@@ -1,0 +1,228 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        "files.associations": {
+            "*.y": "yacc",
+            "*.l": "lex",
+            "*.ptl": "plaintext",
+            "array": "cpp",
+            "atomic": "cpp",
+            "bit": "cpp",
+            "cctype": "cpp",
+            "clocale": "cpp",
+            "cmath": "cpp",
+            "compare": "cpp",
+            "concepts": "cpp",
+            "cstdarg": "cpp",
+            "cstddef": "cpp",
+            "cstdint": "cpp",
+            "cstdio": "cpp",
+            "cstdlib": "cpp",
+            "cstring": "cpp",
+            "cwchar": "cpp",
+            "cwctype": "cpp",
+            "deque": "cpp",
+            "string": "cpp",
+            "unordered_map": "cpp",
+            "vector": "cpp",
+            "exception": "cpp",
+            "algorithm": "cpp",
+            "functional": "cpp",
+            "iterator": "cpp",
+            "memory": "cpp",
+            "memory_resource": "cpp",
+            "numeric": "cpp",
+            "random": "cpp",
+            "string_view": "cpp",
+            "system_error": "cpp",
+            "tuple": "cpp",
+            "type_traits": "cpp",
+            "utility": "cpp",
+            "fstream": "cpp",
+            "initializer_list": "cpp",
+            "iosfwd": "cpp",
+            "iostream": "cpp",
+            "istream": "cpp",
+            "limits": "cpp",
+            "new": "cpp",
+            "numbers": "cpp",
+            "ostream": "cpp",
+            "stdexcept": "cpp",
+            "streambuf": "cpp",
+            "cinttypes": "cpp",
+            "typeinfo": "cpp",
+            "variant": "cpp"
+        },
+        "C_Cpp.default.compilerPath": "/usr/bin/g++",
+        "C_Cpp.default.cppStandard": "c++20",
+        "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+        "C_Cpp.default.includePath": [
+            "${workspaceFolder}/**",
+            "${workspaceFolder}/out"
+        ],
+        "C_Cpp.default.defines": [],
+        "C_Cpp.default.cStandard": "c17"
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-vscode.cpptools",
+            "ms-vscode.cmake-tools"
+        ]
+    },
+    "tasks": {
+        "version": "2.0.0",
+        "tasks": [
+            {
+                "label": "Clean",
+                "type": "shell",
+                "command": "rm",
+                "args": [
+                    "-rf",
+                    "out"
+                ],
+                "group": "build",
+                "presentation": {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": false,
+                    "panel": "shared"
+                }
+            },
+            {
+                "label": "Generate Parser",
+                "type": "shell",
+                "command": "mkdir",
+                "args": [
+                    "-p",
+                    "out"
+                ],
+                "group": "build",
+                "presentation": {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": false,
+                    "panel": "shared"
+                },
+                "problemMatcher": []
+            },
+            {
+                "label": "Generate Parser Files",
+                "type": "shell",
+                "command": "bison",
+                "args": [
+                    "-d",
+                    "-o",
+                    "out/parser.tab.cpp",
+                    "parser.y"
+                ],
+                "group": "build",
+                "presentation": {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": false,
+                    "panel": "shared"
+                },
+                "problemMatcher": [],
+                "dependsOn": "Generate Parser"
+            },
+            {
+                "label": "Generate Lexer",
+                "type": "shell",
+                "command": "flex",
+                "args": [
+                    "--c++",
+                    "-o",
+                    "out/lex.yy.cc",
+                    "lexer.l"
+                ],
+                "group": "build",
+                "presentation": {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": false,
+                    "panel": "shared"
+                },
+                "problemMatcher": [],
+                "dependsOn": "Generate Parser Files"
+            },
+            {
+                "label": "Compile Parser",
+                "type": "shell",
+                "command": "g++",
+                "args": [
+                    "out/parser.tab.cpp",
+                    "out/lex.yy.cc",
+                    "ast.cpp",
+                    "value.cpp",
+                    "type.cpp",
+                    "-I",
+                    ".",
+                    "-I",
+                    "out",
+                    "-o",
+                    "out/parser",
+                    "-lfl",
+                    "--std=c++20",
+                    "-g",
+                    "-O0"
+                ],
+                "group": {
+                    "kind": "build",
+                    "isDefault": true
+                },
+                "presentation": {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": false,
+                    "panel": "shared"
+                },
+                "problemMatcher": [],
+                "dependsOn": "Generate Lexer"
+            },
+            {
+                "label": "Build All",
+                "dependsOrder": "sequence",
+                "dependsOn": [
+                    "Clean",
+                    "Generate Parser",
+                    "Generate Parser Files",
+                    "Generate Lexer", 
+                    "Compile Parser"
+                ],
+                "group": {
+                    "kind": "build",
+                    "isDefault": true
+                }
+            },
+        ]
+    },
+    "launch": {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "name": "Debug Parser",
+                "type": "cppdbg", 
+                "request": "launch",
+                "program": "${workspaceFolder}/out/parser",
+                "args": ["${workspaceFolder}/test.ptf"],
+                "stopAtEntry": false,
+                "cwd": "${workspaceFolder}",
+                "environment": [],
+                "externalConsole": false,
+                "MIMode": "gdb",
+                "setupCommands": [
+                    {
+                        "description": "Enable pretty-printing for gdb",
+                        "text": "-enable-pretty-printing",
+                        "ignoreFailures": true
+                    }
+                ],
+                "preLaunchTask": "Build All"
+            },
+        ]
+    }
+}
