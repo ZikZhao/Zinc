@@ -1,5 +1,8 @@
 const pi = 3.1415926;
 
 if (pi == 3) {
-    
+    let a = 1;
+}
+else {
+    let b = 5;
 }

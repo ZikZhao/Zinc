@@ -1,6 +1,5 @@
 #pragma once
 #include <string>
-#include "ref.hpp"
 
 class Type {
 public:
@@ -28,5 +27,3 @@ using FloatType   = PrimitiveType<FloatTypeName>;
 using StringType  = PrimitiveType<StringTypeName>;
 using BooleanType = PrimitiveType<BooleanTypeName>;
 using NullType    = PrimitiveType<NullTypeName>;
-
-using TypeRef = Reference<Type>;

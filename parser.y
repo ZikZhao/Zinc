@@ -117,18 +117,9 @@ type : KW_INTEGER
      | KW_BOOLEAN
      ;
 
-expression : constant
-           {
-               $$ = $constant;
-           }
-           | identifier
-           {
-               $$ = $identifier;
-           }
-           | OP_SUB expression[expr] %prec OP_NEG
-           {
-               $$ = new ASTNegOp(@$, static_cast<ASTValueExpression*>($expr));
-           }
+expression : constant                                                             { $$ = $constant; }
+           | identifier                                                           { $$ = $identifier; }
+           | OP_SUB expression[expr] %prec OP_NEG                                 { $$ = new ASTNegOp(@$, static_cast<ASTValueExpression*>($expr)); }
            | expression[left] OP_ADD expression[right]                            { $$ = new ASTAddOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_SUB expression[right]                            { $$ = new ASTSubOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_MUL expression[right]                            { $$ = new ASTMulOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
@@ -144,9 +135,9 @@ expression : constant
            | expression[left] OP_LOGICAL_AND expression[right]                    { $$ = new ASTLogicalAndOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_LOGICAL_OR expression[right]                     { $$ = new ASTLogicalOrOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | OP_LOGICAL_NOT expression[expr]                                      { $$ = new ASTLogicalNotOp(@$, static_cast<ASTValueExpression*>($expr)); }
-           | expression[expr] OP_BITWISE_AND expression[right]                    { $$ = new ASTBitwiseAndOp(@$, static_cast<ASTValueExpression*>($expr), static_cast<ASTValueExpression*>($right)); }
-           | expression[expr] OP_BITWISE_OR expression[right]                     { $$ = new ASTBitwiseOrOp(@$, static_cast<ASTValueExpression*>($expr), static_cast<ASTValueExpression*>($right)); }
-           | expression[expr] OP_BITWISE_XOR expression[right]                    { $$ = new ASTBitwiseXorOp(@$, static_cast<ASTValueExpression*>($expr), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_BITWISE_AND expression[right]                    { $$ = new ASTBitwiseAndOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_BITWISE_OR expression[right]                     { $$ = new ASTBitwiseOrOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_BITWISE_XOR expression[right]                    { $$ = new ASTBitwiseXorOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | OP_BITWISE_NOT expression[expr]                                      { $$ = new ASTBitwiseNotOp(@$, static_cast<ASTValueExpression*>($expr)); }
            | expression[left] OP_LEFT_SHIFT expression[right]                     { $$ = new ASTLeftShiftOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_RIGHT_SHIFT expression[right]                    { $$ = new ASTRightShiftOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
@@ -226,4 +217,11 @@ int main(int argc, char* argv[]) {
 
     std::cout << std::endl;
     root->print(std::cout);
+
+    Context globals;
+    root->execute(globals, globals);
+    std::cout << std::endl;
+    for (const auto& record : globals) {
+        std::cout << record.first << " = " << std::string(*record.second) << std::endl;
+    }
 }

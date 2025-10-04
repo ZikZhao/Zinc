@@ -3,13 +3,20 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <map>
+#include "value.hpp"
+#include "type.hpp"
 
-class Value;
-class Type;
 template<typename TargetType> class Reference;
-
+class Variable;
 using ValueRef = Reference<Value>;
 using TypeRef = Reference<Type>;
+
+namespace Constants {
+    extern const ValueRef Null;
+    extern const ValueRef True;
+    extern const ValueRef False;
+}
 
 template<typename TargetType>
 class Reference {
@@ -18,21 +25,37 @@ private:
     std::shared_ptr<TargetType> ptr;
     Reference(TargetType* ptr) : ptr(ptr) {}
 public:
-    Reference(std::shared_ptr<TargetType>&& other) : ptr(std::forward<std::shared_ptr<TargetType>>(other)) {}
+    Reference() = default;
+    template<typename U = TargetType, typename = std::enable_if_t<std::is_same_v<Value, U>>>
+    Reference(int64_t type, const char* literal) : ptr(Value::FromLiteral(type, literal)) {
+        use_const();
+    }
+    Reference(std::shared_ptr<TargetType>&& other) : ptr(std::forward<std::shared_ptr<TargetType>>(other)) {
+        use_const();
+    }
     Reference(const Reference& other) : ptr(other.ptr) {}
+    void use_const() {
+        if constexpr (std::is_same_v<TargetType, Value>) {
+            if (auto ptr = dynamic_cast<NullValue*>(this->ptr.get())) {
+                this->ptr = Constants::Null.ptr;
+            } else if (auto ptr = dynamic_cast<BooleanValue*>(this->ptr.get())) {
+                this->ptr = ptr->value ? Constants::True.ptr : Constants::False.ptr;
+            }
+        }
+    }
     Reference& operator = (const Reference& other) {
-        ptr = other.ptr;
+        if (Value* adapted = this->ptr->adapt_for_assignment(*other.ptr)) {
+            this->ptr = std::shared_ptr<TargetType>(adapted);
+        } else {
+            this->ptr = other.ptr;
+        }
         return *this;
     }
     TargetType& operator * () const noexcept {
         return *ptr;
     }
-    template<typename U = TargetType, typename = std::enable_if_t<std::is_same_v<U, Value>>>
-    TypeRef type() const noexcept {
-        return (*ptr).type;
-    }
     operator std::string () const {
-        return static_cast<std::string>(operator*());
+        return static_cast<std::string>(this->operator*());
     }
     Reference operator + (const Reference& other) const {
         return this->operator*() + *other;
@@ -101,4 +124,9 @@ public:
     Reference operator [] (size_t index) const {
         return this->operator*()[index];
     }
+    bool is_truthy() const {
+        return this->operator*().is_truthy();
+    }
 };
+
+using Context = std::map<std::string, ValueRef>;

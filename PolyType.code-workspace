@@ -55,7 +55,8 @@
             "streambuf": "cpp",
             "cinttypes": "cpp",
             "typeinfo": "cpp",
-            "variant": "cpp"
+            "variant": "cpp",
+            "map": "cpp"
         },
         "C_Cpp.default.compilerPath": "/usr/bin/g++",
         "C_Cpp.default.cppStandard": "c++20",
@@ -93,7 +94,7 @@
                 }
             },
             {
-                "label": "Generate Parser",
+                "label": "Create Output Directory",
                 "type": "shell",
                 "command": "mkdir",
                 "args": [
@@ -127,7 +128,7 @@
                     "panel": "shared"
                 },
                 "problemMatcher": [],
-                "dependsOn": "Generate Parser"
+                "dependsOn": "Create Output Directory"
             },
             {
                 "label": "Generate Lexer",
@@ -159,6 +160,7 @@
                     "ast.cpp",
                     "value.cpp",
                     "type.cpp",
+                    "ref.cpp",
                     "-I",
                     ".",
                     "-I",
@@ -188,7 +190,7 @@
                 "dependsOrder": "sequence",
                 "dependsOn": [
                     "Clean",
-                    "Generate Parser",
+                    "Create Output Directory",
                     "Generate Parser Files",
                     "Generate Lexer", 
                     "Compile Parser"
