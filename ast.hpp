@@ -12,61 +12,29 @@ struct Location {
     } begin, end;
 };
 
-namespace OpStr {
-    constexpr const char NEG[]     = "-";
-    constexpr const char NOT[]     = "not";
-    constexpr const char BIT_NOT[] = "~";
-    constexpr const char ADD[]     = "+";
-    constexpr const char SUB[]     = "-";
-    constexpr const char MUL[]     = "*";
-    constexpr const char DIV[]     = "/";
-    constexpr const char EQUAL[]      = "==";
-    constexpr const char NOT_EQUAL[]     = "!=";
-    constexpr const char LESS_THAN[]      = "<";
-    constexpr const char LESS_THAN_EQUAL[]     = "<=";
-    constexpr const char GREATER_THAN[]      = ">";
-    constexpr const char GREATE_THAN_EQUAL[]     = ">=";
-    constexpr const char AND[]     = "and";
-    constexpr const char OR[]      = "or";
-    constexpr const char BITWISE_AND[] = "&";
-    constexpr const char BITWISE_OR[]  = "|";
-    constexpr const char BITWISE_XOR[] = "^";
-    constexpr const char REM[]     = "%";
-    constexpr const char EXP[]     = "**";
-    constexpr const char LEFT_SHIFT[]  = "<<";
-    constexpr const char RIGHT_SHIFT[] = ">>";
-    constexpr const char ASSIGN[]  = "=";
-    constexpr const char ADD_ASSIGN[] = "+=";
-    constexpr const char SUB_ASSIGN[] = "-=";
-    constexpr const char MUL_ASSIGN[] = "*=";
-    constexpr const char DIV_ASSIGN[] = "/=";
-    constexpr const char REM_ASSIGN[] = "%=";
-    constexpr const char EXP_ASSIGN[] = "**=";
-    constexpr const char BITWISE_AND_ASSIGN[] = "&=";
-    constexpr const char BITWISE_OR_ASSIGN[]  = "|=";
-    constexpr const char BITWISE_XOR_ASSIGN[] = "^=";
-    constexpr const char LEFT_SHIFT_ASSIGN[]  = "<<=";
-    constexpr const char RIGHT_SHIFT_ASSIGN[] = ">>=";
-}
-
-struct ExpFunctor {
-    ValueRef operator() (const ValueRef& left, const ValueRef& right) const {
-        throw std::runtime_error("Exponentiation not implemented");
+template<uint64_t length>
+class FixedString {
+public:
+    char str[length];
+    constexpr FixedString(const char (&str)[length]) {
+        std::copy_n(str, length, this->str);
+    }
+    constexpr std::string_view operator * () const {
+        return std::string_view(str, length);
     }
 };
 
+std::ostream& operator<< (std::ostream& os, const Location& loc);
+
 struct LeftShiftFunctor {
-    ValueRef operator() (const ValueRef& left, const ValueRef& right) const {
-        throw std::runtime_error("Left shift not implemented");
-    }
+    ValueRef operator() (const ValueRef& left, const ValueRef& right) const;
 };
 
 struct RightShiftFunctor {
-    ValueRef operator() (const ValueRef& left, const ValueRef& right) const {
-        throw std::runtime_error("Right shift not implemented");
-    }
+    ValueRef operator() (const ValueRef& left, const ValueRef& right) const;
 };
 
+// Assignment functor that performs operation and assignment
 template<typename FuncType = void>
 struct AssignFunctor {
     static constexpr auto Func = FuncType();
@@ -77,11 +45,11 @@ struct AssignFunctor {
     }
 };
 
+// Specialization for simple assignment
 template<>
 struct AssignFunctor<void> {
-    ValueRef operator() (ValueRef& a, ValueRef& b) const {
-        a = b;
-        return a;
+    ValueRef operator() (ValueRef& left, ValueRef& right) const {
+        return left = right;
     }
 };
 
@@ -92,8 +60,8 @@ using ASTValueExpression = ASTExpression<Value>;
 using ASTTypeExpression  = ASTExpression<Type>;
 class ASTConstant;
 class ASTIdentifier;
-template<const char* Operator, typename FuncType> class ASTUnaryOp;
-template<const char* Operator, typename FuncType> class ASTBinaryOp;
+template<FixedString Operator, typename FuncType> class ASTUnaryOp;
+template<FixedString Operator, typename FuncType> class ASTBinaryOp;
 class ASTDeclaration;
 class ASTIfStatement;
 
@@ -145,8 +113,9 @@ public:
 
 class ASTConstant : public ASTValueExpression {
 public:
-    const ValueRef ref;
-    ASTConstant(const ASTToken& token);
+    const LiteralType type;
+    const std::string literal;
+    ASTConstant(const ASTToken& token, LiteralType type);
     void print(std::ostream& os, uint64_t indent) const override;
     ValueRef eval(Context& globals, Context& locals) const override;
 };
@@ -159,7 +128,7 @@ public:
     ValueRef eval(Context& globals, Context& locals) const override;
 };
 
-template<const char* Operator, typename FuncType>
+template<FixedString Operator, typename FuncType>
 class ASTUnaryOp : public ASTValueExpression {
 private:
     static constexpr auto Func = FuncType();
@@ -170,7 +139,7 @@ public:
         delete expr;
     }
     void print(std::ostream& os, uint64_t indent) const override {
-        os << std::string(indent, ' ') << "UnaryOp("s + Operator + ")"s << std::endl;
+        os << std::string(indent, ' ') << "UnaryOp(" << *Operator << ")" << std::endl;
         expr->print(os, indent + 2);
     }
     ValueRef eval(Context& globals, Context& locals) const override {
@@ -179,7 +148,7 @@ public:
     }
 };
 
-template<const char* Operator, typename FuncType>
+template<FixedString Operator, typename FuncType>
 class ASTBinaryOp : public ASTValueExpression {
 private:
     static constexpr auto Func = FuncType();
@@ -193,7 +162,7 @@ public:
         delete right;
     }
     void print(std::ostream& os, uint64_t indent) const override {
-        os << std::string(indent, ' ') << "BinaryOp("s + Operator + ")"s << std::endl;
+        os << std::string(indent, ' ') << "BinaryOp(" << *Operator << ")" << std::endl;
         left->print(os, indent + 2);
         right->print(os, indent + 2);
     }
@@ -204,44 +173,42 @@ public:
     }
 };
 
-using ASTAddOp              = ASTBinaryOp<OpStr::ADD, std::plus<>>;
-using ASTSubOp              = ASTBinaryOp<OpStr::SUB, std::minus<>>;
-using ASTNegOp              = ASTUnaryOp<OpStr::NEG, std::negate<>>;
-using ASTMulOp              = ASTBinaryOp<OpStr::MUL, std::multiplies<>>;
-using ASTDivOp              = ASTBinaryOp<OpStr::DIV, std::divides<>>;
-using ASTRemOp              = ASTBinaryOp<OpStr::REM, std::modulus<>>;
-using ASTExpOp              = ASTBinaryOp<OpStr::EXP, ExpFunctor>;
+using ASTAddOp              = ASTBinaryOp<"+", std::plus<>>;
+using ASTSubOp              = ASTBinaryOp<"-", std::minus<>>;
+using ASTNegOp              = ASTUnaryOp<"~", std::negate<>>;
+using ASTMulOp              = ASTBinaryOp<"*", std::multiplies<>>;
+using ASTDivOp              = ASTBinaryOp<"/", std::divides<>>;
+using ASTRemOp              = ASTBinaryOp<"%", std::modulus<>>;
 
-using ASTEqualOp            = ASTBinaryOp<OpStr::EQUAL, std::equal_to<>>;
-using ASTNotEqualOp         = ASTBinaryOp<OpStr::NOT_EQUAL, std::not_equal_to<>>;
-using ASTLessThanOp         = ASTBinaryOp<OpStr::LESS_THAN, std::less<>>;
-using ASTLessEqualOp        = ASTBinaryOp<OpStr::LESS_THAN_EQUAL, std::less_equal<>>;
-using ASTGreaterThanOp      = ASTBinaryOp<OpStr::GREATER_THAN, std::greater<>>;
-using ASTGreaterEqualOp     = ASTBinaryOp<OpStr::GREATE_THAN_EQUAL, std::greater_equal<>>;
+using ASTEqualOp            = ASTBinaryOp<"==", std::equal_to<>>;
+using ASTNotEqualOp         = ASTBinaryOp<"!=", std::not_equal_to<>>;
+using ASTLessThanOp         = ASTBinaryOp<"<", std::less<>>;
+using ASTLessEqualOp        = ASTBinaryOp<"<=", std::less_equal<>>;
+using ASTGreaterThanOp      = ASTBinaryOp<">", std::greater<>>;
+using ASTGreaterEqualOp     = ASTBinaryOp<">=", std::greater_equal<>>;
 
-using ASTLogicalAndOp       = ASTBinaryOp<OpStr::AND, std::logical_and<>>;
-using ASTLogicalOrOp        = ASTBinaryOp<OpStr::OR, std::logical_or<>>;
-using ASTLogicalNotOp       = ASTUnaryOp<OpStr::NOT, std::logical_not<>>;
+using ASTLogicalAndOp       = ASTBinaryOp<"&&", std::logical_and<>>;
+using ASTLogicalOrOp        = ASTBinaryOp<"||", std::logical_or<>>;
+using ASTLogicalNotOp       = ASTUnaryOp<"!", std::logical_not<>>;
 
-using ASTBitwiseAndOp       = ASTBinaryOp<OpStr::BITWISE_AND, std::bit_and<>>;
-using ASTBitwiseOrOp        = ASTBinaryOp<OpStr::BITWISE_OR, std::bit_or<>>;
-using ASTBitwiseXorOp       = ASTBinaryOp<OpStr::BITWISE_XOR, std::bit_xor<>>;
-using ASTBitwiseNotOp       = ASTUnaryOp<OpStr::BIT_NOT, std::bit_not<>>;
-using ASTLeftShiftOp        = ASTBinaryOp<OpStr::LEFT_SHIFT, LeftShiftFunctor>;
-using ASTRightShiftOp       = ASTBinaryOp<OpStr::RIGHT_SHIFT, RightShiftFunctor>;
+using ASTBitwiseAndOp       = ASTBinaryOp<"&", std::bit_and<>>;
+using ASTBitwiseOrOp        = ASTBinaryOp<"|", std::bit_or<>>;
+using ASTBitwiseXorOp       = ASTBinaryOp<"^", std::bit_xor<>>;
+using ASTBitwiseNotOp       = ASTUnaryOp<"~", std::bit_not<>>;
+using ASTLeftShiftOp        = ASTBinaryOp<"<<", LeftShiftFunctor>;
+using ASTRightShiftOp       = ASTBinaryOp<">>", RightShiftFunctor>;
 
-using ASTAssignOp           = ASTBinaryOp<OpStr::ASSIGN, AssignFunctor<>>;
-using ASTAddAssignOp        = ASTBinaryOp<OpStr::ADD_ASSIGN, AssignFunctor<std::plus<>>>;
-using ASTSubAssignOp        = ASTBinaryOp<OpStr::SUB_ASSIGN, AssignFunctor<std::minus<>>>;
-using ASTMulAssignOp        = ASTBinaryOp<OpStr::MUL_ASSIGN, AssignFunctor<std::multiplies<>>>;
-using ASTDivAssignOp        = ASTBinaryOp<OpStr::DIV_ASSIGN, AssignFunctor<std::divides<>>>;
-using ASTRemAssignOp        = ASTBinaryOp<OpStr::REM_ASSIGN, AssignFunctor<std::modulus<>>>;
-using ASTExpAssignOp        = ASTBinaryOp<OpStr::EXP_ASSIGN, AssignFunctor<ExpFunctor>>;
-using ASTBitwiseAndAssignOp = ASTBinaryOp<OpStr::BITWISE_AND_ASSIGN, AssignFunctor<std::bit_and<>>>;
-using ASTBitwiseOrAssignOp  = ASTBinaryOp<OpStr::BITWISE_OR_ASSIGN, AssignFunctor<std::bit_or<>>>;
-using ASTBitwiseXorAssignOp = ASTBinaryOp<OpStr::BITWISE_XOR_ASSIGN, AssignFunctor<std::bit_xor<>>>;
-using ASTLeftShiftAssignOp  = ASTBinaryOp<OpStr::LEFT_SHIFT_ASSIGN, AssignFunctor<LeftShiftFunctor>>;
-using ASTRightShiftAssignOp = ASTBinaryOp<OpStr::RIGHT_SHIFT_ASSIGN, AssignFunctor<RightShiftFunctor>>;
+using ASTAssignOp           = ASTBinaryOp<"=", AssignFunctor<>>;
+using ASTAddAssignOp        = ASTBinaryOp<"+=", AssignFunctor<std::plus<>>>;
+using ASTSubAssignOp        = ASTBinaryOp<"-=", AssignFunctor<std::minus<>>>;
+using ASTMulAssignOp        = ASTBinaryOp<"*=", AssignFunctor<std::multiplies<>>>;
+using ASTDivAssignOp        = ASTBinaryOp<"/=", AssignFunctor<std::divides<>>>;
+using ASTRemAssignOp        = ASTBinaryOp<"%=", AssignFunctor<std::modulus<>>>;
+using ASTBitwiseAndAssignOp = ASTBinaryOp<"&=", AssignFunctor<std::bit_and<>>>;
+using ASTBitwiseOrAssignOp  = ASTBinaryOp<"|=", AssignFunctor<std::bit_or<>>>;
+using ASTBitwiseXorAssignOp = ASTBinaryOp<"^=", AssignFunctor<std::bit_xor<>>>;
+using ASTLeftShiftAssignOp  = ASTBinaryOp<"<<=", AssignFunctor<LeftShiftFunctor>>;
+using ASTRightShiftAssignOp = ASTBinaryOp<">>=", AssignFunctor<RightShiftFunctor>>;
 
 class ASTDeclaration : public ASTNode {
 public:
@@ -262,6 +229,31 @@ public:
     const ASTStatements* const if_block;
     const ASTStatements* const else_block;
     ASTIfStatement(const Location& location, const ASTValueExpression* condition, const ASTStatements* const if_block, const ASTStatements* const else_block = nullptr);
+    void execute(Context& globals, Context& locals) const override;
+    void print(std::ostream& os, uint64_t indent) const override;
+};
+
+class ASTForStatement : public ASTNode {
+public:
+    const ASTNode* const initializer; // Can be either a declaration or an expression
+    const ASTValueExpression* const condition;
+    const ASTValueExpression* const increment;
+    const ASTStatements* const body;
+    ASTForStatement(const Location& location, const ASTNode* initializer, const ASTValueExpression* condition, const ASTValueExpression* increment, const ASTStatements* body);
+    void execute(Context& globals, Context& locals) const override;
+    void print(std::ostream& os, uint64_t indent) const override;
+};
+
+class ASTContinueStatement : public ASTNode {
+public:
+    ASTContinueStatement(const Location& location);
+    void execute(Context& globals, Context& locals) const override;
+    void print(std::ostream& os, uint64_t indent) const override;
+};
+
+class ASTBreakStatement : public ASTNode {
+public:
+    ASTBreakStatement(const Location& location);
     void execute(Context& globals, Context& locals) const override;
     void print(std::ostream& os, uint64_t indent) const override;
 };

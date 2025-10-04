@@ -7,26 +7,25 @@
 BooleanValue* Value::ObjectIs(const Value& left, const Value& right) {
     return new BooleanValue(&left == &right);
 }
-Value* Value::FromLiteral(int64_t type, const char* literal) {
+Value* Value::FromLiteral(LiteralType type, std::string_view literal) {
     using namespace yy;
-    using enum parser::token::token_kind_type;
     switch (type) {
-    case T_INTEGER:
-        return new IntegerValue(std::stoll(literal));
-    case T_FLOAT:
-        return new FloatValue(std::stod(literal));
-    case T_STRING:
-        return new StringValue(std::string(literal));
-    case T_BOOLEAN:
-        if (std::string(literal) == "true") {
+    case LITERAL_NULL:
+        return new NullValue();
+    case LITERAL_INTEGER:
+        return new IntegerValue(std::stoll(literal.data()));
+    case LITERAL_FLOAT:
+        return new FloatValue(std::stod(literal.data()));
+    case LITERAL_STRING:
+        return new StringValue(std::string(literal.data()));
+    case LITERAL_BOOLEAN:
+        if (literal == "true") {
             return new BooleanValue(true);
-        } else if (std::string(literal) == "false") {
+        } else if (literal == "false") {
             return new BooleanValue(false);
         } else {
-            throw std::runtime_error("Invalid boolean literal: " + std::string(literal));
+            throw std::runtime_error("Invalid boolean literal: "s + literal.data());
         }
-    case T_NULL:
-        return new NullValue();
     default:
         throw std::runtime_error("Unknown literal type");
     }

@@ -1,6 +1,20 @@
+#include <string>
 #include "ast.hpp"
-
+#include "value.hpp"
+#include "exception.hpp"
 using namespace std::literals::string_literals;
+
+std::ostream& operator<< (std::ostream& os, const Location& loc) {
+    return os << loc.begin.line << ":" << loc.begin.column << "-" << loc.end.line << ":" << loc.end.column;
+}
+
+ValueRef LeftShiftFunctor::operator()(const ValueRef &left, const ValueRef &right) const {
+    return left << right;
+}
+
+ValueRef RightShiftFunctor::operator()(const ValueRef &left, const ValueRef &right) const {
+    return left >> right;
+}
 
 ASTNode::ASTNode(const Location& location) : location(location) {}
 
@@ -41,13 +55,13 @@ ASTStatements& ASTStatements::push(const Location& new_location, ASTNode* node) 
     return *this;
 }
 
-ASTConstant::ASTConstant(const ASTToken& token)
-    : ASTValueExpression(token.location), ref(token.type, token.str.c_str()) {}
+ASTConstant::ASTConstant(const ASTToken& token, LiteralType type)
+    : ASTValueExpression(token.location), type(type), literal(token.str) {}
 void ASTConstant::print(std::ostream& os, uint64_t indent) const {
-    os << std::string(indent, ' ') << "Constant("s + static_cast<std::string>(ref) + ")"s << std::endl;
+    os << std::string(indent, ' ') << "Constant(" << literal << ")" << std::endl;
 }
 ValueRef ASTConstant::eval(Context& globals, Context& locals) const {
-    return ref;
+    return ValueRef(type, literal);
 }
 
 ASTIdentifier::ASTIdentifier(const ASTToken& token)
@@ -64,7 +78,7 @@ ASTDeclaration::ASTDeclaration(const Location& location, const ASTIdentifier* id
 ASTDeclaration::ASTDeclaration(const Location& location, const ASTTypeExpression* type, const ASTIdentifier* identifier, const ASTValueExpression* expr, const bool is_const)
     : ASTNode(location), is_const(is_const), type(type), identifier(identifier), expr(expr), inferred_type() {} // TODO
 void ASTDeclaration::execute(Context& globals, Context& locals) const {
-    locals.insert({identifier->name, expr ? expr->eval(globals, locals) : ValueRef()});
+    locals.emplace(identifier->name, expr ? expr->eval(globals, locals) : ValueRef());
 }
 void ASTDeclaration::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "Declaration"s << std::endl;
@@ -88,4 +102,61 @@ void ASTIfStatement::print(std::ostream& os, uint64_t indent) const {
     if (else_block) {
         else_block->print(os, indent + 2);
     }
+}
+
+ASTForStatement::ASTForStatement(const Location &location, const ASTNode *initializer, const ASTValueExpression *condition, const ASTValueExpression *increment, const ASTStatements *body)
+    : ASTNode(location), initializer(initializer), condition(condition), increment(increment), body(body) {}
+void ASTForStatement::execute(Context& globals, Context& locals) const {
+    if (initializer) {
+        initializer->execute(globals, locals);
+    }
+    while (condition ? condition->eval(globals, locals).is_truthy() : true) {
+        try {
+            body->execute(globals, locals);
+        }
+        catch (BreakException&) {
+            break;
+        }
+        catch (ContinueException&) {}
+        if (increment) {
+            increment->eval(globals, locals);
+        }
+    }
+}
+void ASTForStatement::print(std::ostream& os, uint64_t indent) const {
+    os << std::string(indent, ' ') << "ForStatement"s << std::endl;
+    if (initializer) {
+        initializer->print(os, indent + 2);
+    } else {
+        os << std::string(indent + 2, ' ') << "No initializer"s << std::endl;
+    }
+    if (condition) {
+        condition->print(os, indent + 2);
+    } else {
+        os << std::string(indent + 2, ' ') << "No condition"s << std::endl;
+    }
+    if (increment) {
+        increment->print(os, indent + 2);
+    } else {
+        os << std::string(indent + 2, ' ') << "No increment"s << std::endl;
+    }
+    body->print(os, indent + 2);
+}
+
+ASTContinueStatement::ASTContinueStatement(const Location& location)
+    : ASTNode(location) {}
+void ASTContinueStatement::execute(Context& globals, Context& locals) const {
+    throw ContinueException();
+}
+void ASTContinueStatement::print(std::ostream& os, uint64_t indent) const {
+    os << std::string(indent, ' ') << "ContinueStatement"s << std::endl;
+}
+
+ASTBreakStatement::ASTBreakStatement(const Location& location)
+    : ASTNode(location) {}
+void ASTBreakStatement::execute(Context& globals, Context& locals) const {
+    throw BreakException();
+}
+void ASTBreakStatement::print(std::ostream& os, uint64_t indent) const {
+    os << std::string(indent, ' ') << "BreakStatement"s << std::endl;
 }

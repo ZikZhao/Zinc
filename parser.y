@@ -3,6 +3,7 @@
 #include <fstream>
 #include <vector>
 #include "ast.hpp"
+#include "value.hpp"
 #include "out/parser.tab.hpp"
 
 std::vector<ASTNode*> nodes;
@@ -15,6 +16,7 @@ extern int yylex(ASTNode** yylval, Location* yylloc);
 %code requires {
     #include "ast.hpp"
 }
+%debug
 
 %locations
 %define api.value.type { ASTNode* }
@@ -25,9 +27,10 @@ extern int yylex(ASTNode** yylval, Location* yylloc);
 /* TypeScript Keywords */
 %token KW_CONST KW_LET KW_INTEGER KW_FLOAT KW_STRING KW_BOOLEAN KW_NULL
 %token KW_IF KW_ELSE KW_FOR KW_WHILE KW_FUNCTION KW_RETURN KW_CLASS KW_EXTENDS
+%token KW_BREAK KW_CONTINUE KW_SWITCH KW_CASE KW_DEFAULT KW_IMPORT KW_FROM KW_AS
 
 /* Arithmetic Operators */
-%token OP_ADD OP_SUB OP_MUL OP_DIV OP_REM OP_EXP
+%token OP_ADD OP_SUB OP_MUL OP_DIV OP_REM
 %token OP_INCREMENT OP_DECREMENT
 
 /* Comparison Operators */
@@ -42,7 +45,7 @@ extern int yylex(ASTNode** yylval, Location* yylloc);
 
 /* Assignment Operators */
 %token OP_ASSIGN
-%token OP_ADD_ASSIGN OP_SUB_ASSIGN OP_MUL_ASSIGN OP_DIV_ASSIGN OP_REM_ASSIGN OP_EXP_ASSIGN
+%token OP_ADD_ASSIGN OP_SUB_ASSIGN OP_MUL_ASSIGN OP_DIV_ASSIGN OP_REM_ASSIGN
 %token OP_LEFT_SHIFT_ASSIGN OP_RIGHT_SHIFT_ASSIGN
 %token OP_BITWISE_AND_ASSIGN OP_BITWISE_OR_ASSIGN OP_BITWISE_XOR_ASSIGN
 
@@ -95,6 +98,9 @@ statements : statement                     { $$ = new ASTStatements(@$, $stateme
 statement : expression OP_SEMICOLON      { $$ = $expression; }
           | declaration OP_SEMICOLON     { $$ = $declaration; }
           | if_statement                 { $$ = $if_statement; }
+          | for_statement                { $$ = $for_statement; }
+          | break_statement              { $$ = $break_statement; }
+          | continue_statement           { $$ = $continue_statement; }
           ;
 
 code_block : OP_LBRACE OP_RBRACE               { $$ = new ASTStatements(@$); }
@@ -104,11 +110,11 @@ code_block : OP_LBRACE OP_RBRACE               { $$ = new ASTStatements(@$); }
 identifier : T_IDENTIFIER    { $$ = new ASTIdentifier(*static_cast<ASTToken*>($1)); }
            ;
 
-constant : T_INTEGER    { $$ = new ASTConstant(*static_cast<ASTToken*>($1)); }
-         | T_FLOAT      { $$ = new ASTConstant(*static_cast<ASTToken*>($1)); }
-         | T_STRING     { $$ = new ASTConstant(*static_cast<ASTToken*>($1)); }
-         | T_BOOLEAN    { $$ = new ASTConstant(*static_cast<ASTToken*>($1)); }
-         | KW_NULL      { $$ = new ASTConstant(*static_cast<ASTToken*>($1)); }
+constant : KW_NULL      { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_NULL); }
+         | T_INTEGER    { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_INTEGER); }
+         | T_FLOAT      { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_FLOAT); }
+         | T_STRING     { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_STRING); }
+         | T_BOOLEAN    { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_BOOLEAN); }
          ;
 
 type : KW_INTEGER
@@ -125,7 +131,6 @@ expression : constant                                                           
            | expression[left] OP_MUL expression[right]                            { $$ = new ASTMulOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_DIV expression[right]                            { $$ = new ASTDivOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_REM expression[right]                            { $$ = new ASTRemOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_EXP expression[right]                            { $$ = new ASTExpOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_EQUAL expression[right]                          { $$ = new ASTEqualOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_NOT_EQUAL expression[right]                      { $$ = new ASTNotEqualOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_LESS_THAN expression[right]                      { $$ = new ASTLessThanOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
@@ -147,7 +152,6 @@ expression : constant                                                           
            | expression[left] OP_MUL_ASSIGN expression[right]                     { $$ = new ASTMulAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_DIV_ASSIGN expression[right]                     { $$ = new ASTDivAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_REM_ASSIGN expression[right]                     { $$ = new ASTRemAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_EXP_ASSIGN expression[right]                     { $$ = new ASTExpAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_LEFT_SHIFT_ASSIGN expression[right]              { $$ = new ASTLeftShiftAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_RIGHT_SHIFT_ASSIGN expression[right]             { $$ = new ASTRightShiftAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_BITWISE_AND_ASSIGN expression[right]             { $$ = new ASTBitwiseAndAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
@@ -195,6 +199,38 @@ if_statement : KW_IF OP_LPAREN expression[condition] OP_RPAREN code_block[then]
              }
              ;
 
+optional_initializer : /* empty */    { $$ = nullptr; }
+                     | declaration    { $$ = $declaration; }
+                     | expression     { $$ = $expression; }
+                     ;
+
+optional_condition : /* empty */    { $$ = nullptr; }
+                   | expression     { $$ = $expression; }
+                   ;
+
+optional_increment : /* empty */    { $$ = nullptr; }
+                   | expression     { $$ = $expression; }
+                   ;
+
+for_statement : KW_FOR OP_LPAREN optional_initializer OP_SEMICOLON optional_condition OP_SEMICOLON optional_increment OP_RPAREN code_block
+              {
+                  $$ = new ASTForStatement(@$, $optional_initializer, static_cast<ASTValueExpression*>($optional_condition), static_cast<ASTValueExpression*>($optional_increment), static_cast<ASTStatements*>($code_block));
+              }
+              | KW_FOR OP_LPAREN expression[condition] OP_RPAREN code_block
+              {
+                  $$ = new ASTForStatement(@$, nullptr, static_cast<ASTValueExpression*>($condition), nullptr, static_cast<ASTStatements*>($code_block));
+              }
+              | KW_FOR code_block
+              {
+                  $$ = new ASTForStatement(@$, nullptr, nullptr, nullptr, static_cast<ASTStatements*>($code_block));
+              }
+
+break_statement : KW_BREAK OP_SEMICOLON    { $$ = new ASTBreakStatement(@$); }
+                ;
+
+continue_statement : KW_CONTINUE OP_SEMICOLON    { $$ = new ASTContinueStatement(@$); }
+                   ;
+
 %%
 std::ifstream yyin;
 
@@ -213,6 +249,7 @@ int main(int argc, char* argv[]) {
 
     ASTNode* root = nullptr;
     yy::parser parser(root);
+    parser.set_debug_level(1);
     parser.parse();
 
     std::cout << std::endl;

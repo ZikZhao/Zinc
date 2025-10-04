@@ -23,17 +23,24 @@ class Reference {
     friend class Variable;
 private:
     std::shared_ptr<TargetType> ptr;
-    Reference(TargetType* ptr) : ptr(ptr) {}
+    Reference* source;
 public:
     Reference() = default;
+    Reference(const Reference& other) = default;
+    Reference(Reference&& other) = default;
+    Reference(TargetType* ptr) : ptr(ptr), source(nullptr) {
+        use_const();
+    }
+    Reference(std::shared_ptr<TargetType>&& other) : ptr(std::forward<std::shared_ptr<TargetType>>(other)), source(nullptr) {
+        use_const();
+    }
+    // Copy constructor that keeps track of source for assignment propagation
+    Reference(Reference& other) : ptr(other.ptr), source(&other) {}
     template<typename U = TargetType, typename = std::enable_if_t<std::is_same_v<Value, U>>>
-    Reference(int64_t type, const char* literal) : ptr(Value::FromLiteral(type, literal)) {
+    Reference(LiteralType type, std::string_view literal) : ptr(Value::FromLiteral(type, literal)), source(nullptr) {
         use_const();
     }
-    Reference(std::shared_ptr<TargetType>&& other) : ptr(std::forward<std::shared_ptr<TargetType>>(other)) {
-        use_const();
-    }
-    Reference(const Reference& other) : ptr(other.ptr) {}
+private:
     void use_const() {
         if constexpr (std::is_same_v<TargetType, Value>) {
             if (auto ptr = dynamic_cast<NullValue*>(this->ptr.get())) {
@@ -43,11 +50,18 @@ public:
             }
         }
     }
+public:
+    // Assignment operator with adaptation
     Reference& operator = (const Reference& other) {
         if (Value* adapted = this->ptr->adapt_for_assignment(*other.ptr)) {
-            this->ptr = std::shared_ptr<TargetType>(adapted);
+            this->ptr = std::shared_ptr<Value>(adapted);
         } else {
             this->ptr = other.ptr;
+        }
+        this->use_const();
+        if (this->source) {
+            *(this->source) = *this;
+            this->source = nullptr;
         }
         return *this;
     }
@@ -113,6 +127,12 @@ public:
     }
     Reference operator ~ () const {
         return ~this->operator*();
+    }
+    Reference operator << (const Reference& other) const {
+        return this->operator*() << *other;
+    }
+    Reference operator >> (const Reference& other) const {
+        return this->operator*() >> *other;
     }
     Reference operator () (std::vector<Reference> args) const {
         std::vector<const TargetType*> val_args;

@@ -161,6 +161,7 @@
                     "value.cpp",
                     "type.cpp",
                     "ref.cpp",
+                    "exception.cpp",
                     "-I",
                     ".",
                     "-I",

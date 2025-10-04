@@ -48,23 +48,22 @@ MULTI_LINE_COMMENT \/\*([^*]|\*+[^*/])*\*+\/
 "return"                 { return KW_RETURN; }
 "class"                  { return KW_CLASS; }
 "extends"                { return KW_EXTENDS; }
+"break"                  { return KW_BREAK; }
+"continue"               { return KW_CONTINUE; }
+"switch"                 { return KW_SWITCH; }
+"case"                   { return KW_CASE; }
+"default"                { return KW_DEFAULT; }
+"import"                 { return KW_IMPORT; }
+"from"                   { return KW_FROM; }
+"as"                     { return KW_AS; }
 
 "+"                      { return OP_ADD; }
 "-"                      { return OP_SUB; }
 "*"                      { return OP_MUL; }
 "/"                      { return OP_DIV; }
 "%"                      { return OP_REM; }
-"**"                     { return OP_EXP; }
 "++"                     { return OP_INCREMENT; }
 "--"                     { return OP_DECREMENT; }
-
-"="                      { return OP_ASSIGN; }
-"+="                     { return OP_ADD_ASSIGN; }
-"-="                     { return OP_SUB_ASSIGN; }
-"*="                     { return OP_MUL_ASSIGN; }
-"/="                     { return OP_DIV_ASSIGN; }
-"%="                     { return OP_REM_ASSIGN; }
-"**="                    { return OP_EXP_ASSIGN; }
 
 "=="                     { return OP_EQUAL; }
 "!="                     { return OP_NOT_EQUAL; }
@@ -84,6 +83,13 @@ MULTI_LINE_COMMENT \/\*([^*]|\*+[^*/])*\*+\/
 "<<"                     { return OP_LEFT_SHIFT; }
 ">>"                     { return OP_RIGHT_SHIFT; }
 ">>>"                    { return OP_UNSIGNED_RIGHT_SHIFT; }
+
+"="                      { return OP_ASSIGN; }
+"+="                     { return OP_ADD_ASSIGN; }
+"-="                     { return OP_SUB_ASSIGN; }
+"*="                     { return OP_MUL_ASSIGN; }
+"/="                     { return OP_DIV_ASSIGN; }
+"%="                     { return OP_REM_ASSIGN; }
 
 "?"                      { return OP_QUESTION; }
 ":"                      { return OP_COLON; }
@@ -130,6 +136,5 @@ int yylex(ASTNode** yylval, Location* yylloc) {
     yylloc->end.line = lexer.lineno();
     yylloc->end.column = column;
     *yylval = ASTToken::New(*yylloc, lexer.YYText(), type);
-    std::cout << "(" << type << ", \"" << lexer.YYText() << "\") ";
     return type;
 }

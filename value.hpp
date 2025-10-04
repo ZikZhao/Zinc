@@ -9,7 +9,15 @@
     virtual Value* operator op (const StringValue& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
     virtual Value* operator op (const BooleanValue& other) const { throw std::runtime_error(#op " not implemented for this type"); };
 #define AllTypeVirtualUnaryOperator(op) \
-    virtual Value* operator op () const { throw std::runtime_error(#op " not implemented for this type"); }; \
+    virtual Value* operator op () const { throw std::runtime_error(#op " not implemented for this type"); };
+
+enum LiteralType {
+    LITERAL_NULL,
+    LITERAL_INTEGER,
+    LITERAL_FLOAT,
+    LITERAL_STRING,
+    LITERAL_BOOLEAN,
+};
 
 class Value;
 class NullValue;
@@ -20,7 +28,7 @@ class BooleanValue;
 
 class Value {
 public:
-    static Value* FromLiteral(int64_t type, const char* literal);
+    static Value* FromLiteral(LiteralType type, std::string_view literal);
     static BooleanValue* ObjectIs(const Value& left, const Value& right);
     virtual ~Value() = default;
     AllTypeVirtualBinaryOperator(+);
