@@ -1,7 +1,5 @@
 %{
-#include <stdio.h>
-#include <fstream>
-#include <vector>
+#include "pch.hpp"
 #include "ast.hpp"
 #include "value.hpp"
 #include "out/parser.tab.hpp"
@@ -286,7 +284,7 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl;
     root->print(std::cout);
 
-    Context globals = ASTBuiltinFunctionDefinition::InitGlobals();
+    Context globals = Builtins;
     root->execute(globals, globals);
     std::cout << std::endl;
     for (const auto& record : globals) {

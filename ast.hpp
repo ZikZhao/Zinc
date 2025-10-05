@@ -1,8 +1,7 @@
 #pragma once
-#include <string>
-#include <stdexcept>
-#include <variant>
-#include "ref.hpp"
+#include "pch.hpp"
+#include "value.hpp"
+#include "type.hpp"
 using namespace std::literals::string_literals;
 
 struct Location {
@@ -10,18 +9,6 @@ struct Location {
         uint64_t line;
         uint64_t column;
     } begin, end;
-};
-
-template<uint64_t length>
-class FixedString {
-public:
-    char str[length];
-    constexpr FixedString(const char (&str)[length]) {
-        std::copy_n(str, length, this->str);
-    }
-    constexpr std::string_view operator * () const {
-        return std::string_view(str, length);
-    }
 };
 
 std::ostream& operator<< (std::ostream& os, const Location& loc);
@@ -113,8 +100,7 @@ public:
 
 class ASTConstant : public ASTValueExpression {
 public:
-    const LiteralType type;
-    const std::string literal;
+    const ValueRef value;
     ASTConstant(const ASTToken& token, LiteralType type);
     void print(std::ostream& os, uint64_t indent) const override;
     ValueRef eval(Context& globals, Context& locals) const override;
@@ -321,17 +307,4 @@ public:
     virtual ValueRef call(Context& globals, const ASTFunctionCallArguments& arguments) const;
 protected:
     Context prepare_locals(Context& globals, const ASTFunctionCallArguments& arguments) const;
-};
-
-class ASTBuiltinFunctionDefinition : public ASTFunctionDefinition {
-public:
-    static const std::map<std::string, ASTBuiltinFunctionDefinition> BuiltinFunctions;
-    static Context InitGlobals();
-    using FuncType = std::function<ValueRef(const std::vector<ValueRef>)>;
-    const FuncType func;
-    ASTBuiltinFunctionDefinition(const char* name, FuncType func);
-    ~ASTBuiltinFunctionDefinition() final = default;
-    void execute(Context& globals, Context& locals) const final;
-    void print(std::ostream& os, uint64_t indent) const final;
-    ValueRef call(Context& globals, const ASTFunctionCallArguments& arguments) const final;
 };

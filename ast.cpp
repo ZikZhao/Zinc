@@ -1,6 +1,4 @@
-#include <string>
-#include <iostream>
-#include <utility>
+#include "pch.hpp"
 #include "ast.hpp"
 #include "value.hpp"
 #include "exception.hpp"
@@ -58,12 +56,12 @@ ASTStatements& ASTStatements::push(const Location& new_location, ASTNode* node) 
 }
 
 ASTConstant::ASTConstant(const ASTToken& token, LiteralType type)
-    : ASTValueExpression(token.location), type(type), literal(token.str) {}
+    : ASTValueExpression(token.location), value(Value::FromLiteral(type, token.str)) {}
 void ASTConstant::print(std::ostream& os, uint64_t indent) const {
-    os << std::string(indent, ' ') << "Constant(" << literal << ")" << std::endl;
+    os << std::string(indent, ' ') << "Constant(" << static_cast<std::string>(value) << ")" << std::endl;
 }
 ValueRef ASTConstant::eval(Context& globals, Context& locals) const {
-    return ValueRef(type, literal);
+    return value;
 }
 
 ASTIdentifier::ASTIdentifier(const ASTToken& token)
@@ -292,33 +290,4 @@ Context ASTFunctionDefinition::prepare_locals(Context& globals, const ASTFunctio
         new_locals.emplace((*it)->identifier->name, arguments.size() > index ? arguments[index]->eval(globals, new_locals) : ValueRef());
     }
     return new_locals;
-}
-
-const std::map<std::string, ASTBuiltinFunctionDefinition> ASTBuiltinFunctionDefinition::BuiltinFunctions = {
-    {"print", ASTBuiltinFunctionDefinition("print", [] (const std::vector<ValueRef>& args) {
-        for (const auto& arg : args) {
-            std::cout << static_cast<std::string>(arg) << " ";
-        }
-        std::cout << std::endl;
-        return Constants::Null;
-    })},
-};
-Context ASTBuiltinFunctionDefinition::InitGlobals() {
-    Context globals;
-    for (const auto& [name, func] : BuiltinFunctions) {
-        globals.emplace(name, ValueRef(std::make_shared<FunctionValue>(&func)));
-    }
-    return globals;
-}
-ASTBuiltinFunctionDefinition::ASTBuiltinFunctionDefinition(const char *name, FuncType func)
-    : ASTFunctionDefinition(name), func(func) {}
-void ASTBuiltinFunctionDefinition::execute(Context& globals, Context& locals) const {}
-void ASTBuiltinFunctionDefinition::print(std::ostream& os, uint64_t indent) const {
-    os << std::string(indent, ' ') << "BuiltinFunctionDefinition("s + name + ")"s << std::endl;
-}
-ValueRef ASTBuiltinFunctionDefinition::call(Context& globals, const ASTFunctionCallArguments& arguments) const {
-    Context new_locals = prepare_locals(globals, arguments);
-    // TODO: enable variadic parameters
-    // new_locals.emplace("args", ValueRef(std::make_shared<ListValue>(std::vector<ValueRef>())));
-    // return func(new_locals);
 }

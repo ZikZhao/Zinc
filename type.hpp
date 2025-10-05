@@ -1,5 +1,9 @@
 #pragma once
-#include <string>
+#include "pch.hpp"
+#include "ref.hpp"
+
+class Type;
+using TypeRef = Reference<Type>;
 
 class Type {
 public:

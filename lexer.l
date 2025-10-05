@@ -1,8 +1,5 @@
 %{
-#include <stdio.h>
-#include <string.h>
-#include <iostream>
-#include <fstream>
+#include "pch.hpp"
 #include "ast.hpp"
 #include "out/parser.tab.hpp"
 

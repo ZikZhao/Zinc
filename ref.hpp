@@ -1,21 +1,7 @@
 #pragma once
-#include <stdexcept>
-#include <vector>
-#include <string>
-#include <memory>
-#include <map>
-#include "value.hpp"
-#include "type.hpp"
+#include "pch.hpp"
 
-template<typename TargetType> class Reference;
-using ValueRef = Reference<Value>;
-using TypeRef = Reference<Type>;
-
-namespace Constants {
-    extern const ValueRef Null;
-    extern const ValueRef True;
-    extern const ValueRef False;
-}
+class Value;
 
 template<typename TargetType>
 class Reference {
@@ -26,28 +12,10 @@ public:
     Reference() = default;
     Reference(const Reference& other) = default;
     Reference(Reference&& other) = default;
-    Reference(TargetType* ptr) : ptr(ptr), source(nullptr) {
-        use_const();
-    }
-    Reference(std::shared_ptr<TargetType>&& other) : ptr(std::forward<std::shared_ptr<TargetType>>(other)), source(nullptr) {
-        use_const();
-    }
+    Reference(TargetType* ptr) : ptr(ptr), source(nullptr) {}
+    Reference(std::shared_ptr<TargetType>&& other) : ptr(std::forward<std::shared_ptr<TargetType>>(other)), source(nullptr) {}
     // Copy constructor that keeps track of source for assignment propagation
     Reference(Reference& other) : ptr(other.ptr), source(&other) {}
-    template<typename U = TargetType, typename = std::enable_if_t<std::is_same_v<Value, U>>>
-    Reference(LiteralType type, std::string_view literal) : ptr(Value::FromLiteral(type, literal)), source(nullptr) {
-        use_const();
-    }
-private:
-    void use_const() {
-        if constexpr (std::is_same_v<TargetType, Value>) {
-            if (auto ptr = dynamic_cast<NullValue*>(this->ptr.get())) {
-                this->ptr = Constants::Null.ptr;
-            } else if (auto ptr = dynamic_cast<BooleanValue*>(this->ptr.get())) {
-                this->ptr = ptr->value ? Constants::True.ptr : Constants::False.ptr;
-            }
-        }
-    }
 public:
     // Assignment operator with adaptation
     Reference& operator = (const Reference& other) {
@@ -56,7 +24,6 @@ public:
         } else {
             this->ptr = other.ptr;
         }
-        this->use_const();
         if (this->source) {
             *(this->source) = *this;
             this->source = nullptr;
@@ -146,5 +113,3 @@ public:
         return this->operator*().is_truthy();
     }
 };
-
-using Context = std::map<std::string, ValueRef>;
