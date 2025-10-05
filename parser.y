@@ -123,6 +123,26 @@ type : KW_INTEGER
      | KW_BOOLEAN
      ;
 
+argument_list : expression[arg]
+              { 
+                  $$ = new ASTFunctionCallArguments(@$, static_cast<ASTValueExpression*>($arg));
+              }
+              | argument_list[prev] OP_COMMA expression[arg]
+              { 
+                  $$ = &static_cast<ASTFunctionCallArguments*>($prev)->push_back(static_cast<ASTValueExpression*>($arg));
+              }
+              ;
+
+function_call : expression[function] OP_LPAREN OP_RPAREN
+              {
+                  $$ = new ASTFunctionCall(@$, static_cast<ASTValueExpression*>($function));
+              }
+              | expression[function] OP_LPAREN argument_list OP_RPAREN
+              {
+                  $$ = new ASTFunctionCall(@$, static_cast<ASTValueExpression*>($function), static_cast<ASTFunctionCallArguments*>($argument_list));
+              }
+              ;
+
 expression : constant                                                             { $$ = $constant; }
            | identifier                                                           { $$ = $identifier; }
            | OP_SUB expression[expr] %prec OP_NEG                                 { $$ = new ASTNegOp(@$, static_cast<ASTValueExpression*>($expr)); }
@@ -161,6 +181,7 @@ expression : constant                                                           
            | expression[condition] OP_QUESTION expression[then] OP_COLON expression[else]
            | expression[left] OP_DOT identifier
            | expression[left] OP_COMMA expression[right]
+           | function_call %prec OP_FUNCTION_CALL                                 { $$ = static_cast<ASTFunctionCall*>($function_call); }
            | OP_LPAREN expression[expr] OP_RPAREN                                 { $$ = static_cast<ASTValueExpression*>($expr); }
            ;
 
@@ -231,6 +252,16 @@ break_statement : KW_BREAK OP_SEMICOLON    { $$ = new ASTBreakStatement(@$); }
 continue_statement : KW_CONTINUE OP_SEMICOLON    { $$ = new ASTContinueStatement(@$); }
                    ;
 
+parameter: identifier
+         {
+             $$ = new ASTFunctionParameter(static_cast<ASTIdentifier*>($identifier));
+         }
+         | identifier OP_COLON type
+         {
+             $$ = new ASTFunctionParameter(static_cast<ASTTypeExpression*>(static_cast<ASTTypeExpression*>($type)), static_cast<ASTIdentifier*>($identifier));
+         }
+         ;
+
 %%
 std::ifstream yyin;
 
@@ -255,7 +286,7 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl;
     root->print(std::cout);
 
-    Context globals;
+    Context globals = ASTBuiltinFunctionDefinition::InitGlobals();
     root->execute(globals, globals);
     std::cout << std::endl;
     for (const auto& record : globals) {

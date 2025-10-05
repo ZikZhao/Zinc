@@ -1,4 +1,5 @@
 #include <cmath>
+#include <format>
 #include "value.hpp"
 #include "type.hpp"
 #include "ref.hpp"
@@ -378,3 +379,51 @@ BooleanValue* BooleanValue::adapt_for_assignment(const Value& other) const {
 BooleanValue::operator std::string () const {
     return this->value ? "true" : "false";
 }
+
+FunctionValue::FunctionValue(const ASTFunctionDefinition* definition) : definition(definition) {}
+bool FunctionValue::is_truthy() const {
+    return true;
+}
+FunctionValue* FunctionValue::adapt_for_assignment(const Value& other) const {
+    if (auto func_val = dynamic_cast<const FunctionValue*>(&other)) {
+        return nullptr;
+    } else {
+        throw std::runtime_error("Cannot adapt to Function");
+    }
+}
+FunctionValue::operator std::string () const {
+    return std::format("<function {} at {:p}>", definition->name, static_cast<const void*>(this));
+}
+
+// ListValue::ListValue(std::vector<ValueRef>&& values) : values(std::forward<std::vector<ValueRef>>(values)) {}
+// Value* ListValue::operator [] (size_t index) const {
+//     if (index >= values.size()) {
+//         throw std::runtime_error("Index out of bounds");
+//     }
+//     return nullptr;
+//     // return values[index];
+// }
+// Value* ListValue::operator + (const Value& other) const {
+//     return other + *this;
+// }
+// Value* ListValue::operator + (const ListValue& other) const {
+//     std::vector<ValueRef> new_values = this->values;
+//     new_values.insert(new_values.end(), other.values.begin(), other.values.end());
+//     return new ListValue(std::move(new_values));
+// }
+// Value* ListValue::operator * (const Value& other) const {
+//     if (auto int_val = dynamic_cast<const IntegerValue*>(&other)) {
+//         return this->operator*(*int_val);
+//     } else {
+//         throw std::runtime_error("Multiplication not implemented for this type");
+//     }
+// }
+// Value* ListValue::operator * (const IntegerValue& other) const {
+//     if (other.value <= 0) throw std::runtime_error("Can only multiply list by positive integer");
+//     std::vector<ValueRef> new_values;
+//     new_values.reserve(this->values.size() * other.value);
+//     for (uint64_t i = 0; i < other.value; i++) {
+//         new_values.insert(new_values.end(), this->values.begin(), this->values.end());
+//     }
+//     return new ListValue(std::move(new_values));
+// }

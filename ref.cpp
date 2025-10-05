@@ -1,3 +1,4 @@
+#include <iostream>
 #include "ref.hpp"
 
 const ValueRef Constants::Null = ValueRef(std::make_shared<NullValue>());

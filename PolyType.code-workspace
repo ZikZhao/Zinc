@@ -56,10 +56,16 @@
             "cinttypes": "cpp",
             "typeinfo": "cpp",
             "variant": "cpp",
-            "map": "cpp"
+            "map": "cpp",
+            "charconv": "cpp",
+            "ctime": "cpp",
+            "optional": "cpp",
+            "span": "cpp",
+            "format": "cpp",
+            "text_encoding": "cpp"
         },
         "C_Cpp.default.compilerPath": "/usr/bin/g++",
-        "C_Cpp.default.cppStandard": "c++20",
+        "C_Cpp.default.cppStandard": "c++23",
         "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
         "C_Cpp.default.includePath": [
             "${workspaceFolder}/**",
@@ -78,129 +84,26 @@
         "version": "2.0.0",
         "tasks": [
             {
-                "label": "Clean",
+                "label": "Build with Make",
                 "type": "shell",
-                "command": "rm",
-                "args": [
-                    "-rf",
-                    "out"
-                ],
-                "group": "build",
-                "presentation": {
-                    "echo": true,
-                    "reveal": "always",
-                    "focus": false,
-                    "panel": "shared"
-                }
-            },
-            {
-                "label": "Create Output Directory",
-                "type": "shell",
-                "command": "mkdir",
-                "args": [
-                    "-p",
-                    "out"
-                ],
-                "group": "build",
-                "presentation": {
-                    "echo": true,
-                    "reveal": "always",
-                    "focus": false,
-                    "panel": "shared"
-                },
-                "problemMatcher": []
-            },
-            {
-                "label": "Generate Parser Files",
-                "type": "shell",
-                "command": "bison",
-                "args": [
-                    "-d",
-                    "-o",
-                    "out/parser.tab.cpp",
-                    "parser.y"
-                ],
-                "group": "build",
-                "presentation": {
-                    "echo": true,
-                    "reveal": "always",
-                    "focus": false,
-                    "panel": "shared"
-                },
-                "problemMatcher": [],
-                "dependsOn": "Create Output Directory"
-            },
-            {
-                "label": "Generate Lexer",
-                "type": "shell",
-                "command": "flex",
-                "args": [
-                    "--c++",
-                    "-o",
-                    "out/lex.yy.cc",
-                    "lexer.l"
-                ],
-                "group": "build",
-                "presentation": {
-                    "echo": true,
-                    "reveal": "always",
-                    "focus": false,
-                    "panel": "shared"
-                },
-                "problemMatcher": [],
-                "dependsOn": "Generate Parser Files"
-            },
-            {
-                "label": "Compile Parser",
-                "type": "shell",
-                "command": "g++",
-                "args": [
-                    "out/parser.tab.cpp",
-                    "out/lex.yy.cc",
-                    "ast.cpp",
-                    "value.cpp",
-                    "type.cpp",
-                    "ref.cpp",
-                    "exception.cpp",
-                    "-I",
-                    ".",
-                    "-I",
-                    "out",
-                    "-o",
-                    "out/parser",
-                    "-lfl",
-                    "--std=c++20",
-                    "-g",
-                    "-O0"
-                ],
+                "command": "make",
                 "group": {
                     "kind": "build",
                     "isDefault": true
                 },
-                "presentation": {
-                    "echo": true,
-                    "reveal": "always",
-                    "focus": false,
-                    "panel": "shared"
-                },
-                "problemMatcher": [],
-                "dependsOn": "Generate Lexer"
+                "problemMatcher": [
+                    "$gcc"
+                ]
             },
             {
-                "label": "Build All",
-                "dependsOrder": "sequence",
-                "dependsOn": [
-                    "Clean",
-                    "Create Output Directory",
-                    "Generate Parser Files",
-                    "Generate Lexer", 
-                    "Compile Parser"
+                "label": "Clean with Make",
+                "type": "shell",
+                "command": "make",
+                "args": [
+                    "clean"
                 ],
-                "group": {
-                    "kind": "build",
-                    "isDefault": true
-                }
-            },
+                "group": "build"
+            }
         ]
     },
     "launch": {
@@ -224,7 +127,7 @@
                         "ignoreFailures": true
                     }
                 ],
-                "preLaunchTask": "Build All"
+                "preLaunchTask": "Build with Make"
             },
         ]
     }

@@ -2,12 +2,15 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <functional>
 #define AllTypeVirtualBinaryOperator(op) \
     virtual Value* operator op (const Value& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
     virtual Value* operator op (const IntegerValue& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
     virtual Value* operator op (const FloatValue& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
     virtual Value* operator op (const StringValue& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual Value* operator op (const BooleanValue& other) const { throw std::runtime_error(#op " not implemented for this type"); };
+    virtual Value* operator op (const BooleanValue& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
+    virtual Value* operator op (const FunctionValue& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
+    // virtual Value* operator op (const ListValue& other) const { throw std::runtime_error(#op " not implemented for this type"); };
 #define AllTypeVirtualUnaryOperator(op) \
     virtual Value* operator op () const { throw std::runtime_error(#op " not implemented for this type"); };
 
@@ -19,12 +22,19 @@ enum LiteralType {
     LITERAL_BOOLEAN,
 };
 
+class ASTFunctionDefinition;
+
 class Value;
 class NullValue;
 class IntegerValue;
 class FloatValue;
 class StringValue;
 class BooleanValue;
+class FunctionValue;
+// class ListValue;
+
+template<typename TargetType> class Reference;
+using ValueRef = Reference<Value>;
 
 class Value {
 public:
@@ -52,7 +62,6 @@ public:
     AllTypeVirtualUnaryOperator(~);
     AllTypeVirtualBinaryOperator(<<);
     AllTypeVirtualBinaryOperator(>>);
-    virtual Value* operator () (std::vector<const Value*> args) const { throw std::runtime_error("Function call not implemented for this type"); };
     virtual Value* operator [] (size_t index) const { throw std::runtime_error("Indexing not implemented for this type"); };
     virtual bool is_truthy() const { throw std::runtime_error("Truthiness not implemented for this type"); };
     virtual Value* adapt_for_assignment(const Value& other) const = 0;
@@ -177,3 +186,26 @@ public:
     BooleanValue* adapt_for_assignment(const Value& other) const final;
     operator std::string () const final;
 };
+
+class FunctionValue : public Value {
+public:
+    const ASTFunctionDefinition* const definition;
+    FunctionValue(const ASTFunctionDefinition* definition);
+    bool is_truthy() const final;
+    FunctionValue* adapt_for_assignment(const Value& other) const final;
+    operator std::string () const final;
+};
+
+// class ListValue : public Value {
+// public:
+//     std::vector<ValueRef> values;
+//     ListValue(std::vector<ValueRef>&& values);
+//     Value* operator + (const Value& other) const final;
+//     Value* operator + (const ListValue& other) const final;
+//     Value* operator * (const Value& other) const final;
+//     Value* operator * (const IntegerValue& other) const final;
+//     Value* operator [] (size_t index) const final;
+//     bool is_truthy() const final;
+//     ListValue* adapt_for_assignment(const Value& other) const final;
+//     operator std::string () const final;
+// };

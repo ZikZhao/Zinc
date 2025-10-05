@@ -78,7 +78,7 @@ class ASTToken : public ASTNode {
 private:
     static std::vector<ASTToken> Instances;
 public:
-    static ASTToken* New(auto... args) {
+    static ASTToken* New(auto&&... args) {
         Instances.emplace_back(std::forward<decltype(args)>(args)...);
         return &Instances.back();
     }
@@ -173,6 +173,33 @@ public:
     }
 };
 
+class ASTFunctionCallArguments : public ASTNode {
+public:
+    std::vector<const ASTValueExpression*> arguments;
+    ASTFunctionCallArguments();
+    ASTFunctionCallArguments(const Location& location, const ASTValueExpression* first_arg);
+    ~ASTFunctionCallArguments() override;
+    void print(std::ostream& os, uint64_t indent) const override;
+    void execute(Context& globals, Context& locals) const override;
+    ASTFunctionCallArguments& push_back(const ASTValueExpression* arg);
+    decltype(auto) size() const;
+    decltype(auto) operator[] (uint64_t index) const;
+    decltype(auto) begin();
+    decltype(auto) begin() const;
+    decltype(auto) end();
+    decltype(auto) end() const;
+};
+
+class ASTFunctionCall : public ASTValueExpression {
+public:
+    const ASTValueExpression* const function;
+    const ASTFunctionCallArguments* const arguments;
+    ASTFunctionCall(const Location& location, const ASTValueExpression* function, const ASTFunctionCallArguments* arguments = 0);
+    ~ASTFunctionCall() override;
+    void print(std::ostream& os, uint64_t indent) const override;
+    ValueRef eval(Context& globals, Context& locals) const override;
+};
+
 using ASTAddOp              = ASTBinaryOp<"+", std::plus<>>;
 using ASTSubOp              = ASTBinaryOp<"-", std::minus<>>;
 using ASTNegOp              = ASTUnaryOp<"~", std::negate<>>;
@@ -256,4 +283,55 @@ public:
     ASTBreakStatement(const Location& location);
     void execute(Context& globals, Context& locals) const override;
     void print(std::ostream& os, uint64_t indent) const override;
+};
+
+class ASTFunctionParameter : public ASTNode {
+public:
+    const ASTTypeExpression* const type;
+    const ASTIdentifier* const identifier;
+    ASTFunctionParameter(const Location& location, const ASTTypeExpression* type, const ASTIdentifier* name);
+    ~ASTFunctionParameter() override;
+    void execute(Context& globals, Context& locals) const override;
+    void print(std::ostream& os, uint64_t indent) const override;
+};
+
+class ASTFunctionSignature : public ASTNode {
+public:
+    std::vector<ASTFunctionParameter*> parameters;
+    ASTTypeExpression* return_type;
+    ASTFunctionSignature(const Location& location, const ASTTypeExpression* first_type, const ASTIdentifier* first_name);
+    ~ASTFunctionSignature() override;
+    void execute(Context& globals, Context& locals) const override;
+    void print(std::ostream& os, uint64_t indent) const override;
+    ASTFunctionSignature& push(const Location& new_location, ASTFunctionParameter* param);
+};
+
+class ASTFunctionDefinition : public ASTNode {
+public:
+    const std::string name;
+    const ASTFunctionSignature* const signature;
+    const ASTStatements* const body;
+protected:
+    ASTFunctionDefinition(const char* name);
+public:
+    ASTFunctionDefinition(const Location& location, const ASTIdentifier* name, const ASTFunctionSignature* signature, const ASTStatements* body);
+    ~ASTFunctionDefinition() override;
+    void execute(Context& globals, Context& locals) const override;
+    void print(std::ostream& os, uint64_t indent) const override;
+    virtual ValueRef call(Context& globals, const ASTFunctionCallArguments& arguments) const;
+protected:
+    Context prepare_locals(Context& globals, const ASTFunctionCallArguments& arguments) const;
+};
+
+class ASTBuiltinFunctionDefinition : public ASTFunctionDefinition {
+public:
+    static const std::map<std::string, ASTBuiltinFunctionDefinition> BuiltinFunctions;
+    static Context InitGlobals();
+    using FuncType = std::function<ValueRef(const std::vector<ValueRef>)>;
+    const FuncType func;
+    ASTBuiltinFunctionDefinition(const char* name, FuncType func);
+    ~ASTBuiltinFunctionDefinition() final = default;
+    void execute(Context& globals, Context& locals) const final;
+    void print(std::ostream& os, uint64_t indent) const final;
+    ValueRef call(Context& globals, const ASTFunctionCallArguments& arguments) const final;
 };

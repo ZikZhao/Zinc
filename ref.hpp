@@ -8,7 +8,6 @@
 #include "type.hpp"
 
 template<typename TargetType> class Reference;
-class Variable;
 using ValueRef = Reference<Value>;
 using TypeRef = Reference<Type>;
 
@@ -20,7 +19,6 @@ namespace Constants {
 
 template<typename TargetType>
 class Reference {
-    friend class Variable;
 private:
     std::shared_ptr<TargetType> ptr;
     Reference* source;
