@@ -1,8 +1,6 @@
 #pragma once
 #include "pch.hpp"
 
-class Value;
-
 template<typename TargetType>
 class Reference {
 private:
@@ -19,8 +17,8 @@ public:
 public:
     // Assignment operator with adaptation
     Reference& operator = (const Reference& other) {
-        if (Value* adapted = this->ptr->adapt_for_assignment(*other.ptr)) {
-            this->ptr = std::shared_ptr<Value>(adapted);
+        if (TargetType* adapted = this->ptr->adapt_for_assignment(*other.ptr)) {
+            this->ptr = std::shared_ptr<TargetType>(adapted);
         } else {
             this->ptr = other.ptr;
         }
@@ -99,17 +97,16 @@ public:
     Reference operator >> (const Reference& other) const {
         return this->operator*() >> *other;
     }
-    Reference operator () (std::vector<Reference> args) const {
-        std::vector<const TargetType*> val_args;
-        for (const auto& arg : args) {
-            val_args.push_back(&*arg);
-        }
-        return this->operator*()(val_args);
+    Reference operator () (auto&&... args) const {
+        return this->operator*()(std::forward<decltype(args)>(args)...);
     }
-    Reference operator [] (size_t index) const {
-        return this->operator*()[index];
+    Reference operator [] (auto&& index) const {
+        return this->operator*()[std::forward<decltype(index)>(index)];
     }
     bool is_truthy() const {
         return this->operator*().is_truthy();
+    }
+    bool contains(const TargetType& other) const {
+        return this->operator*().contains(other);
     }
 };

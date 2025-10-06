@@ -2,7 +2,6 @@
 #include "ast.hpp"
 #include "value.hpp"
 #include "exception.hpp"
-using namespace std::literals::string_literals;
 
 std::ostream& operator<< (std::ostream& os, const Location& loc) {
     return os << loc.begin.line << ":" << loc.begin.column << "-" << loc.end.line << ":" << loc.end.column;
@@ -77,40 +76,30 @@ ASTFunctionCallArguments::ASTFunctionCallArguments() : ASTNode({{0, 0}, {0, 0}})
 ASTFunctionCallArguments::ASTFunctionCallArguments(const Location &location, const ASTValueExpression *first_arg)
     : ASTNode(location), arguments{first_arg} {}
 ASTFunctionCallArguments::~ASTFunctionCallArguments() {
-    for (const auto& arg : arguments) {
-        delete arg;
+    for (const auto& expr : arguments) {
+        delete expr;
     }
 }
 void ASTFunctionCallArguments::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "FunctionCallArguments"s << std::endl;
-    for (const auto& arg : arguments) {
-        arg->print(os, indent + 2);
+    for (const auto& expr : arguments) {
+        expr->print(os, indent + 2);
     }
 }
 void ASTFunctionCallArguments::execute(Context& globals, Context& locals) const {
     throw std::runtime_error("Cannot execute function call arguments");
 }
-ASTFunctionCallArguments& ASTFunctionCallArguments::push_back(const ASTValueExpression* arg) {
+ASTFunctionCallArguments& ASTFunctionCallArguments::push_back(const Location& new_location, const ASTValueExpression* arg) {
     arguments.push_back(arg);
+    location = new_location;
     return *this;
 }
-decltype(auto) ASTFunctionCallArguments::size() const {
-    return arguments.size();
-}
-decltype(auto) ASTFunctionCallArguments::operator[] (uint64_t index) const {
-    return arguments[index];
-}
-decltype(auto) ASTFunctionCallArguments::begin() {
-    return arguments.begin();
-}
-decltype(auto) ASTFunctionCallArguments::begin() const {
-    return arguments.begin();
-}
-decltype(auto) ASTFunctionCallArguments::end() {
-    return arguments.end();
-}
-decltype(auto) ASTFunctionCallArguments::end() const {
-    return arguments.end();
+Arguments ASTFunctionCallArguments::eval_arguments(Context& globals, Context& locals) const {
+    Arguments values;
+    for (const auto& expr : arguments) {
+        values.emplace_back(expr->eval(globals, locals));
+    }
+    return values;
 }
 
 ASTFunctionCall::ASTFunctionCall(const Location& location, const ASTValueExpression* function, const ASTFunctionCallArguments* arguments)
@@ -126,11 +115,7 @@ void ASTFunctionCall::print(std::ostream& os, uint64_t indent) const {
 }
 ValueRef ASTFunctionCall::eval(Context& globals, Context& locals) const {
     ValueRef result = function->eval(globals, locals);
-    const FunctionValue* func;
-    if (not (func = dynamic_cast<const FunctionValue*>(&*result))) {
-        throw std::runtime_error("Value is not callable");
-    }
-    return func->definition->call(globals, *arguments);
+    return result(globals, arguments->eval_arguments(globals, locals));
 }
 
 ASTDeclaration::ASTDeclaration(const Location& location, const ASTIdentifier* identifier, const ASTValueExpression* expr, const bool is_const)
@@ -221,8 +206,8 @@ void ASTBreakStatement::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "BreakStatement"s << std::endl;
 }
 
-ASTFunctionParameter::ASTFunctionParameter(const Location& location, const ASTTypeExpression* type, const ASTIdentifier* name)
-    : ASTNode(location), type(type), identifier(name) {}
+ASTFunctionParameter::ASTFunctionParameter(const Location& location, const ASTIdentifier* identifier, const ASTTypeExpression* type)
+    : ASTNode(location), identifier(identifier), type(type) {}
 ASTFunctionParameter::~ASTFunctionParameter() {
     delete type;
     delete identifier;
@@ -237,7 +222,7 @@ void ASTFunctionParameter::print(std::ostream& os, uint64_t indent) const {
 }
 
 ASTFunctionSignature::ASTFunctionSignature(const Location& location, const ASTTypeExpression* first_type, const ASTIdentifier* first_name)
-    : ASTNode(location), parameters{new ASTFunctionParameter(location, first_type, first_name)} {}
+    : ASTNode(location), parameters{new ASTFunctionParameter(location, first_name, first_type)} {}
 ASTFunctionSignature::~ASTFunctionSignature() {
     for (const auto& param : parameters) {
         delete param;
@@ -257,6 +242,27 @@ ASTFunctionSignature& ASTFunctionSignature::push(const Location& new_location, A
     location = new_location;
     return *this;
 }
+Context ASTFunctionSignature::collect_arguments(const Arguments &raw) const {
+    Context context;
+    auto param_it = parameters.begin();
+    auto arg_it = raw.begin();
+    for (; param_it != parameters.end() && arg_it != raw.end(); ++param_it, ++arg_it) {
+        context.emplace((*param_it)->identifier->name, *arg_it);
+    }
+    if (param_it != parameters.end()) {
+        throw ArgumentException("Not enough arguments provided to function call"s);
+    }
+    if (spread_param) {
+        std::vector<ValueRef> spread_args;
+        for (; arg_it != raw.end(); ++arg_it) {
+            spread_args.emplace_back(*arg_it);
+        }
+        context.emplace(spread_param->identifier->name, new ListValue(std::move(spread_args)));
+    } else if (arg_it != raw.end()) {
+        throw ArgumentException("Too many arguments provided to function call"s);
+    }
+    return context;
+}
 
 ASTFunctionDefinition::ASTFunctionDefinition(const char* name)
     : ASTNode({{0, 0}, {0, 0}}), name(name), signature(nullptr), body(nullptr) {}
@@ -271,23 +277,4 @@ void ASTFunctionDefinition::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "FunctionDefinition("s + name + ")"s << std::endl;
     signature->print(os, indent + 2);
     body->print(os, indent + 2);
-}
-ValueRef ASTFunctionDefinition::call(Context& globals, const ASTFunctionCallArguments& arguments) const {
-    Context new_locals = prepare_locals(globals, arguments);
-    try {
-        execute(globals, new_locals);
-    }
-    catch (ReturnException& e) {
-        return e.return_value;
-    }
-    std::unreachable();
-}
-Context ASTFunctionDefinition::prepare_locals(Context& globals, const ASTFunctionCallArguments& arguments) const {
-    Context new_locals;
-    const auto& params = signature->parameters;
-    uint64_t index = 0;
-    for (auto it = params.begin(); it != params.end(); ++it, ++index) {
-        new_locals.emplace((*it)->identifier->name, arguments.size() > index ? arguments[index]->eval(globals, new_locals) : ValueRef());
-    }
-    return new_locals;
 }

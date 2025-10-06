@@ -3,8 +3,6 @@
 #include "type.hpp"
 #include "ref.hpp"
 #include "out/parser.tab.hpp"
-using namespace std::literals::string_literals;
-using namespace std::literals::string_view_literals;
 
 ValueRef Value::ObjectIs(const Value& left, const Value& right) {
     return new BooleanValue(&left == &right);
@@ -382,6 +380,15 @@ BooleanValue::operator std::string () const {
 }
 
 FunctionValue::FunctionValue(const ASTFunctionDefinition* definition) : definition(definition) {}
+ValueRef FunctionValue::operator () (Context &globals, const Arguments &args) const {
+    try {
+        Context locals = definition->signature->collect_arguments(args);
+        definition->body->execute(globals, locals);
+    } catch (ReturnException<ValueRef>& e) {
+        return e.return_value;
+    }
+    std::unreachable();
+}
 bool FunctionValue::is_truthy() const {
     return true;
 }
@@ -396,10 +403,33 @@ FunctionValue::operator std::string () const {
     return std::format("<function {} at {:p}>", definition->name, static_cast<const void*>(this));
 }
 
-BuiltinFunctionValue::BuiltinFunctionValue(std::string_view name, FuncType func)
-    : name(name), func(std::move(func)) {}
-ValueRef BuiltinFunctionValue::operator () (const DictValue* args) const {
-    return func(args);
+BuiltinFunctionValue::Signature::Signature(std::vector<std::pair<std::string, TypeRef>> param_names, std::pair<std::string, TypeRef> spread_param, TypeRef ret_type)
+    : parameters(std::move(param_names)), spread_parameter(std::move(spread_param)), return_type(std::move(ret_type)) {}
+Context BuiltinFunctionValue::Signature::collect_arguments(const Arguments &args) const {
+    Context context;
+    auto param_it = parameters.begin();
+    auto arg_it = args.begin();
+    for (; param_it != parameters.end() && arg_it != args.end(); ++param_it, ++arg_it) {
+        context.emplace(param_it->first, *arg_it);
+    }
+    if (param_it != parameters.end()) {
+        throw ArgumentException("Not enough arguments provided to function call"s);
+    }
+    if (spread_parameter.first != ""s) {
+        std::vector<ValueRef> spread_args;
+        for (; arg_it != args.end(); ++arg_it) {
+            spread_args.emplace_back(*arg_it);
+        }
+        context.emplace(spread_parameter.first, new ListValue(std::move(spread_args)));
+    } else if (arg_it != args.end()) {
+        throw ArgumentException("Too many arguments provided to function call"s);
+    }
+    return context;
+}
+BuiltinFunctionValue::BuiltinFunctionValue(std::string_view name, FuncType func, Signature&& signature)
+    : name(name), func(std::forward<FuncType>(func)), signature(std::forward<Signature>(signature)) {}
+ValueRef BuiltinFunctionValue::operator () (Context& globals, const Arguments& args) const {
+    return func(signature.collect_arguments(args));
 }
 bool BuiltinFunctionValue::is_truthy() const {
     return true;
@@ -415,7 +445,7 @@ BuiltinFunctionValue::operator std::string () const {
     return std::format("<builtin function {} at {:p}>", name, static_cast<const void*>(this));
 }
 
-ClassValue::ClassValue(std::string_view name, std::vector<ValueRef> implements, ValueRef extends, Map properties)
+ClassValue::ClassValue(std::string_view name, std::vector<InterfaceValueRef> implements, ClassValueRef extends, Map<ValueRef> properties)
     : name(name), implements(std::move(implements)), extends(std::move(extends)), properties(std::move(properties)) {}
 ClassValue* ClassValue::adapt_for_assignment(const Value& other) const {
     if (auto class_val = dynamic_cast<const ClassValue*>(&other)) {
@@ -428,7 +458,7 @@ ClassValue::operator std::string () const {
     return std::format("<class {} at {:p}>", name, static_cast<const void*>(this));
 }
 
-ObjectValue::ObjectValue(ValueRef cls) : cls(cls), properties(InitProperties()) {}
+ObjectValue::ObjectValue(ClassValueRef cls) : cls(cls), properties(init_properties()) {}
 ValueRef ObjectValue::get(const std::string_view property) const {
     auto it = properties.find(std::string(property));
     if (it != properties.end()) {
@@ -437,28 +467,41 @@ ValueRef ObjectValue::get(const std::string_view property) const {
         throw std::runtime_error("Property '"s + std::string(property) + "' not found");
     }
 }
-Map ObjectValue::InitProperties() {
+Map<ValueRef> ObjectValue::init_properties() {
     Map props = static_cast<const ClassValue&>(*cls).properties;
     // TODO: Initialize properties from implements and extends
-    return props;
+    return Map(props);
 }
 
-ValueRef ListValue::ListClassInstance(new ClassValue("list"sv, std::vector<ValueRef>{}, {}, Map{
-    {"append", new BuiltinFunctionValue("append"sv, ListValue::Append)},
-}));
-ValueRef ListValue::Append(const DictValue* args) {
-    auto this_it = args->values.find("this");
-    auto value_it = args->values.find("value");
-    if (value_it == args->values.end()) {
-        throw std::runtime_error("Missing 'value' argument for list.append");
+ValueRef ListValue::ListClassInstance(new ClassValue("list"sv, std::vector<ValueRef>{}, {}, Map<ValueRef>({
+    {"append", new BuiltinFunctionValue(
+        "append"sv,
+        ListValue::Append,
+        { { {"value", new IntegerType} }, {}, new NullType }
+    )},
+})));
+ValueRef ListValue::Append(const Map<ValueRef>& args) {
+    try {
+        auto self = args.at("this");
+        auto arg1 = args.at("list");
+        auto arg2 = args.at("value");
+        if (auto list_val = dynamic_cast<ListValue*>(&*arg1)) {
+            list_val->values.push_back(arg2);
+            return new NullValue();
+        }
+        throw;
+    } catch (const std::out_of_range& e) {
+        throw ArgumentException(e.what());
     }
-    auto instance = dynamic_cast<ListValue&>(*this_it->second);
-    instance.values.push_back(value_it->second);
-    return new NullValue();
 }
+ListValue::ListValue() : ObjectValue(ListClassInstance), values() {}
 ListValue::ListValue(std::vector<ValueRef>&& values) : ObjectValue(ListClassInstance), values(std::forward<std::vector<ValueRef>>(values)) {}
 ValueRef ListValue::operator + (const Value& other) const {
-    return other + *this;
+    if (auto list_val = dynamic_cast<const ListValue*>(&other)) {
+        return this->operator+(*list_val);
+    } else {
+        throw std::runtime_error("Addition not implemented for this type");
+    }
 }
 ValueRef ListValue::operator + (const ListValue& other) const {
     std::vector<ValueRef> new_values = this->values;
@@ -515,9 +558,10 @@ ListValue::operator std::string () const {
     return result;
 }
 
-ValueRef DictValue::DictClassInstance(new ClassValue("dict"sv, std::vector<ValueRef>{}, {}, Map{
+ValueRef DictValue::DictClassInstance(new ClassValue("dict"sv, std::vector<ValueRef>{}, {}, Map<ValueRef>{
 }));
-DictValue::DictValue(Map&& values) : ObjectValue(DictValue::DictClassInstance), values(std::forward<Map>(values)) {}
+DictValue::DictValue(std::unordered_map<std::string, ValueRef>&& values)
+    : ObjectValue(DictValue::DictClassInstance), values(std::forward<decltype(values)>(values)) {}
 bool DictValue::is_truthy() const {
     return not this->values.empty();
 }
@@ -561,6 +605,14 @@ decltype(auto) DictValue::end() const {
     return values.end();
 }
 
-Map Builtins{
-
+Context Builtins{
+    { "print"s, new BuiltinFunctionValue(
+        "print"sv,
+        [](const Map<ValueRef>& args) -> ValueRef {
+            auto value_it = args.at("value");
+            std::cout << std::string(value_it) << std::endl;
+            return new NullValue();
+        },
+        { { {"value", new IntegerType} }, {}, new NullType }
+    )},
 };

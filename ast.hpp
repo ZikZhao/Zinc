@@ -2,7 +2,6 @@
 #include "pch.hpp"
 #include "value.hpp"
 #include "type.hpp"
-using namespace std::literals::string_literals;
 
 struct Location {
     struct {
@@ -167,13 +166,8 @@ public:
     ~ASTFunctionCallArguments() override;
     void print(std::ostream& os, uint64_t indent) const override;
     void execute(Context& globals, Context& locals) const override;
-    ASTFunctionCallArguments& push_back(const ASTValueExpression* arg);
-    decltype(auto) size() const;
-    decltype(auto) operator[] (uint64_t index) const;
-    decltype(auto) begin();
-    decltype(auto) begin() const;
-    decltype(auto) end();
-    decltype(auto) end() const;
+    ASTFunctionCallArguments& push_back(const Location& new_location, const ASTValueExpression* arg);
+    Arguments eval_arguments(Context& globals, Context& locals) const;
 };
 
 class ASTFunctionCall : public ASTValueExpression {
@@ -273,9 +267,9 @@ public:
 
 class ASTFunctionParameter : public ASTNode {
 public:
-    const ASTTypeExpression* const type;
     const ASTIdentifier* const identifier;
-    ASTFunctionParameter(const Location& location, const ASTTypeExpression* type, const ASTIdentifier* name);
+    const ASTTypeExpression* const type;
+    ASTFunctionParameter(const Location& location, const ASTIdentifier* identifier, const ASTTypeExpression* type);
     ~ASTFunctionParameter() override;
     void execute(Context& globals, Context& locals) const override;
     void print(std::ostream& os, uint64_t indent) const override;
@@ -284,12 +278,17 @@ public:
 class ASTFunctionSignature : public ASTNode {
 public:
     std::vector<ASTFunctionParameter*> parameters;
+    ASTFunctionParameter* spread_param;
     ASTTypeExpression* return_type;
     ASTFunctionSignature(const Location& location, const ASTTypeExpression* first_type, const ASTIdentifier* first_name);
+    ASTFunctionSignature(std::initializer_list<ASTFunctionParameter*> params);
     ~ASTFunctionSignature() override;
     void execute(Context& globals, Context& locals) const override;
     void print(std::ostream& os, uint64_t indent) const override;
     ASTFunctionSignature& push(const Location& new_location, ASTFunctionParameter* param);
+    ASTFunctionSignature& push_spread(const Location& new_location, ASTFunctionParameter* param);
+    ASTFunctionSignature& set_return_type(const Location& new_location, ASTTypeExpression* return_type);
+    Context collect_arguments(const Arguments& raw) const;
 };
 
 class ASTFunctionDefinition : public ASTNode {
@@ -304,7 +303,4 @@ public:
     ~ASTFunctionDefinition() override;
     void execute(Context& globals, Context& locals) const override;
     void print(std::ostream& os, uint64_t indent) const override;
-    virtual ValueRef call(Context& globals, const ASTFunctionCallArguments& arguments) const;
-protected:
-    Context prepare_locals(Context& globals, const ASTFunctionCallArguments& arguments) const;
 };

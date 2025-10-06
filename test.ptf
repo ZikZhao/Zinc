@@ -7,6 +7,6 @@ else {
     let b = 5;
 }
 
-for (let i = 1; i < 5; i += 1) {
+for (let i = 0; i < 5; i += 1) {
     print(i);
 }

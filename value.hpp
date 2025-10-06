@@ -1,6 +1,8 @@
 #pragma once
 #include "pch.hpp"
 #include "ref.hpp"
+#include "type.hpp"
+#include "exception.hpp"
 #define AllTypeVirtualBinaryOperator(op) \
     virtual ValueRef operator op (const Value& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
     virtual ValueRef operator op (const IntegerValue& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
@@ -20,7 +22,6 @@ enum LiteralType {
     LITERAL_BOOLEAN,
 };
 
-
 class ASTFunctionDefinition;
 
 class Value;
@@ -30,13 +31,20 @@ class FloatValue;
 class StringValue;
 class BooleanValue;
 class FunctionValue;
+class InterfaceValue;
+class ClassValue;
+class ObjectValue;
 class ListValue;
 class DictValue;
+class SetValue;
 
 using ValueRef = Reference<Value>;
 using Context = std::unordered_map<std::string, ValueRef>;
-using Map = std::unordered_map<std::string, ValueRef>;
+using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
+using InterfaceValueRef = ValueRef; // Should always point to an InterfaceValue
+using ClassValueRef = ValueRef; // Should always point to a ClassValue
+using DictValueRef = ValueRef; // Should always point to a DictValue
 
 class Value {
 public:
@@ -64,7 +72,7 @@ public:
     AllTypeVirtualUnaryOperator(~);
     AllTypeVirtualBinaryOperator(<<);
     AllTypeVirtualBinaryOperator(>>);
-    virtual ValueRef operator () (const DictValue* args) const { throw std::runtime_error("Function call not implemented for this type"); };
+    virtual ValueRef operator () (Context& globals, const Arguments& args) const { throw std::runtime_error("Function call not implemented for this type"); };
     virtual ValueRef operator [] (const Slice& indices) const { throw std::runtime_error("Indexing not implemented for this type"); };
     virtual ValueRef get(const std::string_view property) const { throw std::runtime_error("Property access not implemented for this type"); };
     virtual bool is_truthy() const { throw std::runtime_error("Truthiness not implemented for this type"); };
@@ -195,6 +203,7 @@ class FunctionValue : public Value {
 public:
     const ASTFunctionDefinition* const definition;
     FunctionValue(const ASTFunctionDefinition* definition);
+    ValueRef operator () (Context& globals, const Arguments& args) const final;
     bool is_truthy() const final;
     FunctionValue* adapt_for_assignment(const Value& other) const final;
     operator std::string () const final;
@@ -202,11 +211,22 @@ public:
 
 class BuiltinFunctionValue : public Value {
 public:
-    using FuncType = std::function<ValueRef(const DictValue*)>;
+    class Signature {
+    private:
+        std::vector<std::pair<std::string, TypeRef>> parameters;
+        std::pair<std::string, TypeRef> spread_parameter;
+        TypeRef return_type;
+    public:
+        Signature(std::vector<std::pair<std::string, TypeRef>> params, std::pair<std::string, TypeRef> spread_param, TypeRef ret_type);
+        Context collect_arguments(const Arguments& args) const;
+    };
+public:
+    using FuncType = std::function<ValueRef(const Map<ValueRef>&)>;
     const std::string name;
     const FuncType func;
-    BuiltinFunctionValue(std::string_view name, FuncType func);
-    ValueRef operator () (const DictValue* args) const final;
+    const Signature signature;
+    BuiltinFunctionValue(std::string_view name, FuncType func, Signature&& signature);
+    ValueRef operator () (Context& globals, const Arguments& args) const final;
     bool is_truthy() const final;
     BuiltinFunctionValue* adapt_for_assignment(const Value& other) const final;
     operator std::string () const final;
@@ -215,33 +235,34 @@ public:
 class ClassValue : public Value {
 public:
     std::string name;
-    Map properties;
-    std::vector<ValueRef> implements;
-    ValueRef extends;
+    Map<ValueRef> properties;
+    std::vector<InterfaceValueRef> implements;
+    ClassValueRef extends;
 private:
     ClassValue();
 public:
-    ClassValue(std::string_view name, std::vector<ValueRef> implements, ValueRef extends, Map properties);
+    ClassValue(std::string_view name, std::vector<InterfaceValueRef> implements, ClassValueRef extends, Map<ValueRef> properties);
     ClassValue* adapt_for_assignment(const Value& other) const final;
     operator std::string () const final;
 };
 
 class ObjectValue : public Value {
 public:
-    ValueRef cls;
-    Map properties;
-    ObjectValue(ValueRef cls);
+    ClassValueRef cls;
+    Map<ValueRef> properties;
+    ObjectValue(ClassValueRef cls);
     ValueRef get(const std::string_view property) const final;
 private:
-    Map InitProperties();
+    Map<ValueRef> init_properties();
 };
 
 class ListValue : public ObjectValue {
 private:
-    static ValueRef ListClassInstance;
-    static ValueRef Append(const DictValue* args);
+    static ClassValueRef ListClassInstance;
+    static ValueRef Append(const Map<ValueRef>& args);
 public:
     std::vector<ValueRef> values;
+    ListValue();
     ListValue(std::vector<ValueRef>&& values);
     ValueRef operator + (const Value& other) const final;
     ValueRef operator + (const ListValue& other) const final;
@@ -257,8 +278,8 @@ class DictValue : public ObjectValue {
 public:
     static ValueRef DictClassInstance;
 public:
-    Map values;
-    DictValue(Map&& values);
+    std::unordered_map<std::string, ValueRef> values;
+    DictValue(std::unordered_map<std::string, ValueRef>&& values);
     ValueRef operator [] (const Slice& indices) const final;
     bool is_truthy() const final;
     DictValue* adapt_for_assignment(const Value& other) const final;
@@ -269,4 +290,23 @@ public:
     decltype(auto) end() const;
 };
 
-extern Map Builtins;
+class SetValue : public ObjectValue {
+public:
+    static ValueRef SetClassInstance;
+public:
+    std::set<ValueRef> values;
+    SetValue(std::set<ValueRef>&& values);
+    ValueRef operator [] (const Slice& indices) const final;
+    bool is_truthy() const final;
+    SetValue* adapt_for_assignment(const Value& other) const final;
+    operator std::string () const final;
+    decltype(auto) begin();
+    decltype(auto) begin() const;
+    decltype(auto) end();
+    decltype(auto) end() const;
+};
+
+extern Context Builtins;
+
+#undef AllTypeVirtualBinaryOperator
+#undef AllTypeVirtualUnaryOperator

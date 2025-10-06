@@ -127,7 +127,7 @@ argument_list : expression[arg]
               }
               | argument_list[prev] OP_COMMA expression[arg]
               { 
-                  $$ = &static_cast<ASTFunctionCallArguments*>($prev)->push_back(static_cast<ASTValueExpression*>($arg));
+                  $$ = &static_cast<ASTFunctionCallArguments*>($prev)->push_back(@$, static_cast<ASTValueExpression*>($arg));
               }
               ;
 

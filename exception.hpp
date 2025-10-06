@@ -1,5 +1,5 @@
+#pragma once
 #include "pch.hpp"
-#include "value.hpp"
 
 class BreakException : public std::runtime_error {
 public:
@@ -11,8 +11,20 @@ public:
     ContinueException();
 };
 
+template<typename TargetType>
 class ReturnException : public std::runtime_error {
 public:
-    ValueRef return_value;
-    ReturnException(ValueRef return_value);
+    TargetType return_value;
+    ReturnException(TargetType return_value) : std::runtime_error("Return"), return_value(return_value) {}
+};
+
+class TypeException : public std::runtime_error {
+public:
+    TypeException(const std::string_view expected, const std::string_view actual);
+    TypeException(const std::string_view message);
+};
+
+class ArgumentException : public std::runtime_error {
+public:
+    ArgumentException(const std::string_view key);
 };
