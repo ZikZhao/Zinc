@@ -55,10 +55,10 @@ MULTI_LINE_COMMENT \/\*([^*]|\*+[^*/])*\*+\/
 "as"                     { return KW_AS; }
 
 "+"                      { return OP_ADD; }
-"-"                      { return OP_SUB; }
-"*"                      { return OP_MUL; }
-"/"                      { return OP_DIV; }
-"%"                      { return OP_REM; }
+"-"                      { return OP_SUBTRACT; }
+"*"                      { return OP_MULTIPLY; }
+"/"                      { return OP_DIVIDE; }
+"%"                      { return OP_REMAINDER; }
 "++"                     { return OP_INCREMENT; }
 "--"                     { return OP_DECREMENT; }
 
@@ -83,10 +83,10 @@ MULTI_LINE_COMMENT \/\*([^*]|\*+[^*/])*\*+\/
 
 "="                      { return OP_ASSIGN; }
 "+="                     { return OP_ADD_ASSIGN; }
-"-="                     { return OP_SUB_ASSIGN; }
-"*="                     { return OP_MUL_ASSIGN; }
-"/="                     { return OP_DIV_ASSIGN; }
-"%="                     { return OP_REM_ASSIGN; }
+"-="                     { return OP_SUBTRACT_ASSIGN; }
+"*="                     { return OP_MULTIPLY_ASSIGN; }
+"/="                     { return OP_DIVIDE_ASSIGN; }
+"%="                     { return OP_REMAINDER_ASSIGN; }
 
 "?"                      { return OP_QUESTION; }
 ":"                      { return OP_COLON; }

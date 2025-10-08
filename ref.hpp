@@ -34,68 +34,13 @@ public:
     operator std::string () const {
         return static_cast<std::string>(this->operator*());
     }
-    Reference operator + (const Reference& other) const {
-        return this->operator*() + *other;
+    template<typename Operator>
+    Reference eval_operation() const {
+        return this->operator*().eval_operation(GetOperatorString<Operator>());
     }
-    Reference operator - (const Reference& other) const {
-        return this->operator*() - *other;
-    }
-    Reference operator - () const {
-        return -this->operator*();
-    }
-    Reference operator * (const Reference& other) const {
-        return this->operator*() * *other;
-    }
-    Reference operator / (const Reference& other) const {
-        return this->operator*() / *other;
-    }
-    Reference operator % (const Reference& other) const {
-        return this->operator*() % *other;
-    }
-    Reference operator == (const Reference& other) const {
-        return this->operator*() == *other;
-    }
-    Reference operator != (const Reference& other) const {
-        return this->operator*() != *other;
-    }
-    Reference operator < (const Reference& other) const {
-        return this->operator*() < *other;
-    }
-    Reference operator <= (const Reference& other) const {
-        return this->operator*() <= *other;
-    }
-    Reference operator > (const Reference& other) const {
-        return this->operator*() > *other;
-    }
-    Reference operator >= (const Reference& other) const {
-        return this->operator*() >= *other;
-    }
-    Reference operator and (const Reference& other) const {
-        return this->operator*() and *other;
-    }
-    Reference operator or (const Reference& other) const {
-        return this->operator*() or *other;
-    }
-    Reference operator not () const {
-        return not this->operator*();
-    }
-    Reference operator & (const Reference& other) const {
-        return this->operator*() & *other;
-    }
-    Reference operator | (const Reference& other) const {
-        return this->operator*() | *other;
-    }
-    Reference operator ^ (const Reference& other) const {
-        return this->operator*() ^ *other;
-    }
-    Reference operator ~ () const {
-        return ~this->operator*();
-    }
-    Reference operator << (const Reference& other) const {
-        return this->operator*() << *other;
-    }
-    Reference operator >> (const Reference& other) const {
-        return this->operator*() >> *other;
+    template<typename Operator>
+    Reference eval_operation(Reference& other) const {
+        return this->operator*().eval_operation(GetOperatorString<Operator>(), other.operator*());
     }
     Reference operator () (auto&&... args) const {
         return this->operator*()(std::forward<decltype(args)>(args)...);

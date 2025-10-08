@@ -1,20 +1,7 @@
 #pragma once
 #include "pch.hpp"
 #include "ref.hpp"
-#define AllTypeVirtualBinaryOperator(op) \
-    virtual TypeRef operator op (const Type& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const IntegerType& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const FloatType& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const StringType& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const BooleanType& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const FunctionType& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const ListType& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const DictType& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const SetType& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const IntersectionType& other) const { throw std::runtime_error(#op " not implemented for this type"); }; \
-    virtual TypeRef operator op (const UnionType& other) const { throw std::runtime_error(#op " not implemented for this type"); };
-#define AllTypeVirtualUnaryOperator(op) \
-    virtual TypeRef operator op () const { throw std::runtime_error(#op " not implemented for this type"); };
+#include "value.hpp"
 
 class Type;
 class NullType;
@@ -30,31 +17,13 @@ class SetType;
 class IntersectionType;
 class UnionType;
 
+class BuiltinFunctionSignature;
+
 using TypeRef = Reference<Type>;
 
 class Type {
 public:
     virtual ~Type() = default;
-    AllTypeVirtualBinaryOperator(+);
-    AllTypeVirtualBinaryOperator(-);
-    AllTypeVirtualUnaryOperator(-);
-    AllTypeVirtualBinaryOperator(*);
-    AllTypeVirtualBinaryOperator(/);
-    AllTypeVirtualBinaryOperator(%);
-    AllTypeVirtualBinaryOperator(==);
-    AllTypeVirtualBinaryOperator(!=);
-    AllTypeVirtualBinaryOperator(<);
-    AllTypeVirtualBinaryOperator(<=);
-    AllTypeVirtualBinaryOperator(>);
-    AllTypeVirtualBinaryOperator(>=);
-    AllTypeVirtualBinaryOperator(and);
-    AllTypeVirtualBinaryOperator(or);
-    AllTypeVirtualUnaryOperator(not);
-    AllTypeVirtualBinaryOperator(&);
-    AllTypeVirtualBinaryOperator(|);
-    AllTypeVirtualBinaryOperator(^);
-    AllTypeVirtualBinaryOperator(<<);
-    AllTypeVirtualBinaryOperator(>>);
     virtual bool contains(const Type& other) const = 0;
     virtual operator std::string () const = 0;
 };
@@ -150,5 +119,12 @@ public:
     operator std::string () const final;
 };
 
-#undef AllTypeVirtualBinaryOperator
-#undef AllTypeVirtualUnaryOperator
+class BuiltinFunctionSignature {
+private:
+    std::vector<std::pair<std::string, TypeRef>> parameters;
+    std::pair<std::string, TypeRef> spread_parameter;
+    TypeRef return_type;
+public:
+    BuiltinFunctionSignature(std::vector<std::pair<std::string, TypeRef>> params, std::pair<std::string, TypeRef> spread_param, TypeRef ret_type);
+    Context collect_arguments(const Arguments& args) const;
+};

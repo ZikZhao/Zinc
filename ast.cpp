@@ -7,14 +7,6 @@ std::ostream& operator<< (std::ostream& os, const Location& loc) {
     return os << loc.begin.line << ":" << loc.begin.column << "-" << loc.end.line << ":" << loc.end.column;
 }
 
-ValueRef LeftShiftFunctor::operator()(const ValueRef &left, const ValueRef &right) const {
-    return left << right;
-}
-
-ValueRef RightShiftFunctor::operator()(const ValueRef &left, const ValueRef &right) const {
-    return left >> right;
-}
-
 ASTNode::ASTNode(const Location& location) : location(location) {}
 
 std::vector<ASTToken> ASTToken::Instances;
@@ -52,15 +44,6 @@ ASTStatements& ASTStatements::push(const Location& new_location, ASTNode* node) 
     statements.push_back(node);
     location = new_location;
     return *this;
-}
-
-ASTConstant::ASTConstant(const ASTToken& token, LiteralType type)
-    : ASTValueExpression(token.location), value(Value::FromLiteral(type, token.str)) {}
-void ASTConstant::print(std::ostream& os, uint64_t indent) const {
-    os << std::string(indent, ' ') << "Constant(" << static_cast<std::string>(value) << ")" << std::endl;
-}
-ValueRef ASTConstant::eval(Context& globals, Context& locals) const {
-    return value;
 }
 
 ASTIdentifier::ASTIdentifier(const ASTToken& token)

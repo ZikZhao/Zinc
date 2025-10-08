@@ -154,3 +154,27 @@ bool SetType::contains(const Type& other) const {
 SetType::operator std::string () const {
     return "set<" + static_cast<std::string>(element_type) + ">";
 }
+
+BuiltinFunctionSignature::BuiltinFunctionSignature(std::vector<std::pair<std::string, TypeRef>> param_names, std::pair<std::string, TypeRef> spread_param, TypeRef ret_type)
+    : parameters(std::move(param_names)), spread_parameter(std::move(spread_param)), return_type(std::move(ret_type)) {}
+Context BuiltinFunctionSignature::collect_arguments(const Arguments &args) const {
+    Context context;
+    auto param_it = parameters.begin();
+    auto arg_it = args.begin();
+    for (; param_it != parameters.end() && arg_it != args.end(); ++param_it, ++arg_it) {
+        context.emplace(param_it->first, *arg_it);
+    }
+    if (param_it != parameters.end()) {
+        throw ArgumentException("Not enough arguments provided to function call"s);
+    }
+    if (spread_parameter.first != ""s) {
+        std::vector<ValueRef> spread_args;
+        for (; arg_it != args.end(); ++arg_it) {
+            spread_args.emplace_back(*arg_it);
+        }
+        context.emplace(spread_parameter.first, new ListValue(std::move(spread_args)));
+    } else if (arg_it != args.end()) {
+        throw ArgumentException("Too many arguments provided to function call"s);
+    }
+    return context;
+}

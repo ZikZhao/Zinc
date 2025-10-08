@@ -28,7 +28,7 @@ extern int yylex(ASTNode** yylval, Location* yylloc);
 %token KW_BREAK KW_CONTINUE KW_SWITCH KW_CASE KW_DEFAULT KW_IMPORT KW_FROM KW_AS
 
 /* Arithmetic Operators */
-%token OP_ADD OP_SUB OP_MUL OP_DIV OP_REM
+%token OP_ADD OP_SUBTRACT OP_MULTIPLY OP_DIVIDE OP_REMAINDER
 %token OP_INCREMENT OP_DECREMENT
 
 /* Comparison Operators */
@@ -43,7 +43,7 @@ extern int yylex(ASTNode** yylval, Location* yylloc);
 
 /* Assignment Operators */
 %token OP_ASSIGN
-%token OP_ADD_ASSIGN OP_SUB_ASSIGN OP_MUL_ASSIGN OP_DIV_ASSIGN OP_REM_ASSIGN
+%token OP_ADD_ASSIGN OP_SUBTRACT_ASSIGN OP_MULTIPLY_ASSIGN OP_DIVIDE_ASSIGN OP_REMAINDER_ASSIGN
 %token OP_LEFT_SHIFT_ASSIGN OP_RIGHT_SHIFT_ASSIGN
 %token OP_BITWISE_AND_ASSIGN OP_BITWISE_OR_ASSIGN OP_BITWISE_XOR_ASSIGN
 
@@ -68,7 +68,7 @@ extern int yylex(ASTNode** yylval, Location* yylloc);
 
 /* Precedence and Associativity */
 %left OP_COMMA
-%right OP_QUESTION OP_COLON OP_ASSIGN OP_ADD_ASSIGN OP_SUB_ASSIGN OP_MUL_ASSIGN OP_DIV_ASSIGN OP_REM_ASSIGN OP_EXP_ASSIGN OP_LEFT_SHIFT_ASSIGN OP_RIGHT_SHIFT_ASSIGN OP_BITWISE_AND_ASSIGN OP_BITWISE_OR_ASSIGN OP_BITWISE_XOR_ASSIGN
+%right OP_QUESTION OP_COLON OP_ASSIGN OP_ADD_ASSIGN OP_SUBTRACT_ASSIGN OP_MULTIPLY_ASSIGN OP_DIVIDE_ASSIGN OP_REMAINDER_ASSIGN OP_EXP_ASSIGN OP_LEFT_SHIFT_ASSIGN OP_RIGHT_SHIFT_ASSIGN OP_BITWISE_AND_ASSIGN OP_BITWISE_OR_ASSIGN OP_BITWISE_XOR_ASSIGN
 %left OP_LOGICAL_OR
 %left OP_LOGICAL_AND
 %left OP_BITWISE_OR
@@ -77,8 +77,8 @@ extern int yylex(ASTNode** yylval, Location* yylloc);
 %left OP_EQUAL OP_NOT_EQUAL 
 %left OP_LESS_THAN OP_GREATER_THAN OP_LESS_EQUAL OP_GREATER_EQUAL
 %left OP_LEFT_SHIFT OP_RIGHT_SHIFT OP_UNSIGNED_RIGHT_SHIFT
-%left OP_ADD OP_SUB
-%left OP_MUL OP_DIV OP_REM
+%left OP_ADD OP_SUBTRACT
+%left OP_MULTIPLY OP_DIVIDE OP_REMAINDER
 %right OP_EXP
 %right OP_INCREMENT OP_DECREMENT OP_NEG OP_LOGICAL_NOT OP_BITWISE_NOT
 %left OP_DOT OP_FUNCTION_CALL OP_INDEXING
@@ -108,11 +108,11 @@ code_block : OP_LBRACE OP_RBRACE               { $$ = new ASTStatements(@$); }
 identifier : T_IDENTIFIER    { $$ = new ASTIdentifier(*static_cast<ASTToken*>($1)); }
            ;
 
-constant : KW_NULL      { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_NULL); }
-         | T_INTEGER    { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_INTEGER); }
-         | T_FLOAT      { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_FLOAT); }
-         | T_STRING     { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_STRING); }
-         | T_BOOLEAN    { $$ = new ASTConstant(*static_cast<ASTToken*>($1), LITERAL_BOOLEAN); }
+constant : KW_NULL      { $$ = new ASTConstant<NullValue>(*static_cast<ASTToken*>($1)); }
+         | T_INTEGER    { $$ = new ASTConstant<IntegerValue>(*static_cast<ASTToken*>($1)); }
+         | T_FLOAT      { $$ = new ASTConstant<FloatValue>(*static_cast<ASTToken*>($1)); }
+         | T_STRING     { $$ = new ASTConstant<StringValue>(*static_cast<ASTToken*>($1)); }
+         | T_BOOLEAN    { $$ = new ASTConstant<BooleanValue>(*static_cast<ASTToken*>($1)); }
          ;
 
 type : KW_INTEGER
@@ -143,12 +143,12 @@ function_call : expression[function] OP_LPAREN OP_RPAREN
 
 expression : constant                                                             { $$ = $constant; }
            | identifier                                                           { $$ = $identifier; }
-           | OP_SUB expression[expr] %prec OP_NEG                                 { $$ = new ASTNegOp(@$, static_cast<ASTValueExpression*>($expr)); }
+           | OP_SUBTRACT expression[expr] %prec OP_NEG                                 { $$ = new ASTNegOp(@$, static_cast<ASTValueExpression*>($expr)); }
            | expression[left] OP_ADD expression[right]                            { $$ = new ASTAddOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_SUB expression[right]                            { $$ = new ASTSubOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_MUL expression[right]                            { $$ = new ASTMulOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_DIV expression[right]                            { $$ = new ASTDivOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_REM expression[right]                            { $$ = new ASTRemOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_SUBTRACT expression[right]                            { $$ = new ASTSubOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_MULTIPLY expression[right]                            { $$ = new ASTMulOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_DIVIDE expression[right]                            { $$ = new ASTDivOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_REMAINDER expression[right]                            { $$ = new ASTRemOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_EQUAL expression[right]                          { $$ = new ASTEqualOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_NOT_EQUAL expression[right]                      { $$ = new ASTNotEqualOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_LESS_THAN expression[right]                      { $$ = new ASTLessThanOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
@@ -166,10 +166,10 @@ expression : constant                                                           
            | expression[left] OP_RIGHT_SHIFT expression[right]                    { $$ = new ASTRightShiftOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_ASSIGN expression[right]                         { $$ = new ASTAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_ADD_ASSIGN expression[right]                     { $$ = new ASTAddAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_SUB_ASSIGN expression[right]                     { $$ = new ASTSubAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_MUL_ASSIGN expression[right]                     { $$ = new ASTMulAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_DIV_ASSIGN expression[right]                     { $$ = new ASTDivAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
-           | expression[left] OP_REM_ASSIGN expression[right]                     { $$ = new ASTRemAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_SUBTRACT_ASSIGN expression[right]                     { $$ = new ASTSubAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_MULTIPLY_ASSIGN expression[right]                     { $$ = new ASTMulAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_DIVIDE_ASSIGN expression[right]                     { $$ = new ASTDivAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
+           | expression[left] OP_REMAINDER_ASSIGN expression[right]                     { $$ = new ASTRemAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_LEFT_SHIFT_ASSIGN expression[right]              { $$ = new ASTLeftShiftAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_RIGHT_SHIFT_ASSIGN expression[right]             { $$ = new ASTRightShiftAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }
            | expression[left] OP_BITWISE_AND_ASSIGN expression[right]             { $$ = new ASTBitwiseAndAssignOp(@$, static_cast<ASTValueExpression*>($left), static_cast<ASTValueExpression*>($right)); }

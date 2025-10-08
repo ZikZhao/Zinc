@@ -1,36 +1,82 @@
 #include "pch.hpp"
 #include "value.hpp"
-#include "type.hpp"
 #include "ref.hpp"
 #include "out/parser.tab.hpp"
+
+template<typename Left, typename Func, typename Right = void>
+auto MakeRule() {
+    if constexpr (std::is_same_v<Right, void>) {
+        using ResultType = std::invoke_result_t<Func, Left>;
+        const auto wrapped = [](const Value* expr, const Value* _) -> Value* {
+            return Func()(static_cast<const Left&>(*expr));
+        };
+        return std::make_pair(
+            OperationTuple{ GetOperatorString<Func>(), typeid(Left), typeid(void) },
+            OperatorWithResult{ std::type_index(typeid(ResultType)), std::function<Value*(const Value*, const Value*)>(wrapped) }
+        );
+    } else {
+        using ResultType = std::invoke_result_t<Func, Left, Right>;
+        const auto wrapped = [](const Value* left, const Value* right) -> Value* {
+            return Func()(static_cast<const Left&>(*left), static_cast<const Right&>(*right));
+        };
+        return std::make_pair(
+            OperationTuple{ GetOperatorString<Func>(), typeid(Left), typeid(Right) },
+            OperatorWithResult{ std::type_index(typeid(ResultType)), std::function<Value*(const Value*, const Value*)>(wrapped) }
+        );
+    }
+}
+
+const std::map<OperationTuple, OperatorWithResult> OperationMap = {
+    MakeRule<IntegerValue, OperatorFunctors::Add, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::Subtract, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::Negate>(),
+    MakeRule<IntegerValue, OperatorFunctors::Multiply, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::Divide, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::Remainder, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::Equal, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::NotEqual, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::LessThan, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::LessEqual, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::GreaterThan, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::GreaterEqual, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::BitwiseAnd, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::BitwiseOr, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::BitwiseXor, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::BitwiseNot>(),
+    MakeRule<IntegerValue, OperatorFunctors::LeftShift, IntegerValue>(),
+    MakeRule<IntegerValue, OperatorFunctors::RightShift, IntegerValue>(),
+    MakeRule<FloatValue, OperatorFunctors::Add, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::Subtract, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::Negate>(),
+    MakeRule<FloatValue, OperatorFunctors::Multiply, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::Divide, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::Remainder, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::Equal, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::NotEqual, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::LessThan, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::LessEqual, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::GreaterThan, FloatValue>(),
+    MakeRule<FloatValue, OperatorFunctors::GreaterEqual, FloatValue>(),
+    MakeRule<StringValue, OperatorFunctors::Add, StringValue>(),
+    MakeRule<StringValue, OperatorFunctors::Multiply, IntegerValue>(),
+    MakeRule<StringValue, OperatorFunctors::Equal, StringValue>(),
+    MakeRule<StringValue, OperatorFunctors::NotEqual, StringValue>(),
+    MakeRule<BooleanValue, OperatorFunctors::Equal, BooleanValue>(),
+    MakeRule<BooleanValue, OperatorFunctors::NotEqual, BooleanValue>(),
+    MakeRule<BooleanValue, OperatorFunctors::LogicalAnd, BooleanValue>(),
+    MakeRule<BooleanValue, OperatorFunctors::LogicalOr, BooleanValue>(),
+    MakeRule<BooleanValue, OperatorFunctors::LogicalNot>(),
+    // MakeRule<ListValue, OperatorFunctors::Add, ListValue>(),
+    // MakeRule<ListValue, OperatorFunctors::Multiply, IntegerValue>(),
+    // MakeRule<ListValue, OperatorFunctors::Equal, ListValue>(),
+    // MakeRule<ListValue, OperatorFunctors::NotEqual, ListValue>(),
+};
 
 ValueRef Value::ObjectIs(const Value& left, const Value& right) {
     return new BooleanValue(&left == &right);
 }
-ValueRef Value::FromLiteral(LiteralType type, std::string_view literal) {
-    using namespace yy;
-    switch (type) {
-    case LITERAL_NULL:
-        return new NullValue();
-    case LITERAL_INTEGER:
-        return new IntegerValue(std::stoll(literal.data()));
-    case LITERAL_FLOAT:
-        return new FloatValue(std::stod(literal.data()));
-    case LITERAL_STRING:
-        return new StringValue(std::string(literal.data()));
-    case LITERAL_BOOLEAN:
-        if (literal == "true") {
-            return new BooleanValue(true);
-        } else if (literal == "false") {
-            return new BooleanValue(false);
-        } else {
-            throw std::runtime_error("Invalid boolean literal: "s + literal.data());
-        }
-    default:
-        throw std::runtime_error("Unknown literal type");
-    }
-}
 
+NullValue::NullValue() : Value(typeid(NullValue)) {}
 NullValue* NullValue::adapt_for_assignment(const Value& other) const {
     if (dynamic_cast<const NullValue*>(&other)) {
         return nullptr;
@@ -42,124 +88,64 @@ NullValue::operator std::string () const {
     return "null";
 }
 
-IntegerValue::IntegerValue(int64_t value) : value(value) {}
-ValueRef IntegerValue::operator + (const Value& other) const {
-    return other + *this;
-}
-ValueRef IntegerValue::operator + (const IntegerValue& other) const {
+IntegerValue::IntegerValue(int64_t value) : Value(typeid(IntegerValue)), value(value) {}
+IntegerValue* IntegerValue::operator + (const IntegerValue& other) const {
     return new IntegerValue(this->value + other.value);
 }
-ValueRef IntegerValue::operator + (const FloatValue& other) const {
-    return new FloatValue(static_cast<double>(this->value) + other.value);
-}
-ValueRef IntegerValue::operator - (const Value& other) const {
-    return *(-other) + *this;
-}
-ValueRef IntegerValue::operator - (const IntegerValue& other) const {
+IntegerValue* IntegerValue::operator - (const IntegerValue& other) const {
     return new IntegerValue(this->value - other.value);
 }
-ValueRef IntegerValue::operator - (const FloatValue& other) const {
-    return new FloatValue(static_cast<double>(this->value) - other.value);
-}
-ValueRef IntegerValue::operator - () const {
+IntegerValue* IntegerValue::operator - () const {
     return new IntegerValue(-this->value);
 }
-ValueRef IntegerValue::operator * (const Value& other) const {
-    return other * *this;
-}
-ValueRef IntegerValue::operator * (const IntegerValue& other) const {
+IntegerValue* IntegerValue::operator * (const IntegerValue& other) const {
     return new IntegerValue(this->value * other.value);
 }
-ValueRef IntegerValue::operator * (const FloatValue& other) const {
-    return new FloatValue(static_cast<double>(this->value) * other.value);
-}
-ValueRef IntegerValue::operator / (const Value& other) const {
-    if (auto int_val = dynamic_cast<const IntegerValue*>(&other)) {
-        return this->operator/(*int_val);
-    } else if (auto float_val = dynamic_cast<const FloatValue*>(&other)) {
-        return this->operator/(*float_val);
-    } else {
-        throw std::runtime_error("Division not implemented for this type");
-    }
-}
-ValueRef IntegerValue::operator / (const IntegerValue& other) const {
+IntegerValue* IntegerValue::operator / (const IntegerValue& other) const {
     if (other.value == 0) throw std::runtime_error("Division by zero");
-    return new FloatValue(static_cast<double>(this->value) / static_cast<double>(other.value));
+    return new IntegerValue(this->value / other.value);
 }
-ValueRef IntegerValue::operator / (const FloatValue& other) const {
-    if (other.value == 0.0) throw std::runtime_error("Division by zero");
-    return new FloatValue(static_cast<double>(this->value) / other.value);
-}
-ValueRef IntegerValue::operator % (const Value& other) const {
-    if (auto int_val = dynamic_cast<const IntegerValue*>(&other)) {
-        return this->operator%(*int_val);
-    } else if (auto float_val = dynamic_cast<const FloatValue*>(&other)) {
-        return this->operator%(*float_val);
-    } else {
-        throw std::runtime_error("Remainder not implemented for this type");
-    }
-}
-ValueRef IntegerValue::operator % (const IntegerValue& other) const {
+IntegerValue* IntegerValue::operator % (const IntegerValue& other) const {
     if (other.value == 0) throw std::runtime_error("Division by zero");
     return new IntegerValue(this->value % other.value);
 }
-ValueRef IntegerValue::operator % (const FloatValue& other) const {
-    if (other.value == 0.0) throw std::runtime_error("Division by zero");
-    return new FloatValue(std::fmod(static_cast<double>(this->value), other.value));
-}
-ValueRef IntegerValue::operator < (const Value& other) const {
-    return other > *this;
-}
-ValueRef IntegerValue::operator < (const IntegerValue& other) const {
-    return new BooleanValue(this->value < other.value);
-}
-ValueRef IntegerValue::operator < (const FloatValue& other) const {
-    return new BooleanValue(static_cast<double>(this->value) < other.value);
-}
-ValueRef IntegerValue::operator <= (const Value& other) const {
-    return other >= *this;
-}
-ValueRef IntegerValue::operator <= (const IntegerValue& other) const {
-    return new BooleanValue(this->value <= other.value);
-}
-ValueRef IntegerValue::operator <= (const FloatValue& other) const {
-    return new BooleanValue(static_cast<double>(this->value) <= other.value);
-}
-ValueRef IntegerValue::operator > (const Value& other) const {
-    return other < *this;
-}
-ValueRef IntegerValue::operator > (const IntegerValue& other) const {
-    return new BooleanValue(this->value > other.value);
-}
-ValueRef IntegerValue::operator > (const FloatValue& other) const {
-    return new BooleanValue(static_cast<double>(this->value) > other.value);
-}
-ValueRef IntegerValue::operator >= (const Value& other) const {
-    return other <= *this;
-}
-ValueRef IntegerValue::operator >= (const IntegerValue& other) const {
-    return new BooleanValue(this->value >= other.value);
-}
-ValueRef IntegerValue::operator >= (const FloatValue& other) const {
-    return new BooleanValue(static_cast<double>(this->value) >= other.value);
-}
-ValueRef IntegerValue::operator == (const Value& other) const {
-    return other.operator==(*this);
-}
-ValueRef IntegerValue::operator == (const IntegerValue& other) const {
+BooleanValue* IntegerValue::operator == (const IntegerValue& other) const {
     return new BooleanValue(this->value == other.value);
 }
-ValueRef IntegerValue::operator == (const FloatValue& other) const {
-    return new BooleanValue(static_cast<double>(this->value) == other.value);
-}
-ValueRef IntegerValue::operator != (const Value& other) const {
-    return other.operator!=(*this);
-}
-ValueRef IntegerValue::operator != (const IntegerValue& other) const {
+BooleanValue* IntegerValue::operator != (const IntegerValue& other) const {
     return new BooleanValue(this->value != other.value);
 }
-ValueRef IntegerValue::operator != (const FloatValue& other) const {
-    return new BooleanValue(static_cast<double>(this->value) != other.value);
+BooleanValue* IntegerValue::operator < (const IntegerValue& other) const {
+    return new BooleanValue(this->value < other.value);
+}
+BooleanValue* IntegerValue::operator <= (const IntegerValue& other) const {
+    return new BooleanValue(this->value <= other.value);
+}
+BooleanValue* IntegerValue::operator > (const IntegerValue& other) const {
+    return new BooleanValue(this->value > other.value);
+}
+BooleanValue* IntegerValue::operator >= (const IntegerValue& other) const {
+    return new BooleanValue(this->value >= other.value);
+}
+IntegerValue* IntegerValue::operator & (const IntegerValue& other) const {
+    return new IntegerValue(this->value & other.value);
+}
+IntegerValue* IntegerValue::operator | (const IntegerValue& other) const {
+    return new IntegerValue(this->value | other.value);
+}
+IntegerValue* IntegerValue::operator ^ (const IntegerValue& other) const {
+    return new IntegerValue(this->value ^ other.value);
+}
+IntegerValue* IntegerValue::operator ~ () const {
+    return new IntegerValue(~this->value);
+}
+IntegerValue* IntegerValue::operator << (const IntegerValue& other) const {
+    if (other.value < 0) throw std::runtime_error("Cannot left shift by negative amount");
+    return new IntegerValue(this->value << other.value);
+}
+IntegerValue* IntegerValue::operator >> (const IntegerValue& other) const {
+    if (other.value < 0) throw std::runtime_error("Cannot right shift by negative amount");
+    return new IntegerValue(this->value >> other.value);
 }
 bool IntegerValue::is_truthy() const {
     return this->value != 0;
@@ -177,124 +163,44 @@ IntegerValue::operator std::string () const {
     return std::to_string(value);
 }
 
-FloatValue::FloatValue(double value) : value(value) {}
-ValueRef FloatValue::operator + (const Value& other) const {
-    return other + *this;
-}
-ValueRef FloatValue::operator + (const IntegerValue& other) const {
-    return new FloatValue(this->value + static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator + (const FloatValue& other) const {
+FloatValue::FloatValue(double value) : Value(typeid(FloatValue)), value(value) {}
+FloatValue* FloatValue::operator + (const FloatValue& other) const {
     return new FloatValue(this->value + other.value);
 }
-ValueRef FloatValue::operator - (const Value& other) const {
-    return *(-other) + *this;
-}
-ValueRef FloatValue::operator - (const IntegerValue& other) const {
-    return new FloatValue(this->value - static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator - (const FloatValue& other) const {
+FloatValue* FloatValue::operator - (const FloatValue& other) const {
     return new FloatValue(this->value - other.value);
 }
-ValueRef FloatValue::operator - () const {
+FloatValue* FloatValue::operator - () const {
     return new FloatValue(-this->value);
 }
-ValueRef FloatValue::operator * (const Value& other) const {
-    return other * *this;
-}
-ValueRef FloatValue::operator * (const IntegerValue& other) const {
-    return new FloatValue(this->value * static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator * (const FloatValue& other) const {
+FloatValue* FloatValue::operator * (const FloatValue& other) const {
     return new FloatValue(this->value * other.value);
 }
-ValueRef FloatValue::operator / (const Value& other) const {
-    if (auto int_val = dynamic_cast<const IntegerValue*>(&other)) {
-        return this->operator/(*int_val);
-    } else if (auto float_val = dynamic_cast<const FloatValue*>(&other)) {
-        return this->operator/(*float_val);
-    } else {
-        throw std::runtime_error("Division not implemented for this type");
-    }
-}
-ValueRef FloatValue::operator / (const IntegerValue& other) const {
-    if (other.value == 0) throw std::runtime_error("Division by zero");
-    return new FloatValue(this->value / static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator / (const FloatValue& other) const {
+FloatValue* FloatValue::operator / (const FloatValue& other) const {
     if (other.value == 0.0) throw std::runtime_error("Division by zero");
     return new FloatValue(this->value / other.value);
 }
-ValueRef FloatValue::operator % (const Value& other) const {
-    if (auto int_val = dynamic_cast<const IntegerValue*>(&other)) {
-        return this->operator%(*int_val);
-    } else if (auto float_val = dynamic_cast<const FloatValue*>(&other)) {
-        return this->operator%(*float_val);
-    } else {
-        throw std::runtime_error("Remainder not implemented for this type");
-    }
-}
-ValueRef FloatValue::operator % (const IntegerValue& other) const {
-    if (other.value == 0) throw std::runtime_error("Division by zero");
-    return new FloatValue(std::fmod(this->value, static_cast<double>(other.value)));
-}
-ValueRef FloatValue::operator % (const FloatValue& other) const {
+FloatValue* FloatValue::operator % (const FloatValue& other) const {
     if (other.value == 0.0) throw std::runtime_error("Division by zero");
     return new FloatValue(std::fmod(this->value, other.value));
 }
-ValueRef FloatValue::operator < (const Value& other) const {
-    return other > *this;
-}
-ValueRef FloatValue::operator < (const IntegerValue& other) const {
-    return new BooleanValue(this->value < static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator < (const FloatValue& other) const {
-    return new BooleanValue(this->value < other.value);
-}
-ValueRef FloatValue::operator <= (const Value& other) const {
-    return other >= *this;
-}
-ValueRef FloatValue::operator <= (const IntegerValue& other) const {
-    return new BooleanValue(this->value <= static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator <= (const FloatValue& other) const {
-    return new BooleanValue(this->value <= other.value);
-}
-ValueRef FloatValue::operator > (const Value& other) const {
-    return other < *this;
-}
-ValueRef FloatValue::operator > (const IntegerValue& other) const {
-    return new BooleanValue(this->value > static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator > (const FloatValue& other) const {
-    return new BooleanValue(this->value > other.value);
-}
-ValueRef FloatValue::operator >= (const Value& other) const {
-    return other <= *this;
-}
-ValueRef FloatValue::operator >= (const IntegerValue& other) const {
-    return new BooleanValue(this->value >= static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator >= (const FloatValue& other) const {
-    return new BooleanValue(this->value >= other.value);
-}
-ValueRef FloatValue::operator == (const Value& other) const {
-    return other.operator==(*this);
-}
-ValueRef FloatValue::operator == (const IntegerValue& other) const {
-    return new BooleanValue(this->value == static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator == (const FloatValue& other) const {
+BooleanValue* FloatValue::operator == (const FloatValue& other) const {
     return new BooleanValue(this->value == other.value);
 }
-ValueRef FloatValue::operator != (const Value& other) const {
-    return other.operator!=(*this);
-}
-ValueRef FloatValue::operator != (const IntegerValue& other) const {
-    return new BooleanValue(this->value != static_cast<double>(other.value));
-}
-ValueRef FloatValue::operator != (const FloatValue& other) const {
+BooleanValue* FloatValue::operator != (const FloatValue& other) const {
     return new BooleanValue(this->value != other.value);
+}
+BooleanValue* FloatValue::operator < (const FloatValue& other) const {
+    return new BooleanValue(this->value < other.value);
+}
+BooleanValue* FloatValue::operator <= (const FloatValue& other) const {
+    return new BooleanValue(this->value <= other.value);
+}
+BooleanValue* FloatValue::operator > (const FloatValue& other) const {
+    return new BooleanValue(this->value > other.value);
+}
+BooleanValue* FloatValue::operator >= (const FloatValue& other) const {
+    return new BooleanValue(this->value >= other.value);
 }
 bool FloatValue::is_truthy() const {
     return this->value != 0.0;
@@ -312,21 +218,11 @@ FloatValue::operator std::string () const {
     return std::to_string(value);
 }
 
-StringValue::StringValue(std::string&& value) : value(std::forward<std::string>(value)) {}
-ValueRef StringValue::operator + (const Value& other) const {
-    return other + *this;
-}
-ValueRef StringValue::operator + (const StringValue& other) const {
+StringValue::StringValue(std::string&& value) : Value(typeid(StringValue)), value(std::forward<std::string>(value)) {}
+StringValue* StringValue::operator + (const StringValue& other) const {
     return new StringValue(this->value + other.value);
 }
-ValueRef StringValue::operator * (const Value& other) const {
-    if (auto int_val = dynamic_cast<const IntegerValue*>(&other)) {
-        return this->operator*(*int_val);
-    } else {
-        throw std::runtime_error("Multiplication not implemented for this type");
-    }
-}
-ValueRef StringValue::operator * (const IntegerValue& other) const {
+StringValue* StringValue::operator * (const IntegerValue& other) const {
     if (other.value <= 0) throw std::runtime_error("Can only multiply string by positive integer");
     std::string result;
     result.reserve(this->value.size() * other.value);
@@ -334,6 +230,12 @@ ValueRef StringValue::operator * (const IntegerValue& other) const {
         result += this->value;
     }
     return new StringValue(std::move(result));
+}
+BooleanValue* StringValue::operator == (const StringValue& other) const {
+    return new BooleanValue(this->value == other.value);
+}
+BooleanValue* StringValue::operator != (const StringValue& other) const {
+    return new BooleanValue(this->value != other.value);
 }
 bool StringValue::is_truthy() const {
     return not this->value.empty();
@@ -349,21 +251,21 @@ StringValue::operator std::string () const {
     return "\"" + value + "\"";
 }
 
-BooleanValue::BooleanValue(bool value) : value(value) {}
-ValueRef BooleanValue::operator and (const Value& other) const {
-    return other and *this;
+BooleanValue::BooleanValue(bool value) : Value(typeid(BooleanValue)), value(value) {}
+BooleanValue* BooleanValue::operator == (const BooleanValue& other) const {
+    return new BooleanValue(this->value == other.value);
 }
-ValueRef BooleanValue::operator and (const BooleanValue& other) const {
-    return new BooleanValue(this->value and other.value);
+BooleanValue* BooleanValue::operator != (const BooleanValue& other) const {
+    return new BooleanValue(this->value != other.value);
 }
-ValueRef BooleanValue::operator or (const Value& other) const {
-    return other or *this;
+BooleanValue* BooleanValue::operator and (const BooleanValue& other) const {
+    return new BooleanValue(this->value && other.value);
 }
-ValueRef BooleanValue::operator or (const BooleanValue& other) const {
-    return new BooleanValue(this->value or other.value);
+BooleanValue* BooleanValue::operator or (const BooleanValue& other) const {
+    return new BooleanValue(this->value || other.value);
 }
-ValueRef BooleanValue::operator not () const {
-    return new BooleanValue(not this->value);
+BooleanValue* BooleanValue::operator not () const {
+    return new BooleanValue(!this->value);
 }
 bool BooleanValue::is_truthy() const {
     return this->value;
@@ -379,7 +281,7 @@ BooleanValue::operator std::string () const {
     return this->value ? "true" : "false";
 }
 
-FunctionValue::FunctionValue(const ASTFunctionDefinition* definition) : definition(definition) {}
+FunctionValue::FunctionValue(const ASTFunctionDefinition* definition) : Value(typeid(FunctionValue)), definition(definition) {}
 ValueRef FunctionValue::operator () (Context &globals, const Arguments &args) const {
     try {
         Context locals = definition->signature->collect_arguments(args);
@@ -403,33 +305,10 @@ FunctionValue::operator std::string () const {
     return std::format("<function {} at {:p}>", definition->name, static_cast<const void*>(this));
 }
 
-BuiltinFunctionValue::Signature::Signature(std::vector<std::pair<std::string, TypeRef>> param_names, std::pair<std::string, TypeRef> spread_param, TypeRef ret_type)
-    : parameters(std::move(param_names)), spread_parameter(std::move(spread_param)), return_type(std::move(ret_type)) {}
-Context BuiltinFunctionValue::Signature::collect_arguments(const Arguments &args) const {
-    Context context;
-    auto param_it = parameters.begin();
-    auto arg_it = args.begin();
-    for (; param_it != parameters.end() && arg_it != args.end(); ++param_it, ++arg_it) {
-        context.emplace(param_it->first, *arg_it);
-    }
-    if (param_it != parameters.end()) {
-        throw ArgumentException("Not enough arguments provided to function call"s);
-    }
-    if (spread_parameter.first != ""s) {
-        std::vector<ValueRef> spread_args;
-        for (; arg_it != args.end(); ++arg_it) {
-            spread_args.emplace_back(*arg_it);
-        }
-        context.emplace(spread_parameter.first, new ListValue(std::move(spread_args)));
-    } else if (arg_it != args.end()) {
-        throw ArgumentException("Too many arguments provided to function call"s);
-    }
-    return context;
-}
-BuiltinFunctionValue::BuiltinFunctionValue(std::string_view name, FuncType func, Signature&& signature)
-    : name(name), func(std::forward<FuncType>(func)), signature(std::forward<Signature>(signature)) {}
+BuiltinFunctionValue::BuiltinFunctionValue(std::string_view name, FuncType func, const BuiltinFunctionSignature* signature)
+    : Value(typeid(BuiltinFunctionValue)), name(name), func(std::forward<FuncType>(func)), signature(signature) {}
 ValueRef BuiltinFunctionValue::operator () (Context& globals, const Arguments& args) const {
-    return func(signature.collect_arguments(args));
+    return func(signature->collect_arguments(args));
 }
 bool BuiltinFunctionValue::is_truthy() const {
     return true;
@@ -446,7 +325,7 @@ BuiltinFunctionValue::operator std::string () const {
 }
 
 ClassValue::ClassValue(std::string_view name, std::vector<InterfaceValueRef> implements, ClassValueRef extends, Map<ValueRef> properties)
-    : name(name), implements(std::move(implements)), extends(std::move(extends)), properties(std::move(properties)) {}
+    : Value(typeid(ClassValue)), name(name), implements(std::move(implements)), extends(std::move(extends)), properties(std::move(properties)) {}
 ClassValue* ClassValue::adapt_for_assignment(const Value& other) const {
     if (auto class_val = dynamic_cast<const ClassValue*>(&other)) {
         return nullptr;
@@ -458,7 +337,7 @@ ClassValue::operator std::string () const {
     return std::format("<class {} at {:p}>", name, static_cast<const void*>(this));
 }
 
-ObjectValue::ObjectValue(ClassValueRef cls) : cls(cls), properties(init_properties()) {}
+ObjectValue::ObjectValue(ClassValueRef cls) : Value(typeid(ObjectValue)), cls(cls), properties(init_properties()) {}
 ValueRef ObjectValue::get(const std::string_view property) const {
     auto it = properties.find(std::string(property));
     if (it != properties.end()) {
@@ -477,7 +356,7 @@ ValueRef ListValue::ListClassInstance(new ClassValue("list"sv, std::vector<Value
     {"append", new BuiltinFunctionValue(
         "append"sv,
         ListValue::Append,
-        { { {"value", new IntegerType} }, {}, new NullType }
+        new BuiltinFunctionSignature({ {"value", new IntegerType} }, {}, new NullType)
     )},
 })));
 ValueRef ListValue::Append(const Map<ValueRef>& args) {
@@ -496,26 +375,12 @@ ValueRef ListValue::Append(const Map<ValueRef>& args) {
 }
 ListValue::ListValue() : ObjectValue(ListClassInstance), values() {}
 ListValue::ListValue(std::vector<ValueRef>&& values) : ObjectValue(ListClassInstance), values(std::forward<std::vector<ValueRef>>(values)) {}
-ValueRef ListValue::operator + (const Value& other) const {
-    if (auto list_val = dynamic_cast<const ListValue*>(&other)) {
-        return this->operator+(*list_val);
-    } else {
-        throw std::runtime_error("Addition not implemented for this type");
-    }
-}
-ValueRef ListValue::operator + (const ListValue& other) const {
+ListValue* ListValue::operator + (const ListValue& other) const {
     std::vector<ValueRef> new_values = this->values;
     new_values.insert(new_values.end(), other.values.begin(), other.values.end());
     return new ListValue(std::move(new_values));
 }
-ValueRef ListValue::operator * (const Value& other) const {
-    if (auto int_val = dynamic_cast<const IntegerValue*>(&other)) {
-        return this->operator*(*int_val);
-    } else {
-        throw std::runtime_error("Multiplication not implemented for this type");
-    }
-}
-ValueRef ListValue::operator * (const IntegerValue& other) const {
+ListValue* ListValue::operator * (const IntegerValue& other) const {
     if (other.value <= 0) throw std::runtime_error("Can only multiply list by positive integer");
     std::vector<ValueRef> new_values;
     new_values.reserve(this->values.size() * other.value);
@@ -613,6 +478,6 @@ Context Builtins{
             std::cout << std::string(value_it) << std::endl;
             return new NullValue();
         },
-        { { {"value", new IntegerType} }, {}, new NullType }
+        new BuiltinFunctionSignature({ {"value", new IntegerType} }, {}, new NullType)
     )},
 };

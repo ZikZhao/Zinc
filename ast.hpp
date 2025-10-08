@@ -12,18 +12,10 @@ struct Location {
 
 std::ostream& operator<< (std::ostream& os, const Location& loc);
 
-struct LeftShiftFunctor {
-    ValueRef operator() (const ValueRef& left, const ValueRef& right) const;
-};
-
-struct RightShiftFunctor {
-    ValueRef operator() (const ValueRef& left, const ValueRef& right) const;
-};
-
 // Assignment functor that performs operation and assignment
-template<typename FuncType = void>
+template<typename Operator = void>
 struct AssignFunctor {
-    static constexpr auto Func = FuncType();
+    static constexpr auto Func = Operator();
     ValueRef operator() (ValueRef& left, ValueRef& right) const {
         const ValueRef result = Func(left, right);
         left = result;
@@ -44,10 +36,10 @@ class ASTToken;
 template<typename TargetType> class ASTExpression;
 using ASTValueExpression = ASTExpression<Value>;
 using ASTTypeExpression  = ASTExpression<Type>;
-class ASTConstant;
+template<typename LiteralType> class ASTConstant;
 class ASTIdentifier;
-template<FixedString Operator, typename FuncType> class ASTUnaryOp;
-template<FixedString Operator, typename FuncType> class ASTBinaryOp;
+template<typename Operator> class ASTUnaryOp;
+template<typename Operator> class ASTBinaryOp;
 class ASTDeclaration;
 class ASTIfStatement;
 
@@ -97,12 +89,17 @@ public:
     virtual Reference<TargetType> eval(Context& globals, Context& locals) const = 0;
 };
 
+template<typename LiteralType>
 class ASTConstant : public ASTValueExpression {
 public:
     const ValueRef value;
-    ASTConstant(const ASTToken& token, LiteralType type);
-    void print(std::ostream& os, uint64_t indent) const override;
-    ValueRef eval(Context& globals, Context& locals) const override;
+    ASTConstant(const ASTToken& token) : ASTValueExpression(token.location), value(Value::FromLiteral<LiteralType>(token.str)) {}
+    void print(std::ostream& os, uint64_t indent) const override {
+        os << std::string(indent, ' ') << "Constant(" << static_cast<std::string>(value) << ")" << std::endl;
+    }
+    ValueRef eval(Context& globals, Context& locals) const override {
+        return value;
+    }
 };
 
 class ASTIdentifier : public ASTValueExpression {
@@ -113,10 +110,10 @@ public:
     ValueRef eval(Context& globals, Context& locals) const override;
 };
 
-template<FixedString Operator, typename FuncType>
+template<typename Operator>
 class ASTUnaryOp : public ASTValueExpression {
 private:
-    static constexpr auto Func = FuncType();
+    static constexpr auto Func = Operator();
 public:
     const ASTValueExpression* const expr;
     ASTUnaryOp(const Location& location, const ASTValueExpression* expr) : ASTValueExpression(location), expr(expr) {}
@@ -124,19 +121,19 @@ public:
         delete expr;
     }
     void print(std::ostream& os, uint64_t indent) const override {
-        os << std::string(indent, ' ') << "UnaryOp(" << *Operator << ")" << std::endl;
+        os << std::string(indent, ' ') << "UnaryOp(" << GetOperatorString<Operator>() << ")" << std::endl;
         expr->print(os, indent + 2);
     }
     ValueRef eval(Context& globals, Context& locals) const override {
         ValueRef result = expr->eval(globals, locals);
-        return Func(result);
+        return result.eval_operation<Operator>();
     }
 };
 
-template<FixedString Operator, typename FuncType>
+template<typename Operator>
 class ASTBinaryOp : public ASTValueExpression {
 private:
-    static constexpr auto Func = FuncType();
+    static constexpr auto Func = Operator();
 public:
     const ASTValueExpression* const left;
     const ASTValueExpression* const right;
@@ -147,14 +144,14 @@ public:
         delete right;
     }
     void print(std::ostream& os, uint64_t indent) const override {
-        os << std::string(indent, ' ') << "BinaryOp(" << *Operator << ")" << std::endl;
+        os << std::string(indent, ' ') << "BinaryOp(" << GetOperatorString<Operator>() << ")" << std::endl;
         left->print(os, indent + 2);
         right->print(os, indent + 2);
     }
     ValueRef eval(Context& globals, Context& locals) const override {
         ValueRef result_left = left->eval(globals, locals);
         ValueRef result_right = right->eval(globals, locals);
-        return Func(result_left, result_right);
+        return result_left.eval_operation<Operator>(result_right);
     }
 };
 
@@ -180,42 +177,42 @@ public:
     ValueRef eval(Context& globals, Context& locals) const override;
 };
 
-using ASTAddOp              = ASTBinaryOp<"+", std::plus<>>;
-using ASTSubOp              = ASTBinaryOp<"-", std::minus<>>;
-using ASTNegOp              = ASTUnaryOp<"~", std::negate<>>;
-using ASTMulOp              = ASTBinaryOp<"*", std::multiplies<>>;
-using ASTDivOp              = ASTBinaryOp<"/", std::divides<>>;
-using ASTRemOp              = ASTBinaryOp<"%", std::modulus<>>;
+using ASTAddOp              = ASTBinaryOp<OperatorFunctors::Add>;
+using ASTSubOp              = ASTBinaryOp<OperatorFunctors::Subtract>;
+using ASTNegOp              = ASTUnaryOp<OperatorFunctors::Negate>;
+using ASTMulOp              = ASTBinaryOp<OperatorFunctors::Multiply>;
+using ASTDivOp              = ASTBinaryOp<OperatorFunctors::Divide>;
+using ASTRemOp              = ASTBinaryOp<OperatorFunctors::Remainder>;
 
-using ASTEqualOp            = ASTBinaryOp<"==", std::equal_to<>>;
-using ASTNotEqualOp         = ASTBinaryOp<"!=", std::not_equal_to<>>;
-using ASTLessThanOp         = ASTBinaryOp<"<", std::less<>>;
-using ASTLessEqualOp        = ASTBinaryOp<"<=", std::less_equal<>>;
-using ASTGreaterThanOp      = ASTBinaryOp<">", std::greater<>>;
-using ASTGreaterEqualOp     = ASTBinaryOp<">=", std::greater_equal<>>;
+using ASTEqualOp            = ASTBinaryOp<OperatorFunctors::Equal>;
+using ASTNotEqualOp         = ASTBinaryOp<OperatorFunctors::NotEqual>;
+using ASTLessThanOp         = ASTBinaryOp<OperatorFunctors::LessThan>;
+using ASTLessEqualOp        = ASTBinaryOp<OperatorFunctors::LessEqual>;
+using ASTGreaterThanOp      = ASTBinaryOp<OperatorFunctors::GreaterThan>;
+using ASTGreaterEqualOp     = ASTBinaryOp<OperatorFunctors::GreaterEqual>;
 
-using ASTLogicalAndOp       = ASTBinaryOp<"&&", std::logical_and<>>;
-using ASTLogicalOrOp        = ASTBinaryOp<"||", std::logical_or<>>;
-using ASTLogicalNotOp       = ASTUnaryOp<"!", std::logical_not<>>;
+using ASTLogicalAndOp       = ASTBinaryOp<OperatorFunctors::LogicalAnd>;
+using ASTLogicalOrOp        = ASTBinaryOp<OperatorFunctors::LogicalOr>;
+using ASTLogicalNotOp       = ASTUnaryOp<OperatorFunctors::LogicalNot>;
 
-using ASTBitwiseAndOp       = ASTBinaryOp<"&", std::bit_and<>>;
-using ASTBitwiseOrOp        = ASTBinaryOp<"|", std::bit_or<>>;
-using ASTBitwiseXorOp       = ASTBinaryOp<"^", std::bit_xor<>>;
-using ASTBitwiseNotOp       = ASTUnaryOp<"~", std::bit_not<>>;
-using ASTLeftShiftOp        = ASTBinaryOp<"<<", LeftShiftFunctor>;
-using ASTRightShiftOp       = ASTBinaryOp<">>", RightShiftFunctor>;
+using ASTBitwiseAndOp       = ASTBinaryOp<OperatorFunctors::BitwiseAnd>;
+using ASTBitwiseOrOp        = ASTBinaryOp<OperatorFunctors::BitwiseOr>;
+using ASTBitwiseXorOp       = ASTBinaryOp<OperatorFunctors::BitwiseXor>;
+using ASTBitwiseNotOp       = ASTUnaryOp<OperatorFunctors::BitwiseNot>;
+using ASTLeftShiftOp        = ASTBinaryOp<OperatorFunctors::LeftShift>;
+using ASTRightShiftOp       = ASTBinaryOp<OperatorFunctors::RightShift>;
 
-using ASTAssignOp           = ASTBinaryOp<"=", AssignFunctor<>>;
-using ASTAddAssignOp        = ASTBinaryOp<"+=", AssignFunctor<std::plus<>>>;
-using ASTSubAssignOp        = ASTBinaryOp<"-=", AssignFunctor<std::minus<>>>;
-using ASTMulAssignOp        = ASTBinaryOp<"*=", AssignFunctor<std::multiplies<>>>;
-using ASTDivAssignOp        = ASTBinaryOp<"/=", AssignFunctor<std::divides<>>>;
-using ASTRemAssignOp        = ASTBinaryOp<"%=", AssignFunctor<std::modulus<>>>;
-using ASTBitwiseAndAssignOp = ASTBinaryOp<"&=", AssignFunctor<std::bit_and<>>>;
-using ASTBitwiseOrAssignOp  = ASTBinaryOp<"|=", AssignFunctor<std::bit_or<>>>;
-using ASTBitwiseXorAssignOp = ASTBinaryOp<"^=", AssignFunctor<std::bit_xor<>>>;
-using ASTLeftShiftAssignOp  = ASTBinaryOp<"<<=", AssignFunctor<LeftShiftFunctor>>;
-using ASTRightShiftAssignOp = ASTBinaryOp<">>=", AssignFunctor<RightShiftFunctor>>;
+using ASTAssignOp           = ASTBinaryOp<OperatorFunctors::Assign<>>;
+using ASTAddAssignOp        = ASTBinaryOp<OperatorFunctors::AddAssign>;
+using ASTSubAssignOp        = ASTBinaryOp<OperatorFunctors::SubtractAssign>;
+using ASTMulAssignOp        = ASTBinaryOp<OperatorFunctors::MultiplyAssign>;
+using ASTDivAssignOp        = ASTBinaryOp<OperatorFunctors::DivideAssign>;
+using ASTRemAssignOp        = ASTBinaryOp<OperatorFunctors::RemainderAssign>;
+using ASTBitwiseAndAssignOp = ASTBinaryOp<OperatorFunctors::BitwiseAndAssign>;
+using ASTBitwiseOrAssignOp  = ASTBinaryOp<OperatorFunctors::BitwiseOrAssign>;
+using ASTBitwiseXorAssignOp = ASTBinaryOp<OperatorFunctors::BitwiseXorAssign>;
+using ASTLeftShiftAssignOp  = ASTBinaryOp<OperatorFunctors::LeftShiftAssign>;
+using ASTRightShiftAssignOp = ASTBinaryOp<OperatorFunctors::RightShiftAssign>;
 
 class ASTDeclaration : public ASTNode {
 public:
