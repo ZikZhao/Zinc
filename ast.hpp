@@ -12,25 +12,6 @@ struct Location {
 
 std::ostream& operator<< (std::ostream& os, const Location& loc);
 
-// Assignment functor that performs operation and assignment
-template<typename Operator = void>
-struct AssignFunctor {
-    static constexpr auto Func = Operator();
-    ValueRef operator() (ValueRef& left, ValueRef& right) const {
-        const ValueRef result = Func(left, right);
-        left = result;
-        return left;
-    }
-};
-
-// Specialization for simple assignment
-template<>
-struct AssignFunctor<void> {
-    ValueRef operator() (ValueRef& left, ValueRef& right) const {
-        return left = right;
-    }
-};
-
 class ASTNode;
 class ASTToken;
 template<typename TargetType> class ASTExpression;
@@ -152,6 +133,33 @@ public:
         ValueRef result_left = left->eval(globals, locals);
         ValueRef result_right = right->eval(globals, locals);
         return result_left.eval_operation<Operator>(result_right);
+    }
+};
+
+template<typename Operator>
+class ASTBinaryOp<OperatorFunctors::Assign<Operator>> : public ASTValueExpression {
+private:
+    using AssignFunctorType = OperatorFunctors::Assign<Operator>;
+    static constexpr auto Func = AssignFunctorType();
+public:
+    const ASTValueExpression* const left;
+    const ASTValueExpression* const right;
+    ASTBinaryOp(const Location& location, ASTValueExpression* left, ASTValueExpression* right)
+        : ASTValueExpression(location), left(left), right(right) {}
+    ~ASTBinaryOp() override {
+        delete left;
+        delete right;
+    }
+    void print(std::ostream& os, uint64_t indent) const override {
+        os << std::string(indent, ' ') << "BinaryOp(" << GetOperatorString<Operator>() << ")" << std::endl;
+        left->print(os, indent + 2);
+        right->print(os, indent + 2);
+    }
+    ValueRef eval(Context& globals, Context& locals) const override {
+        ValueRef result_left = left->eval(globals, locals);
+        ValueRef result_right = right->eval(globals, locals);
+        ValueRef result = result_left.eval_operation<Operator>(result_right);
+        return result_left = result;
     }
 };
 

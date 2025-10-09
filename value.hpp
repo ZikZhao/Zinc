@@ -68,22 +68,8 @@ public:
     const std::type_index type_index;
     Value(const std::type_info& type) : type_index(type) {}
     virtual ~Value() = default;
-    Value* eval_operation(std::string_view op) const {
-        auto it = OperationMap.find(OperationTuple{ std::string(op), this->type_index, std::type_index(typeid(void)) });
-        if (it != OperationMap.end()) {
-            return it->second.func(this, nullptr);
-        } else {
-            throw std::runtime_error("Operation "s + std::string(op) + " not supported for type " + static_cast<std::string>(*this));
-        }
-    }
-    Value* eval_operation(std::string_view op, const Value& other) const {
-        auto it = OperationMap.find(OperationTuple{ std::string(op), this->type_index, other.type_index });
-        if (it != OperationMap.end()) {
-            return it->second.func(this, &other);
-        } else {
-            throw std::runtime_error("Operation "s + std::string(op) + " not supported for types " + static_cast<std::string>(*this) + " and " + static_cast<std::string>(other));
-        }
-    }
+    Value* eval_operation(std::string_view op) const;
+    Value* eval_operation(std::string_view op, const Value& other) const;
     virtual ValueRef operator () (Context& globals, const Arguments& args) const { throw std::runtime_error("Function call not implemented for this type"); };
     virtual ValueRef operator [] (const Slice& indices) const { throw std::runtime_error("Indexing not implemented for this type"); };
     virtual ValueRef get(const std::string_view property) const { throw std::runtime_error("Property access not implemented for this type"); };

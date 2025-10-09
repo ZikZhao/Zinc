@@ -75,6 +75,33 @@ const std::map<OperationTuple, OperatorWithResult> OperationMap = {
 ValueRef Value::ObjectIs(const Value& left, const Value& right) {
     return new BooleanValue(&left == &right);
 }
+Value* Value::eval_operation(std::string_view op) const {
+    auto it = OperationMap.find(OperationTuple{ std::string(op), this->type_index, std::type_index(typeid(void)) });
+    if (it != OperationMap.end()) {
+        return it->second.func(this, nullptr);
+    } else {
+        throw std::runtime_error("Operation "s + std::string(op) + " not supported for type " + static_cast<std::string>(*this));
+    }
+}
+Value* Value::eval_operation(std::string_view op, const Value& other) const {
+    if (this->type_index != other.type_index) {
+        if (this->type_index == typeid(FloatValue) and other.type_index == typeid(IntegerValue)) {
+            FloatValue promoted_other = static_cast<const IntegerValue&>(other).value;
+            auto result = promoted_other.eval_operation(op, *this);
+            return result;
+        } else if (this->type_index == typeid(IntegerValue) and other.type_index == typeid(FloatValue)) {
+            FloatValue promoted_this = static_cast<const IntegerValue&>(*this).value;
+            auto result = promoted_this.eval_operation(op, other);
+            return result;
+        }
+    }
+    auto it = OperationMap.find(OperationTuple{ std::string(op), this->type_index, other.type_index });
+    if (it != OperationMap.end()) {
+        return it->second.func(this, &other);
+    } else {
+        throw std::runtime_error("Operation "s + std::string(op) + " not supported for types " + static_cast<std::string>(*this) + " and " + static_cast<std::string>(other));
+    }
+}
 
 NullValue::NullValue() : Value(typeid(NullValue)) {}
 NullValue* NullValue::adapt_for_assignment(const Value& other) const {

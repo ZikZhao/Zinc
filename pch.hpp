@@ -93,7 +93,9 @@ public:
 template<typename Functor>
 constexpr std::string_view GetOperatorString() {
     using namespace OperatorFunctors;
-    if constexpr (std::is_same_v<Functor, Add>) {
+    if constexpr (std::is_same_v<Functor, void>) {
+        return ""sv;
+    } else if constexpr (std::is_same_v<Functor, Add>) {
         return "+"sv;
     } else if constexpr (std::is_same_v<Functor, Subtract>) {
         return "-"sv;
