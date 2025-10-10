@@ -182,7 +182,7 @@ expr_without_comma
         { $$ = static_cast<ASTValueExpression*>($expr); }
     /* Unary operators */
     | OP_SUBTRACT expr_without_comma[expr] %prec OP_NEGATE
-        { $$ = new ASTNegOp(@$, static_cast<ASTValueExpression*>($expr)); }
+        { $$ = new ASTNegateOp(@$, static_cast<ASTValueExpression*>($expr)); }
     | OP_LOGICAL_NOT expr_without_comma[expr]
         { $$ = new ASTLogicalNotOp(@$, static_cast<ASTValueExpression*>($expr)); }
     | OP_BITWISE_NOT expr_without_comma[expr]
@@ -192,16 +192,16 @@ expr_without_comma
         { $$ = new ASTAddOp(@$, static_cast<ASTValueExpression*>($left), 
                            static_cast<ASTValueExpression*>($right)); }
     | expr_without_comma[left] OP_SUBTRACT expr_without_comma[right]
-        { $$ = new ASTSubOp(@$, static_cast<ASTValueExpression*>($left), 
+        { $$ = new ASTSubtractOp(@$, static_cast<ASTValueExpression*>($left), 
                            static_cast<ASTValueExpression*>($right)); }
     | expr_without_comma[left] OP_MULTIPLY expr_without_comma[right]
-        { $$ = new ASTMulOp(@$, static_cast<ASTValueExpression*>($left), 
+        { $$ = new ASTMultiplyOp(@$, static_cast<ASTValueExpression*>($left), 
                            static_cast<ASTValueExpression*>($right)); }
     | expr_without_comma[left] OP_DIVIDE expr_without_comma[right]
-        { $$ = new ASTDivOp(@$, static_cast<ASTValueExpression*>($left), 
+        { $$ = new ASTDivideOp(@$, static_cast<ASTValueExpression*>($left), 
                            static_cast<ASTValueExpression*>($right)); }
     | expr_without_comma[left] OP_REMAINDER expr_without_comma[right]
-        { $$ = new ASTRemOp(@$, static_cast<ASTValueExpression*>($left), 
+        { $$ = new ASTRemainderOp(@$, static_cast<ASTValueExpression*>($left), 
                            static_cast<ASTValueExpression*>($right)); }
     /* Comparison operators */
     | expr_without_comma[left] OP_EQUAL expr_without_comma[right]
@@ -254,16 +254,16 @@ expr_without_comma
         { $$ = new ASTAddAssignOp(@$, static_cast<ASTValueExpression*>($left), 
                                  static_cast<ASTValueExpression*>($right)); }
     | expr_without_comma[left] OP_SUBTRACT_ASSIGN expr_without_comma[right]
-        { $$ = new ASTSubAssignOp(@$, static_cast<ASTValueExpression*>($left), 
+        { $$ = new ASTSubtractAssignOp(@$, static_cast<ASTValueExpression*>($left), 
                                  static_cast<ASTValueExpression*>($right)); }
     | expr_without_comma[left] OP_MULTIPLY_ASSIGN expr_without_comma[right]
-        { $$ = new ASTMulAssignOp(@$, static_cast<ASTValueExpression*>($left), 
+        { $$ = new ASTMultiplyAssignOp(@$, static_cast<ASTValueExpression*>($left), 
                                  static_cast<ASTValueExpression*>($right)); }
     | expr_without_comma[left] OP_DIVIDE_ASSIGN expr_without_comma[right]
-        { $$ = new ASTDivAssignOp(@$, static_cast<ASTValueExpression*>($left), 
+        { $$ = new ASTDivideAssignOp(@$, static_cast<ASTValueExpression*>($left), 
                                  static_cast<ASTValueExpression*>($right)); }
     | expr_without_comma[left] OP_REMAINDER_ASSIGN expr_without_comma[right]
-        { $$ = new ASTRemAssignOp(@$, static_cast<ASTValueExpression*>($left), 
+        { $$ = new ASTRemainderAssignOp(@$, static_cast<ASTValueExpression*>($left), 
                                  static_cast<ASTValueExpression*>($right)); }
     | expr_without_comma[left] OP_LEFT_SHIFT_ASSIGN expr_without_comma[right]
         { $$ = new ASTLeftShiftAssignOp(@$, static_cast<ASTValueExpression*>($left), 

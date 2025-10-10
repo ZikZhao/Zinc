@@ -115,7 +115,7 @@
                 "name": "Debug Parser",
                 "type": "cppdbg", 
                 "request": "launch",
-                "program": "${workspaceFolder}/out/parser",
+                "program": "${workspaceFolder}/out/interpreter",
                 "args": ["${workspaceFolder}/test.ptf"],
                 "stopAtEntry": false,
                 "cwd": "${workspaceFolder}",

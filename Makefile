@@ -2,7 +2,7 @@
 CXX = g++
 CXXFLAGS = -g -O0 --std=c++23 -I. -Iout -fsanitize=address -fno-omit-frame-pointer
 LDFLAGS = -fsanitize=address
-TARGET = out/parser
+TARGET = out/interpreter
 
 # Source files
 OBJS = out/ast.o out/value.o out/type.o out/exception.o out/parser.tab.o out/lex.yy.o
