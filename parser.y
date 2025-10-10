@@ -4,8 +4,6 @@
 #include "value.hpp"
 #include "out/parser.tab.hpp"
 
-std::vector<ASTNode*> nodes;
-
 extern int yylex(ASTNode** yylval, Location* yylloc);
 %}
 
@@ -85,7 +83,7 @@ extern int yylex(ASTNode** yylval, Location* yylloc);
 %left OP_SCOPE_RESOLUTION
 %%
 
-top_level_statements : /* empty */   { /* no-op */ }
+top_level_statements : /* empty */   { root = nullptr; }
                      | statements    { root = $statements; }
                      ;
 
@@ -243,6 +241,7 @@ for_statement : KW_FOR OP_LPAREN optional_initializer OP_SEMICOLON optional_cond
               {
                   $$ = new ASTForStatement(@$, nullptr, nullptr, nullptr, static_cast<ASTStatements*>($code_block));
               }
+              ;
 
 break_statement : KW_BREAK OP_SEMICOLON    { $$ = new ASTBreakStatement(@$); }
                 ;
@@ -286,8 +285,5 @@ int main(int argc, char* argv[]) {
 
     Context globals = Builtins;
     root->execute(globals, globals);
-    std::cout << std::endl;
-    for (const auto& record : globals) {
-        std::cout << record.first << " = " << std::string(*record.second) << std::endl;
-    }
+    delete root;
 }

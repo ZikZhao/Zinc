@@ -10,7 +10,7 @@ struct Location {
     } begin, end;
 };
 
-std::ostream& operator<< (std::ostream& os, const Location& loc);
+std::ostream& operator << (std::ostream& os, const Location& loc);
 
 class ASTNode;
 class ASTToken;
@@ -139,8 +139,8 @@ public:
 template<typename Operator>
 class ASTBinaryOp<OperatorFunctors::Assign<Operator>> : public ASTValueExpression {
 private:
-    using AssignFunctorType = OperatorFunctors::Assign<Operator>;
-    static constexpr auto Func = AssignFunctorType();
+    using AssignOperator = OperatorFunctors::Assign<Operator>;
+    static constexpr auto Func = AssignOperator();
 public:
     const ASTValueExpression* const left;
     const ASTValueExpression* const right;
@@ -151,7 +151,7 @@ public:
         delete right;
     }
     void print(std::ostream& os, uint64_t indent) const override {
-        os << std::string(indent, ' ') << "BinaryOp(" << GetOperatorString<Operator>() << ")" << std::endl;
+        os << std::string(indent, ' ') << "BinaryOp(" << GetOperatorString<AssignOperator>() << ")" << std::endl;
         left->print(os, indent + 2);
         right->print(os, indent + 2);
     }
@@ -231,6 +231,7 @@ public:
     const TypeRef inferred_type;
     ASTDeclaration(const Location& location, const ASTIdentifier* identifier, const ASTValueExpression* expr, const bool is_const = false);
     ASTDeclaration(const Location& location, const ASTTypeExpression* type, const ASTIdentifier* identifier, const ASTValueExpression* expr, const bool is_const = false);
+    ~ASTDeclaration() override;
     void execute(Context& globals, Context& locals) const override;
     void print(std::ostream& os, uint64_t indent) const override;
 };
@@ -241,6 +242,7 @@ public:
     const ASTStatements* const if_block;
     const ASTStatements* const else_block;
     ASTIfStatement(const Location& location, const ASTValueExpression* condition, const ASTStatements* const if_block, const ASTStatements* const else_block = nullptr);
+    ~ASTIfStatement() override;
     void execute(Context& globals, Context& locals) const override;
     void print(std::ostream& os, uint64_t indent) const override;
 };
@@ -252,6 +254,7 @@ public:
     const ASTValueExpression* const increment;
     const ASTStatements* const body;
     ASTForStatement(const Location& location, const ASTNode* initializer, const ASTValueExpression* condition, const ASTValueExpression* increment, const ASTStatements* body);
+    ~ASTForStatement() override;
     void execute(Context& globals, Context& locals) const override;
     void print(std::ostream& os, uint64_t indent) const override;
 };

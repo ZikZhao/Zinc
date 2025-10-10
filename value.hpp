@@ -175,7 +175,7 @@ public:
     using FuncType = std::function<ValueRef(const Map<ValueRef>&)>;
     const std::string name;
     const FuncType func;
-    const BuiltinFunctionSignature* signature;
+    const std::unique_ptr<const BuiltinFunctionSignature> signature;
     BuiltinFunctionValue(std::string_view name, FuncType func, const BuiltinFunctionSignature* signature);
     ValueRef operator () (Context& globals, const Arguments& args) const final;
     bool is_truthy() const final;

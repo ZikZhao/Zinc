@@ -3,7 +3,7 @@
 #include "value.hpp"
 #include "exception.hpp"
 
-std::ostream& operator<< (std::ostream& os, const Location& loc) {
+std::ostream& operator << (std::ostream& os, const Location& loc) {
     return os << loc.begin.line << ":" << loc.begin.column << "-" << loc.end.line << ":" << loc.end.column;
 }
 
@@ -105,6 +105,11 @@ ASTDeclaration::ASTDeclaration(const Location& location, const ASTIdentifier* id
     : ASTNode(location), is_const(is_const), type(nullptr), identifier(identifier), expr(expr), inferred_type() {} // TODO
 ASTDeclaration::ASTDeclaration(const Location& location, const ASTTypeExpression* type, const ASTIdentifier* identifier, const ASTValueExpression* expr, const bool is_const)
     : ASTNode(location), is_const(is_const), type(type), identifier(identifier), expr(expr), inferred_type() {} // TODO
+ASTDeclaration::~ASTDeclaration() {
+    delete type;
+    delete identifier;
+    delete expr;
+}
 void ASTDeclaration::execute(Context& globals, Context& locals) const {
     locals.emplace(identifier->name, expr ? expr->eval(globals, locals) : ValueRef());
 }
@@ -116,6 +121,11 @@ void ASTDeclaration::print(std::ostream& os, uint64_t indent) const {
 
 ASTIfStatement::ASTIfStatement(const Location& location, const ASTValueExpression* condition, const ASTStatements* const if_block, const ASTStatements* const else_block)
     : ASTNode(location), condition(condition), if_block(if_block), else_block(else_block) {}
+ASTIfStatement::~ASTIfStatement() {
+    delete condition;
+    delete if_block;
+    delete else_block;
+}
 void ASTIfStatement::execute(Context& globals, Context& locals) const {
     if (condition->eval(globals, locals).is_truthy()) {
         if_block->execute(globals, locals);
@@ -134,6 +144,12 @@ void ASTIfStatement::print(std::ostream& os, uint64_t indent) const {
 
 ASTForStatement::ASTForStatement(const Location &location, const ASTNode *initializer, const ASTValueExpression *condition, const ASTValueExpression *increment, const ASTStatements *body)
     : ASTNode(location), initializer(initializer), condition(condition), increment(increment), body(body) {}
+ASTForStatement::~ASTForStatement() {
+    delete initializer;
+    delete condition;
+    delete increment;
+    delete body;
+}
 void ASTForStatement::execute(Context& globals, Context& locals) const {
     if (initializer) {
         initializer->execute(globals, locals);
