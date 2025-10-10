@@ -2,12 +2,14 @@
 #include "pch.hpp"
 #include "ast.hpp"
 #include "out/parser.tab.hpp"
+#define SPECIAL_TOKEN_EOF 0
+#define SPECIAL_TOKEN_WHITESPACE -1
+#define SPECIAL_TOKEN_NEWLINE -2
 
 using namespace yy;
 using enum parser::token::token_kind_type;
 
 extern std::ifstream yyin;
-uint64_t column = 0;
 %}
 
 %option c++
@@ -114,8 +116,8 @@ MULTI_LINE_COMMENT \/\*([^*]|\*+[^*/])*\*+\/
 {SINGLE_LINE_COMMENT}    { return T_SINGLE_LINE_COMMENT; }
 {MULTI_LINE_COMMENT}     { return T_MULTI_LINE_COMMENT; }
 
-{WHITESPACE}             { /* Ignore whitespace */ }
-{NEW_LINE}               { column = 0; std::cout << std::endl; }
+{WHITESPACE}             { return SPECIAL_TOKEN_WHITESPACE; }
+{NEW_LINE}               { return SPECIAL_TOKEN_NEWLINE; }
 
 .                        { printf("UNKNOWN(%c) ", yytext[0]); }
 
@@ -124,14 +126,27 @@ extern std::ifstream yyin;
 
 int yylex(ASTNode** yylval, Location* yylloc) {
     static yyFlexLexer lexer(&yyin, nullptr);
-    static uint64_t column = 0;
+    static uint64_t column = 1;
 
-    yylloc->begin.line = lexer.lineno();
-    yylloc->begin.column = column;
-    const int type = lexer.yylex();
-    column += strlen(lexer.YYText());
-    yylloc->end.line = lexer.lineno();
-    yylloc->end.column = column;
-    *yylval = ASTToken::New(*yylloc, lexer.YYText(), type);
-    return type;
+    while (true) {
+        yylloc->begin.line = lexer.lineno();
+        yylloc->begin.column = column;
+        const int type = lexer.yylex();
+        switch (type) {
+            case SPECIAL_TOKEN_EOF:
+                return SPECIAL_TOKEN_EOF;
+            case SPECIAL_TOKEN_WHITESPACE:
+                column += std::strlen(lexer.YYText());
+                break;
+            case SPECIAL_TOKEN_NEWLINE:
+                column = 1;
+                break;
+            default:
+                column += std::strlen(lexer.YYText());
+                yylloc->end.line = lexer.lineno();
+                yylloc->end.column = column;
+                *yylval = ASTToken::New(*yylloc, lexer.YYText(), type);
+                return type;
+        }
+    }
 }
