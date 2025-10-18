@@ -13,8 +13,22 @@
 #include <stdexcept>
 #include <utility>
 #include <typeindex>
+#include <ranges>
+#include <cassert>
+#include <array>
+
+#define CHECK(condition) \
+    do { \
+        if (not (condition)) FatalError(#condition); \
+    } while (false);
+
 using namespace std::literals::string_literals;
 using namespace std::literals::string_view_literals;
+
+constexpr void FatalError(std::string_view message) {
+    std::cout << message;
+    std::abort();
+}
 
 template<typename ValueType>
 using Map = std::unordered_map<std::string, ValueType>;
@@ -52,41 +66,45 @@ namespace OperatorFunctors {
         }
     };
     template<typename Functor = void>
-    struct Assign {
-        template<typename T>
-        T operator() (T& left, T& right) const {
-            static Functor func;
-            return left = func(left, right);
-        }
-    };
+    struct OperateAndAssign {};
     template<>
-    struct Assign<void> {
-        template<typename T>
-        T operator() (T& left, T& right) const {
+    struct OperateAndAssign<void> {
+        template<typename Left, typename Right>
+        auto operator() (const Left& left, const Right& right) const {
             return left = right;
         }
     };
-    using AddAssign = Assign<Add>;
-    using SubtractAssign = Assign<Subtract>;
-    using MultiplyAssign = Assign<Multiply>;
-    using DivideAssign = Assign<Divide>;
-    using RemainderAssign = Assign<Remainder>;
-    using BitwiseAndAssign = Assign<BitwiseAnd>;
-    using BitwiseOrAssign  = Assign<BitwiseOr>;
-    using BitwiseXorAssign = Assign<BitwiseXor>;
-    using LeftShiftAssign  = Assign<LeftShift>;
-    using RightShiftAssign = Assign<RightShift>;
+    using Assign = OperateAndAssign<>;
+    using AddAssign = OperateAndAssign<Add>;
+    using SubtractAssign = OperateAndAssign<Subtract>;
+    using MultiplyAssign = OperateAndAssign<Multiply>;
+    using DivideAssign = OperateAndAssign<Divide>;
+    using RemainderAssign = OperateAndAssign<Remainder>;
+    using BitwiseAndAssign = OperateAndAssign<BitwiseAnd>;
+    using BitwiseOrAssign  = OperateAndAssign<BitwiseOr>;
+    using BitwiseXorAssign = OperateAndAssign<BitwiseXor>;
+    using LeftShiftAssign  = OperateAndAssign<LeftShift>;
+    using RightShiftAssign = OperateAndAssign<RightShift>;
 }
+
+struct Location {
+    struct {
+        uint64_t line;
+        uint64_t column;
+    } begin, end;
+};
+
+std::ostream& operator << (std::ostream& os, const Location& loc);
 
 template<uint64_t length>
 class FixedString {
 public:
-    char str[length];
+    const char str_[length];
     constexpr FixedString(const char (&str)[length]) {
-        std::copy_n(str, length, this->str);
+        std::copy_n(str, length, str_);
     }
     constexpr std::string_view operator * () const {
-        return std::string_view(str, length);
+        return std::string_view(str_, length);
     }
 };
 
@@ -137,7 +155,7 @@ constexpr std::string_view GetOperatorString() {
         return "<<"sv;
     } else if constexpr (std::is_same_v<Functor, RightShift>) {
         return ">>"sv;
-    } else if constexpr (std::is_same_v<Functor, Assign<>>) {
+    } else if constexpr (std::is_same_v<Functor, Assign>) {
         return "="sv;
     } else if constexpr (std::is_same_v<Functor, AddAssign>) {
         return "+="sv;

@@ -1,7 +1,7 @@
 %{
 #include "pch.hpp"
 #include "ast.hpp"
-#include "value.hpp"
+#include "object.hpp"
 #include "out/parser.tab.hpp"
 
 extern int yylex(ASTNode** yylval, Location* yylloc);
@@ -21,7 +21,7 @@ extern int yylex(ASTNode** yylval, Location* yylloc);
 %parse-param { ASTNode*& root }
 
 /* TypeScript Keywords */
-%token KW_CONST KW_LET KW_INTEGER KW_FLOAT KW_STRING KW_BOOLEAN KW_NULL
+%token KW_CONST KW_LET KW_TYPE KW_INTEGER KW_FLOAT KW_STRING KW_BOOLEAN KW_NULL
 %token KW_IF KW_ELSE KW_FOR KW_WHILE KW_FUNCTION KW_RETURN KW_CLASS KW_EXTENDS
 %token KW_BREAK KW_CONTINUE KW_SWITCH KW_CASE KW_DEFAULT KW_IMPORT KW_FROM KW_AS
 
@@ -92,9 +92,9 @@ top_level_statements
 
 statements
     : statement
-        { $$ = new ASTStatements(@$, $statement); }
+        { $$ = new ASTCodeBlock(@$, $statement); }
     | statements[prev] statement
-        { $$ = &static_cast<ASTStatements*>($prev)->push(@$, $statement); }
+        { $$ = &static_cast<ASTCodeBlock*>($prev)->push(@$, $statement); }
     ;
 
 statement
@@ -114,7 +114,7 @@ statement
 
 code_block
     : OP_LBRACE OP_RBRACE
-        { $$ = new ASTStatements(@$); }
+        { $$ = new ASTCodeBlock(@$); }
     | OP_LBRACE statements OP_RBRACE
         { $$ = $statements; }
     ;
@@ -137,22 +137,52 @@ constant
         { $$ = new ASTConstant<BooleanValue>(*static_cast<ASTToken*>($1)); }
     ;
 
-type
-    : KW_INTEGER
+primitive_type
+    : KW_NULL
+        { $$ = new ASTPrimitiveType<NullType>(*static_cast<ASTToken*>($1)); }
+    | KW_INTEGER
+        { $$ = new ASTPrimitiveType<IntegerType>(*static_cast<ASTToken*>($1)); }
     | KW_FLOAT
+        { $$ = new ASTPrimitiveType<FloatType>(*static_cast<ASTToken*>($1)); }
     | KW_STRING
+        { $$ = new ASTPrimitiveType<StringType>(*static_cast<ASTToken*>($1)); }
     | KW_BOOLEAN
+        { $$ = new ASTPrimitiveType<BooleanType>(*static_cast<ASTToken*>($1)); }
+    ;
+
+type_expression
+    : primitive_type
+        { $$ = static_cast<ASTTypeExpression*>($primitive_type); }
+    // | function_type
+    //     { $$ = static_cast<ASTTypeExpression*>($function_type); }
+    // | object_type
+    //     { $$ = static_cast<ASTTypeExpression*>($object_type); }
+    // | intersection_type
+    //     { $$ = static_cast<ASTTypeExpression*>($intersection_type); }
+    // | union_type
+    //     { $$ = static_cast<ASTTypeExpression*>($union_type); }
+
+type_alias
+    : KW_TYPE identifier OP_ASSIGN type_expression[type] OP_SEMICOLON
+        {
+            $$ = new ASTTypeAlias(
+                @$,
+                static_cast<ASTIdentifier*>($identifier),
+                static_cast<ASTTypeExpression*>($type));
+        }
     ;
 
 argument_list
     : expr_without_comma[arg]
         {
-            $$ = new ASTFunctionCallArguments(@$, 
+            $$ = new ASTFunctionCallArguments(
+                @$, 
                 static_cast<ASTValueExpression*>($arg));
         }
     | argument_list[prev] OP_COMMA expr_without_comma[arg]
         {
-            $$ = &static_cast<ASTFunctionCallArguments*>($prev)->push_back(@$,
+            $$ = &static_cast<ASTFunctionCallArguments*>($prev)->push_back(
+                @$,
                 static_cast<ASTValueExpression*>($arg));
         }
     ;
@@ -160,12 +190,14 @@ argument_list
 function_call
     : expr_without_comma[function] OP_LPAREN OP_RPAREN
         {
-            $$ = new ASTFunctionCall(@$, 
+            $$ = new ASTFunctionCall(
+                @$, 
                 static_cast<ASTValueExpression*>($function));
         }
     | expr_without_comma[function] OP_LPAREN argument_list OP_RPAREN
         {
-            $$ = new ASTFunctionCall(@$, 
+            $$ = new ASTFunctionCall(
+                @$, 
                 static_cast<ASTValueExpression*>($function), 
                 static_cast<ASTFunctionCallArguments*>($argument_list));
         }
@@ -189,97 +221,213 @@ expr_without_comma
         { $$ = new ASTBitwiseNotOp(@$, static_cast<ASTValueExpression*>($expr)); }
     /* Arithmetic operators */
     | expr_without_comma[left] OP_ADD expr_without_comma[right]
-        { $$ = new ASTAddOp(@$, static_cast<ASTValueExpression*>($left), 
-                           static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTAddOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_SUBTRACT expr_without_comma[right]
-        { $$ = new ASTSubtractOp(@$, static_cast<ASTValueExpression*>($left), 
-                           static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTSubtractOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_MULTIPLY expr_without_comma[right]
-        { $$ = new ASTMultiplyOp(@$, static_cast<ASTValueExpression*>($left), 
-                           static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTMultiplyOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_DIVIDE expr_without_comma[right]
-        { $$ = new ASTDivideOp(@$, static_cast<ASTValueExpression*>($left), 
-                           static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTDivideOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_REMAINDER expr_without_comma[right]
-        { $$ = new ASTRemainderOp(@$, static_cast<ASTValueExpression*>($left), 
-                           static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTRemainderOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     /* Comparison operators */
     | expr_without_comma[left] OP_EQUAL expr_without_comma[right]
-        { $$ = new ASTEqualOp(@$, static_cast<ASTValueExpression*>($left), 
-                             static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTEqualOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_NOT_EQUAL expr_without_comma[right]
-        { $$ = new ASTNotEqualOp(@$, static_cast<ASTValueExpression*>($left), 
-                                static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTNotEqualOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_LESS_THAN expr_without_comma[right]
-        { $$ = new ASTLessThanOp(@$, static_cast<ASTValueExpression*>($left), 
-                                static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTLessThanOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_GREATER_THAN expr_without_comma[right]
-        { $$ = new ASTGreaterThanOp(@$, static_cast<ASTValueExpression*>($left), 
-                                   static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTGreaterThanOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_LESS_EQUAL expr_without_comma[right]
-        { $$ = new ASTLessEqualOp(@$, static_cast<ASTValueExpression*>($left), 
-                                 static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTLessEqualOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_GREATER_EQUAL expr_without_comma[right]
-        { $$ = new ASTGreaterEqualOp(@$, static_cast<ASTValueExpression*>($left), 
-                                    static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTGreaterEqualOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     /* Logical operators */
     | expr_without_comma[left] OP_LOGICAL_AND expr_without_comma[right]
-        { $$ = new ASTLogicalAndOp(@$, static_cast<ASTValueExpression*>($left), 
-                                  static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTLogicalAndOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_LOGICAL_OR expr_without_comma[right]
-        { $$ = new ASTLogicalOrOp(@$, static_cast<ASTValueExpression*>($left), 
-                                 static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTLogicalOrOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     /* Bitwise operators */
     | expr_without_comma[left] OP_BITWISE_AND expr_without_comma[right]
-        { $$ = new ASTBitwiseAndOp(@$, static_cast<ASTValueExpression*>($left), 
-                                  static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTBitwiseAndOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_BITWISE_OR expr_without_comma[right]
-        { $$ = new ASTBitwiseOrOp(@$, static_cast<ASTValueExpression*>($left), 
-                                 static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTBitwiseOrOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_BITWISE_XOR expr_without_comma[right]
-        { $$ = new ASTBitwiseXorOp(@$, static_cast<ASTValueExpression*>($left), 
-                                  static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTBitwiseXorOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     /* Shift operators */
     | expr_without_comma[left] OP_LEFT_SHIFT expr_without_comma[right]
-        { $$ = new ASTLeftShiftOp(@$, static_cast<ASTValueExpression*>($left), 
-                                 static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTLeftShiftOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_RIGHT_SHIFT expr_without_comma[right]
-        { $$ = new ASTRightShiftOp(@$, static_cast<ASTValueExpression*>($left), 
-                                  static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTRightShiftOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     /* Assignment operators */
     | expr_without_comma[left] OP_ASSIGN expr_without_comma[right]
-        { $$ = new ASTAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                              static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_ADD_ASSIGN expr_without_comma[right]
-        { $$ = new ASTAddAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                 static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTAddAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_SUBTRACT_ASSIGN expr_without_comma[right]
-        { $$ = new ASTSubtractAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                 static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTSubtractAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_MULTIPLY_ASSIGN expr_without_comma[right]
-        { $$ = new ASTMultiplyAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                 static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTMultiplyAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_DIVIDE_ASSIGN expr_without_comma[right]
-        { $$ = new ASTDivideAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                 static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTDivideAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_REMAINDER_ASSIGN expr_without_comma[right]
-        { $$ = new ASTRemainderAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                 static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTRemainderAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_LEFT_SHIFT_ASSIGN expr_without_comma[right]
-        { $$ = new ASTLeftShiftAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                       static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTLeftShiftAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_RIGHT_SHIFT_ASSIGN expr_without_comma[right]
-        { $$ = new ASTRightShiftAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                        static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTRightShiftAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_BITWISE_AND_ASSIGN expr_without_comma[right]
-        { $$ = new ASTBitwiseAndAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                        static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTBitwiseAndAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_BITWISE_OR_ASSIGN expr_without_comma[right]
-        { $$ = new ASTBitwiseOrAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                       static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTBitwiseOrAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     | expr_without_comma[left] OP_BITWISE_XOR_ASSIGN expr_without_comma[right]
-        { $$ = new ASTBitwiseXorAssignOp(@$, static_cast<ASTValueExpression*>($left), 
-                                        static_cast<ASTValueExpression*>($right)); }
+        {
+            $$ = new ASTBitwiseXorAssignOp(
+                @$, 
+                static_cast<ASTValueExpression*>($left), 
+                static_cast<ASTValueExpression*>($right));
+        }
     /* Other operators */
     | expr_without_comma[left] OP_SCOPE_RESOLUTION identifier
     | expr_without_comma[condition] OP_QUESTION expr_without_comma[then] OP_COLON expr_without_comma[else]
@@ -295,29 +443,33 @@ expression
 declaration
     : KW_CONST identifier OP_ASSIGN expression
         {
-            $$ = new ASTDeclaration(@$, static_cast<ASTIdentifier*>($identifier), 
-                                   static_cast<ASTValueExpression*>($expression));
+            $$ = new ASTDeclaration(
+                @$, 
+                static_cast<ASTIdentifier*>($identifier), 
+                static_cast<ASTValueExpression*>($expression));
         }
     | KW_LET identifier OP_ASSIGN expression
         {
-            $$ = new ASTDeclaration(@$, static_cast<ASTIdentifier*>($identifier), 
-                                   static_cast<ASTValueExpression*>($expression));
+            $$ = new ASTDeclaration(
+                @$, 
+                static_cast<ASTIdentifier*>($identifier), 
+                static_cast<ASTValueExpression*>($expression));
         }
-    | KW_CONST identifier OP_COLON type OP_ASSIGN expression
+    | KW_CONST identifier OP_COLON type_expression[type] OP_ASSIGN expression
         {
             $$ = new ASTDeclaration(@$, 
                 static_cast<ASTTypeExpression*>(static_cast<ASTTypeExpression*>($type)),
                 static_cast<ASTIdentifier*>($identifier), 
                 static_cast<ASTValueExpression*>($expression));
         }
-    | KW_LET identifier OP_COLON type OP_ASSIGN expression
+    | KW_LET identifier OP_COLON type_expression[type] OP_ASSIGN expression
         {
             $$ = new ASTDeclaration(@$, 
                 static_cast<ASTTypeExpression*>(static_cast<ASTTypeExpression*>($type)),
                 static_cast<ASTIdentifier*>($identifier), 
                 static_cast<ASTValueExpression*>($expression));
         }
-    | KW_LET identifier OP_COLON type
+    | KW_LET identifier OP_COLON type_expression[type]
         {
             $$ = new ASTDeclaration(@$, 
                 static_cast<ASTTypeExpression*>(static_cast<ASTTypeExpression*>($type)),
@@ -328,14 +480,19 @@ declaration
 if_statement
     : KW_IF OP_LPAREN expression[condition] OP_RPAREN code_block[then]
         {
-            $$ = new ASTIfStatement(@$, static_cast<ASTValueExpression*>($condition), 
-                                   static_cast<ASTStatements*>($then), nullptr);
+            $$ = new ASTIfStatement(
+                @$, 
+                static_cast<ASTValueExpression*>($condition), 
+                static_cast<ASTCodeBlock*>($then), 
+                nullptr);
         }
     | KW_IF OP_LPAREN expression[condition] OP_RPAREN code_block[then] KW_ELSE code_block[else]
         {
-            $$ = new ASTIfStatement(@$, static_cast<ASTValueExpression*>($condition), 
-                                   static_cast<ASTStatements*>($then), 
-                                   static_cast<ASTStatements*>($else));
+            $$ = new ASTIfStatement(
+                @$, 
+                static_cast<ASTValueExpression*>($condition), 
+                static_cast<ASTCodeBlock*>($then), 
+                static_cast<ASTCodeBlock*>($else));
         }
     ;
 
@@ -365,21 +522,30 @@ optional_increment
 for_statement
     : KW_FOR OP_LPAREN optional_initializer OP_SEMICOLON optional_condition OP_SEMICOLON optional_increment OP_RPAREN code_block
         {
-            $$ = new ASTForStatement(@$, $optional_initializer, 
-                                    static_cast<ASTValueExpression*>($optional_condition), 
-                                    static_cast<ASTValueExpression*>($optional_increment), 
-                                    static_cast<ASTStatements*>($code_block));
+            $$ = new ASTForStatement(
+                @$, 
+                $optional_initializer, 
+                static_cast<ASTValueExpression*>($optional_condition), 
+                static_cast<ASTValueExpression*>($optional_increment), 
+                static_cast<ASTCodeBlock*>($code_block));
         }
     | KW_FOR OP_LPAREN expression[condition] OP_RPAREN code_block
         {
-            $$ = new ASTForStatement(@$, nullptr, 
-                                    static_cast<ASTValueExpression*>($condition), 
-                                    nullptr, static_cast<ASTStatements*>($code_block));
+            $$ = new ASTForStatement(
+                @$, 
+                nullptr, 
+                static_cast<ASTValueExpression*>($condition), 
+                nullptr, 
+                static_cast<ASTCodeBlock*>($code_block));
         }
     | KW_FOR code_block
         {
-            $$ = new ASTForStatement(@$, nullptr, nullptr, nullptr, 
-                                    static_cast<ASTStatements*>($code_block));
+            $$ = new ASTForStatement(
+                @$, 
+                nullptr, 
+                nullptr, 
+                nullptr, 
+                static_cast<ASTCodeBlock*>($code_block));
         }
     ;
 
@@ -398,39 +564,10 @@ parameter
         {
             $$ = new ASTFunctionParameter(static_cast<ASTIdentifier*>($identifier));
         }
-    | identifier OP_COLON type
+    | identifier OP_COLON type_expression[type]
         {
             $$ = new ASTFunctionParameter(
                 static_cast<ASTTypeExpression*>(static_cast<ASTTypeExpression*>($type)), 
                 static_cast<ASTIdentifier*>($identifier));
         }
     ;
-
-%%
-std::ifstream yyin;
-
-void yy::parser::error(const Location& location, const std::string& message) {
-    std::cerr << "Parsing terminated due to errors: " << message << std::endl;
-}
-
-int main(int argc, char* argv[]) {
-    if (argc > 1) {
-        yyin.open(argv[1]);
-        if (yyin.fail()) {
-            std::cerr << "Error: Cannot open file " << argv[1] << std::endl;
-            return 1;
-        }
-    }
-
-    ASTNode* root = nullptr;
-    yy::parser parser(root);
-    parser.set_debug_level(1);
-    parser.parse();
-
-    std::cout << std::endl;
-    root->print(std::cout);
-
-    Context globals = Builtins;
-    root->execute(globals, globals);
-    delete root;
-}

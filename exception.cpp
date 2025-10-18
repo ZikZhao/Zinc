@@ -1,13 +1,22 @@
+#include "pch.hpp"
 #include "exception.hpp"
 
-BreakException::BreakException() : std::runtime_error("Break") {}
+Exception::Exception()
+    : std::runtime_error("") {}
+Exception::Exception(std::string_view message)
+    : std::runtime_error(std::string(message)) {}
 
-ContinueException::ContinueException() : std::runtime_error("Continue") {}
+BreakException::BreakException() : Exception("Break") {}
 
-TypeException::TypeException(const std::string_view expected, const std::string_view actual)
-    : std::runtime_error("Type error: expected " + std::string(expected) + ", got " + std::string(actual)) {}
+ContinueException::ContinueException() : Exception("Continue") {}
 
-TypeException::TypeException(const std::string_view message)
-    : std::runtime_error("Type error: " + std::string(message)) {}
+TypeException::TypeException(std::string_view expected, std::string_view actual)
+    : Exception("Type error: expected " + std::string(expected) + ", got " + std::string(actual)) {}
 
-ArgumentException::ArgumentException(const std::string_view key) : std::runtime_error("Argument not found: " + std::string(key)) {}
+TypeException::TypeException(std::string_view message)
+    : Exception(message) {}
+
+VariableException::VariableException(std::string_view name)
+    : Exception("Variable not found: " + std::string(name)) {}
+
+ArgumentException::ArgumentException(std::string_view key) : Exception("Argument not found: " + std::string(key)) {}

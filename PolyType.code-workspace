@@ -64,7 +64,8 @@
             "format": "cpp",
             "text_encoding": "cpp",
             "set": "cpp",
-            "typeindex": "cpp"
+            "typeindex": "cpp",
+            "ranges": "cpp"
         },
         "C_Cpp.default.compilerPath": "/usr/bin/g++",
         "C_Cpp.default.cppStandard": "c++23",
@@ -112,7 +113,7 @@
         "version": "0.2.0",
         "configurations": [
             {
-                "name": "Debug Parser",
+                "name": "Debug Interpreter",
                 "type": "cppdbg", 
                 "request": "launch",
                 "program": "${workspaceFolder}/out/interpreter",

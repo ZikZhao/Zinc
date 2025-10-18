@@ -1,30 +1,42 @@
 #pragma once
 #include "pch.hpp"
 
-class BreakException : public std::runtime_error {
+class Exception : public std::runtime_error {
+public:
+    Location location_;
+    Exception();
+    Exception(std::string_view message);
+};
+
+class BreakException : public Exception {
 public:
     BreakException();
 };
 
-class ContinueException : public std::runtime_error {
+class ContinueException : public Exception {
 public:
     ContinueException();
 };
 
 template<typename TargetType>
-class ReturnException : public std::runtime_error {
+class ReturnException : public Exception {
 public:
-    TargetType return_value;
-    ReturnException(TargetType return_value) : std::runtime_error("Return"), return_value(return_value) {}
+    TargetType value_;
+    ReturnException(TargetType value) : Exception("Return"), value_(value) {}
 };
 
-class TypeException : public std::runtime_error {
+class TypeException : public Exception {
 public:
-    TypeException(const std::string_view expected, const std::string_view actual);
-    TypeException(const std::string_view message);
+    TypeException(std::string_view expected, std::string_view actual);
+    TypeException(std::string_view message);
 };
 
-class ArgumentException : public std::runtime_error {
+class VariableException : public Exception {
 public:
-    ArgumentException(const std::string_view key);
+    VariableException(std::string_view name);
+};
+
+class ArgumentException : public Exception {
+public:
+    ArgumentException(std::string_view key);
 };

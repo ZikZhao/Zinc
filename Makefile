@@ -1,11 +1,12 @@
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -g -O0 --std=c++23 -I. -Iout -fsanitize=address -fno-omit-frame-pointer
-LDFLAGS = -fsanitize=address
+CXXFLAGS = -D_GLIBCXX_DEBUG -g3 -O0 --std=c++23 -I. -Iout -fsanitize=undefined,address -fno-omit-frame-pointer \
+	-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wno-unused-parameter -Wno-missing-field-initializers
+LDFLAGS = -fsanitize=undefined,address
 TARGET = out/interpreter
 
 # Source files
-OBJS = out/ast.o out/value.o out/type.o out/exception.o out/parser.tab.o out/lex.yy.o
+OBJS =  out/object.o out/exception.o out/ast.o out/main.o out/parser.tab.o out/lex.yy.o
 
 # Precompiled header
 PCH_SRC = pch.hpp

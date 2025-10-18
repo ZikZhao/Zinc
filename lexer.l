@@ -34,6 +34,7 @@ MULTI_LINE_COMMENT \/\*([^*]|\*+[^*/])*\*+\/
 
 "const"                  { return KW_CONST; }
 "let"                    { return KW_LET; }
+"type"                   { return KW_TYPE; }
 "integer"                { return KW_INTEGER; }
 "float"                  { return KW_FLOAT; }
 "string"                 { return KW_STRING; }
@@ -126,10 +127,10 @@ extern std::ifstream yyin;
 
 int yylex(ASTNode** yylval, Location* yylloc) {
     static yyFlexLexer lexer(&yyin, nullptr);
-    static uint64_t column = 1;
+    static std::uint64_t column = 1;
 
     while (true) {
-        yylloc->begin.line = lexer.lineno();
+        yylloc->begin.line = static_cast<std::uint64_t>(lexer.lineno());
         yylloc->begin.column = column;
         const int type = lexer.yylex();
         switch (type) {
@@ -143,9 +144,9 @@ int yylex(ASTNode** yylval, Location* yylloc) {
                 break;
             default:
                 column += std::strlen(lexer.YYText());
-                yylloc->end.line = lexer.lineno();
+                yylloc->end.line = static_cast<std::uint64_t>(lexer.lineno());
                 yylloc->end.column = column;
-                *yylval = ASTToken::New(*yylloc, lexer.YYText(), type);
+                *yylval = ASTToken::New(*yylloc, lexer.YYText());
                 return type;
         }
     }
