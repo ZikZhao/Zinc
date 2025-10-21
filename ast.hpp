@@ -19,20 +19,22 @@ class ASTIfStatement;
 
 class ScopeDefinition {
 private:
-    const ScopeDefinition* const parent_;
-    std::vector<std::pair<std::string, const ASTExpression*>> symbols;
-    uint64_t shadow_count;
+    ScopeDefinition* const parent_ = nullptr;
+    ScopeDefinition* const enclosing_ = nullptr;
+    std::vector<std::pair<std::string, const ASTExpression*>> symbols_;
+    uint64_t shadow_count_ = 0;
 public:
-    ScopeDefinition(const ScopeDefinition* parent);
+    ScopeDefinition(ScopeDefinition& parent) noexcept;
+    ScopeDefinition(ScopeDefinition& enclosing, int) noexcept;
     ScopeDefinition(const std::vector<std::pair<std::string, TypeRef>>& builtins);
     ~ScopeDefinition() = default;
     uint64_t get_length() const;
     void add_symbol(const std::string& name, const ASTExpression* symbol);
     bool has_var(const std::string& name) const;
-    std::pair<uint64_t, bool> get_var_offset(const std::string& name) const noexcept;
-    void update_shadow_count(const ScopeDefinition& child);
+    std::pair<uint64_t, bool> get_var_offset(const std::string& name) const;
+    void update_parent_shadow() const;
 private:
-    uint64_t get_full_length() const;
+    uint64_t get_offset() const;
 };
 
 class ASTNode {
@@ -41,8 +43,8 @@ public:
     ASTNode(const Location& location);
     virtual ~ASTNode() = default;
     virtual void print(std::ostream& os, uint64_t indent = 0) const = 0;
-    virtual void first_analyze(ScopeDefinition* scope);
-    virtual void second_analyze(ScopeDefinition* scope);
+    virtual void first_analyze(ScopeDefinition& scope);
+    virtual void second_analyze(ScopeDefinition& scope);
     virtual void execute(Context& globals, Context& locals) const;
 };
 
@@ -67,13 +69,13 @@ public:
 class ASTCodeBlock final : public ASTNode {
 public:
     std::vector<ASTNode*> statements_;
-    ScopeDefinition* local_scope_;
+    std::unique_ptr<ScopeDefinition> local_scope_;
     ASTCodeBlock(const Location& location);
     ASTCodeBlock(const Location& location, ASTNode* node);
     ~ASTCodeBlock() final;
     void print(std::ostream& os, uint64_t indent) const final;
-    void first_analyze(ScopeDefinition* scope) final;
-    void second_analyze(ScopeDefinition* scope) final;
+    void first_analyze(ScopeDefinition& scope) final;
+    void second_analyze(ScopeDefinition& scope) final;
     void execute(Context& globals, Context& locals) const final;
     ASTCodeBlock& push(const Location& new_location, ASTNode* node);
 };
@@ -109,8 +111,8 @@ public:
     ASTIdentifier(const ASTToken& token);
     ~ASTIdentifier() final = default;
     void print(std::ostream& os, uint64_t indent) const final;
-    void first_analyze(ScopeDefinition* scope) final;
-    void second_analyze(ScopeDefinition* scope) final;
+    void first_analyze(ScopeDefinition& scope) final;
+    void second_analyze(ScopeDefinition& scope) final;
     Ref eval(Context& globals, Context& locals) const final;
 };
 
@@ -119,14 +121,20 @@ class ASTUnaryOp final : public ASTExpression {
 private:
     static constexpr auto Func = Op();
 public:
-    const ASTExpression* const expr_;
-    ASTUnaryOp(const Location& location, const ASTExpression* expr) : ASTExpression(location), expr_(expr) {}
+    ASTExpression* const expr_;
+    ASTUnaryOp(const Location& location, ASTExpression* expr) : ASTExpression(location), expr_(expr) {}
     ~ASTUnaryOp() final {
         delete expr_;
     }
     void print(std::ostream& os, uint64_t indent) const final {
         os << std::string(indent, ' ') << "UnaryOp(" << GetOperatorString<Op>() << ")" << std::endl;
         expr_->print(os, indent + 2);
+    }
+    void first_analyze(ScopeDefinition& scope) final {
+        expr_->first_analyze(scope);
+    }
+    void second_analyze(ScopeDefinition& scope) final {
+        expr_->second_analyze(scope);
     }
     Ref eval(Context& globals, Context& locals) const final {
         Ref result = expr_->eval(globals, locals);
@@ -139,8 +147,8 @@ class ASTBinaryOp final : public ASTExpression {
 private:
     static constexpr auto Func = Op();
 public:
-    const ASTExpression* const left_;
-    const ASTExpression* const right_;
+    ASTExpression* const left_;
+    ASTExpression* const right_;
     ASTBinaryOp(const Location& location, ASTExpression* left, ASTExpression* right)
         : ASTExpression(location), left_(left), right_(right) {}
     ~ASTBinaryOp() final {
@@ -151,6 +159,14 @@ public:
         os << std::string(indent, ' ') << "BinaryOp(" << GetOperatorString<Op>() << ")" << std::endl;
         left_->print(os, indent + 2);
         right_->print(os, indent + 2);
+    }
+    void first_analyze(ScopeDefinition& scope) final {
+        left_->first_analyze(scope);
+        right_->first_analyze(scope);
+    }
+    void second_analyze(ScopeDefinition& scope) final {
+        left_->second_analyze(scope);
+        right_->second_analyze(scope);
     }
     Ref eval(Context& globals, Context& locals) const final {
         Ref result_left = left_->eval(globals, locals);
@@ -284,65 +300,71 @@ public:
 
 class ASTDeclaration final : public ASTNode {
 public:
-    const bool is_const_;
-    const ASTExpression* const type_;
-    const ASTIdentifier* const identifier_;
-    const ASTExpression* const expr_;
-    const TypeRef inferred_type_;
-    ASTDeclaration(const Location& location, const ASTIdentifier* identifier, const ASTExpression* expr, const bool is_const = false);
-    ASTDeclaration(const Location& location, const ASTExpression* type, const ASTIdentifier* identifier, const ASTExpression* expr, const bool is_const = false);
+    ASTExpression* const type_;
+    ASTIdentifier* const identifier_;
+    ASTExpression* const expr_;
+    TypeRef inferred_type_;
+    ASTDeclaration(const Location& location, ASTIdentifier* identifier, ASTExpression* expr);
+    ASTDeclaration(const Location& location, ASTExpression* type, ASTIdentifier* identifier, ASTExpression* expr);
     ~ASTDeclaration() final;
     void print(std::ostream& os, uint64_t indent) const final;
-    void first_analyze(ScopeDefinition* scope) final;
+    void first_analyze(ScopeDefinition& scope) final;
+    void second_analyze(ScopeDefinition& scope) final;
+    void execute(Context& globals, Context& locals) const final;
 };
 
 class ASTTypeAlias final : public ASTNode {
 public:
-    const ASTIdentifier* const identifier_;
-    const ASTExpression* const type_;
-    ASTTypeAlias(const Location& location, const ASTIdentifier* identifier, const ASTExpression* type);
+    ASTIdentifier* const identifier_;
+    ASTExpression* const type_;
+    ASTTypeAlias(const Location& location, ASTIdentifier* identifier, ASTExpression* type);
     ~ASTTypeAlias() final;
     void print(std::ostream& os, uint64_t indent) const final;
-    void first_analyze(ScopeDefinition* scope) final;
+    void first_analyze(ScopeDefinition& scope) final;
 };
 
 class ASTIfStatement final : public ASTNode {
 public:
-    const ASTExpression* condition_;
-    const ASTCodeBlock* const if_block_;
-    const ASTCodeBlock* const else_block_;
-    ASTIfStatement(const Location& location, const ASTExpression* condition, const ASTCodeBlock* const if_block, const ASTCodeBlock* const else_block = nullptr);
+    ASTExpression* const condition_;
+    ASTCodeBlock* const if_block_;
+    ASTCodeBlock* const else_block_;
+    ASTIfStatement(const Location& location, ASTExpression* condition, ASTCodeBlock* if_block, ASTCodeBlock* else_block = nullptr);
     ~ASTIfStatement() final;
-    void execute(Context& globals, Context& locals) const final;
     void print(std::ostream& os, uint64_t indent) const final;
+    void first_analyze(ScopeDefinition& scope) final;
+    void second_analyze(ScopeDefinition& scope) final;
+    void execute(Context& globals, Context& locals) const final;
 };
 
 class ASTForStatement final : public ASTNode {
 public:
-    const ASTNode* const initializer_; // Can be either a declaration or an expression
-    const ASTExpression* const condition_;
-    const ASTExpression* const increment_;
-    const ASTCodeBlock* const body_;
-    ASTForStatement(const Location& location, const ASTNode* initializer, const ASTExpression* condition, const ASTExpression* increment, const ASTCodeBlock* body);
+    ASTNode* const initializer_ = nullptr; // Can be either a declaration or an expression
+    ASTExpression* const condition_ = nullptr;
+    ASTExpression* const increment_ = nullptr;
+    ASTCodeBlock* const body_;
+    ASTForStatement(const Location& location, ASTNode* initializer, ASTExpression* condition, ASTExpression* increment, ASTCodeBlock* body);
+    ASTForStatement(const Location& location, ASTCodeBlock* body);
     ~ASTForStatement() final;
-    void execute(Context& globals, Context& locals) const final;
     void print(std::ostream& os, uint64_t indent) const final;
+    void first_analyze(ScopeDefinition& scope) final;
+    void second_analyze(ScopeDefinition& scope) final;
+    void execute(Context& globals, Context& locals) const final;
 };
 
 class ASTContinueStatement final : public ASTNode {
 public:
     ASTContinueStatement(const Location& location);
     ~ASTContinueStatement() final = default;
-    void execute(Context& globals, Context& locals) const final;
     void print(std::ostream& os, uint64_t indent) const final;
+    void execute(Context& globals, Context& locals) const final;
 };
 
 class ASTBreakStatement final : public ASTNode {
 public:
     ASTBreakStatement(const Location& location);
     ~ASTBreakStatement() final = default;
-    void execute(Context& globals, Context& locals) const final;
     void print(std::ostream& os, uint64_t indent) const final;
+    void execute(Context& globals, Context& locals) const final;
 };
 
 class ASTFunctionParameter final : public ASTNode {

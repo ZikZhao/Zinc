@@ -49,7 +49,7 @@ public:
 public:
     // Assignment operator with adaptation
     Reference& operator = (const Reference& other) {
-        if (not (ptr_->kind_ == other.ptr_->kind_)) {
+        if (ptr_ != nullptr and (ptr_->kind_ != other.ptr_->kind_)) {
             const auto result = ptr_->eval_operation(GetOperatorString<OperatorFunctors::Assign>(), *other.ptr_);
             ptr_ = std::move(result.ptr_);
         }

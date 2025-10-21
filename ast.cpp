@@ -3,27 +3,26 @@
 #include "object.hpp"
 #include "exception.hpp"
 
-ScopeDefinition::ScopeDefinition(const ScopeDefinition* parent)
-    : parent_(parent), shadow_count(0) {}
-ScopeDefinition::ScopeDefinition(const std::vector<std::pair<std::string, TypeRef>>& builtins)
-    : parent_(nullptr), shadow_count(0) {
+ScopeDefinition::ScopeDefinition(ScopeDefinition& parent) noexcept : parent_(&parent) {}
+ScopeDefinition::ScopeDefinition(ScopeDefinition& enclosing, int) noexcept : enclosing_(&enclosing) {}
+ScopeDefinition::ScopeDefinition(const std::vector<std::pair<std::string, TypeRef>>& builtins) {
     for (const auto& [name, type] : builtins) {
-        symbols.emplace_back(name, nullptr);
+        symbols_.emplace_back(name, nullptr);
     }
 }
 uint64_t ScopeDefinition::get_length() const {
-    return symbols.size();
+    return symbols_.size();
 }
 void ScopeDefinition::add_symbol(const std::string& name, const ASTExpression* symbol) {
-    for (const auto& [key, _] : symbols) {
+    for (const auto& [key, _] : symbols_) {
         if (key == name) {
             throw std::runtime_error("Symbol already defined in this scope: "s + name);
         }
     }
-    symbols.emplace_back(name, symbol);
+    symbols_.emplace_back(name, symbol);
 }
 bool ScopeDefinition::has_var(const std::string& name) const {
-    for (const auto& [key, _] : symbols) {
+    for (const auto& [key, _] : symbols_) {
         if (key == name) {
             return true;
         }
@@ -34,29 +33,36 @@ bool ScopeDefinition::has_var(const std::string& name) const {
         return false;
     }
 }
-std::pair<uint64_t, bool> ScopeDefinition::get_var_offset(const std::string& name) const noexcept {
-    for (auto it = symbols.begin(); it != symbols.end(); ++it) {
+std::pair<uint64_t, bool> ScopeDefinition::get_var_offset(const std::string& name) const {
+    for (auto it = symbols_.begin(); it != symbols_.end(); ++it) {
         const auto& [key, symbol] = *it;
         if (key == name) {
+            const std::uint64_t offset = (parent_ and parent_->enclosing_ == enclosing_) ? parent_->get_offset() : 0;
             return {
-                static_cast<uint64_t>(std::distance(symbols.begin(), it)) + parent_->get_full_length(),
+                static_cast<std::uint64_t>(std::distance(symbols_.begin(), it)) + offset,
                 parent_ == nullptr
             };
         }
     }
     return parent_->get_var_offset(name);
 }
-void ScopeDefinition::update_shadow_count(const ScopeDefinition& child) {
-    shadow_count = std::max(shadow_count, child.shadow_count);
+void ScopeDefinition::update_parent_shadow() const {
+    assert(parent_ != nullptr);
+    parent_->shadow_count_ = std::max(parent_->shadow_count_, symbols_.size() + shadow_count_);
 }
-uint64_t ScopeDefinition::get_full_length() const {
-    // Global scope does not count towards stack frame length
-    return parent_ ? parent_->get_full_length() + symbols.size() : 0;
+uint64_t ScopeDefinition::get_offset() const {
+    if (parent_) {
+        // Global scope does not count towards stack frame length
+        return parent_->get_offset() + parent_->symbols_.size();
+    }
+    else {
+        return 0;
+    }
 }
 
 ASTNode::ASTNode(const Location& location) : location_(location) {}
-void ASTNode::first_analyze(ScopeDefinition* scope) {}
-void ASTNode::second_analyze(ScopeDefinition* scope) {}
+void ASTNode::first_analyze(ScopeDefinition& scope) {}
+void ASTNode::second_analyze(ScopeDefinition& scope) {}
 void ASTNode::execute(Context& globals, Context& locals) const {}
 
 std::vector<std::unique_ptr<ASTToken>> ASTToken::Instances;
@@ -78,7 +84,6 @@ ASTCodeBlock::~ASTCodeBlock() {
     for (const auto& stmt : statements_) {
         delete stmt;
     }
-    delete local_scope_;
 }
 void ASTCodeBlock::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "Statements"s << std::endl;
@@ -86,20 +91,16 @@ void ASTCodeBlock::print(std::ostream& os, uint64_t indent) const {
         stmt->print(os, indent + 2);
     }
 }
-void ASTCodeBlock::first_analyze(ScopeDefinition* scope) {
-    local_scope_ = new ScopeDefinition(scope);
-    // Register declarations and type aliases
+void ASTCodeBlock::first_analyze(ScopeDefinition& scope) {
+    local_scope_ = std::make_unique<ScopeDefinition>(scope);
     for (auto& stmt : statements_) {
-        stmt->first_analyze(local_scope_);
+        stmt->first_analyze(*local_scope_);
     }
-    // Update shadow count in parent scope
-    if (scope) {
-        scope->update_shadow_count(*local_scope_);
-    }
+    local_scope_->update_parent_shadow();
 }
-void ASTCodeBlock::second_analyze(ScopeDefinition* scope) {
+void ASTCodeBlock::second_analyze(ScopeDefinition& scope) {
     for (auto& stmt : statements_) {
-        stmt->second_analyze(local_scope_);
+        stmt->second_analyze(*local_scope_);
     }
 }
 void ASTCodeBlock::execute(Context& globals, Context& locals) const {
@@ -124,14 +125,14 @@ ASTIdentifier::ASTIdentifier(const ASTToken& token)
 void ASTIdentifier::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "Identifier("s + name_ + ")"s << std::endl;
 }
-void ASTIdentifier::first_analyze(ScopeDefinition* scope) {
-    if (!scope->has_var(name_)) {
+void ASTIdentifier::first_analyze(ScopeDefinition& scope) {
+    if (!scope.has_var(name_)) {
         throw VariableException(name_);
     }
 }
-void ASTIdentifier::second_analyze(ScopeDefinition* scope) {
+void ASTIdentifier::second_analyze(ScopeDefinition& scope) {
     try {
-        auto [index, is_global] = scope->get_var_offset(name_);
+        auto [index, is_global] = scope.get_var_offset(name_);
         this->index_ = index;
         this->is_global_ = is_global;
     } catch (TypeException& e) {
@@ -190,10 +191,10 @@ ValueRef ASTFunctionCall::eval(Context& globals, Context& locals) const {
     return static_cast<FunctionValue&>(*result)(arguments_->eval_arguments(globals, locals));
 }
 
-ASTDeclaration::ASTDeclaration(const Location& location, const ASTIdentifier* identifier, const ASTExpression* expr, const bool is_const)
-    : ASTNode(location), is_const_(is_const), type_(nullptr), identifier_(identifier), expr_(expr), inferred_type_() {} // TODO
-ASTDeclaration::ASTDeclaration(const Location& location, const ASTExpression* type, const ASTIdentifier* identifier, const ASTExpression* expr, const bool is_const)
-    : ASTNode(location), is_const_(is_const), type_(type), identifier_(identifier), expr_(expr), inferred_type_() {} // TODO
+ASTDeclaration::ASTDeclaration(const Location& location, ASTIdentifier* identifier, ASTExpression* expr)
+    : ASTNode(location), type_(nullptr), identifier_(identifier), expr_(expr), inferred_type_() {} // TODO
+ASTDeclaration::ASTDeclaration(const Location& location, ASTExpression* type, ASTIdentifier* identifier, ASTExpression* expr)
+    : ASTNode(location), type_(type), identifier_(identifier), expr_(expr), inferred_type_() {} // TODO
 ASTDeclaration::~ASTDeclaration() {
     delete type_;
     delete identifier_;
@@ -204,11 +205,19 @@ void ASTDeclaration::print(std::ostream& os, uint64_t indent) const {
     identifier_->print(os, indent + 2);
     expr_->print(os, indent + 2);
 }
-void ASTDeclaration::first_analyze(ScopeDefinition* scope) {
-    scope->add_symbol(identifier_->name_, type_);
+void ASTDeclaration::first_analyze(ScopeDefinition& scope) {
+    scope.add_symbol(identifier_->name_, type_);
+}
+void ASTDeclaration::second_analyze(ScopeDefinition& scope) {
+    identifier_->second_analyze(scope);
+    expr_->second_analyze(scope);
+}
+void ASTDeclaration::execute(Context& globals, Context& locals) const {
+    ValueRef value = expr_->eval(globals, locals);
+    identifier_->eval(globals, locals) = value;
 }
 
-ASTTypeAlias::ASTTypeAlias(const Location &location, const ASTIdentifier *identifier, const ASTExpression *type)
+ASTTypeAlias::ASTTypeAlias(const Location &location, ASTIdentifier *identifier, ASTExpression *type)
     : ASTNode(location), identifier_(identifier), type_(type) {}
 ASTTypeAlias::~ASTTypeAlias() {
     delete identifier_;
@@ -219,23 +228,16 @@ void ASTTypeAlias::print(std::ostream& os, uint64_t indent) const {
     identifier_->print(os, indent + 2);
     type_->print(os, indent + 2);
 }
-void ASTTypeAlias::first_analyze(ScopeDefinition* scope) {
-    scope->add_symbol(identifier_->name_, type_);
+void ASTTypeAlias::first_analyze(ScopeDefinition& scope) {
+    scope.add_symbol(identifier_->name_, type_);
 }
 
-ASTIfStatement::ASTIfStatement(const Location& location, const ASTExpression* condition, const ASTCodeBlock* const if_block, const ASTCodeBlock* const else_block)
+ASTIfStatement::ASTIfStatement(const Location& location, ASTExpression* condition, ASTCodeBlock* if_block, ASTCodeBlock* else_block)
     : ASTNode(location), condition_(condition), if_block_(if_block), else_block_(else_block) {}
 ASTIfStatement::~ASTIfStatement() {
     delete condition_;
     delete if_block_;
     delete else_block_;
-}
-void ASTIfStatement::execute(Context& globals, Context& locals) const {
-    if (condition_->eval(globals, locals).is_truthy()) {
-        if_block_->execute(globals, locals);
-    } else if (else_block_) {
-        else_block_->execute(globals, locals);
-    }
 }
 void ASTIfStatement::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "IfStatement"s << std::endl;
@@ -245,31 +247,37 @@ void ASTIfStatement::print(std::ostream& os, uint64_t indent) const {
         else_block_->print(os, indent + 2);
     }
 }
+void ASTIfStatement::first_analyze(ScopeDefinition& scope) {
+    condition_->first_analyze(scope);
+    if_block_->first_analyze(scope);
+    if (else_block_) {
+        else_block_->first_analyze(scope);
+    }
+}
+void ASTIfStatement::second_analyze(ScopeDefinition& scope) {
+    condition_->second_analyze(scope);
+    if_block_->second_analyze(scope);
+    if (else_block_) {
+        else_block_->second_analyze(scope);
+    }
+}
+void ASTIfStatement::execute(Context& globals, Context& locals) const {
+    if (condition_->eval(globals, locals).is_truthy()) {
+        if_block_->execute(globals, locals);
+    } else if (else_block_) {
+        else_block_->execute(globals, locals);
+    }
+}
 
-ASTForStatement::ASTForStatement(const Location &location, const ASTNode *initializer, const ASTExpression *condition, const ASTExpression *increment, const ASTCodeBlock *body)
+ASTForStatement::ASTForStatement(const Location &location, ASTNode *initializer, ASTExpression *condition, ASTExpression *increment, ASTCodeBlock *body)
     : ASTNode(location), initializer_(initializer), condition_(condition), increment_(increment), body_(body) {}
+ASTForStatement::ASTForStatement(const Location &location, ASTCodeBlock *body)
+    : ASTNode(location), body_(body) {}
 ASTForStatement::~ASTForStatement() {
     delete initializer_;
     delete condition_;
     delete increment_;
     delete body_;
-}
-void ASTForStatement::execute(Context& globals, Context& locals) const {
-    if (initializer_) {
-        initializer_->execute(globals, locals);
-    }
-    while (condition_ ? condition_->eval(globals, locals).is_truthy() : true) {
-        try {
-            body_->execute(globals, locals);
-        }
-        catch (BreakException&) {
-            break;
-        }
-        catch (ContinueException&) {}
-        if (increment_) {
-            increment_->eval(globals, locals);
-        }
-    }
 }
 void ASTForStatement::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "ForStatement"s << std::endl;
@@ -290,23 +298,64 @@ void ASTForStatement::print(std::ostream& os, uint64_t indent) const {
     }
     body_->print(os, indent + 2);
 }
+void ASTForStatement::first_analyze(ScopeDefinition& scope) {
+    if (initializer_) {
+        initializer_->first_analyze(scope);
+    }
+    if (condition_) {
+        condition_->first_analyze(scope);
+    }
+    if (increment_) {
+        increment_->first_analyze(scope);
+    }
+    body_->first_analyze(scope);
+}
+void ASTForStatement::second_analyze(ScopeDefinition& scope) {
+    if (initializer_) {
+        initializer_->second_analyze(scope);
+    }
+    if (condition_) {
+        condition_->second_analyze(scope);
+    }
+    if (increment_) {
+        increment_->second_analyze(scope);
+    }
+    body_->second_analyze(scope);
+}
+void ASTForStatement::execute(Context& globals, Context& locals) const {
+    if (initializer_) {
+        initializer_->execute(globals, locals);
+    }
+    while (condition_ ? condition_->eval(globals, locals).is_truthy() : true) {
+        try {
+            body_->execute(globals, locals);
+        }
+        catch (BreakException&) {
+            break;
+        }
+        catch (ContinueException&) {}
+        if (increment_) {
+            increment_->eval(globals, locals);
+        }
+    }
+}
 
 ASTContinueStatement::ASTContinueStatement(const Location& location)
     : ASTNode(location) {}
-void ASTContinueStatement::execute(Context& globals, Context& locals) const {
-    throw ContinueException();
-}
 void ASTContinueStatement::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "ContinueStatement"s << std::endl;
+}
+void ASTContinueStatement::execute(Context& globals, Context& locals) const {
+    throw ContinueException();
 }
 
 ASTBreakStatement::ASTBreakStatement(const Location& location)
     : ASTNode(location) {}
-void ASTBreakStatement::execute(Context& globals, Context& locals) const {
-    throw BreakException();
-}
 void ASTBreakStatement::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "BreakStatement"s << std::endl;
+}
+void ASTBreakStatement::execute(Context& globals, Context& locals) const {
+    throw BreakException();
 }
 
 ASTFunctionParameter::ASTFunctionParameter(const Location& location, const ASTIdentifier* identifier, const ASTExpression* type)

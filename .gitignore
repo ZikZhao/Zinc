@@ -1,5 +1,5 @@
 # Build output directory
-out/
+build/
 
 # Temporary files
 *.tmp

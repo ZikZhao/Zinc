@@ -72,10 +72,13 @@
         "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
         "C_Cpp.default.includePath": [
             "${workspaceFolder}/**",
-            "${workspaceFolder}/out"
+            "${workspaceFolder}/build/out"
         ],
         "C_Cpp.default.defines": [],
-        "C_Cpp.default.cStandard": "c17"
+        "C_Cpp.default.cStandard": "c17",
+        "cmake.buildDirectory": "${workspaceFolder}/build",
+        "cmake.sourceDirectory": "${workspaceFolder}",
+        "cmake.configureOnOpen": true
     },
     "extensions": {
         "recommendations": [
@@ -87,25 +90,59 @@
         "version": "2.0.0",
         "tasks": [
             {
-                "label": "Build with Make",
+                "label": "CMake Configure",
                 "type": "shell",
-                "command": "make",
+                "command": "cmake",
+                "args": [
+                    "-B", "build",
+                    "-S", "."
+                ],
+                "group": "build",
+                "presentation": {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": false,
+                    "panel": "shared"
+                },
+                "problemMatcher": []
+            },
+            {
+                "label": "CMake Build",
+                "type": "shell",
+                "command": "cmake",
+                "args": [
+                    "--build", "build",
+                    "-j", "${env:NUMBER_OF_PROCESSORS}"
+                ],
                 "group": {
                     "kind": "build",
                     "isDefault": true
+                },
+                "dependsOn": "CMake Configure",
+                "presentation": {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": false,
+                    "panel": "shared"
                 },
                 "problemMatcher": [
                     "$gcc"
                 ]
             },
             {
-                "label": "Clean with Make",
+                "label": "CMake Clean",
                 "type": "shell",
-                "command": "make",
+                "command": "rm",
                 "args": [
-                    "clean"
+                    "-rf", "build"
                 ],
-                "group": "build"
+                "group": "build",
+                "presentation": {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": false,
+                    "panel": "shared"
+                }
             }
         ]
     },
@@ -116,7 +153,7 @@
                 "name": "Debug Interpreter",
                 "type": "cppdbg", 
                 "request": "launch",
-                "program": "${workspaceFolder}/out/interpreter",
+                "program": "${workspaceFolder}/build/out/interpreter",
                 "args": ["${workspaceFolder}/test.ptf"],
                 "stopAtEntry": false,
                 "cwd": "${workspaceFolder}",
@@ -130,7 +167,7 @@
                         "ignoreFailures": true
                     }
                 ],
-                "preLaunchTask": "Build with Make"
+                "preLaunchTask": "CMake Build"
             },
         ]
     }

@@ -108,6 +108,52 @@ public:
     }
 };
 
+template<typename TargetClass = void>
+class Defer {
+private:
+    TargetClass& target_;
+    void (TargetClass::*func_)();
+public:
+    Defer(TargetClass& target, auto&& func)
+        : target_(target), func_(static_cast<void (TargetClass::*)()>(std::forward<decltype(func)>(func))) {}
+    ~Defer() {
+        (target_.*func_)();
+    }
+};
+
+template<typename TargetClass>
+class Defer<const TargetClass> {
+private:
+    const TargetClass& target_;
+    void (TargetClass::*func_)() const;
+public:
+    Defer(const TargetClass& target, auto&& func)
+        : target_(target), func_(static_cast<void (TargetClass::*)() const>(std::forward<decltype(func)>(func))) {}
+    ~Defer() {
+        (target_.*func_)();
+    }
+};
+
+template<>
+class Defer<> {
+private:
+    std::function<void()> func_;
+public:
+    Defer(auto&& func) : func_(std::forward<decltype(func)>(func)) {}
+    ~Defer() {
+        func_();
+    }
+};
+
+template<typename TargetClass, typename Func>
+Defer(TargetClass&, Func) -> Defer<TargetClass>;
+
+template<typename TargetClass, typename Func>
+Defer(const TargetClass&, Func) -> Defer<const TargetClass>;
+
+template<typename Func>
+Defer(Func&&) -> Defer<>;
+
 template<typename Functor>
 constexpr std::string_view GetOperatorString() {
     using namespace OperatorFunctors;

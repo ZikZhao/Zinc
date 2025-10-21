@@ -15,9 +15,9 @@ void yy::parser::error(const Location& location, const std::string& message) {
 
 namespace Builtins {
     struct BuiltinFunction {
-        const std::string_view name_;
-        const TypeRef type_;
-        const std::function<ValueRef (const Arguments&)> func_;
+        const std::string_view name;
+        const TypeRef type;
+        const std::function<ValueRef (const Arguments&)> func;
     };
     BuiltinFunction Print = {
         "print",
@@ -31,17 +31,18 @@ namespace Builtins {
             }
         },
     };
-    std::pair<ScopeDefinition, Context> GetBuiltins() {
-        const std::vector<BuiltinFunction*> builtins = {
-            &Print,
-        };
-        const ScopeDefinition scope = builtins | std::views::transform([](BuiltinFunction* builtin) {
-            return std::pair(std::string(builtin->name_), builtin->type_);
-        }) | std::ranges::to<std::vector<std::pair<std::string, TypeRef>>>();
-        const Context ctx = builtins | std::views::transform([](BuiltinFunction* builtin) {
-            return ValueRef(new FunctionValue(builtin->func_, builtin->type_));
+    const std::vector<BuiltinFunction*> AllBuiltins = {
+        &Print,
+    };
+    ScopeDefinition GetBuiltinsScope() {
+        return ScopeDefinition(AllBuiltins | std::views::transform([](BuiltinFunction* builtin) {
+            return std::pair(std::string(builtin->name), builtin->type);
+        }) | std::ranges::to<std::vector<std::pair<std::string, TypeRef>>>());
+    }
+    Context GetBuiltinsContext() {
+        return AllBuiltins | std::views::transform([](BuiltinFunction* builtin) {
+            return ValueRef(new FunctionValue(builtin->func, builtin->type));
         }) | std::ranges::to<Context>();
-        return { std::move(scope), std::move(ctx) };
     }
 }
 
@@ -62,9 +63,10 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl;
     root->print(std::cout);
 
-    auto [defs, globals] = Builtins::GetBuiltins();
-    root->first_analyze(&defs);
-    root->second_analyze(&defs);
+    ScopeDefinition builtins = Builtins::GetBuiltinsScope();
+    root->first_analyze(builtins);
+    root->second_analyze(builtins);
+    Context globals = Builtins::GetBuiltinsContext();
     root->execute(globals, globals);
     delete root;
 }
