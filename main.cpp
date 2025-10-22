@@ -39,10 +39,10 @@ namespace Builtins {
             return std::pair(std::string(builtin->name), builtin->type);
         }) | std::ranges::to<std::vector<std::pair<std::string, TypeRef>>>());
     }
-    Context GetBuiltinsContext() {
+    ScopeStorage GetBuiltinsScopeStorage() {
         return AllBuiltins | std::views::transform([](BuiltinFunction* builtin) {
             return ValueRef(new FunctionValue(builtin->func, builtin->type));
-        }) | std::ranges::to<Context>();
+        }) | std::ranges::to<std::vector<ValueRef>>();
     }
 }
 
@@ -66,7 +66,7 @@ int main(int argc, char* argv[]) {
     ScopeDefinition builtins = Builtins::GetBuiltinsScope();
     root->first_analyze(builtins);
     root->second_analyze(builtins);
-    Context globals = Builtins::GetBuiltinsContext();
+    ScopeStorage globals = Builtins::GetBuiltinsScopeStorage();
     root->execute(globals, globals);
     delete root;
 }

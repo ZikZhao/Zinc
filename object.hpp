@@ -127,7 +127,6 @@ using InterfaceTypeRef = Ref; // Should always point to an InterfaceType
 using ClassTypeRef = Ref; // Should always point to a ClassType
 using DictValueRef = Ref; // Should always point to a DictValue
 
-using Context = std::vector<ValueRef>;
 using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
 

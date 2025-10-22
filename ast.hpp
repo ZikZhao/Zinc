@@ -35,6 +35,21 @@ public:
     void update_parent_shadow() const;
 private:
     uint64_t get_offset() const;
+    bool is_global() const;
+};
+
+class ScopeStorage {
+private:
+    std::vector<ValueRef> symbols_;
+public:
+    ScopeStorage() = default;
+    ScopeStorage(const ScopeStorage& other) = default;
+    ScopeStorage(ScopeStorage&& other) noexcept = default;
+    ScopeStorage(auto&& view) : symbols_(std::forward<decltype(view)>(view)) {}
+    ~ScopeStorage() = default;
+    ValueRef operator[] (std::uint64_t index);
+    void push(const ScopeDefinition& scope);
+    void pop(const ScopeDefinition& scope);
 };
 
 class ASTNode {
@@ -45,7 +60,7 @@ public:
     virtual void print(std::ostream& os, uint64_t indent = 0) const = 0;
     virtual void first_analyze(ScopeDefinition& scope);
     virtual void second_analyze(ScopeDefinition& scope);
-    virtual void execute(Context& globals, Context& locals) const;
+    virtual void execute(ScopeStorage& globals, ScopeStorage& locals) const;
 };
 
 class ASTToken final : public ASTNode {
@@ -63,7 +78,7 @@ private:
 public:
     ~ASTToken() final = default;
     void print(std::ostream& os, uint64_t indent) const final;
-    void execute(Context& globals, Context& locals) const final;
+    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
 class ASTCodeBlock final : public ASTNode {
@@ -76,17 +91,17 @@ public:
     void print(std::ostream& os, uint64_t indent) const final;
     void first_analyze(ScopeDefinition& scope) final;
     void second_analyze(ScopeDefinition& scope) final;
-    void execute(Context& globals, Context& locals) const final;
+    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
     ASTCodeBlock& push(const Location& new_location, ASTNode* node);
 };
 
 class ASTExpression : public ASTNode {
 public:
     ASTExpression(const Location& location) : ASTNode(location) {};
-    void execute(Context& globals, Context& locals) const final {
+    void execute(ScopeStorage& globals, ScopeStorage& locals) const final {
         (void)eval(globals, locals);
     }
-    virtual Ref eval(Context& globals, Context& locals) const = 0;
+    virtual Ref eval(ScopeStorage& globals, ScopeStorage& locals) const = 0;
 };
 
 template<ValueClass V>
@@ -98,7 +113,7 @@ public:
     void print(std::ostream& os, uint64_t indent) const final {
         os << std::string(indent, ' ') << "Constant(" << value_.repr() << ")" << std::endl;
     }
-    ValueRef eval(Context& globals, Context& locals) const final {
+    ValueRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
         return value_;
     }
 };
@@ -113,7 +128,7 @@ public:
     void print(std::ostream& os, uint64_t indent) const final;
     void first_analyze(ScopeDefinition& scope) final;
     void second_analyze(ScopeDefinition& scope) final;
-    Ref eval(Context& globals, Context& locals) const final;
+    Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
 template<OperatorFunctor Op>
@@ -136,7 +151,7 @@ public:
     void second_analyze(ScopeDefinition& scope) final {
         expr_->second_analyze(scope);
     }
-    Ref eval(Context& globals, Context& locals) const final {
+    Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final {
         Ref result = expr_->eval(globals, locals);
         return result.eval_operation<Op>();
     }
@@ -168,7 +183,7 @@ public:
         left_->second_analyze(scope);
         right_->second_analyze(scope);
     }
-    Ref eval(Context& globals, Context& locals) const final {
+    Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final {
         Ref result_left = left_->eval(globals, locals);
         Ref result_right = right_->eval(globals, locals);
         return result_left.eval_operation<Op>(result_right);
@@ -181,8 +196,8 @@ private:
     using AssignOperator = OperatorFunctors::OperateAndAssign<Op>;
     static constexpr auto Func = AssignOperator();
 public:
-    const ASTExpression* const left_;
-    const ASTExpression* const right_;
+    ASTExpression* const left_;
+    ASTExpression* const right_;
     ASTBinaryOp(const Location& location, ASTExpression* left, ASTExpression* right)
         : ASTExpression(location), left_(left), right_(right) {}
     ~ASTBinaryOp() final {
@@ -194,7 +209,15 @@ public:
         left_->print(os, indent + 2);
         right_->print(os, indent + 2);
     }
-    Ref eval(Context& globals, Context& locals) const final {
+    void first_analyze(ScopeDefinition& scope) final {
+        left_->first_analyze(scope);
+        right_->first_analyze(scope);
+    }
+    void second_analyze(ScopeDefinition& scope) final {
+        left_->second_analyze(scope);
+        right_->second_analyze(scope);
+    }
+    Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final {
         Ref result_left = left_->eval(globals, locals);
         Ref result_right = right_->eval(globals, locals);
         Ref result = result_left.eval_operation<Op>(result_right);
@@ -204,23 +227,27 @@ public:
 
 class ASTFunctionCallArguments final : public ASTNode {
 public:
-    std::vector<const ASTExpression*> arguments_;
+    std::vector<ASTExpression*> arguments_;
     ASTFunctionCallArguments();
-    ASTFunctionCallArguments(const Location& location, const ASTExpression* first_arg);
+    ASTFunctionCallArguments(const Location& location, ASTExpression* first_arg);
     ~ASTFunctionCallArguments() final;
     void print(std::ostream& os, uint64_t indent) const final;
-    ASTFunctionCallArguments& push_back(const Location& new_location, const ASTExpression* arg);
-    Arguments eval_arguments(Context& globals, Context& locals) const;
+    void first_analyze(ScopeDefinition& scope) final;
+    void second_analyze(ScopeDefinition& scope) final;
+    ASTFunctionCallArguments& push_back(const Location& new_location, ASTExpression* arg);
+    Arguments eval_arguments(ScopeStorage& globals, ScopeStorage& locals) const;
 };
 
 class ASTFunctionCall final : public ASTExpression {
 public:
-    const ASTExpression* const function_;
-    const ASTFunctionCallArguments* const arguments_;
-    ASTFunctionCall(const Location& location, const ASTExpression* function, const ASTFunctionCallArguments* arguments = 0);
+    ASTExpression* const function_;
+    ASTFunctionCallArguments* const arguments_;
+    ASTFunctionCall(const Location& location, ASTExpression* function, ASTFunctionCallArguments* arguments = 0);
     ~ASTFunctionCall() final;
     void print(std::ostream& os, uint64_t indent) const final;
-    ValueRef eval(Context& globals, Context& locals) const final;
+    void first_analyze(ScopeDefinition& scope) final;
+    void second_analyze(ScopeDefinition& scope) final;
+    ValueRef eval(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
 using ASTAddOp              = ASTBinaryOp<OperatorFunctors::Add>;
@@ -279,7 +306,7 @@ public:
             static_assert(false, "Unhandled primitive type");
         }
     }
-    TypeRef eval(Context& globals, Context& locals) const final {
+    TypeRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
         return new T();
     }
 };
@@ -293,7 +320,7 @@ public:
     void print(std::ostream& os, uint64_t indent) const final {
         os << std::string(indent, ' ') << "PrimitiveType(Function)" << std::endl;
     }
-    TypeRef eval(Context& globals, Context& locals) const final {
+    TypeRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
         return value_;
     }
 };
@@ -310,7 +337,7 @@ public:
     void print(std::ostream& os, uint64_t indent) const final;
     void first_analyze(ScopeDefinition& scope) final;
     void second_analyze(ScopeDefinition& scope) final;
-    void execute(Context& globals, Context& locals) const final;
+    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
 class ASTTypeAlias final : public ASTNode {
@@ -333,7 +360,7 @@ public:
     void print(std::ostream& os, uint64_t indent) const final;
     void first_analyze(ScopeDefinition& scope) final;
     void second_analyze(ScopeDefinition& scope) final;
-    void execute(Context& globals, Context& locals) const final;
+    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
 class ASTForStatement final : public ASTNode {
@@ -348,7 +375,7 @@ public:
     void print(std::ostream& os, uint64_t indent) const final;
     void first_analyze(ScopeDefinition& scope) final;
     void second_analyze(ScopeDefinition& scope) final;
-    void execute(Context& globals, Context& locals) const final;
+    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
 class ASTContinueStatement final : public ASTNode {
@@ -356,7 +383,7 @@ public:
     ASTContinueStatement(const Location& location);
     ~ASTContinueStatement() final = default;
     void print(std::ostream& os, uint64_t indent) const final;
-    void execute(Context& globals, Context& locals) const final;
+    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
 class ASTBreakStatement final : public ASTNode {
@@ -364,7 +391,7 @@ public:
     ASTBreakStatement(const Location& location);
     ~ASTBreakStatement() final = default;
     void print(std::ostream& os, uint64_t indent) const final;
-    void execute(Context& globals, Context& locals) const final;
+    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
 class ASTFunctionParameter final : public ASTNode {
@@ -387,7 +414,7 @@ public:
     ASTFunctionSignature& push(const Location& new_location, ASTFunctionParameter* param);
     ASTFunctionSignature& push_spread(const Location& new_location, ASTFunctionParameter* param);
     ASTFunctionSignature& set_return_type(const Location& new_location, ASTExpression* return_type);
-    Context collect_arguments(const Arguments& raw) const;
+    ScopeStorage collect_arguments(const Arguments& raw) const;
 };
 
 class ASTFunctionDefinition final : public ASTNode {

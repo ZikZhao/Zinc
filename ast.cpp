@@ -37,10 +37,10 @@ std::pair<uint64_t, bool> ScopeDefinition::get_var_offset(const std::string& nam
     for (auto it = symbols_.begin(); it != symbols_.end(); ++it) {
         const auto& [key, symbol] = *it;
         if (key == name) {
-            const std::uint64_t offset = (parent_ and parent_->enclosing_ == enclosing_) ? parent_->get_offset() : 0;
+            const std::uint64_t offset = get_offset();
             return {
                 static_cast<std::uint64_t>(std::distance(symbols_.begin(), it)) + offset,
-                parent_ == nullptr
+                is_global()
             };
         }
     }
@@ -59,18 +59,42 @@ uint64_t ScopeDefinition::get_offset() const {
         return 0;
     }
 }
+bool ScopeDefinition::is_global() const {
+    if (enclosing_) {
+        return false;
+    } else if (not parent_) {
+        return true;
+    } else {
+        return parent_->is_global();
+    }
+}
+
+ValueRef ScopeStorage::operator[] (std::uint64_t index) {
+    assert(index < symbols_.size());
+    return symbols_[index];
+}
+void ScopeStorage::push(const ScopeDefinition& scope) {
+    for (std::uint64_t i = 0; i < scope.get_length(); ++i) {
+        symbols_.emplace_back(nullptr);
+    }
+}
+void ScopeStorage::pop(const ScopeDefinition& scope) {
+    for (std::uint64_t i = 0; i < scope.get_length(); ++i) {
+        symbols_.pop_back();
+    }
+}
 
 ASTNode::ASTNode(const Location& location) : location_(location) {}
 void ASTNode::first_analyze(ScopeDefinition& scope) {}
 void ASTNode::second_analyze(ScopeDefinition& scope) {}
-void ASTNode::execute(Context& globals, Context& locals) const {}
+void ASTNode::execute(ScopeStorage& globals, ScopeStorage& locals) const {}
 
 std::vector<std::unique_ptr<ASTToken>> ASTToken::Instances;
 ASTToken::ASTToken(const Location& location, const char* str) : ASTNode(location), str_(str) {}
 void ASTToken::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "Token("s + str_ + ")"s << std::endl;
 }
-void ASTToken::execute(Context& globals, Context& locals) const {
+void ASTToken::execute(ScopeStorage& globals, ScopeStorage& locals) const {
     throw std::runtime_error("Cannot execute a token");
 }
 
@@ -103,16 +127,12 @@ void ASTCodeBlock::second_analyze(ScopeDefinition& scope) {
         stmt->second_analyze(*local_scope_);
     }
 }
-void ASTCodeBlock::execute(Context& globals, Context& locals) const {
-    for (uint64_t i = 0; i < local_scope_->get_length(); ++i) {
-        locals.emplace_back(nullptr);
-    }
+void ASTCodeBlock::execute(ScopeStorage& globals, ScopeStorage& locals) const {
+    locals.push(*local_scope_);
     for (const auto& stmt : statements_) {
         stmt->execute(globals, locals);
     }
-    for (uint64_t i = 0; i < local_scope_->get_length(); ++i) {
-        locals.pop_back();
-    }
+    locals.pop(*local_scope_);
 }
 ASTCodeBlock& ASTCodeBlock::push(const Location& new_location, ASTNode* node) {
     statements_.push_back(node);
@@ -143,12 +163,12 @@ void ASTIdentifier::second_analyze(ScopeDefinition& scope) {
         throw;
     }
 }
-ValueRef ASTIdentifier::eval(Context& globals, Context& locals) const {
+ValueRef ASTIdentifier::eval(ScopeStorage& globals, ScopeStorage& locals) const {
     return is_global_ ? globals[index_] : locals[index_];
 }
 
 ASTFunctionCallArguments::ASTFunctionCallArguments() : ASTNode({{0, 0}, {0, 0}}) {}
-ASTFunctionCallArguments::ASTFunctionCallArguments(const Location &location, const ASTExpression *first_arg)
+ASTFunctionCallArguments::ASTFunctionCallArguments(const Location &location, ASTExpression *first_arg)
     : ASTNode(location), arguments_{first_arg} {}
 ASTFunctionCallArguments::~ASTFunctionCallArguments() {
     for (const auto& expr : arguments_) {
@@ -161,12 +181,22 @@ void ASTFunctionCallArguments::print(std::ostream& os, uint64_t indent) const {
         expr->print(os, indent + 2);
     }
 }
-ASTFunctionCallArguments& ASTFunctionCallArguments::push_back(const Location& new_location, const ASTExpression* arg) {
+void ASTFunctionCallArguments::first_analyze(ScopeDefinition& scope) {
+    for (const auto& expr : arguments_) {
+        expr->first_analyze(scope);
+    }
+}
+void ASTFunctionCallArguments::second_analyze(ScopeDefinition& scope) {
+    for (const auto& expr : arguments_) {
+        expr->second_analyze(scope);
+    }
+}
+ASTFunctionCallArguments& ASTFunctionCallArguments::push_back(const Location& new_location, ASTExpression* arg) {
     arguments_.push_back(arg);
     location_ = new_location;
     return *this;
 }
-Arguments ASTFunctionCallArguments::eval_arguments(Context& globals, Context& locals) const {
+Arguments ASTFunctionCallArguments::eval_arguments(ScopeStorage& globals, ScopeStorage& locals) const {
     Arguments values;
     for (const auto& expr : arguments_) {
         values.emplace_back(expr->eval(globals, locals));
@@ -174,7 +204,7 @@ Arguments ASTFunctionCallArguments::eval_arguments(Context& globals, Context& lo
     return values;
 }
 
-ASTFunctionCall::ASTFunctionCall(const Location& location, const ASTExpression* function, const ASTFunctionCallArguments* arguments)
+ASTFunctionCall::ASTFunctionCall(const Location& location, ASTExpression* function, ASTFunctionCallArguments* arguments)
     : ASTExpression(location), function_(function), arguments_(arguments ? arguments : new ASTFunctionCallArguments()) {}
 ASTFunctionCall::~ASTFunctionCall() {
     delete function_;
@@ -185,7 +215,15 @@ void ASTFunctionCall::print(std::ostream& os, uint64_t indent) const {
     function_->print(os, indent + 2);
     arguments_->print(os, indent + 2);
 }
-ValueRef ASTFunctionCall::eval(Context& globals, Context& locals) const {
+void ASTFunctionCall::first_analyze(ScopeDefinition& scope) {
+    function_->first_analyze(scope);
+    arguments_->first_analyze(scope);
+}
+void ASTFunctionCall::second_analyze(ScopeDefinition& scope) {
+    function_->second_analyze(scope);
+    arguments_->second_analyze(scope);
+}
+ValueRef ASTFunctionCall::eval(ScopeStorage& globals, ScopeStorage& locals) const {
     ValueRef result = function_->eval(globals, locals);
     CHECK(result->kind_ == KIND::KIND_FUNCTION);
     return static_cast<FunctionValue&>(*result)(arguments_->eval_arguments(globals, locals));
@@ -212,7 +250,7 @@ void ASTDeclaration::second_analyze(ScopeDefinition& scope) {
     identifier_->second_analyze(scope);
     expr_->second_analyze(scope);
 }
-void ASTDeclaration::execute(Context& globals, Context& locals) const {
+void ASTDeclaration::execute(ScopeStorage& globals, ScopeStorage& locals) const {
     ValueRef value = expr_->eval(globals, locals);
     identifier_->eval(globals, locals) = value;
 }
@@ -261,7 +299,7 @@ void ASTIfStatement::second_analyze(ScopeDefinition& scope) {
         else_block_->second_analyze(scope);
     }
 }
-void ASTIfStatement::execute(Context& globals, Context& locals) const {
+void ASTIfStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
     if (condition_->eval(globals, locals).is_truthy()) {
         if_block_->execute(globals, locals);
     } else if (else_block_) {
@@ -322,7 +360,7 @@ void ASTForStatement::second_analyze(ScopeDefinition& scope) {
     }
     body_->second_analyze(scope);
 }
-void ASTForStatement::execute(Context& globals, Context& locals) const {
+void ASTForStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
     if (initializer_) {
         initializer_->execute(globals, locals);
     }
@@ -345,7 +383,7 @@ ASTContinueStatement::ASTContinueStatement(const Location& location)
 void ASTContinueStatement::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "ContinueStatement"s << std::endl;
 }
-void ASTContinueStatement::execute(Context& globals, Context& locals) const {
+void ASTContinueStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
     throw ContinueException();
 }
 
@@ -354,7 +392,7 @@ ASTBreakStatement::ASTBreakStatement(const Location& location)
 void ASTBreakStatement::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "BreakStatement"s << std::endl;
 }
-void ASTBreakStatement::execute(Context& globals, Context& locals) const {
+void ASTBreakStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
     throw BreakException();
 }
 
@@ -388,13 +426,11 @@ ASTFunctionSignature& ASTFunctionSignature::push(const Location& new_location, A
     location_ = new_location;
     return *this;
 }
-Context ASTFunctionSignature::collect_arguments(const Arguments &raw) const {
-    Context context;
+ScopeStorage ASTFunctionSignature::collect_arguments(const Arguments &raw) const {
+    ScopeStorage stack;
     auto param_it = parameters_.begin();
     auto arg_it = raw.begin();
-    for (; param_it != parameters_.end() && arg_it != raw.end(); ++param_it, ++arg_it) {
-        context.emplace_back(*arg_it);
-    }
+    // TODO: Collect regular parameters
     if (param_it != parameters_.end()) {
         throw ArgumentException("Not enough arguments provided to function call"s);
     }
@@ -403,11 +439,11 @@ Context ASTFunctionSignature::collect_arguments(const Arguments &raw) const {
         for (; arg_it != raw.end(); ++arg_it) {
             spread_args.emplace_back(*arg_it);
         }
-        context.emplace_back(new ListValue(std::move(spread_args)));
+        // ScopeStorage.emplace_back(new ListValue(std::move(spread_args)));
     } else if (arg_it != raw.end()) {
         throw ArgumentException("Too many arguments provided to function call"s);
     }
-    return context;
+    return stack;
 }
 
 ASTFunctionDefinition::ASTFunctionDefinition(const char* name)
