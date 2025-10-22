@@ -85,8 +85,25 @@ void ScopeStorage::pop(const ScopeDefinition& scope) {
 }
 
 ASTNode::ASTNode(const Location& location) : location_(location) {}
-void ASTNode::first_analyze(ScopeDefinition& scope) {}
-void ASTNode::second_analyze(ScopeDefinition& scope) {}
+std::vector<ASTNode*> ASTNode::get_children() const {
+    return {};
+}
+void ASTNode::first_analyze(ScopeDefinition& scope) {
+    for (const auto& child : get_children()) {
+        if (child == nullptr) {
+            continue;
+        }
+        child->first_analyze(scope);
+    }
+}
+void ASTNode::second_analyze(ScopeDefinition& scope) {
+    for (const auto& child : get_children()) {
+        if (child == nullptr) {
+            continue;
+        }
+        child->second_analyze(scope);
+    }
+}
 void ASTNode::execute(ScopeStorage& globals, ScopeStorage& locals) const {}
 
 std::vector<std::unique_ptr<ASTToken>> ASTToken::Instances;
@@ -108,6 +125,9 @@ ASTCodeBlock::~ASTCodeBlock() {
     for (const auto& stmt : statements_) {
         delete stmt;
     }
+}
+std::vector<ASTNode*> ASTCodeBlock::get_children() const {
+    return statements_;
 }
 void ASTCodeBlock::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "Statements"s << std::endl;
@@ -175,20 +195,13 @@ ASTFunctionCallArguments::~ASTFunctionCallArguments() {
         delete expr;
     }
 }
+std::vector<ASTNode*> ASTFunctionCallArguments::get_children() const {
+    return std::vector<ASTNode*>(arguments_.begin(), arguments_.end());
+}
 void ASTFunctionCallArguments::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "FunctionCallArguments"s << std::endl;
     for (const auto& expr : arguments_) {
         expr->print(os, indent + 2);
-    }
-}
-void ASTFunctionCallArguments::first_analyze(ScopeDefinition& scope) {
-    for (const auto& expr : arguments_) {
-        expr->first_analyze(scope);
-    }
-}
-void ASTFunctionCallArguments::second_analyze(ScopeDefinition& scope) {
-    for (const auto& expr : arguments_) {
-        expr->second_analyze(scope);
     }
 }
 ASTFunctionCallArguments& ASTFunctionCallArguments::push_back(const Location& new_location, ASTExpression* arg) {
@@ -210,18 +223,13 @@ ASTFunctionCall::~ASTFunctionCall() {
     delete function_;
     delete arguments_;
 }
+std::vector<ASTNode*> ASTFunctionCall::get_children() const {
+    return { function_, arguments_ };
+}
 void ASTFunctionCall::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "FunctionCall"s << std::endl;
     function_->print(os, indent + 2);
     arguments_->print(os, indent + 2);
-}
-void ASTFunctionCall::first_analyze(ScopeDefinition& scope) {
-    function_->first_analyze(scope);
-    arguments_->first_analyze(scope);
-}
-void ASTFunctionCall::second_analyze(ScopeDefinition& scope) {
-    function_->second_analyze(scope);
-    arguments_->second_analyze(scope);
 }
 ValueRef ASTFunctionCall::eval(ScopeStorage& globals, ScopeStorage& locals) const {
     ValueRef result = function_->eval(globals, locals);
@@ -238,17 +246,17 @@ ASTDeclaration::~ASTDeclaration() {
     delete identifier_;
     delete expr_;
 }
+std::vector<ASTNode*> ASTDeclaration::get_children() const {
+    return { identifier_, expr_ };
+}
 void ASTDeclaration::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "Declaration"s << std::endl;
     identifier_->print(os, indent + 2);
     expr_->print(os, indent + 2);
 }
 void ASTDeclaration::first_analyze(ScopeDefinition& scope) {
-    scope.add_symbol(identifier_->name_, type_);
-}
-void ASTDeclaration::second_analyze(ScopeDefinition& scope) {
-    identifier_->second_analyze(scope);
-    expr_->second_analyze(scope);
+    scope.add_symbol(identifier_->name_, expr_);
+    expr_->first_analyze(scope);
 }
 void ASTDeclaration::execute(ScopeStorage& globals, ScopeStorage& locals) const {
     ValueRef value = expr_->eval(globals, locals);
@@ -277,26 +285,15 @@ ASTIfStatement::~ASTIfStatement() {
     delete if_block_;
     delete else_block_;
 }
+std::vector<ASTNode*> ASTIfStatement::get_children() const {
+    return { condition_, if_block_, else_block_ };
+}
 void ASTIfStatement::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "IfStatement"s << std::endl;
     condition_->print(os, indent + 2);
     if_block_->print(os, indent + 2);
     if (else_block_) {
         else_block_->print(os, indent + 2);
-    }
-}
-void ASTIfStatement::first_analyze(ScopeDefinition& scope) {
-    condition_->first_analyze(scope);
-    if_block_->first_analyze(scope);
-    if (else_block_) {
-        else_block_->first_analyze(scope);
-    }
-}
-void ASTIfStatement::second_analyze(ScopeDefinition& scope) {
-    condition_->second_analyze(scope);
-    if_block_->second_analyze(scope);
-    if (else_block_) {
-        else_block_->second_analyze(scope);
     }
 }
 void ASTIfStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
@@ -317,6 +314,9 @@ ASTForStatement::~ASTForStatement() {
     delete increment_;
     delete body_;
 }
+std::vector<ASTNode*> ASTForStatement::get_children() const {
+    return { initializer_, condition_, increment_, body_ };
+}
 void ASTForStatement::print(std::ostream& os, uint64_t indent) const {
     os << std::string(indent, ' ') << "ForStatement"s << std::endl;
     if (initializer_) {
@@ -335,30 +335,6 @@ void ASTForStatement::print(std::ostream& os, uint64_t indent) const {
         os << std::string(indent + 2, ' ') << "No increment"s << std::endl;
     }
     body_->print(os, indent + 2);
-}
-void ASTForStatement::first_analyze(ScopeDefinition& scope) {
-    if (initializer_) {
-        initializer_->first_analyze(scope);
-    }
-    if (condition_) {
-        condition_->first_analyze(scope);
-    }
-    if (increment_) {
-        increment_->first_analyze(scope);
-    }
-    body_->first_analyze(scope);
-}
-void ASTForStatement::second_analyze(ScopeDefinition& scope) {
-    if (initializer_) {
-        initializer_->second_analyze(scope);
-    }
-    if (condition_) {
-        condition_->second_analyze(scope);
-    }
-    if (increment_) {
-        increment_->second_analyze(scope);
-    }
-    body_->second_analyze(scope);
 }
 void ASTForStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
     if (initializer_) {

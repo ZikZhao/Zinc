@@ -154,7 +154,7 @@
                 "type": "cppdbg", 
                 "request": "launch",
                 "program": "${workspaceFolder}/build/out/interpreter",
-                "args": ["${workspaceFolder}/test.ptf"],
+                "args": ["${workspaceFolder}/test.dag"],
                 "stopAtEntry": false,
                 "cwd": "${workspaceFolder}",
                 "environment": [],

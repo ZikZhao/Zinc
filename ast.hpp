@@ -57,6 +57,7 @@ public:
     Location location_;
     ASTNode(const Location& location);
     virtual ~ASTNode() = default;
+    virtual std::vector<ASTNode*> get_children() const;
     virtual void print(std::ostream& os, uint64_t indent = 0) const = 0;
     virtual void first_analyze(ScopeDefinition& scope);
     virtual void second_analyze(ScopeDefinition& scope);
@@ -88,6 +89,7 @@ public:
     ASTCodeBlock(const Location& location);
     ASTCodeBlock(const Location& location, ASTNode* node);
     ~ASTCodeBlock() final;
+    std::vector<ASTNode*> get_children() const final;
     void print(std::ostream& os, uint64_t indent) const final;
     void first_analyze(ScopeDefinition& scope) final;
     void second_analyze(ScopeDefinition& scope) final;
@@ -141,15 +143,12 @@ public:
     ~ASTUnaryOp() final {
         delete expr_;
     }
+    std::vector<ASTNode*> get_children() const final {
+        return { expr_ };
+    }
     void print(std::ostream& os, uint64_t indent) const final {
         os << std::string(indent, ' ') << "UnaryOp(" << GetOperatorString<Op>() << ")" << std::endl;
         expr_->print(os, indent + 2);
-    }
-    void first_analyze(ScopeDefinition& scope) final {
-        expr_->first_analyze(scope);
-    }
-    void second_analyze(ScopeDefinition& scope) final {
-        expr_->second_analyze(scope);
     }
     Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final {
         Ref result = expr_->eval(globals, locals);
@@ -170,18 +169,13 @@ public:
         delete left_;
         delete right_;
     }
+    std::vector<ASTNode*> get_children() const final {
+        return { left_, right_ };
+    }
     void print(std::ostream& os, uint64_t indent) const final {
         os << std::string(indent, ' ') << "BinaryOp(" << GetOperatorString<Op>() << ")" << std::endl;
         left_->print(os, indent + 2);
         right_->print(os, indent + 2);
-    }
-    void first_analyze(ScopeDefinition& scope) final {
-        left_->first_analyze(scope);
-        right_->first_analyze(scope);
-    }
-    void second_analyze(ScopeDefinition& scope) final {
-        left_->second_analyze(scope);
-        right_->second_analyze(scope);
     }
     Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final {
         Ref result_left = left_->eval(globals, locals);
@@ -204,18 +198,13 @@ public:
         delete left_;
         delete right_;
     }
+    std::vector<ASTNode*> get_children() const final {
+        return { left_, right_ };
+    }
     void print(std::ostream& os, uint64_t indent) const final {
         os << std::string(indent, ' ') << "BinaryOp(" << GetOperatorString<AssignOperator>() << ")" << std::endl;
         left_->print(os, indent + 2);
         right_->print(os, indent + 2);
-    }
-    void first_analyze(ScopeDefinition& scope) final {
-        left_->first_analyze(scope);
-        right_->first_analyze(scope);
-    }
-    void second_analyze(ScopeDefinition& scope) final {
-        left_->second_analyze(scope);
-        right_->second_analyze(scope);
     }
     Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final {
         Ref result_left = left_->eval(globals, locals);
@@ -231,9 +220,8 @@ public:
     ASTFunctionCallArguments();
     ASTFunctionCallArguments(const Location& location, ASTExpression* first_arg);
     ~ASTFunctionCallArguments() final;
+    std::vector<ASTNode*> get_children() const final;
     void print(std::ostream& os, uint64_t indent) const final;
-    void first_analyze(ScopeDefinition& scope) final;
-    void second_analyze(ScopeDefinition& scope) final;
     ASTFunctionCallArguments& push_back(const Location& new_location, ASTExpression* arg);
     Arguments eval_arguments(ScopeStorage& globals, ScopeStorage& locals) const;
 };
@@ -244,9 +232,8 @@ public:
     ASTFunctionCallArguments* const arguments_;
     ASTFunctionCall(const Location& location, ASTExpression* function, ASTFunctionCallArguments* arguments = 0);
     ~ASTFunctionCall() final;
+    std::vector<ASTNode*> get_children() const final;
     void print(std::ostream& os, uint64_t indent) const final;
-    void first_analyze(ScopeDefinition& scope) final;
-    void second_analyze(ScopeDefinition& scope) final;
     ValueRef eval(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
@@ -334,9 +321,9 @@ public:
     ASTDeclaration(const Location& location, ASTIdentifier* identifier, ASTExpression* expr);
     ASTDeclaration(const Location& location, ASTExpression* type, ASTIdentifier* identifier, ASTExpression* expr);
     ~ASTDeclaration() final;
+    std::vector<ASTNode*> get_children() const final;
     void print(std::ostream& os, uint64_t indent) const final;
     void first_analyze(ScopeDefinition& scope) final;
-    void second_analyze(ScopeDefinition& scope) final;
     void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
@@ -357,9 +344,8 @@ public:
     ASTCodeBlock* const else_block_;
     ASTIfStatement(const Location& location, ASTExpression* condition, ASTCodeBlock* if_block, ASTCodeBlock* else_block = nullptr);
     ~ASTIfStatement() final;
+    std::vector<ASTNode*> get_children() const final;
     void print(std::ostream& os, uint64_t indent) const final;
-    void first_analyze(ScopeDefinition& scope) final;
-    void second_analyze(ScopeDefinition& scope) final;
     void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
@@ -372,9 +358,8 @@ public:
     ASTForStatement(const Location& location, ASTNode* initializer, ASTExpression* condition, ASTExpression* increment, ASTCodeBlock* body);
     ASTForStatement(const Location& location, ASTCodeBlock* body);
     ~ASTForStatement() final;
+    std::vector<ASTNode*> get_children() const final;
     void print(std::ostream& os, uint64_t indent) const final;
-    void first_analyze(ScopeDefinition& scope) final;
-    void second_analyze(ScopeDefinition& scope) final;
     void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };
 
