@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    ASTNode* root = nullptr;
+    std::unique_ptr<ASTNode> root;
     yy::parser parser(root);
     parser.set_debug_level(1);
     parser.parse();
@@ -68,5 +68,4 @@ int main(int argc, char* argv[]) {
     root->second_analyze(builtins);
     ScopeStorage globals = Builtins::GetBuiltinsScopeStorage();
     root->execute(globals, globals);
-    delete root;
 }

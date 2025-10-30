@@ -125,7 +125,7 @@ MULTI_LINE_COMMENT \/\*([^*]|\*+[^*/])*\*+\/
 %%
 extern std::ifstream yyin;
 
-int yylex(ASTNode** yylval, Location* yylloc) {
+int yylex(std::unique_ptr<ASTNode>* yylval, Location* yylloc) {
     static yyFlexLexer lexer(&yyin, nullptr);
     static std::uint64_t column = 1;
 
@@ -146,7 +146,7 @@ int yylex(ASTNode** yylval, Location* yylloc) {
                 column += std::strlen(lexer.YYText());
                 yylloc->end.line = static_cast<std::uint64_t>(lexer.lineno());
                 yylloc->end.column = column;
-                *yylval = ASTToken::New(*yylloc, lexer.YYText());
+                *yylval = std::make_unique<ASTToken>(*yylloc, lexer.YYText());
                 return type;
         }
     }

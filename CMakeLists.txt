@@ -30,22 +30,30 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out)
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_BINARY_DIR})
 
-# Generate parser files with Bison
+# Generate parser files with Bison (must be done first)
 BISON_TARGET(Parser
     ${CMAKE_SOURCE_DIR}/parser.y
     ${CMAKE_BINARY_DIR}/out/parser.tab.cpp
     DEFINES_FILE ${CMAKE_BINARY_DIR}/out/parser.tab.hpp
+    COMPILE_FLAGS "--verbose"
 )
 
-# Generate lexer files with Flex
+# Generate lexer files with Flex (depends on parser header)
 FLEX_TARGET(Lexer
     ${CMAKE_SOURCE_DIR}/lexer.l
     ${CMAKE_BINARY_DIR}/out/lex.yy.cc
     COMPILE_FLAGS "--c++"
 )
 
-# Add dependency between lexer and parser
+# Ensure Bison runs before Flex (Flex needs parser.tab.hpp)
 ADD_FLEX_BISON_DEPENDENCY(Lexer Parser)
+
+# Explicitly add dependencies to ensure proper build order
+set_source_files_properties(
+    ${FLEX_Lexer_OUTPUTS}
+    PROPERTIES
+    OBJECT_DEPENDS ${BISON_Parser_OUTPUT_HEADER}
+)
 
 # Precompiled header setup
 set(PCH_HEADER ${CMAKE_SOURCE_DIR}/pch.hpp)

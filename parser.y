@@ -4,21 +4,21 @@
 #include "object.hpp"
 #include "out/parser.tab.hpp"
 
-extern int yylex(ASTNode** yylval, Location* yylloc);
+extern int yylex(std::unique_ptr<ASTNode>* yylval, Location* yylloc);
 %}
 
 %language "C++"
-%require "3.2"
+%require "3.8"
 %code requires {
     #include "ast.hpp"
 }
 %debug
 
 %locations
-%define api.value.type { ASTNode* }
+%define api.value.type { std::unique_ptr<ASTNode> }
 %define api.location.type { Location }
 
-%parse-param { ASTNode*& root }
+%parse-param { std::unique_ptr<ASTNode>& root }
 
 /* TypeScript Keywords */
 %token KW_CONST KW_LET KW_TYPE KW_INTEGER KW_FLOAT KW_STRING KW_BOOLEAN KW_NULL
@@ -87,72 +87,75 @@ top_level_statements
     : /* empty */
         { root = nullptr; }
     | statements
-        { root = $statements; }
+        { root = std::move($statements); }
     ;
 
 statements
     : statement
-        { $$ = new ASTCodeBlock(@$, $statement); }
+        { $$ = std::make_unique<ASTCodeBlock>(@$, std::move($statement)); }
     | statements[prev] statement
-        { $$ = &static_cast<ASTCodeBlock*>($prev)->push(@$, $statement); }
+        {
+            static_cast<ASTCodeBlock&>(*$prev).push(@$, std::move($statement));
+            $$ = std::move($prev);
+        }
     ;
 
 statement
     : expression OP_SEMICOLON
-        { $$ = $expression; }
+        { $$ = std::move($expression); }
     | declaration OP_SEMICOLON
-        { $$ = $declaration; }
+        { $$ = std::move($declaration); }
     | if_statement
-        { $$ = $if_statement; }
+        { $$ = std::move($if_statement); }
     | for_statement
-        { $$ = $for_statement; }
+        { $$ = std::move($for_statement); }
     | break_statement
-        { $$ = $break_statement; }
+        { $$ = std::move($break_statement); }
     | continue_statement
-        { $$ = $continue_statement; }
+        { $$ = std::move($continue_statement); }
     ;
 
 code_block
     : OP_LBRACE OP_RBRACE
-        { $$ = new ASTCodeBlock(@$); }
+        { $$ = std::make_unique<ASTCodeBlock>(@$); }
     | OP_LBRACE statements OP_RBRACE
-        { $$ = $statements; }
+        { $$ = std::move($statements); }
     ;
 
 identifier
     : T_IDENTIFIER
-        { $$ = new ASTIdentifier(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTIdentifier>(*static_cast<ASTToken*>($1.get())); }
     ;
 
 constant
     : KW_NULL
-        { $$ = new ASTConstant<NullValue>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTConstant<NullValue>>(*static_cast<ASTToken*>($1.get())); }
     | T_INTEGER
-        { $$ = new ASTConstant<IntegerValue>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTConstant<IntegerValue>>(*static_cast<ASTToken*>($1.get())); }
     | T_FLOAT
-        { $$ = new ASTConstant<FloatValue>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTConstant<FloatValue>>(*static_cast<ASTToken*>($1.get())); }
     | T_STRING
-        { $$ = new ASTConstant<StringValue>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTConstant<StringValue>>(*static_cast<ASTToken*>($1.get())); }
     | T_BOOLEAN
-        { $$ = new ASTConstant<BooleanValue>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTConstant<BooleanValue>>(*static_cast<ASTToken*>($1.get())); }
     ;
 
 primitive_type
     : KW_NULL
-        { $$ = new ASTPrimitiveType<NullType>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTPrimitiveType<NullType>>(*static_cast<ASTToken*>($1.get())); }
     | KW_INTEGER
-        { $$ = new ASTPrimitiveType<IntegerType>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTPrimitiveType<IntegerType>>(*static_cast<ASTToken*>($1.get())); }
     | KW_FLOAT
-        { $$ = new ASTPrimitiveType<FloatType>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTPrimitiveType<FloatType>>(*static_cast<ASTToken*>($1.get())); }
     | KW_STRING
-        { $$ = new ASTPrimitiveType<StringType>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTPrimitiveType<StringType>>(*static_cast<ASTToken*>($1.get())); }
     | KW_BOOLEAN
-        { $$ = new ASTPrimitiveType<BooleanType>(*static_cast<ASTToken*>($1)); }
+        { $$ = std::make_unique<ASTPrimitiveType<BooleanType>>(*static_cast<ASTToken*>($1.get())); }
     ;
 
 type_expression
     : primitive_type
-        { $$ = static_cast<ASTTypeExpression*>($primitive_type); }
+        { $$ = std::move($primitive_type); }
     // | function_type
     //     { $$ = static_cast<ASTTypeExpression*>($function_type); }
     // | object_type
@@ -165,334 +168,337 @@ type_expression
 type_alias
     : KW_TYPE identifier OP_ASSIGN type_expression[type] OP_SEMICOLON
         {
-            $$ = new ASTTypeAlias(
+            $$ = std::make_unique<ASTTypeAlias>(
                 @$,
-                static_cast<ASTIdentifier*>($identifier),
-                static_cast<ASTTypeExpression*>($type));
+                std::unique_ptr<ASTIdentifier>(static_cast<ASTIdentifier*>($identifier.release())),
+                std::move($type));
         }
     ;
 
 argument_list
     : expr_without_comma[arg]
         {
-            $$ = new ASTFunctionCallArguments(
+            $$ = std::make_unique<ASTFunctionCallArguments>(
                 @$, 
-                static_cast<ASTValueExpression*>($arg));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($arg.release())));
         }
     | argument_list[prev] OP_COMMA expr_without_comma[arg]
         {
-            $$ = &static_cast<ASTFunctionCallArguments*>($prev)->push_back(
+            auto& args = static_cast<ASTFunctionCallArguments&>(*$prev);
+            args.push_back(
                 @$,
-                static_cast<ASTValueExpression*>($arg));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($arg.release())));
+            $$ = std::move($prev);
         }
     ;
 
 function_call
     : expr_without_comma[function] OP_LPAREN OP_RPAREN
         {
-            $$ = new ASTFunctionCall(
+            $$ = std::make_unique<ASTFunctionCall>(
                 @$, 
-                static_cast<ASTValueExpression*>($function));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($function.release())));
         }
     | expr_without_comma[function] OP_LPAREN argument_list OP_RPAREN
         {
-            $$ = new ASTFunctionCall(
+            $$ = std::make_unique<ASTFunctionCall>(
                 @$, 
-                static_cast<ASTValueExpression*>($function), 
-                static_cast<ASTFunctionCallArguments*>($argument_list));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($function.release())), 
+                std::unique_ptr<ASTFunctionCallArguments>(static_cast<ASTFunctionCallArguments*>($argument_list.release())));
         }
     ;
 
 expr_without_comma
     : constant
-        { $$ = $constant; }
+        { $$ = std::move($constant); }
     | identifier
-        { $$ = $identifier; }
+        { $$ = std::move($identifier); }
     | function_call
-        { $$ = static_cast<ASTFunctionCall*>($function_call); }
+        { $$ = std::move($function_call); }
     | OP_LPAREN expr_without_comma[expr] OP_RPAREN
-        { $$ = static_cast<ASTValueExpression*>($expr); }
+        { $$ = std::move($expr); }
     /* Unary operators */
     | OP_SUBTRACT expr_without_comma[expr] %prec OP_NEGATE
-        { $$ = new ASTNegateOp(@$, static_cast<ASTValueExpression*>($expr)); }
+        { $$ = std::make_unique<ASTNegateOp>(@$, std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($expr.release()))); }
     | OP_LOGICAL_NOT expr_without_comma[expr]
-        { $$ = new ASTLogicalNotOp(@$, static_cast<ASTValueExpression*>($expr)); }
+        { $$ = std::make_unique<ASTLogicalNotOp>(@$, std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($expr.release()))); }
     | OP_BITWISE_NOT expr_without_comma[expr]
-        { $$ = new ASTBitwiseNotOp(@$, static_cast<ASTValueExpression*>($expr)); }
+        { $$ = std::make_unique<ASTBitwiseNotOp>(@$, std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($expr.release()))); }
     /* Arithmetic operators */
     | expr_without_comma[left] OP_ADD expr_without_comma[right]
         {
-            $$ = new ASTAddOp(
+            $$ = std::make_unique<ASTAddOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_SUBTRACT expr_without_comma[right]
         {
-            $$ = new ASTSubtractOp(
+            $$ = std::make_unique<ASTSubtractOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_MULTIPLY expr_without_comma[right]
         {
-            $$ = new ASTMultiplyOp(
+            $$ = std::make_unique<ASTMultiplyOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_DIVIDE expr_without_comma[right]
         {
-            $$ = new ASTDivideOp(
+            $$ = std::make_unique<ASTDivideOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_REMAINDER expr_without_comma[right]
         {
-            $$ = new ASTRemainderOp(
+            $$ = std::make_unique<ASTRemainderOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     /* Comparison operators */
     | expr_without_comma[left] OP_EQUAL expr_without_comma[right]
         {
-            $$ = new ASTEqualOp(
+            $$ = std::make_unique<ASTEqualOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_NOT_EQUAL expr_without_comma[right]
         {
-            $$ = new ASTNotEqualOp(
+            $$ = std::make_unique<ASTNotEqualOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_LESS_THAN expr_without_comma[right]
         {
-            $$ = new ASTLessThanOp(
+            $$ = std::make_unique<ASTLessThanOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_GREATER_THAN expr_without_comma[right]
         {
-            $$ = new ASTGreaterThanOp(
+            $$ = std::make_unique<ASTGreaterThanOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_LESS_EQUAL expr_without_comma[right]
         {
-            $$ = new ASTLessEqualOp(
+            $$ = std::make_unique<ASTLessEqualOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_GREATER_EQUAL expr_without_comma[right]
         {
-            $$ = new ASTGreaterEqualOp(
+            $$ = std::make_unique<ASTGreaterEqualOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     /* Logical operators */
     | expr_without_comma[left] OP_LOGICAL_AND expr_without_comma[right]
         {
-            $$ = new ASTLogicalAndOp(
+            $$ = std::make_unique<ASTLogicalAndOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_LOGICAL_OR expr_without_comma[right]
         {
-            $$ = new ASTLogicalOrOp(
+            $$ = std::make_unique<ASTLogicalOrOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     /* Bitwise operators */
     | expr_without_comma[left] OP_BITWISE_AND expr_without_comma[right]
         {
-            $$ = new ASTBitwiseAndOp(
+            $$ = std::make_unique<ASTBitwiseAndOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_BITWISE_OR expr_without_comma[right]
         {
-            $$ = new ASTBitwiseOrOp(
+            $$ = std::make_unique<ASTBitwiseOrOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_BITWISE_XOR expr_without_comma[right]
         {
-            $$ = new ASTBitwiseXorOp(
+            $$ = std::make_unique<ASTBitwiseXorOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     /* Shift operators */
     | expr_without_comma[left] OP_LEFT_SHIFT expr_without_comma[right]
         {
-            $$ = new ASTLeftShiftOp(
+            $$ = std::make_unique<ASTLeftShiftOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_RIGHT_SHIFT expr_without_comma[right]
         {
-            $$ = new ASTRightShiftOp(
+            $$ = std::make_unique<ASTRightShiftOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     /* Assignment operators */
     | expr_without_comma[left] OP_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTAssignOp(
+            $$ = std::make_unique<ASTAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_ADD_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTAddAssignOp(
+            $$ = std::make_unique<ASTAddAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_SUBTRACT_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTSubtractAssignOp(
+            $$ = std::make_unique<ASTSubtractAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_MULTIPLY_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTMultiplyAssignOp(
+            $$ = std::make_unique<ASTMultiplyAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_DIVIDE_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTDivideAssignOp(
+            $$ = std::make_unique<ASTDivideAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_REMAINDER_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTRemainderAssignOp(
+            $$ = std::make_unique<ASTRemainderAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_LEFT_SHIFT_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTLeftShiftAssignOp(
+            $$ = std::make_unique<ASTLeftShiftAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_RIGHT_SHIFT_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTRightShiftAssignOp(
+            $$ = std::make_unique<ASTRightShiftAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_BITWISE_AND_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTBitwiseAndAssignOp(
+            $$ = std::make_unique<ASTBitwiseAndAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_BITWISE_OR_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTBitwiseOrAssignOp(
+            $$ = std::make_unique<ASTBitwiseOrAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     | expr_without_comma[left] OP_BITWISE_XOR_ASSIGN expr_without_comma[right]
         {
-            $$ = new ASTBitwiseXorAssignOp(
+            $$ = std::make_unique<ASTBitwiseXorAssignOp>(
                 @$, 
-                static_cast<ASTValueExpression*>($left), 
-                static_cast<ASTValueExpression*>($right));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($left.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($right.release())));
         }
     /* Other operators */
-    | expr_without_comma[left] OP_SCOPE_RESOLUTION identifier
-    | expr_without_comma[condition] OP_QUESTION expr_without_comma[then] OP_COLON expr_without_comma[else]
-    | expr_without_comma[left] OP_DOT identifier
+    // | expr_without_comma[left] OP_SCOPE_RESOLUTION identifier
+    // | expr_without_comma[condition] OP_QUESTION expr_without_comma[then] OP_COLON expr_without_comma[else]
+    // | expr_without_comma[left] OP_DOT identifier
     ;
 
 expression
     : expr_without_comma
-        { $$ = $expr_without_comma; }
+        { $$ = std::move($expr_without_comma); }
     | expr_without_comma OP_COMMA expr_without_comma
+        { $$ = nullptr; /* TODO */ }
     ;
 
 declaration
     : KW_CONST identifier OP_ASSIGN expression
         {
-            $$ = new ASTDeclaration(
+            $$ = std::make_unique<ASTDeclaration>(
                 @$, 
-                static_cast<ASTIdentifier*>($identifier), 
-                static_cast<ASTValueExpression*>($expression));
+                std::unique_ptr<ASTIdentifier>(static_cast<ASTIdentifier*>($identifier.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($expression.release())));
         }
     | KW_LET identifier OP_ASSIGN expression
         {
-            $$ = new ASTDeclaration(
+            $$ = std::make_unique<ASTDeclaration>(
                 @$, 
-                static_cast<ASTIdentifier*>($identifier), 
-                static_cast<ASTValueExpression*>($expression));
+                std::unique_ptr<ASTIdentifier>(static_cast<ASTIdentifier*>($identifier.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($expression.release())));
         }
     | KW_CONST identifier OP_COLON type_expression[type] OP_ASSIGN expression
         {
-            $$ = new ASTDeclaration(@$, 
-                static_cast<ASTTypeExpression*>(static_cast<ASTTypeExpression*>($type)),
-                static_cast<ASTIdentifier*>($identifier), 
-                static_cast<ASTValueExpression*>($expression));
+            $$ = std::make_unique<ASTDeclaration>(@$, 
+                std::move($type),
+                std::unique_ptr<ASTIdentifier>(static_cast<ASTIdentifier*>($identifier.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($expression.release())));
         }
     | KW_LET identifier OP_COLON type_expression[type] OP_ASSIGN expression
         {
-            $$ = new ASTDeclaration(@$, 
-                static_cast<ASTTypeExpression*>(static_cast<ASTTypeExpression*>($type)),
-                static_cast<ASTIdentifier*>($identifier), 
-                static_cast<ASTValueExpression*>($expression));
+            $$ = std::make_unique<ASTDeclaration>(@$, 
+                std::move($type),
+                std::unique_ptr<ASTIdentifier>(static_cast<ASTIdentifier*>($identifier.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($expression.release())));
         }
     | KW_LET identifier OP_COLON type_expression[type]
         {
-            $$ = new ASTDeclaration(@$, 
-                static_cast<ASTTypeExpression*>(static_cast<ASTTypeExpression*>($type)),
-                static_cast<ASTIdentifier*>($identifier), nullptr);
+            $$ = std::make_unique<ASTDeclaration>(@$, 
+                std::move($type),
+                std::unique_ptr<ASTIdentifier>(static_cast<ASTIdentifier*>($identifier.release())), nullptr);
         }
     ;
 
 if_statement
     : KW_IF OP_LPAREN expression[condition] OP_RPAREN code_block[then]
         {
-            $$ = new ASTIfStatement(
+            $$ = std::make_unique<ASTIfStatement>(
                 @$, 
-                static_cast<ASTValueExpression*>($condition), 
-                static_cast<ASTCodeBlock*>($then), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($condition.release())), 
+                std::unique_ptr<ASTCodeBlock>(static_cast<ASTCodeBlock*>($then.release())), 
                 nullptr);
         }
     | KW_IF OP_LPAREN expression[condition] OP_RPAREN code_block[then] KW_ELSE code_block[else]
         {
-            $$ = new ASTIfStatement(
+            $$ = std::make_unique<ASTIfStatement>(
                 @$, 
-                static_cast<ASTValueExpression*>($condition), 
-                static_cast<ASTCodeBlock*>($then), 
-                static_cast<ASTCodeBlock*>($else));
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($condition.release())), 
+                std::unique_ptr<ASTCodeBlock>(static_cast<ASTCodeBlock*>($then.release())), 
+                std::unique_ptr<ASTCodeBlock>(static_cast<ASTCodeBlock*>($else.release())));
         }
     ;
 
@@ -500,74 +506,78 @@ optional_initializer
     : /* empty */
         { $$ = nullptr; }
     | declaration
-        { $$ = $declaration; }
+        { $$ = std::move($declaration); }
     | expression
-        { $$ = $expression; }
+        { $$ = std::move($expression); }
     ;
 
 optional_condition
     : /* empty */
         { $$ = nullptr; }
     | expression
-        { $$ = $expression; }
+        { $$ = std::move($expression); }
     ;
 
 optional_increment
     : /* empty */
         { $$ = nullptr; }
     | expression
-        { $$ = $expression; }
+        { $$ = std::move($expression); }
     ;
 
 for_statement
     : KW_FOR OP_LPAREN optional_initializer OP_SEMICOLON optional_condition OP_SEMICOLON optional_increment OP_RPAREN code_block
         {
-            $$ = new ASTForStatement(
+            $$ = std::make_unique<ASTForStatement>(
                 @$, 
-                $optional_initializer, 
-                static_cast<ASTValueExpression*>($optional_condition), 
-                static_cast<ASTValueExpression*>($optional_increment), 
-                static_cast<ASTCodeBlock*>($code_block));
+                std::move($optional_initializer), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($optional_condition.release())), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($optional_increment.release())), 
+                std::unique_ptr<ASTCodeBlock>(static_cast<ASTCodeBlock*>($code_block.release())));
         }
     | KW_FOR OP_LPAREN expression[condition] OP_RPAREN code_block
         {
-            $$ = new ASTForStatement(
+            $$ = std::make_unique<ASTForStatement>(
                 @$, 
                 nullptr, 
-                static_cast<ASTValueExpression*>($condition), 
+                std::unique_ptr<ASTExpression>(static_cast<ASTExpression*>($condition.release())), 
                 nullptr, 
-                static_cast<ASTCodeBlock*>($code_block));
+                std::unique_ptr<ASTCodeBlock>(static_cast<ASTCodeBlock*>($code_block.release())));
         }
     | KW_FOR code_block
         {
-            $$ = new ASTForStatement(
+            $$ = std::make_unique<ASTForStatement>(
                 @$, 
                 nullptr, 
                 nullptr, 
                 nullptr, 
-                static_cast<ASTCodeBlock*>($code_block));
+                std::unique_ptr<ASTCodeBlock>(static_cast<ASTCodeBlock*>($code_block.release())));
         }
     ;
 
 break_statement
     : KW_BREAK OP_SEMICOLON
-        { $$ = new ASTBreakStatement(@$); }
+        { $$ = std::make_unique<ASTBreakStatement>(@$); }
     ;
 
 continue_statement
     : KW_CONTINUE OP_SEMICOLON
-        { $$ = new ASTContinueStatement(@$); }
+        { $$ = std::make_unique<ASTContinueStatement>(@$); }
     ;
 
 parameter
     : identifier
         {
-            $$ = new ASTFunctionParameter(static_cast<ASTIdentifier*>($identifier));
+            $$ = std::make_unique<ASTFunctionParameter>(
+                @$,
+                std::unique_ptr<const ASTIdentifier>(static_cast<ASTIdentifier*>($identifier.release())),
+                nullptr);
         }
     | identifier OP_COLON type_expression[type]
         {
-            $$ = new ASTFunctionParameter(
-                static_cast<ASTTypeExpression*>(static_cast<ASTTypeExpression*>($type)), 
-                static_cast<ASTIdentifier*>($identifier));
+            $$ = std::make_unique<ASTFunctionParameter>(
+                @$,
+                std::unique_ptr<const ASTIdentifier>(static_cast<ASTIdentifier*>($identifier.release())),
+                std::unique_ptr<const ASTExpression>(static_cast<ASTExpression*>($type.release())));
         }
     ;

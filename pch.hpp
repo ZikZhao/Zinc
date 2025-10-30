@@ -16,6 +16,7 @@
 #include <ranges>
 #include <cassert>
 #include <array>
+#include <generator>
 
 #define CHECK(condition) \
     do { \
