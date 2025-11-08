@@ -75,7 +75,7 @@ void ScopeStorage::pop(const ScopeDefinition& scope) noexcept {
     }
 }
 
-ASTNode::ASTNode(const Location& location) noexcept : location_(location) {}
+ASTNode::ASTNode(const Location& loc) noexcept : location_(loc) {}
 std::generator<ASTNode*> ASTNode::get_children() const noexcept {
     co_return;
 }
@@ -97,20 +97,8 @@ void ASTNode::second_analyze(ScopeDefinition& scope) {
 }
 void ASTNode::execute(ScopeStorage& globals, ScopeStorage& locals) const {}
 
-ASTToken::ASTToken(const Location& location, std::string str) noexcept : ASTNode(location), str_(std::move(str)) {}
-void ASTToken::print(std::ostream& os, uint64_t indent) const noexcept {
-    os << std::string(indent, ' ') << "Token("s + str_ + ")"s << std::endl;
-}
-void ASTToken::execute(ScopeStorage& globals, ScopeStorage& locals) const {
-    throw std::runtime_error("Cannot execute a token");
-}
-
-ASTCodeBlock::ASTCodeBlock(const Location& location) noexcept
-    : ASTNode(location) {}
-ASTCodeBlock::ASTCodeBlock(const Location& location, std::unique_ptr<ASTNode> node) noexcept
-    : ASTNode(location) {
-    statements_.push_back(std::move(node));
-}
+ASTCodeBlock::ASTCodeBlock(const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements) noexcept
+    : ASTNode(loc), statements_(std::move(statements)) {}
 std::generator<ASTNode*> ASTCodeBlock::get_children() const noexcept {
     for (const auto& stmt : statements_) {
         co_yield stmt.get();
@@ -147,8 +135,8 @@ ASTCodeBlock& ASTCodeBlock::push(const Location& new_location, std::unique_ptr<A
     return *this;
 }
 
-ASTIdentifier::ASTIdentifier(const ASTToken& token) noexcept
-    : ASTExpression(token.location_), name_(token.str_) {}
+ASTIdentifier::ASTIdentifier(const Location& loc, std::string name) noexcept
+    : ASTExpression(loc), name_(std::move(name)) {}
 void ASTIdentifier::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent, ' ') << "Identifier("s + name_ + ")"s << std::endl;
 }
@@ -177,63 +165,38 @@ ValueRef ASTIdentifier::eval(ScopeStorage& globals, ScopeStorage& locals) const 
     return is_global_ ? globals[index_] : locals[index_];
 }
 
-ASTFunctionCallArguments::ASTFunctionCallArguments() noexcept : ASTNode({{0, 0}, {0, 0}}) {}
-ASTFunctionCallArguments::ASTFunctionCallArguments(const Location &location, std::unique_ptr<ASTExpression> first_arg) noexcept
-    : ASTNode(location) {
-    arguments_.push_back(std::move(first_arg));
-}
-std::generator<ASTNode*> ASTFunctionCallArguments::get_children() const noexcept {
+ASTFunctionCall::ASTFunctionCall(const Location& location, std::unique_ptr<ASTValueExpression> function, std::vector<std::unique_ptr<ASTValueExpression>> arguments) noexcept
+    : ASTExpression(location), function_(std::move(function)), arguments_(std::move(arguments)) {}
+std::generator<ASTNode*> ASTFunctionCall::get_children() const noexcept {
+    co_yield function_.get();
     for (const auto& arg : arguments_) {
         co_yield arg.get();
     }
 }
-void ASTFunctionCallArguments::print(std::ostream& os, uint64_t indent) const noexcept {
-    os << std::string(indent, ' ') << "FunctionCallArguments"s << std::endl;
-    for (const auto& expr : arguments_) {
-        expr->print(os, indent + 2);
-    }
-}
-ASTFunctionCallArguments& ASTFunctionCallArguments::push_back(const Location& new_location, std::unique_ptr<ASTExpression> next_arg) noexcept {
-    arguments_.push_back(std::move(next_arg));
-    location_ = new_location;
-    return *this;
-}
-Arguments ASTFunctionCallArguments::eval_arguments(ScopeStorage& globals, ScopeStorage& locals) const {
-    Arguments values;
-    for (const auto& expr : arguments_) {
-        values.emplace_back(expr->eval(globals, locals));
-    }
-    return values;
-}
-
-ASTFunctionCall::ASTFunctionCall(const Location& location, std::unique_ptr<ASTExpression> function, std::unique_ptr<ASTFunctionCallArguments> arguments) noexcept
-    : ASTExpression(location), function_(std::move(function)), arguments_(arguments ? std::move(arguments) : std::make_unique<ASTFunctionCallArguments>()) {}
-std::generator<ASTNode*> ASTFunctionCall::get_children() const noexcept {
-    co_yield function_.get();
-    co_yield arguments_.get();
-}
 void ASTFunctionCall::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent, ' ') << "FunctionCall"s << std::endl;
     function_->print(os, indent + 2);
-    arguments_->print(os, indent + 2);
+    for (const auto& arg : arguments_) {
+        arg->print(os, indent + 2);
+    }
 }
 ValueRef ASTFunctionCall::eval(ScopeStorage& globals, ScopeStorage& locals) const {
     ValueRef result = function_->eval(globals, locals);
-    CHECK(result->kind_ == KIND::KIND_FUNCTION);
-    return static_cast<FunctionValue&>(*result)(arguments_->eval_arguments(globals, locals));
+    std::vector<ValueRef> arguments_ref = arguments_
+        | std::views::transform([&](const auto& arg) { return arg->eval(globals, locals); })
+        | std::ranges::to<std::vector<ValueRef>>();
+    assert(result->kind_ == KIND::KIND_FUNCTION);
+    return static_cast<FunctionValue&>(*result)(arguments_ref);
 }
 
-ASTDeclaration::ASTDeclaration(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> expr) noexcept
-    : ASTNode(location), type_(nullptr), identifier_(std::move(identifier)), expr_(std::move(expr)), inferred_type_() {} // TODO
 ASTDeclaration::ASTDeclaration(const Location& location, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> expr) noexcept
     : ASTNode(location), type_(std::move(type)), identifier_(std::move(identifier)), expr_(std::move(expr)), inferred_type_() {} // TODO
 std::generator<ASTNode*> ASTDeclaration::get_children() const noexcept {
-    co_yield identifier_.get();
     co_yield expr_.get();
 }
 void ASTDeclaration::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent, ' ') << "Declaration"s << std::endl;
-    identifier_->print(os, indent + 2);
+    os << std::string(indent + 2, ' ') << "Identifier: " << identifier_ << std::endl;
     expr_->print(os, indent + 2);
 }
 void ASTDeclaration::first_analyze(ScopeDefinition& scope) {
@@ -350,6 +313,26 @@ void ASTBreakStatement::print(std::ostream& os, uint64_t indent) const noexcept 
 }
 void ASTBreakStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
     throw BreakException();
+}
+
+ASTReturnStatement::ASTReturnStatement(const Location& location, std::unique_ptr<ASTExpression> expr) noexcept
+    : ASTNode(location), expr_(std::move(expr)) {}
+std::generator<ASTNode*> ASTReturnStatement::get_children() const noexcept {
+    if (expr_) {
+        co_yield expr_.get();
+    }
+}
+void ASTReturnStatement::print(std::ostream& os, uint64_t indent) const noexcept {
+    os << std::string(indent, ' ') << "ReturnStatement"s << std::endl;
+    if (expr_) {
+        expr_->print(os, indent + 2);
+    } else {
+        os << std::string(indent + 2, ' ') << "No return value"s << std::endl;
+    }
+}
+void ASTReturnStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
+    ValueRef return_value = expr_ ? expr_->eval(globals, locals) : nullptr;
+    throw ReturnException(return_value);
 }
 
 ASTFunctionParameter::ASTFunctionParameter(const Location& location, std::unique_ptr<const ASTIdentifier> identifier, std::unique_ptr<const ASTExpression> type) noexcept

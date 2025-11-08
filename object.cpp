@@ -1,6 +1,5 @@
 #include "pch.hpp"
 #include "object.hpp"
-#include "out/parser.tab.hpp"
 
 template<typename Left, typename Func, typename Right = void>
 consteval auto MakeBasicOperation() {
@@ -105,7 +104,7 @@ bool TypeOrValue::contains(const TypeOrValue& other) const {
     }
     return static_cast<const Type*>(this)->contains(*static_cast<const Type*>(&other));
 }
-Ref TypeOrValue::eval_operation(std::string_view op) {
+ObjRef TypeOrValue::eval_operation(std::string_view op) {
     auto it = OperationMap.find(OperationTuple{ std::string(op), this->kind_, KIND::KIND_NO_RIGHT_OPERAND });
     if (it != OperationMap.end()) {
         return it->second(this, nullptr);
@@ -113,7 +112,7 @@ Ref TypeOrValue::eval_operation(std::string_view op) {
         throw std::runtime_error("Operation not supported");
     }
 }
-Ref TypeOrValue::eval_operation(std::string_view op, TypeOrValue& other) {
+ObjRef TypeOrValue::eval_operation(std::string_view op, TypeOrValue& other) {
     if (this->kind_ != other.kind_) {
         if (this->kind_ == KIND::KIND_FLOAT and other.kind_ == KIND::KIND_INTEGER) {
             FloatValue promoted_other = static_cast<double>(static_cast<const IntegerValue&>(other).value_);

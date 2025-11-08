@@ -1,6 +1,9 @@
 # Build output directory
 build/
 
+# ANTLR generated files
+.antlr/
+
 # Temporary files
 *.tmp
 *.bak

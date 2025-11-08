@@ -16,6 +16,7 @@ extern int yylex(std::unique_ptr<ASTNode>* yylval, Location* yylloc);
 
 %locations
 %define api.value.type { std::unique_ptr<ASTNode> }
+%define api.value.automove
 %define api.location.type { Location }
 
 %parse-param { std::unique_ptr<ASTNode>& root }

@@ -6,7 +6,6 @@ template<typename Op>
 concept OperatorFunctor = requires { GetOperatorString<Op>(); };
 
 class ASTNode;
-class ASTToken;
 class ASTExpression;
 using ASTTypeExpression = ASTExpression;
 using ASTValueExpression = ASTExpression;
@@ -54,7 +53,7 @@ public:
 class ASTNode {
 public:
     Location location_;
-    ASTNode(const Location& location) noexcept;
+    ASTNode(const Location& loc) noexcept;
     virtual ~ASTNode() noexcept = default;
     virtual std::generator<ASTNode*> get_children() const noexcept;
     virtual void print(std::ostream& os, std::uint64_t indent = 0) const noexcept = 0;
@@ -63,22 +62,11 @@ public:
     virtual void execute(ScopeStorage& globals, ScopeStorage& locals) const;
 };
 
-class ASTToken final : public ASTNode {
-public:
-    const std::string str_;
-public:
-    ASTToken(const Location& location, std::string str) noexcept;
-    ~ASTToken() noexcept final = default;
-    void print(std::ostream& os, std::uint64_t indent) const noexcept final;
-    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
-};
-
 class ASTCodeBlock final : public ASTNode {
 public:
     std::vector<std::unique_ptr<ASTNode>> statements_;
     std::unique_ptr<ScopeDefinition> local_scope_;
-    ASTCodeBlock(const Location& location) noexcept;
-    ASTCodeBlock(const Location& location, std::unique_ptr<ASTNode> node) noexcept;
+    ASTCodeBlock(const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements) noexcept;
     ~ASTCodeBlock() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, std::uint64_t indent) const noexcept final;
@@ -94,14 +82,14 @@ public:
     void execute(ScopeStorage& globals, ScopeStorage& locals) const final {
         (void)eval(globals, locals);
     }
-    virtual Ref eval(ScopeStorage& globals, ScopeStorage& locals) const = 0;
+    virtual ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const = 0;
 };
 
 template<ValueClass V>
 class ASTConstant final : public ASTExpression {
 public:
     const ValueRef value_;
-    ASTConstant(const ASTToken& token) : ASTExpression(token.location_), value_(Value::FromLiteral<V>(token.str_)) {}
+    ASTConstant(const Location& loc, std::string_view str) : ASTExpression(loc), value_(Value::FromLiteral<V>(str)) {}
     ~ASTConstant() noexcept final = default;
     void print(std::ostream& os, std::uint64_t indent) const noexcept final {
         os << std::string(indent, ' ') << "Constant(" << value_.repr() << ")" << std::endl;
@@ -116,12 +104,12 @@ public:
     const std::string name_;
     std::uint64_t index_;
     bool is_global_;
-    ASTIdentifier(const ASTToken& token) noexcept;
+    ASTIdentifier(const Location& loc, std::string name) noexcept;
     ~ASTIdentifier() noexcept final = default;
     void print(std::ostream& os, std::uint64_t indent) const noexcept final;
     void first_analyze(ScopeDefinition& scope) final;
     void second_analyze(ScopeDefinition& scope) final;
-    Ref eval(ScopeStorage& globals, ScopeStorage& locals) const noexcept final;
+    ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const noexcept final;
 };
 
 template<OperatorFunctor Op>
@@ -139,8 +127,8 @@ public:
         os << std::string(indent, ' ') << "UnaryOp(" << GetOperatorString<Op>() << ")" << std::endl;
         expr_->print(os, indent + 2);
     }
-    Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final {
-        Ref result = expr_->eval(globals, locals);
+    ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
+        ObjRef result = expr_->eval(globals, locals);
         return result.eval_operation<Op>();
     }
 };
@@ -164,9 +152,9 @@ public:
         left_->print(os, indent + 2);
         right_->print(os, indent + 2);
     }
-    Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final {
-        Ref result_left = left_->eval(globals, locals);
-        Ref result_right = right_->eval(globals, locals);
+    ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
+        ObjRef result_left = left_->eval(globals, locals);
+        ObjRef result_right = right_->eval(globals, locals);
         return result_left.eval_operation<Op>(result_right);
     }
 };
@@ -191,31 +179,19 @@ public:
         left_->print(os, indent + 2);
         right_->print(os, indent + 2);
     }
-    Ref eval(ScopeStorage& globals, ScopeStorage& locals) const final {
-        Ref result_left = left_->eval(globals, locals);
-        Ref result_right = right_->eval(globals, locals);
-        Ref result = result_left.eval_operation<Op>(result_right);
+    ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
+        ObjRef result_left = left_->eval(globals, locals);
+        ObjRef result_right = right_->eval(globals, locals);
+        ObjRef result = result_left.eval_operation<Op>(result_right);
         return result_left = result;
     }
 };
 
-class ASTFunctionCallArguments final : public ASTNode {
-public:
-    std::vector<std::unique_ptr<ASTExpression>> arguments_;
-    ASTFunctionCallArguments() noexcept;
-    ASTFunctionCallArguments(const Location& location, std::unique_ptr<ASTExpression> first_arg) noexcept;
-    ~ASTFunctionCallArguments() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final;
-    void print(std::ostream& os, uint64_t indent) const noexcept final;
-    ASTFunctionCallArguments& push_back(const Location& new_location, std::unique_ptr<ASTExpression> next_arg) noexcept;
-    Arguments eval_arguments(ScopeStorage& globals, ScopeStorage& locals) const;
-};
-
 class ASTFunctionCall final : public ASTExpression {
 public:
-    const std::unique_ptr<ASTExpression> function_;
-    const std::unique_ptr<ASTFunctionCallArguments> arguments_;
-    ASTFunctionCall(const Location& location, std::unique_ptr<ASTExpression> function, std::unique_ptr<ASTFunctionCallArguments> arguments = nullptr) noexcept;
+    const std::unique_ptr<ASTValueExpression> function_;
+    const std::vector<std::unique_ptr<ASTValueExpression>> arguments_;
+    ASTFunctionCall(const Location& location, std::unique_ptr<ASTValueExpression> function, std::vector<std::unique_ptr<ASTValueExpression>> arguments) noexcept;
     ~ASTFunctionCall() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
@@ -228,6 +204,8 @@ using ASTNegateOp           = ASTUnaryOp<OperatorFunctors::Negate>;
 using ASTMultiplyOp         = ASTBinaryOp<OperatorFunctors::Multiply>;
 using ASTDivideOp           = ASTBinaryOp<OperatorFunctors::Divide>;
 using ASTRemainderOp        = ASTBinaryOp<OperatorFunctors::Remainder>;
+using ASTIncrementOp        = ASTUnaryOp<OperatorFunctors::Increment>;
+using ASTDecrementOp        = ASTUnaryOp<OperatorFunctors::Decrement>;
 
 using ASTEqualOp            = ASTBinaryOp<OperatorFunctors::Equal>;
 using ASTNotEqualOp         = ASTBinaryOp<OperatorFunctors::NotEqual>;
@@ -253,6 +231,8 @@ using ASTSubtractAssignOp   = ASTBinaryOp<OperatorFunctors::SubtractAssign>;
 using ASTMultiplyAssignOp   = ASTBinaryOp<OperatorFunctors::MultiplyAssign>;
 using ASTDivideAssignOp     = ASTBinaryOp<OperatorFunctors::DivideAssign>;
 using ASTRemainderAssignOp  = ASTBinaryOp<OperatorFunctors::RemainderAssign>;
+using ASTLogicalAndAssignOp = ASTBinaryOp<OperatorFunctors::LogicalAndAssign>;
+using ASTLogicalOrAssignOp  = ASTBinaryOp<OperatorFunctors::LogicalOrAssign>;
 using ASTBitwiseAndAssignOp = ASTBinaryOp<OperatorFunctors::BitwiseAndAssign>;
 using ASTBitwiseOrAssignOp  = ASTBinaryOp<OperatorFunctors::BitwiseOrAssign>;
 using ASTBitwiseXorAssignOp = ASTBinaryOp<OperatorFunctors::BitwiseXorAssign>;
@@ -262,7 +242,7 @@ using ASTRightShiftAssignOp = ASTBinaryOp<OperatorFunctors::RightShiftAssign>;
 template<TypeClass T>
 class ASTPrimitiveType final : public ASTExpression {
 public:
-    ASTPrimitiveType(const ASTToken& token) noexcept : ASTExpression(token.location_) {}
+    ASTPrimitiveType(const Location& loc) noexcept : ASTExpression(loc) {}
     void print(std::ostream& os, uint64_t indent) const noexcept final {
         if constexpr (std::is_same_v<T, NullType>) {
             os << std::string(indent, ' ') << "PrimitiveType(Null)" << std::endl;
@@ -287,8 +267,8 @@ template<>
 class ASTPrimitiveType<FunctionType> final : public ASTExpression {
 public:
     const TypeRef value_;
-    ASTPrimitiveType(FunctionType* func) noexcept : ASTExpression({{0, 0}, {0, 0}}), value_(func) {}
-    ASTPrimitiveType(const ASTToken& token, FunctionType* func) noexcept : ASTExpression(token.location_), value_(func) {}
+    ASTPrimitiveType(FunctionType* func) noexcept : ASTExpression({0, {0, 0}, {0, 0}}), value_(func) {}
+    ASTPrimitiveType(const Location& loc, FunctionType* func) noexcept : ASTExpression(loc), value_(func) {}
     void print(std::ostream& os, uint64_t indent) const noexcept final {
         os << std::string(indent, ' ') << "PrimitiveType(Function)" << std::endl;
     }
@@ -303,8 +283,7 @@ public:
     const std::unique_ptr<ASTIdentifier> identifier_;
     const std::unique_ptr<ASTExpression> expr_;
     TypeRef inferred_type_;
-    ASTDeclaration(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> expr) noexcept;
-    ASTDeclaration(const Location& location, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> expr) noexcept;
+    ASTDeclaration(const Location& location, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> expr = nullptr) noexcept;
     ~ASTDeclaration() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
@@ -360,6 +339,16 @@ class ASTBreakStatement final : public ASTNode {
 public:
     ASTBreakStatement(const Location& location) noexcept;
     ~ASTBreakStatement() noexcept final = default;
+    void print(std::ostream& os, uint64_t indent) const noexcept final;
+    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
+};
+
+class ASTReturnStatement final : public ASTNode {
+public:
+    const std::unique_ptr<ASTExpression> expr_;
+    ASTReturnStatement(const Location& location, std::unique_ptr<ASTExpression> expr = nullptr) noexcept;
+    ~ASTReturnStatement() noexcept final = default;
+    std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
     void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
 };

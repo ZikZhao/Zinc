@@ -91,7 +91,7 @@ public:
 };
 
 class TypeOrValue;
-using Ref = Reference<TypeOrValue>;
+using ObjRef = Reference<TypeOrValue>;
 
 class Value;
 class NullValue;
@@ -121,11 +121,11 @@ concept TypeClass = std::derived_from<T, Type>;
 template<typename T>
 concept ValueClass = std::derived_from<T, Value>;
 
-using TypeRef = Ref; // Should always point to a Type
-using ValueRef = Ref; // Should always point to a Value
-using InterfaceTypeRef = Ref; // Should always point to an InterfaceType
-using ClassTypeRef = Ref; // Should always point to a ClassType
-using DictValueRef = Ref; // Should always point to a DictValue
+using TypeRef = ObjRef; // Should always point to a Type
+using ValueRef = ObjRef; // Should always point to a Value
+using InterfaceTypeRef = ObjRef; // Should always point to an InterfaceType
+using ClassTypeRef = ObjRef; // Should always point to a ClassType
+using DictValueRef = ObjRef; // Should always point to a DictValue
 
 using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
@@ -152,8 +152,8 @@ public:
     bool is_truthy() const;
     bool contains(const TypeOrValue& other) const;
     // Evaluations are not const because data structures may need to be modified
-    Ref eval_operation(std::string_view op);
-    Ref eval_operation(std::string_view op, TypeOrValue& other);
+    ObjRef eval_operation(std::string_view op);
+    ObjRef eval_operation(std::string_view op, TypeOrValue& other);
 };
 
 class Type : public TypeOrValue {

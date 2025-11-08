@@ -17,43 +17,95 @@
 #include <cassert>
 #include <array>
 #include <generator>
-
-#define CHECK(condition) \
-    do { \
-        if (not (condition)) FatalError(#condition); \
-    } while (false);
+#include <filesystem>
+#include "antlr4-runtime.h"
 
 using namespace std::literals::string_literals;
 using namespace std::literals::string_view_literals;
 
-constexpr void FatalError(std::string_view message) {
-    std::cout << message;
-    std::abort();
+struct Location {
+    std::size_t id;
+    struct {
+        std::size_t line;
+        std::size_t column;
+    } begin, end;
+};
+
+class SourceManager {
+public:
+    std::map<std::string, std::string> files_;
+    std::vector<std::string> file_order_;
+public:
+    SourceManager() = default;
+    auto operator [] (std::string_view filename) {
+        struct SourceFile {
+            std::string path;
+            const std::string& content;
+        };
+        std::ifstream file_stream(filename.data());
+        if (file_stream.fail()) {
+            throw std::runtime_error("Cannot open source file: "s + filename.data());
+        }
+        std::string absolute_path = std::filesystem::canonical(filename).string();
+        std::string content((std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>());
+        const std::string& file_content = (files_[absolute_path] = std::move(content));
+        file_order_.push_back(absolute_path);
+        return SourceFile{
+            .path = absolute_path,
+            .content = file_content
+        };
+    }
+    const std::string& operator [] (std::size_t index) const noexcept {
+        assert(index < file_order_.size());
+        return files_.at(file_order_.at(index));
+    }
+    std::size_t index(std::string filename) const noexcept {
+        for (std::size_t i = 0; i < file_order_.size(); ++i) {
+            if (file_order_[i] == filename) {
+                return i;
+            }
+        }
+        assert(false && "File not found in SourceManager");
+    }
+};
+
+template<std::size_t length>
+class FixedString {
+public:
+    const char str_[length];
+    constexpr FixedString(const char (&str)[length]) {
+        std::copy_n(str, length, str_);
+    }
+    constexpr std::string_view operator * () const {
+        return std::string_view(str_, length);
+    }
+};
+
+template<typename Derived, typename Base, typename Deleter>
+requires (not std::is_same_v<Deleter, std::default_delete<Base>> and std::has_virtual_destructor_v<Base>)
+constexpr std::unique_ptr<Derived, Deleter> StaticUniqueCast(std::unique_ptr<Base, Deleter>&& ptr) {
+    return std::unique_ptr<Derived, Deleter>(static_cast<Derived*>(ptr.release()), std::move(ptr.get_deleter()));
 }
 
-template<typename ValueType>
-using Map = std::unordered_map<std::string, ValueType>;
+template<typename Derived, typename Base>
+requires (std::has_virtual_destructor_v<Base>)
+constexpr std::unique_ptr<Derived> StaticUniqueCast(std::unique_ptr<Base, std::default_delete<Base>>&& ptr) {
+    return std::unique_ptr<Derived>(static_cast<Derived*>(ptr.release()));
+}
 
 namespace OperatorFunctors {
-    using Add = std::plus<>;
-    using Subtract = std::minus<>;
-    using Negate = std::negate<>;
-    using Multiply = std::multiplies<>;
-    using Divide = std::divides<>;
-    using Remainder = std::modulus<>;
-    using Equal = std::equal_to<>;
-    using NotEqual = std::not_equal_to<>;
-    using LessThan = std::less<>;
-    using LessEqual = std::less_equal<>;
-    using GreaterThan = std::greater<>;
-    using GreaterEqual = std::greater_equal<>;
-    using LogicalAnd = std::logical_and<>;
-    using LogicalOr = std::logical_or<>;
-    using LogicalNot = std::logical_not<>;
-    using BitwiseAnd = std::bit_and<>;
-    using BitwiseOr = std::bit_or<>;
-    using BitwiseXor = std::bit_xor<>;
-    using BitwiseNot = std::bit_not<>;
+    struct Increment {
+        template<typename T>
+        auto operator() (const T& value) const {
+            return value++;
+        }
+    };
+    struct Decrement {
+        template<typename T>
+        auto operator() (const T& value) const {
+            return value--;
+        }
+    };
     struct LeftShift {
         template<typename T>
         auto operator() (const T& left, const T& right) const {
@@ -75,85 +127,39 @@ namespace OperatorFunctors {
             return left = right;
         }
     };
+    using Add = std::plus<>;
+    using Subtract = std::minus<>;
+    using Negate = std::negate<>;
+    using Multiply = std::multiplies<>;
+    using Divide = std::divides<>;
+    using Remainder = std::modulus<>;
+    using Equal = std::equal_to<>;
+    using NotEqual = std::not_equal_to<>;
+    using LessThan = std::less<>;
+    using LessEqual = std::less_equal<>;
+    using GreaterThan = std::greater<>;
+    using GreaterEqual = std::greater_equal<>;
+    using LogicalAnd = std::logical_and<>;
+    using LogicalOr = std::logical_or<>;
+    using LogicalNot = std::logical_not<>;
+    using BitwiseAnd = std::bit_and<>;
+    using BitwiseOr = std::bit_or<>;
+    using BitwiseXor = std::bit_xor<>;
+    using BitwiseNot = std::bit_not<>;
     using Assign = OperateAndAssign<>;
     using AddAssign = OperateAndAssign<Add>;
     using SubtractAssign = OperateAndAssign<Subtract>;
     using MultiplyAssign = OperateAndAssign<Multiply>;
     using DivideAssign = OperateAndAssign<Divide>;
     using RemainderAssign = OperateAndAssign<Remainder>;
+    using LogicalAndAssign = OperateAndAssign<LogicalAnd>;
+    using LogicalOrAssign  = OperateAndAssign<LogicalOr>;
     using BitwiseAndAssign = OperateAndAssign<BitwiseAnd>;
     using BitwiseOrAssign  = OperateAndAssign<BitwiseOr>;
     using BitwiseXorAssign = OperateAndAssign<BitwiseXor>;
     using LeftShiftAssign  = OperateAndAssign<LeftShift>;
     using RightShiftAssign = OperateAndAssign<RightShift>;
 }
-
-struct Location {
-    struct {
-        uint64_t line;
-        uint64_t column;
-    } begin, end;
-};
-
-std::ostream& operator << (std::ostream& os, const Location& loc);
-
-template<uint64_t length>
-class FixedString {
-public:
-    const char str_[length];
-    constexpr FixedString(const char (&str)[length]) {
-        std::copy_n(str, length, str_);
-    }
-    constexpr std::string_view operator * () const {
-        return std::string_view(str_, length);
-    }
-};
-
-template<typename TargetClass = void>
-class Defer {
-private:
-    TargetClass& target_;
-    void (TargetClass::*func_)();
-public:
-    Defer(TargetClass& target, auto&& func)
-        : target_(target), func_(static_cast<void (TargetClass::*)()>(std::forward<decltype(func)>(func))) {}
-    ~Defer() {
-        (target_.*func_)();
-    }
-};
-
-template<typename TargetClass>
-class Defer<const TargetClass> {
-private:
-    const TargetClass& target_;
-    void (TargetClass::*func_)() const;
-public:
-    Defer(const TargetClass& target, auto&& func)
-        : target_(target), func_(static_cast<void (TargetClass::*)() const>(std::forward<decltype(func)>(func))) {}
-    ~Defer() {
-        (target_.*func_)();
-    }
-};
-
-template<>
-class Defer<> {
-private:
-    std::function<void()> func_;
-public:
-    Defer(auto&& func) : func_(std::forward<decltype(func)>(func)) {}
-    ~Defer() {
-        func_();
-    }
-};
-
-template<typename TargetClass, typename Func>
-Defer(TargetClass&, Func) -> Defer<TargetClass>;
-
-template<typename TargetClass, typename Func>
-Defer(const TargetClass&, Func) -> Defer<const TargetClass>;
-
-template<typename Func>
-Defer(Func&&) -> Defer<>;
 
 template<typename Functor>
 constexpr std::string_view GetOperatorString() {
@@ -172,6 +178,10 @@ constexpr std::string_view GetOperatorString() {
         return "/"sv;
     } else if constexpr (std::is_same_v<Functor, Remainder>) {
         return "%"sv;
+    } else if constexpr (std::is_same_v<Functor, Increment>) {
+        return "++"sv;
+    } else if constexpr (std::is_same_v<Functor, Decrement>) {
+        return "--"sv;
     } else if constexpr (std::is_same_v<Functor, Equal>) {
         return "=="sv;
     } else if constexpr (std::is_same_v<Functor, NotEqual>) {
@@ -214,6 +224,10 @@ constexpr std::string_view GetOperatorString() {
         return "/="sv;
     } else if constexpr (std::is_same_v<Functor, RemainderAssign>) {
         return "%="sv;
+    } else if constexpr (std::is_same_v<Functor, LogicalAndAssign>) {
+        return "&&="sv;
+    } else if constexpr (std::is_same_v<Functor, LogicalOrAssign>) {
+        return "||="sv;
     } else if constexpr (std::is_same_v<Functor, BitwiseAndAssign>) {
         return "&="sv;
     } else if constexpr (std::is_same_v<Functor, BitwiseOrAssign>) {
