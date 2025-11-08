@@ -81,16 +81,17 @@ public:
     }
 };
 
-template<typename Derived, typename Base, typename Deleter>
-requires (not std::is_same_v<Deleter, std::default_delete<Base>> and std::has_virtual_destructor_v<Base>)
-constexpr std::unique_ptr<Derived, Deleter> StaticUniqueCast(std::unique_ptr<Base, Deleter>&& ptr) {
-    return std::unique_ptr<Derived, Deleter>(static_cast<Derived*>(ptr.release()), std::move(ptr.get_deleter()));
-}
-
 template<typename Derived, typename Base>
 requires (std::has_virtual_destructor_v<Base>)
 constexpr std::unique_ptr<Derived> StaticUniqueCast(std::unique_ptr<Base, std::default_delete<Base>>&& ptr) {
+    assert(dynamic_cast<Derived*>(ptr.get()) != nullptr);
     return std::unique_ptr<Derived>(static_cast<Derived*>(ptr.release()));
+}
+
+template<typename Derived, typename Base, typename Deleter>
+requires (!std::is_same_v<Deleter, std::default_delete<Base>>)
+constexpr std::unique_ptr<Derived, Deleter> StaticUniqueCast(std::unique_ptr<Base, Deleter>&& ptr) {
+    return std::unique_ptr<Derived, Deleter>(static_cast<Derived*>(ptr.release()), std::move(ptr.get_deleter()));
 }
 
 namespace OperatorFunctors {

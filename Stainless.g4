@@ -5,13 +5,13 @@ options {
 }
 
 program
-    : statement* EOF
+    : statements_+=statement* EOF
     ;
 
 statement
     : code_block
     | expr_statement
-    | declaration
+    | declaration_statement
     | if_statement
     | for_statement
     | break_statement
@@ -20,15 +20,15 @@ statement
     ;
 
 code_block
-    : OP_LBRACE statement* OP_RBRACE
+    : OP_LBRACE statements_+=statement* OP_RBRACE
     ;
 
 expr_statement
-    : expr OP_SEMICOLON
+    : expr_=expr OP_SEMICOLON
     ;
 
-declaration
-    : type identifier (OP_ASSIGN expr)? OP_SEMICOLON
+declaration_statement
+    : type_=type identifier_=identifier (OP_ASSIGN value_=expr)? OP_SEMICOLON
     ;
 
 if_statement
@@ -37,7 +37,7 @@ if_statement
 
 for_statement
     : KW_FOR OP_LPAREN (
-          init_decl_=declaration
+          init_decl_=declaration_statement
         | init_expr_=expr_statement
         | OP_SEMICOLON
       )
@@ -55,7 +55,7 @@ continue_statement
     ;
 
 return_statement
-    : KW_RETURN expr? OP_SEMICOLON
+    : KW_RETURN expr_=expr? OP_SEMICOLON
     ;
 
 expr

@@ -78,7 +78,9 @@
             "sstream": "cpp",
             "stop_token": "cpp",
             "thread": "cpp",
-            "generator": "cpp"
+            "generator": "cpp",
+            "codecvt": "cpp",
+            "iomanip": "cpp"
         },
         "C_Cpp.default.compilerPath": "/usr/bin/g++",
         "C_Cpp.default.cppStandard": "c++23",
