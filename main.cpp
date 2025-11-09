@@ -1,4 +1,4 @@
-#include "pch.hpp"
+﻿#include "pch.hpp"
 #include "ast.hpp"
 #include "object.hpp"
 #include "StainlessLexer.h"
@@ -47,7 +47,7 @@ private:
     }
 public:
     ASTBuilder(const SourceManager& source_manager) noexcept : source_manager_(source_manager) {}
-    std::unique_ptr<ASTCodeBlock> transform_root(antlr4::tree::ParseTree* root) noexcept {
+    std::unique_ptr<ASTCodeBlock> operator () (antlr4::tree::ParseTree* root) noexcept {
         return StaticUniqueCast<ASTCodeBlock>(transform(root));
     }
     antlrcpp::Any visitProgram(StainlessParser::ProgramContext* context) noexcept final {
@@ -81,7 +81,7 @@ public:
         );
         return {};
     }
-    antlrcpp::Any visitIf_statement(StainlessParser::If_statementContext* context) final {
+    antlrcpp::Any visitIf_statement(StainlessParser::If_statementContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTIfStatement>(
             loc(context),
             StaticUniqueCast<ASTExpression>(transform(context->condition_)),
@@ -90,7 +90,7 @@ public:
         );
         return {};
     }
-    antlrcpp::Any visitFor_statement(StainlessParser::For_statementContext* context) final {
+    antlrcpp::Any visitFor_statement(StainlessParser::For_statementContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTForStatement>(
             loc(context),
             transform_group(context->init_decl_, context->init_expr_),
@@ -100,22 +100,22 @@ public:
         );
         return {};
     }
-    antlrcpp::Any visitBreak_statement(StainlessParser::Break_statementContext* context) final {
+    antlrcpp::Any visitBreak_statement(StainlessParser::Break_statementContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTBreakStatement>(loc(context));
         return {};
     }
-    antlrcpp::Any visitContinue_statement(StainlessParser::Continue_statementContext* context) final {
+    antlrcpp::Any visitContinue_statement(StainlessParser::Continue_statementContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTContinueStatement>(loc(context));
         return {};
     }
-    antlrcpp::Any visitReturn_statement(StainlessParser::Return_statementContext* context) final {
+    antlrcpp::Any visitReturn_statement(StainlessParser::Return_statementContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTReturnStatement>(
             loc(context),
             StaticUniqueCast<ASTExpression>(transform(context->expr_))
         );
         return {};
     }
-    antlrcpp::Any visitAssignExpr(StainlessParser::AssignExprContext* context) final {
+    antlrcpp::Any visitAssignExpr(StainlessParser::AssignExprContext* context) noexcept final {
         std::unique_ptr<ASTExpression> left = StaticUniqueCast<ASTExpression>(transform(context->left_));
         std::unique_ptr<ASTExpression> right = StaticUniqueCast<ASTExpression>(transform(context->right_));
         switch (context->op_->getType()) {
@@ -164,7 +164,7 @@ public:
         }
         return {};
     }
-    antlrcpp::Any visitEqualityExpr(StainlessParser::EqualityExprContext* context) final {
+    antlrcpp::Any visitEqualityExpr(StainlessParser::EqualityExprContext* context) noexcept final {
         std::unique_ptr<ASTExpression> left = StaticUniqueCast<ASTExpression>(transform(context->left_));
         std::unique_ptr<ASTExpression> right = StaticUniqueCast<ASTExpression>(transform(context->right_));
         switch (context->op_->getType()) {
@@ -180,7 +180,7 @@ public:
         }
         return {};
     }
-    antlrcpp::Any visitRelationalExpr(StainlessParser::RelationalExprContext* context) final {
+    antlrcpp::Any visitRelationalExpr(StainlessParser::RelationalExprContext* context) noexcept final {
         std::unique_ptr<ASTExpression> left = StaticUniqueCast<ASTExpression>(transform(context->left_));
         std::unique_ptr<ASTExpression> right = StaticUniqueCast<ASTExpression>(transform(context->right_));
         switch (context->op_->getType()) {
@@ -202,7 +202,7 @@ public:
         }
         return {};
     }
-    antlrcpp::Any visitShiftExpr(StainlessParser::ShiftExprContext* context) final {
+    antlrcpp::Any visitShiftExpr(StainlessParser::ShiftExprContext* context) noexcept final {
         std::unique_ptr<ASTExpression> left = StaticUniqueCast<ASTExpression>(transform(context->left_));
         std::unique_ptr<ASTExpression> right = StaticUniqueCast<ASTExpression>(transform(context->right_));
         switch (context->op_->getType()) {
@@ -218,7 +218,7 @@ public:
         }
         return {};
     }
-    antlrcpp::Any visitAdditiveExpr(StainlessParser::AdditiveExprContext* context) final {
+    antlrcpp::Any visitAdditiveExpr(StainlessParser::AdditiveExprContext* context) noexcept final {
         std::unique_ptr<ASTExpression> left = StaticUniqueCast<ASTExpression>(transform(context->left_));
         std::unique_ptr<ASTExpression> right = StaticUniqueCast<ASTExpression>(transform(context->right_));
         switch (context->op_->getType()) {
@@ -234,7 +234,7 @@ public:
         }
         return {};
     }
-    antlrcpp::Any visitMultiplicativeExpr(StainlessParser::MultiplicativeExprContext* context) final {
+    antlrcpp::Any visitMultiplicativeExpr(StainlessParser::MultiplicativeExprContext* context) noexcept final {
         std::unique_ptr<ASTExpression> left = StaticUniqueCast<ASTExpression>(transform(context->left_));
         std::unique_ptr<ASTExpression> right = StaticUniqueCast<ASTExpression>(transform(context->right_));
         switch (context->op_->getType()) {
@@ -253,7 +253,7 @@ public:
         }
         return {};
     }
-    antlrcpp::Any visitUnaryExpr(StainlessParser::UnaryExprContext* context) final {
+    antlrcpp::Any visitUnaryExpr(StainlessParser::UnaryExprContext* context) noexcept final {
         std::unique_ptr<ASTExpression> expr = StaticUniqueCast<ASTExpression>(transform(context->expr_));
         switch (context->op_->getType()) {
             case StainlessParser::OP_INC:
@@ -277,11 +277,11 @@ public:
         }
         return {};
     }
-    antlrcpp::Any visitConstExpr(StainlessParser::ConstExprContext* context) final {
+    antlrcpp::Any visitConstExpr(StainlessParser::ConstExprContext* context) noexcept final {
         last_visited_ = transform(context->constant_);
         return {};
     }
-    antlrcpp::Any visitCallExpr(StainlessParser::CallExprContext* context) final {
+    antlrcpp::Any visitCallExpr(StainlessParser::CallExprContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTFunctionCall>(
             loc(context),
             StaticUniqueCast<ASTValueExpression>(transform(context->func_)),
@@ -289,19 +289,19 @@ public:
         );
         return {};
     }
-    antlrcpp::Any visitParenExpr(StainlessParser::ParenExprContext* context) final {
+    antlrcpp::Any visitParenExpr(StainlessParser::ParenExprContext* context) noexcept final {
         last_visited_ = transform(context->inner_expr_);
         return {};
     }
-    antlrcpp::Any visitIdentifierExpr(StainlessParser::IdentifierExprContext* context) final {
+    antlrcpp::Any visitIdentifierExpr(StainlessParser::IdentifierExprContext* context) noexcept final {
         last_visited_ = transform(context->identifier_);
         return {};
     }
-    antlrcpp::Any visitIdentifier(StainlessParser::IdentifierContext* context) final {
+    antlrcpp::Any visitIdentifier(StainlessParser::IdentifierContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTIdentifier>(loc(context), context->name_->getText());
         return {};
     }
-    antlrcpp::Any visitConstant(StainlessParser::ConstantContext* context) final {
+    antlrcpp::Any visitConstant(StainlessParser::ConstantContext* context) noexcept final {
         switch (context->value_->getType()) {
             case StainlessParser::T_INT:
                 last_visited_ = std::make_unique<ASTConstant<IntegerValue>>(
@@ -329,7 +329,7 @@ public:
         }
         return {};
     }
-    antlrcpp::Any visitPrimitiveType(StainlessParser::PrimitiveTypeContext* context) final {
+    antlrcpp::Any visitPrimitiveType(StainlessParser::PrimitiveTypeContext* context) noexcept final {
         switch (context->primitive_->getType()) {
             case StainlessParser::KW_NULL:
                 last_visited_ = std::make_unique<ASTPrimitiveType<NullType>>(loc(context));
@@ -352,11 +352,11 @@ public:
         }
         return {};
     }
-    antlrcpp::Any visitParenType(StainlessParser::ParenTypeContext* context) final {
+    antlrcpp::Any visitParenType(StainlessParser::ParenTypeContext* context) noexcept final {
         last_visited_ = transform(context->inner_type_);
         return {};
     }
-    antlrcpp::Any visitIdentifierType(StainlessParser::IdentifierTypeContext* context) final {
+    antlrcpp::Any visitIdentifierType(StainlessParser::IdentifierTypeContext* context) noexcept final {
         last_visited_ = transform(context->identifier_);
         return {};
     }
@@ -399,7 +399,8 @@ int main(int argc, char* argv[]) {
 
     SourceManager source_manager;
 
-    std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
+    //std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
+	std::string_view input_path = "test.sl";
     auto file = source_manager[input_path];
     antlr4::ANTLRInputStream stream(file.content);
     stream.name = file.path;
@@ -411,7 +412,7 @@ int main(int argc, char* argv[]) {
     std::cout << tree->toStringTree(&parser, true) << std::endl;
 
     ASTBuilder builder(source_manager);
-    std::unique_ptr<ASTCodeBlock> root = builder.transform_root(tree);
+    std::unique_ptr<ASTCodeBlock> root = builder(tree);
 
     ScopeDefinition builtins = Builtins::GetBuiltinsScope();
     root->first_analyze(builtins);

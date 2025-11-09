@@ -78,9 +78,7 @@
             "sstream": "cpp",
             "stop_token": "cpp",
             "thread": "cpp",
-            "generator": "cpp",
-            "codecvt": "cpp",
-            "iomanip": "cpp"
+            "generator": "cpp"
         },
         "C_Cpp.default.compilerPath": "/usr/bin/g++",
         "C_Cpp.default.cppStandard": "c++23",
@@ -189,7 +187,16 @@
                 "args": ["${workspaceFolder}/test.sl"],
                 "stopAtEntry": false,
                 "cwd": "${workspaceFolder}",
-                "environment": [],
+                "environment": [
+                    {
+                        "name": "UBSAN_OPTIONS",
+                        "value": "halt_on_error=1:print_stacktrace=1:abort_on_error=1"
+                    },
+                    {
+                        "name": "ASAN_OPTIONS",
+                        "value": "halt_on_error=1:detect_leaks=1:abort_on_error=1"
+                    }
+                ],
                 "externalConsole": false,
                 "MIMode": "gdb",
                 "setupCommands": [
@@ -251,6 +258,31 @@
                     {
                         "description": "Skip std::__detail internals",
                         "text": "skip -rfu ^std::__detail::.*",
+                        "ignoreFailures": true
+                    },
+                    {
+                        "description": "Skip all /usr/include/c++ files",
+                        "text": "skip -rfi ^/usr/include/c\\+\\+/.*",
+                        "ignoreFailures": true
+                    },
+                    {
+                        "description": "Skip all /usr/lib files",
+                        "text": "skip -rfi ^/usr/lib/.*",
+                        "ignoreFailures": true
+                    },
+                    {
+                        "description": "Skip std namespace internals",
+                        "text": "skip -rfu ^std::_.*",
+                        "ignoreFailures": true
+                    },
+                    {
+                        "description": "Skip operator new/delete",
+                        "text": "skip -rfu ^operator (new|delete)",
+                        "ignoreFailures": true
+                    },
+                    {
+                        "description": "Set step-mode to skip unavailable sources",
+                        "text": "set step-mode off",
                         "ignoreFailures": true
                     }
                 ],

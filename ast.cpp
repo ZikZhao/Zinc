@@ -192,7 +192,11 @@ ValueRef ASTFunctionCall::eval(ScopeStorage& globals, ScopeStorage& locals) cons
 ASTDeclaration::ASTDeclaration(const Location& location, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> expr) noexcept
     : ASTNode(location), type_(std::move(type)), identifier_(std::move(identifier)), expr_(std::move(expr)), inferred_type_() {} // TODO
 std::generator<ASTNode*> ASTDeclaration::get_children() const noexcept {
-    co_yield expr_.get();
+    co_yield type_.get();
+    co_yield identifier_.get();
+    if (expr_) {
+        co_yield expr_.get();
+    }
 }
 void ASTDeclaration::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent, ' ') << "Declaration"s << std::endl;
