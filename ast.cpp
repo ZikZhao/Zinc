@@ -3,17 +3,55 @@
 #include "object.hpp"
 #include "exception.hpp"
 
-ScopeDefinition::ScopeDefinition(ScopeDefinition& parent) noexcept : parent_(&parent) {}
-ScopeDefinition::ScopeDefinition(ScopeDefinition& enclosing, int) noexcept : enclosing_(&enclosing) {}
-ScopeDefinition::ScopeDefinition(const std::vector<std::pair<std::string, TypeRef>>& builtins) noexcept {
+void TypeSystem::add(const ASTTypeExpression* expr) {
+    types_.push_back(expr);
+}
+void TypeSystem::resolve() {
+    std::map<const ASTTypeExpression*, std::set<const ASTTypeExpression*>> dependency_map;
+    std::multimap<const ASTTypeExpression*, const ASTTypeExpression*> reverse_dependency_map;
+    for (const auto& type_expr : types_) {
+        for (const auto& dependency : type_expr->get_dependencies()) {
+            dependency_map[type_expr].emplace(dependency);
+        }
+    }
+    while (!types_.empty()) {
+        size_t prev_size = dependency_map.size();
+        for (auto it = dependency_map.begin(); it != dependency_map.end(); ) {
+            const auto& [type, dependents] = *it;
+            if (dependents.empty()) {
+                type_map_[type] = type->eval(*this);
+                ++it;
+                dependency_map.erase(it);
+                auto range = reverse_dependency_map.equal_range(type);
+                for (auto rev_it = range.first; rev_it != range.second; ++rev_it) {
+                    dependency_map[rev_it->second].erase(type);
+                }
+                reverse_dependency_map.erase(range.first, range.second);
+            }
+            else {
+                ++it;
+            }
+        }
+        if (dependency_map.size() == prev_size) {
+            throw std::runtime_error("Cyclic type dependencies detected");
+        }
+    }
+}
+TypeRef TypeSystem::eval(const ASTTypeExpression* expr) const noexcept {
+    return type_map_.at(expr);
+}
+
+Scope::Scope(Scope& parent) noexcept : parent_(&parent) {}
+Scope::Scope(Scope& enclosing, int) noexcept : enclosing_(&enclosing) {}
+Scope::Scope(const std::vector<std::pair<std::string, TypeRef>>& builtins) noexcept {
     for (const auto& [name, type] : builtins) {
         symbols_.emplace_back(name, nullptr);
     }
 }
-std::uint64_t ScopeDefinition::get_length() const noexcept {
+std::uint64_t Scope::get_length() const noexcept {
     return symbols_.size();
 }
-void ScopeDefinition::add_symbol(std::string name, const ASTExpression* symbol) {
+void Scope::add(std::string name, const ASTExpression* symbol) {
     for (const auto& [key, _] : symbols_) {
         if (key == name) {
             throw std::runtime_error("Symbol already defined in this scope: "s + name);
@@ -21,11 +59,11 @@ void ScopeDefinition::add_symbol(std::string name, const ASTExpression* symbol) 
     }
     symbols_.emplace_back(std::move(name), symbol);
 }
-std::pair<std::uint64_t, bool> ScopeDefinition::get_var_offset(std::string_view name) const {
+std::pair<std::uint64_t, bool> Scope::get_offset(std::string_view name) const {
     for (auto it = symbols_.begin(); it != symbols_.end(); ++it) {
         const auto& [key, symbol] = *it;
         if (key == name) {
-            const std::uint64_t offset = get_offset();
+            const std::uint64_t offset = get_parent_offset();
             return {
                 static_cast<std::uint64_t>(std::distance(symbols_.begin(), it)) + offset,
                 is_global()
@@ -35,22 +73,21 @@ std::pair<std::uint64_t, bool> ScopeDefinition::get_var_offset(std::string_view 
     if (not parent_) {
         throw VariableException(name);
     }
-    return parent_->get_var_offset(name);
+    return parent_->get_offset(name);
 }
-void ScopeDefinition::update_parent_shadow() const noexcept {
+void Scope::update_parent_shadow() const noexcept {
     assert(parent_ != nullptr);
     parent_->shadow_count_ = std::max(parent_->shadow_count_, symbols_.size() + shadow_count_);
 }
-std::uint64_t ScopeDefinition::get_offset() const noexcept {
+std::uint64_t Scope::get_parent_offset() const noexcept {
     if (parent_) {
-        // Global scope does not count towards stack frame length
-        return parent_->get_offset() + parent_->symbols_.size();
+        return parent_->get_parent_offset() + parent_->symbols_.size();
     }
     else {
         return 0;
     }
 }
-bool ScopeDefinition::is_global() const noexcept {
+bool Scope::is_global() const noexcept {
     if (enclosing_) {
         return false;
     } else if (not parent_) {
@@ -60,16 +97,16 @@ bool ScopeDefinition::is_global() const noexcept {
     }
 }
 
-ValueRef ScopeStorage::operator [] (std::uint64_t index) noexcept {
+ValueRef RuntimeStack::operator [] (std::uint64_t index) noexcept {
     assert(index < symbols_.size());
     return symbols_[index];
 }
-void ScopeStorage::push(const ScopeDefinition& scope) noexcept {
+void RuntimeStack::enter(const Scope& scope) noexcept {
     for (std::uint64_t i = 0; i < scope.get_length(); ++i) {
         symbols_.emplace_back(nullptr);
     }
 }
-void ScopeStorage::pop(const ScopeDefinition& scope) noexcept {
+void RuntimeStack::exit(const Scope& scope) noexcept {
     for (std::uint64_t i = 0; i < scope.get_length(); ++i) {
         symbols_.pop_back();
     }
@@ -79,23 +116,23 @@ ASTNode::ASTNode(const Location& loc) noexcept : location_(loc) {}
 std::generator<ASTNode*> ASTNode::get_children() const noexcept {
     co_return;
 }
-void ASTNode::first_analyze(ScopeDefinition& scope) {
+void ASTNode::first_analyze(TypeSystem& ts) {
     for (const auto& child : get_children()) {
         if (child == nullptr) {
             continue;
         }
-        child->first_analyze(scope);
+        child->first_analyze(ts);
     }
 }
-void ASTNode::second_analyze(ScopeDefinition& scope) {
+void ASTNode::second_analyze(TypeSystem& ts, Scope& scope) {
     for (const auto& child : get_children()) {
         if (child == nullptr) {
             continue;
         }
-        child->second_analyze(scope);
+        child->second_analyze(ts, scope);
     }
 }
-void ASTNode::execute(ScopeStorage& globals, ScopeStorage& locals) const {}
+void ASTNode::execute(RuntimeStack& globals, RuntimeStack& locals) const {}
 
 ASTCodeBlock::ASTCodeBlock(const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements) noexcept
     : ASTNode(loc), statements_(std::move(statements)) {}
@@ -110,24 +147,18 @@ void ASTCodeBlock::print(std::ostream& os, uint64_t indent) const noexcept {
         stmt->print(os, indent + 2);
     }
 }
-void ASTCodeBlock::first_analyze(ScopeDefinition& scope) {
-    local_scope_ = std::make_unique<ScopeDefinition>(scope);
+void ASTCodeBlock::second_analyze(TypeSystem& ts, Scope& scope) {
+    local_scope_ = std::make_unique<Scope>(scope);
     for (auto& stmt : statements_) {
-        stmt->first_analyze(*local_scope_);
-    }
-    local_scope_->update_parent_shadow();
-}
-void ASTCodeBlock::second_analyze(ScopeDefinition& scope) {
-    for (auto& stmt : statements_) {
-        stmt->second_analyze(*local_scope_);
+        stmt->second_analyze(ts, *local_scope_);
     }
 }
-void ASTCodeBlock::execute(ScopeStorage& globals, ScopeStorage& locals) const {
-    locals.push(*local_scope_);
+void ASTCodeBlock::execute(RuntimeStack& globals, RuntimeStack& locals) const {
+    locals.enter(*local_scope_);
     for (const auto& stmt : statements_) {
         stmt->execute(globals, locals);
     }
-    locals.pop(*local_scope_);
+    locals.exit(*local_scope_);
 }
 ASTCodeBlock& ASTCodeBlock::push(const Location& new_location, std::unique_ptr<ASTNode> node) noexcept {
     statements_.push_back(std::move(node));
@@ -140,17 +171,9 @@ ASTIdentifier::ASTIdentifier(const Location& loc, std::string name) noexcept
 void ASTIdentifier::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent, ' ') << "Identifier("s + name_ + ")"s << std::endl;
 }
-void ASTIdentifier::first_analyze(ScopeDefinition& scope) {
+void ASTIdentifier::second_analyze(TypeSystem& ts, Scope& scope) {
     try {
-        (void)scope.get_var_offset(name_);
-    } catch (VariableException& e) {
-        e.location_ = location_;
-        throw;
-    }
-}
-void ASTIdentifier::second_analyze(ScopeDefinition& scope) {
-    try {
-        auto [index, is_global] = scope.get_var_offset(name_);
+        auto [index, is_global] = scope.get_offset(name_);
         this->index_ = index;
         this->is_global_ = is_global;
     } catch (TypeException& e) {
@@ -161,7 +184,7 @@ void ASTIdentifier::second_analyze(ScopeDefinition& scope) {
         throw;
     }
 }
-ValueRef ASTIdentifier::eval(ScopeStorage& globals, ScopeStorage& locals) const noexcept {
+ValueRef ASTIdentifier::eval(RuntimeStack& globals, RuntimeStack& locals) const noexcept {
     return is_global_ ? globals[index_] : locals[index_];
 }
 
@@ -180,7 +203,7 @@ void ASTFunctionCall::print(std::ostream& os, uint64_t indent) const noexcept {
         arg->print(os, indent + 2);
     }
 }
-ValueRef ASTFunctionCall::eval(ScopeStorage& globals, ScopeStorage& locals) const {
+ValueRef ASTFunctionCall::eval(RuntimeStack& globals, RuntimeStack& locals) const {
     ValueRef result = function_->eval(globals, locals);
     std::vector<ValueRef> arguments_ref = arguments_
         | std::views::transform([&](const auto& arg) { return arg->eval(globals, locals); })
@@ -189,8 +212,24 @@ ValueRef ASTFunctionCall::eval(ScopeStorage& globals, ScopeStorage& locals) cons
     return static_cast<FunctionValue&>(*result)(arguments_ref);
 }
 
-ASTDeclaration::ASTDeclaration(const Location& location, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> expr) noexcept
-    : ASTNode(location), type_(std::move(type)), identifier_(std::move(identifier)), expr_(std::move(expr)), inferred_type_() {} // TODO
+ASTRecordType::ASTRecordType(const Location& location, std::vector<std::unique_ptr<ASTDeclaration>> fields) noexcept
+    : ASTExpression(location), fields_(std::move(fields)) {}
+void ASTRecordType::print(std::ostream& os, uint64_t indent) const noexcept {
+    os << std::string(indent, ' ') << "RecordType"s << std::endl;
+    for (const auto& declaration : fields_) {
+        declaration->print(os, indent + 4);
+    }
+}
+TypeRef ASTRecordType::eval(const TypeSystem& type_map) const noexcept {
+    std::map<std::string, TypeRef> field_types;
+    for (const auto& field : fields_) {
+        field_types.emplace(field->identifier_->name_, field->type_->eval(type_map));
+    }
+    return new RecordType(field_types);
+}
+
+ASTDeclaration::ASTDeclaration(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTExpression> expr) noexcept
+    : ASTNode(location), identifier_(std::move(identifier)), type_(std::move(type)), expr_(std::move(expr)), inferred_type_() {} // TODO
 std::generator<ASTNode*> ASTDeclaration::get_children() const noexcept {
     co_yield type_.get();
     co_yield identifier_.get();
@@ -203,11 +242,11 @@ void ASTDeclaration::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent + 2, ' ') << "Identifier: " << identifier_ << std::endl;
     expr_->print(os, indent + 2);
 }
-void ASTDeclaration::first_analyze(ScopeDefinition& scope) {
-    scope.add_symbol(identifier_->name_, expr_.get());
-    expr_->first_analyze(scope);
+void ASTDeclaration::second_analyze(TypeSystem& ts, Scope& scope) {
+    scope.add(identifier_->name_, type_.get());
+    identifier_->second_analyze(ts, scope);
 }
-void ASTDeclaration::execute(ScopeStorage& globals, ScopeStorage& locals) const {
+void ASTDeclaration::execute(RuntimeStack& globals, RuntimeStack& locals) const {
     ValueRef value = expr_->eval(globals, locals);
     identifier_->eval(globals, locals) = value;
 }
@@ -219,8 +258,8 @@ void ASTTypeAlias::print(std::ostream& os, uint64_t indent) const noexcept {
     identifier_->print(os, indent + 2);
     type_->print(os, indent + 2);
 }
-void ASTTypeAlias::first_analyze(ScopeDefinition& scope) {
-    scope.add_symbol(identifier_->name_, type_.get());
+void ASTTypeAlias::first_analyze(TypeSystem& ts) {
+    ts.add(type_.get());
 }
 
 ASTIfStatement::ASTIfStatement(const Location& location, std::unique_ptr<ASTExpression> condition, std::unique_ptr<ASTCodeBlock> if_block, std::unique_ptr<ASTCodeBlock> else_block) noexcept
@@ -240,7 +279,7 @@ void ASTIfStatement::print(std::ostream& os, uint64_t indent) const noexcept {
         else_block_->print(os, indent + 2);
     }
 }
-void ASTIfStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
+void ASTIfStatement::execute(RuntimeStack& globals, RuntimeStack& locals) const {
     if (condition_->eval(globals, locals).is_truthy()) {
         if_block_->execute(globals, locals);
     } else if (else_block_) {
@@ -283,7 +322,7 @@ void ASTForStatement::print(std::ostream& os, uint64_t indent) const noexcept {
     }
     body_->print(os, indent + 2);
 }
-void ASTForStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
+void ASTForStatement::execute(RuntimeStack& globals, RuntimeStack& locals) const {
     if (initializer_) {
         initializer_->execute(globals, locals);
     }
@@ -306,7 +345,7 @@ ASTContinueStatement::ASTContinueStatement(const Location& location) noexcept
 void ASTContinueStatement::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent, ' ') << "ContinueStatement"s << std::endl;
 }
-void ASTContinueStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
+void ASTContinueStatement::execute(RuntimeStack& globals, RuntimeStack& locals) const {
     throw ContinueException();
 }
 
@@ -315,7 +354,7 @@ ASTBreakStatement::ASTBreakStatement(const Location& location) noexcept
 void ASTBreakStatement::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent, ' ') << "BreakStatement"s << std::endl;
 }
-void ASTBreakStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
+void ASTBreakStatement::execute(RuntimeStack& globals, RuntimeStack& locals) const {
     throw BreakException();
 }
 
@@ -334,7 +373,7 @@ void ASTReturnStatement::print(std::ostream& os, uint64_t indent) const noexcept
         os << std::string(indent + 2, ' ') << "No return value"s << std::endl;
     }
 }
-void ASTReturnStatement::execute(ScopeStorage& globals, ScopeStorage& locals) const {
+void ASTReturnStatement::execute(RuntimeStack& globals, RuntimeStack& locals) const {
     ValueRef return_value = expr_ ? expr_->eval(globals, locals) : nullptr;
     throw ReturnException(return_value);
 }
@@ -372,8 +411,8 @@ ASTFunctionSignature& ASTFunctionSignature::set_return_type(const Location& new_
     location_ = new_location;
     return *this;
 }
-ScopeStorage ASTFunctionSignature::collect_arguments(const Arguments &raw) const {
-    ScopeStorage stack;
+RuntimeStack ASTFunctionSignature::collect_arguments(const Arguments &raw) const {
+    RuntimeStack stack;
     auto param_it = parameters_.begin();
     auto arg_it = raw.begin();
     // TODO: Collect regular parameters

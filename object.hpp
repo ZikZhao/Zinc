@@ -2,7 +2,7 @@
 #include "pch.hpp"
 #include "exception.hpp"
 
-class ScopeDefinition;
+class Scope;
 
 enum class KIND : std::uint16_t {
     KIND_NO_RIGHT_OPERAND,
@@ -13,15 +13,13 @@ enum class KIND : std::uint16_t {
     KIND_STRING,
     KIND_BOOLEAN,
     KIND_FUNCTION,
+    KIND_LIST,
+    KIND_RECORD,
     KIND_INTERFACE,
-    KIND_STRUCT,
     KIND_CLASS,
     KIND_OBJECT,
     KIND_INTERSECTION,
     KIND_UNION,
-    KIND_LIST,
-    KIND_DICT,
-    KIND_SET,
     KIND_TYPE_FLAG = 1 << (std::numeric_limits<std::underlying_type_t<KIND>>::digits - 1),
 };
 
@@ -252,11 +250,18 @@ using StringType = PrimitiveType<KIND::KIND_STRING>;
 using BooleanType = PrimitiveType<KIND::KIND_BOOLEAN>;
 using FunctionType = PrimitiveType<KIND::KIND_FUNCTION>;
 
-class StructType: public Type {
+class ListType final : public Type {
 public:
-    std::string name;
-    const ScopeDefinition* properties;
-    StructType(std::string_view name, const ScopeDefinition* properties);
+    TypeRef element_type_;
+    ListType(TypeRef element_type);
+    std::string repr() const final;
+    bool contains(const Type& other) const final;
+};
+
+class RecordType: public Type {
+public:
+    const std::map<std::string, TypeRef> fields_;
+    RecordType(std::map<std::string, TypeRef> fields);
     std::string repr() const final;
     bool contains(const Type& other) const final;
 };
@@ -266,18 +271,10 @@ public:
     const std::string_view name;
     const std::vector<InterfaceTypeRef>& interfaces;
     const ClassTypeRef extends;
-    const ScopeDefinition* properties;
-    ClassType(std::string_view name, const std::vector<InterfaceTypeRef>& interfaces, const ClassTypeRef extends, const ScopeDefinition* properties);
+    const Scope* properties;
+    ClassType(std::string_view name, const std::vector<InterfaceTypeRef>& interfaces, const ClassTypeRef extends, const Scope* properties);
     std::string repr() const override;
     bool contains(const Type& other) const override;
-};
-
-class ListType final : public ClassType {
-public:
-    TypeRef element_type_;
-    ListType(TypeRef element_type);
-    std::string repr() const final;
-    bool contains(const Type& other) const final;
 };
 
 class IntersectionType final : public Type {

@@ -75,8 +75,8 @@ public:
     antlrcpp::Any visitDeclaration_statement(StainlessParser::Declaration_statementContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTDeclaration>(
             loc(context),
-            StaticUniqueCast<ASTTypeExpression>(transform(context->type_)),
             StaticUniqueCast<ASTIdentifier>(transform(context->identifier_)),
+            StaticUniqueCast<ASTTypeExpression>(transform(context->type_)),
             StaticUniqueCast<ASTValueExpression>(transform(context->value_))
         );
         return {};
@@ -112,6 +112,14 @@ public:
         last_visited_ = std::make_unique<ASTReturnStatement>(
             loc(context),
             StaticUniqueCast<ASTExpression>(transform(context->expr_))
+        );
+        return {};
+    }
+    antlrcpp::Any visitType_alias_declaration(StainlessParser::Type_alias_declarationContext* context) noexcept final {
+        last_visited_ = std::make_unique<ASTTypeAlias>(
+            loc(context),
+            StaticUniqueCast<ASTIdentifier>(transform(context->identifier_)),
+            StaticUniqueCast<ASTTypeExpression>(transform(context->type_))
         );
         return {};
     }
@@ -360,6 +368,22 @@ public:
         last_visited_ = transform(context->identifier_);
         return {};
     }
+    antlrcpp::Any visitRecordType(StainlessParser::RecordTypeContext* context) noexcept final {
+        last_visited_ = std::make_unique<ASTRecordType>(
+            loc(context),
+            transform_list<ASTDeclaration>(context->fields_)
+        );
+        return {};
+    }
+    antlrcpp::Any visitRecord_field(StainlessParser::Record_fieldContext* context) noexcept final {
+        last_visited_ = std::make_unique<ASTDeclaration>(
+            loc(context),
+            StaticUniqueCast<ASTIdentifier>(transform(context->identifier_)),
+            StaticUniqueCast<ASTTypeExpression>(transform(context->type_)),
+            nullptr
+        );
+        return {};
+    }
 };
 
 namespace Builtins {
@@ -383,12 +407,12 @@ namespace Builtins {
     const std::vector<BuiltinFunction*> AllBuiltins = {
         &Print,
     };
-    ScopeDefinition GetBuiltinsScope() {
-        return ScopeDefinition(AllBuiltins | std::views::transform([](BuiltinFunction* builtin) {
+    Scope GetBuiltinsScope() {
+        return Scope(AllBuiltins | std::views::transform([](BuiltinFunction* builtin) {
             return std::pair(std::string(builtin->name), builtin->type);
         }) | std::ranges::to<std::vector<std::pair<std::string, TypeRef>>>());
     }
-    ScopeStorage GetBuiltinsScopeStorage() {
+    RuntimeStack GetBuiltinsStack() {
         return AllBuiltins | std::views::transform([](BuiltinFunction* builtin) {
             return ValueRef(new FunctionValue(builtin->func, builtin->type));
         }) | std::ranges::to<std::vector<ValueRef>>();
@@ -399,8 +423,7 @@ int main(int argc, char* argv[]) {
 
     SourceManager source_manager;
 
-    //std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
-	std::string_view input_path = "test.sl";
+    std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
     auto file = source_manager[input_path];
     antlr4::ANTLRInputStream stream(file.content);
     stream.name = file.path;
@@ -414,9 +437,10 @@ int main(int argc, char* argv[]) {
     ASTBuilder builder(source_manager);
     std::unique_ptr<ASTCodeBlock> root = builder(tree);
 
-    ScopeDefinition builtins = Builtins::GetBuiltinsScope();
-    root->first_analyze(builtins);
-    root->second_analyze(builtins);
-    ScopeStorage globals = Builtins::GetBuiltinsScopeStorage();
+    Scope builtins = Builtins::GetBuiltinsScope();
+    TypeSystem ts;
+    root->first_analyze(ts);
+    root->second_analyze(ts, builtins);
+    RuntimeStack globals = Builtins::GetBuiltinsStack();
     root->execute(globals, globals);
 }

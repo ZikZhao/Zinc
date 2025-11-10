@@ -7,8 +7,8 @@ concept OperatorFunctor = requires { GetOperatorString<Op>(); };
 
 class ASTNode;
 class ASTExpression;
-using ASTTypeExpression = ASTExpression;
 using ASTValueExpression = ASTExpression;
+using ASTTypeExpression = ASTExpression;
 template<ValueClass T> class ASTConstant;
 class ASTIdentifier;
 template<OperatorFunctor Op> class ASTUnaryOp;
@@ -16,38 +16,57 @@ template<OperatorFunctor Op> class ASTBinaryOp;
 class ASTDeclaration;
 class ASTIfStatement;
 
-class ScopeDefinition {
+class TypeSystem {
+public:
+    using TypeMap = std::map<const ASTTypeExpression*, TypeRef>;
+    struct CompareBySecond {
+        constexpr bool operator () (const auto& left, const auto& right) const {
+            return left.second == right.second ? left.first < right.first : left.second < right.second;
+        }
+    };
 private:
-    ScopeDefinition* const parent_ = nullptr;
-    ScopeDefinition* const enclosing_ = nullptr;
-    std::vector<std::pair<std::string, const ASTExpression*>> symbols_;
+    std::vector<const ASTTypeExpression*> types_;
+    std::map<const ASTTypeExpression*, TypeRef> type_map_;
+public:
+    TypeSystem() = default;
+    ~TypeSystem() noexcept = default;
+    void add(const ASTTypeExpression* expr);
+    void resolve();
+    TypeRef eval(const ASTTypeExpression* expr) const noexcept;
+};
+
+class Scope {
+private:
+    Scope* const parent_ = nullptr;
+    Scope* const enclosing_ = nullptr;
+    std::vector<std::pair<std::string, const ASTTypeExpression*>> symbols_;
     std::uint64_t shadow_count_ = 0;
 public:
-    ScopeDefinition(ScopeDefinition& parent) noexcept;
-    ScopeDefinition(ScopeDefinition& enclosing, int) noexcept;
-    ScopeDefinition(const std::vector<std::pair<std::string, TypeRef>>& builtins) noexcept;
-    ~ScopeDefinition() noexcept = default;
+    Scope(Scope& parent) noexcept;
+    Scope(Scope& enclosing, int) noexcept;
+    Scope(const std::vector<std::pair<std::string, TypeRef>>& builtins) noexcept;
+    ~Scope() noexcept = default;
     std::uint64_t get_length() const noexcept;
-    void add_symbol(std::string name, const ASTExpression* symbol);
-    std::pair<std::uint64_t, bool> get_var_offset(std::string_view name) const;
+    void add(std::string name, const ASTTypeExpression* symbol);
+    std::pair<std::uint64_t, bool> get_offset(std::string_view name) const;
     void update_parent_shadow() const noexcept;
 private:
-    std::uint64_t get_offset() const noexcept;
+    std::uint64_t get_parent_offset() const noexcept;
     bool is_global() const noexcept;
 };
 
-class ScopeStorage {
+class RuntimeStack {
 private:
     std::vector<ValueRef> symbols_;
 public:
-    ScopeStorage() = default;
-    ScopeStorage(const ScopeStorage& other) = default;
-    ScopeStorage(ScopeStorage&& other) noexcept = default;
-    ScopeStorage(auto&& view) : symbols_(std::forward<decltype(view)>(view)) {}
-    ~ScopeStorage() = default;
+    RuntimeStack() = default;
+    RuntimeStack(const RuntimeStack& other) = default;
+    RuntimeStack(RuntimeStack&& other) noexcept = default;
+    RuntimeStack(auto&& view) : symbols_(std::forward<decltype(view)>(view)) {}
+    ~RuntimeStack() = default;
     ValueRef operator[] (std::uint64_t index) noexcept;
-    void push(const ScopeDefinition& scope) noexcept;
-    void pop(const ScopeDefinition& scope) noexcept;
+    void enter(const Scope& scope) noexcept;
+    void exit(const Scope& scope) noexcept;
 };
 
 class ASTNode {
@@ -57,32 +76,39 @@ public:
     virtual ~ASTNode() noexcept = default;
     virtual std::generator<ASTNode*> get_children() const noexcept;
     virtual void print(std::ostream& os, std::uint64_t indent = 0) const noexcept = 0;
-    virtual void first_analyze(ScopeDefinition& scope);
-    virtual void second_analyze(ScopeDefinition& scope);
-    virtual void execute(ScopeStorage& globals, ScopeStorage& locals) const;
+    virtual void first_analyze(TypeSystem& ts);
+    virtual void second_analyze(TypeSystem& ts, Scope& scope);
+    virtual void execute(RuntimeStack& globals, RuntimeStack& locals) const;
 };
 
 class ASTCodeBlock final : public ASTNode {
 public:
     std::vector<std::unique_ptr<ASTNode>> statements_;
-    std::unique_ptr<ScopeDefinition> local_scope_;
+    std::unique_ptr<Scope> local_scope_;
     ASTCodeBlock(const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements) noexcept;
     ~ASTCodeBlock() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, std::uint64_t indent) const noexcept final;
-    void first_analyze(ScopeDefinition& scope) final;
-    void second_analyze(ScopeDefinition& scope) final;
-    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
+    void second_analyze(TypeSystem& ts, Scope& scope) final;
+    void execute(RuntimeStack& globals, RuntimeStack& locals) const final;
     ASTCodeBlock& push(const Location& new_location, std::unique_ptr<ASTNode> node) noexcept;
 };
 
 class ASTExpression : public ASTNode {
 public:
     ASTExpression(const Location& location) : ASTNode(location) {};
-    void execute(ScopeStorage& globals, ScopeStorage& locals) const final {
+    void execute(RuntimeStack& globals, RuntimeStack& locals) const final {
         (void)eval(globals, locals);
     }
-    virtual ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const = 0;
+    virtual ValueRef eval(RuntimeStack& globals, RuntimeStack& locals) const {
+        assert(false && "Is not a value expression");
+    }
+    virtual TypeRef eval(const TypeSystem& type_map) const noexcept {
+        assert(false && "Is not a type expression");
+    };
+    virtual std::generator<const ASTTypeExpression*> get_dependencies() const noexcept {
+        assert(false && "Is not a type expression");
+    }
 };
 
 template<ValueClass V>
@@ -94,7 +120,7 @@ public:
     void print(std::ostream& os, std::uint64_t indent) const noexcept final {
         os << std::string(indent, ' ') << "Constant(" << value_.repr() << ")" << std::endl;
     }
-    ValueRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
+    ValueRef eval(RuntimeStack& globals, RuntimeStack& locals) const noexcept final {
         return value_;
     }
 };
@@ -107,9 +133,8 @@ public:
     ASTIdentifier(const Location& loc, std::string name) noexcept;
     ~ASTIdentifier() noexcept final = default;
     void print(std::ostream& os, std::uint64_t indent) const noexcept final;
-    void first_analyze(ScopeDefinition& scope) final;
-    void second_analyze(ScopeDefinition& scope) final;
-    ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const noexcept final;
+    void second_analyze(TypeSystem& ts, Scope& scope) final;
+    ValueRef eval(RuntimeStack& globals, RuntimeStack& locals) const noexcept final;
 };
 
 template<OperatorFunctor Op>
@@ -127,8 +152,8 @@ public:
         os << std::string(indent, ' ') << "UnaryOp(" << GetOperatorString<Op>() << ")" << std::endl;
         expr_->print(os, indent + 2);
     }
-    ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
-        ObjRef result = expr_->eval(globals, locals);
+    ValueRef eval(RuntimeStack& globals, RuntimeStack& locals) const final {
+        ValueRef result = expr_->eval(globals, locals);
         return result.eval_operation<Op>();
     }
 };
@@ -152,9 +177,9 @@ public:
         left_->print(os, indent + 2);
         right_->print(os, indent + 2);
     }
-    ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
-        ObjRef result_left = left_->eval(globals, locals);
-        ObjRef result_right = right_->eval(globals, locals);
+    ValueRef eval(RuntimeStack& globals, RuntimeStack& locals) const final {
+        ValueRef result_left = left_->eval(globals, locals);
+        ValueRef result_right = right_->eval(globals, locals);
         return result_left.eval_operation<Op>(result_right);
     }
 };
@@ -179,10 +204,10 @@ public:
         left_->print(os, indent + 2);
         right_->print(os, indent + 2);
     }
-    ObjRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
-        ObjRef result_left = left_->eval(globals, locals);
-        ObjRef result_right = right_->eval(globals, locals);
-        ObjRef result = result_left.eval_operation<Op>(result_right);
+    ValueRef eval(RuntimeStack& globals, RuntimeStack& locals) const final {
+        ValueRef result_left = left_->eval(globals, locals);
+        ValueRef result_right = right_->eval(globals, locals);
+        ValueRef result = result_left.eval_operation<Op>(result_right);
         return result_left = result;
     }
 };
@@ -195,7 +220,7 @@ public:
     ~ASTFunctionCall() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    ValueRef eval(ScopeStorage& globals, ScopeStorage& locals) const final;
+    ValueRef eval(RuntimeStack& globals, RuntimeStack& locals) const final;
 };
 
 using ASTAddOp              = ASTBinaryOp<OperatorFunctors::Add>;
@@ -258,7 +283,7 @@ public:
             static_assert(false, "Unhandled primitive type");
         }
     }
-    TypeRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
+    TypeRef eval(const TypeSystem& type_map) const noexcept final {
         return new T();
     }
 };
@@ -272,23 +297,32 @@ public:
     void print(std::ostream& os, uint64_t indent) const noexcept final {
         os << std::string(indent, ' ') << "PrimitiveType(Function)" << std::endl;
     }
-    TypeRef eval(ScopeStorage& globals, ScopeStorage& locals) const final {
+    TypeRef eval(const TypeSystem& type_map) const noexcept final {
         return value_;
     }
 };
 
+class ASTRecordType final : public ASTExpression {
+public:
+    std::vector<std::unique_ptr<ASTDeclaration>> fields_;
+    ASTRecordType(const Location& location, std::vector<std::unique_ptr<ASTDeclaration>> fields) noexcept;
+    ~ASTRecordType() noexcept final = default;
+    void print(std::ostream& os, uint64_t indent) const noexcept final;
+    TypeRef eval(const TypeSystem& type_map) const noexcept final;
+};
+
 class ASTDeclaration final : public ASTNode {
 public:
-    const std::unique_ptr<ASTExpression> type_;
     const std::unique_ptr<ASTIdentifier> identifier_;
+    const std::unique_ptr<ASTExpression> type_;
     const std::unique_ptr<ASTExpression> expr_;
     TypeRef inferred_type_;
-    ASTDeclaration(const Location& location, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> expr = nullptr) noexcept;
+    ASTDeclaration(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTExpression> expr = nullptr) noexcept;
     ~ASTDeclaration() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    void first_analyze(ScopeDefinition& scope) final;
-    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
+    void second_analyze(TypeSystem& ts, Scope& scope) final;
+    void execute(RuntimeStack& globals, RuntimeStack& locals) const final;
 };
 
 class ASTTypeAlias final : public ASTNode {
@@ -298,7 +332,7 @@ public:
     ASTTypeAlias(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> type) noexcept;
     ~ASTTypeAlias() noexcept final = default;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    void first_analyze(ScopeDefinition& scope) final;
+    void first_analyze(TypeSystem& ts) final;
 };
 
 class ASTIfStatement final : public ASTNode {
@@ -310,7 +344,7 @@ public:
     ~ASTIfStatement() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
+    void execute(RuntimeStack& globals, RuntimeStack& locals) const final;
 };
 
 class ASTForStatement final : public ASTNode {
@@ -324,7 +358,7 @@ public:
     ~ASTForStatement() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
+    void execute(RuntimeStack& globals, RuntimeStack& locals) const final;
 };
 
 class ASTContinueStatement final : public ASTNode {
@@ -332,7 +366,7 @@ public:
     ASTContinueStatement(const Location& location) noexcept;
     ~ASTContinueStatement() noexcept final = default;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
+    void execute(RuntimeStack& globals, RuntimeStack& locals) const final;
 };
 
 class ASTBreakStatement final : public ASTNode {
@@ -340,7 +374,7 @@ public:
     ASTBreakStatement(const Location& location) noexcept;
     ~ASTBreakStatement() noexcept final = default;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
+    void execute(RuntimeStack& globals, RuntimeStack& locals) const final;
 };
 
 class ASTReturnStatement final : public ASTNode {
@@ -350,7 +384,7 @@ public:
     ~ASTReturnStatement() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    void execute(ScopeStorage& globals, ScopeStorage& locals) const final;
+    void execute(RuntimeStack& globals, RuntimeStack& locals) const final;
 };
 
 class ASTFunctionParameter final : public ASTNode {
@@ -373,7 +407,7 @@ public:
     ASTFunctionSignature& push(const Location& new_location, std::unique_ptr<ASTFunctionParameter> next_param) noexcept;
     ASTFunctionSignature& push_spread(const Location& new_location, std::unique_ptr<ASTFunctionParameter> next_param) noexcept;
     ASTFunctionSignature& set_return_type(const Location& new_location, std::unique_ptr<ASTExpression> return_type) noexcept;
-    ScopeStorage collect_arguments(const Arguments& raw) const;
+    RuntimeStack collect_arguments(const Arguments& raw) const;
 };
 
 class ASTFunctionDefinition final : public ASTNode {

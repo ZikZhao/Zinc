@@ -1,12 +1,17 @@
-float pi = 3.1415926;
+type Data = {
+    age: int;
+    name: string;
+};
+
+let pi: float = 3.1415926;
 
 if (pi == 3) {
-    int a = 1;
+    let a: int = 1;
 }
 else {
-    int b = 5;
+    let b: int = 5;
 }
 
-for (int i = 0; i < 5; i += 1) {
+for (let i: int = 0; i < 5; i += 1) {
     print(i);
 }

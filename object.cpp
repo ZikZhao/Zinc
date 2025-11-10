@@ -157,17 +157,7 @@ bool AnyType::contains(const Type& other) const {
     return true;
 }
 
-ClassType::ClassType(std::string_view name, const std::vector<InterfaceTypeRef>& interfaces, const ClassTypeRef extends, const ScopeDefinition* properties)
-    : Type(KIND::KIND_CLASS), name(name), interfaces(interfaces), extends(extends), properties(properties) {}
-std::string ClassType::repr() const {
-    return "class "s + std::string(name);
-}
-bool ClassType::contains(const Type& other) const {
-    // TODO
-    return false;
-}
-
-ListType::ListType(TypeRef element_type) : ClassType("List", {}, nullptr, nullptr), element_type_(element_type) {}
+ListType::ListType(TypeRef element_type) : Type(KIND::KIND_LIST | KIND::KIND_TYPE_FLAG), element_type_(element_type) {}
 std::string ListType::repr() const {
     return "List<"s + element_type_->repr() + ">"s;
 }
@@ -177,6 +167,27 @@ bool ListType::contains(const Type& other) const {
     }
     const ListType& other_list = static_cast<const ListType&>(other);
     return this->element_type_->contains(*other_list.element_type_);
+}
+
+RecordType::RecordType(std::map<std::string, TypeRef> fields)
+    : Type(KIND::KIND_RECORD | KIND::KIND_TYPE_FLAG), fields_(std::move(fields)) {}
+std::string RecordType::repr() const {
+    // TODO
+    return {};
+}
+bool RecordType::contains(const Type& other) const {
+    // TODO
+    return false;
+}
+
+ClassType::ClassType(std::string_view name, const std::vector<InterfaceTypeRef>& interfaces, const ClassTypeRef extends, const Scope* properties)
+    : Type(KIND::KIND_CLASS), name(name), interfaces(interfaces), extends(extends), properties(properties) {}
+std::string ClassType::repr() const {
+    return "class "s + std::string(name);
+}
+bool ClassType::contains(const Type& other) const {
+    // TODO
+    return false;
 }
 
 Value::Value(KIND kind) : TypeOrValue(kind) {}

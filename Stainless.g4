@@ -17,6 +17,7 @@ statement
     | break_statement
     | continue_statement
     | return_statement
+    | type_alias_declaration
     ;
 
 code_block
@@ -28,7 +29,7 @@ expr_statement
     ;
 
 declaration_statement
-    : type_=type identifier_=identifier (OP_ASSIGN value_=expr)? OP_SEMICOLON
+    : KW_LET identifier_=identifier (OP_COLON type_=type)? (OP_ASSIGN value_=expr)? OP_SEMICOLON
     ;
 
 if_statement
@@ -56,6 +57,10 @@ continue_statement
 
 return_statement
     : KW_RETURN expr_=expr? OP_SEMICOLON
+    ;
+
+type_alias_declaration
+    : KW_TYPE identifier_=identifier OP_ASSIGN type_=type OP_SEMICOLON
     ;
 
 expr
@@ -87,9 +92,14 @@ type
     : primitive_=(KW_NULL | KW_INT | KW_FLOAT | KW_STRING | KW_BOOL) # PrimitiveType
     | OP_LBRACKET inner_type_=type OP_RBRACKET # ParenType
     | identifier_=identifier # IdentifierType
+    | OP_LBRACE fields_+=record_field* OP_RBRACE # RecordType
     ;
 
-KW_CONST : 'const' ;
+record_field
+    : identifier_=identifier OP_COLON type_=type OP_SEMICOLON
+    ;
+
+KW_LET : 'let' ;
 KW_NULL : 'null' ;
 KW_INT : 'int' ;
 KW_FLOAT : 'float' ;
@@ -105,6 +115,7 @@ KW_FUNC : 'func' ;
 KW_BREAK : 'break' ;
 KW_CONTINUE : 'continue' ;
 KW_RETURN : 'return' ;
+KW_TYPE : 'type' ;
 
 OP_ADD : '+' ;
 OP_SUB : '-' ;
