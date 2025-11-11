@@ -9,12 +9,25 @@ class ASTNode;
 class ASTExpression;
 using ASTValueExpression = ASTExpression;
 using ASTTypeExpression = ASTExpression;
+class ASTCodeBlock;
 template<ValueClass T> class ASTConstant;
 class ASTIdentifier;
 template<OperatorFunctor Op> class ASTUnaryOp;
 template<OperatorFunctor Op> class ASTBinaryOp;
+class ASTFunctionCall;
+template<TypeClass T> class ASTPrimitiveType;
+class ASTRecordType;
 class ASTDeclaration;
+class ASTFieldDeclaration;
+class ASTTypeAlias;
 class ASTIfStatement;
+class ASTForStatement;
+class ASTContinueStatement;
+class ASTBreakStatement;
+class ASTReturnStatement;
+class ASTFunctionParameter;
+class ASTFunctionSignature;
+class ASTFunctionDefinition;
 
 class TypeSystem {
 public:
@@ -103,7 +116,7 @@ public:
     virtual ValueRef eval(RuntimeStack& globals, RuntimeStack& locals) const {
         assert(false && "Is not a value expression");
     }
-    virtual TypeRef eval(const TypeSystem& type_map) const noexcept {
+    virtual TypeRef eval(const TypeSystem& ts) const noexcept {
         assert(false && "Is not a type expression");
     };
     virtual std::generator<const ASTTypeExpression*> get_dependencies() const noexcept {
@@ -265,9 +278,9 @@ using ASTLeftShiftAssignOp  = ASTBinaryOp<OperatorFunctors::LeftShiftAssign>;
 using ASTRightShiftAssignOp = ASTBinaryOp<OperatorFunctors::RightShiftAssign>;
 
 template<TypeClass T>
-class ASTPrimitiveType final : public ASTExpression {
+class ASTPrimitiveType final : public ASTTypeExpression {
 public:
-    ASTPrimitiveType(const Location& loc) noexcept : ASTExpression(loc) {}
+    ASTPrimitiveType(const Location& loc) noexcept : ASTTypeExpression(loc) {}
     void print(std::ostream& os, uint64_t indent) const noexcept final {
         if constexpr (std::is_same_v<T, NullType>) {
             os << std::string(indent, ' ') << "PrimitiveType(Null)" << std::endl;
@@ -283,41 +296,56 @@ public:
             static_assert(false, "Unhandled primitive type");
         }
     }
-    TypeRef eval(const TypeSystem& type_map) const noexcept final {
+    void first_analyze(TypeSystem& ts) final {
+        ts.add(this);
+    }
+    TypeRef eval(const TypeSystem& ts) const noexcept final {
         return new T();
+    }
+    std::generator<const ASTTypeExpression*> get_dependencies() const noexcept final {
+        co_return;
     }
 };
 
 template<>
-class ASTPrimitiveType<FunctionType> final : public ASTExpression {
+class ASTPrimitiveType<FunctionType> final : public ASTTypeExpression {
 public:
     const TypeRef value_;
-    ASTPrimitiveType(FunctionType* func) noexcept : ASTExpression({0, {0, 0}, {0, 0}}), value_(func) {}
-    ASTPrimitiveType(const Location& loc, FunctionType* func) noexcept : ASTExpression(loc), value_(func) {}
+    ASTPrimitiveType(FunctionType* func) noexcept : ASTTypeExpression({0, {0, 0}, {0, 0}}), value_(func) {}
+    ASTPrimitiveType(const Location& loc, FunctionType* func) noexcept : ASTTypeExpression(loc), value_(func) {}
     void print(std::ostream& os, uint64_t indent) const noexcept final {
         os << std::string(indent, ' ') << "PrimitiveType(Function)" << std::endl;
     }
-    TypeRef eval(const TypeSystem& type_map) const noexcept final {
+    void first_analyze(TypeSystem& ts) final {
+        ts.add(this);
+    }
+    TypeRef eval(const TypeSystem& ts) const noexcept final {
         return value_;
+    }
+    std::generator<const ASTTypeExpression*> get_dependencies() const noexcept final {
+        co_return;
     }
 };
 
-class ASTRecordType final : public ASTExpression {
+class ASTRecordType final : public ASTTypeExpression {
 public:
-    std::vector<std::unique_ptr<ASTDeclaration>> fields_;
-    ASTRecordType(const Location& location, std::vector<std::unique_ptr<ASTDeclaration>> fields) noexcept;
+    const std::vector<std::unique_ptr<ASTFieldDeclaration>> fields_;
+    ASTRecordType(const Location& location, std::vector<std::unique_ptr<ASTFieldDeclaration>> fields) noexcept;
     ~ASTRecordType() noexcept final = default;
+    std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    TypeRef eval(const TypeSystem& type_map) const noexcept final;
+    void first_analyze(TypeSystem& ts) final;
+    TypeRef eval(const TypeSystem& ts) const noexcept final;
+    std::generator<const ASTTypeExpression*> get_dependencies() const noexcept final;
 };
 
 class ASTDeclaration final : public ASTNode {
 public:
     const std::unique_ptr<ASTIdentifier> identifier_;
-    const std::unique_ptr<ASTExpression> type_;
-    const std::unique_ptr<ASTExpression> expr_;
+    const std::unique_ptr<ASTTypeExpression> type_;
+    const std::unique_ptr<ASTValueExpression> expr_;
     TypeRef inferred_type_;
-    ASTDeclaration(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTExpression> expr = nullptr) noexcept;
+    ASTDeclaration(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTTypeExpression> type, std::unique_ptr<ASTValueExpression> expr = nullptr) noexcept;
     ~ASTDeclaration() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
@@ -325,14 +353,24 @@ public:
     void execute(RuntimeStack& globals, RuntimeStack& locals) const final;
 };
 
+class ASTFieldDeclaration final : public ASTNode {
+public:
+    const std::string identifier_;
+    const std::unique_ptr<ASTTypeExpression> type_;
+    ASTFieldDeclaration(const Location& location, std::string identifier, std::unique_ptr<ASTTypeExpression> type) noexcept;
+    ~ASTFieldDeclaration() noexcept final = default;
+    std::generator<ASTNode*> get_children() const noexcept final;
+    void print(std::ostream& os, uint64_t indent) const noexcept final;
+};
+
 class ASTTypeAlias final : public ASTNode {
 public:
-    const std::unique_ptr<ASTIdentifier> identifier_;
+    const std::string identifier_;
     const std::unique_ptr<ASTExpression> type_;
-    ASTTypeAlias(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> type) noexcept;
+    ASTTypeAlias(const Location& location, std::string identifier, std::unique_ptr<ASTExpression> type) noexcept;
     ~ASTTypeAlias() noexcept final = default;
+    std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
-    void first_analyze(TypeSystem& ts) final;
 };
 
 class ASTIfStatement final : public ASTNode {

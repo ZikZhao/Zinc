@@ -4,29 +4,31 @@
 #include "exception.hpp"
 
 void TypeSystem::add(const ASTTypeExpression* expr) {
-    types_.push_back(expr);
+    types_.emplace_back(expr);
 }
 void TypeSystem::resolve() {
     std::map<const ASTTypeExpression*, std::set<const ASTTypeExpression*>> dependency_map;
     std::multimap<const ASTTypeExpression*, const ASTTypeExpression*> reverse_dependency_map;
     for (const auto& type_expr : types_) {
-        for (const auto& dependency : type_expr->get_dependencies()) {
-            dependency_map[type_expr].emplace(dependency);
+        // generator -> set is not compilable in G++ 14
+        auto& deps = dependency_map[type_expr];
+        for (const auto& dep : type_expr->get_dependencies()) {
+            deps.insert(dep);
+            reverse_dependency_map.emplace(dep, type_expr);
         }
     }
-    while (!types_.empty()) {
+    while (!dependency_map.empty()) {
         size_t prev_size = dependency_map.size();
         for (auto it = dependency_map.begin(); it != dependency_map.end(); ) {
             const auto& [type, dependents] = *it;
             if (dependents.empty()) {
                 type_map_[type] = type->eval(*this);
-                ++it;
-                dependency_map.erase(it);
                 auto range = reverse_dependency_map.equal_range(type);
                 for (auto rev_it = range.first; rev_it != range.second; ++rev_it) {
                     dependency_map[rev_it->second].erase(type);
                 }
                 reverse_dependency_map.erase(range.first, range.second);
+                dependency_map.erase(it++);
             }
             else {
                 ++it;
@@ -212,27 +214,39 @@ ValueRef ASTFunctionCall::eval(RuntimeStack& globals, RuntimeStack& locals) cons
     return static_cast<FunctionValue&>(*result)(arguments_ref);
 }
 
-ASTRecordType::ASTRecordType(const Location& location, std::vector<std::unique_ptr<ASTDeclaration>> fields) noexcept
-    : ASTExpression(location), fields_(std::move(fields)) {}
+ASTRecordType::ASTRecordType(const Location& location, std::vector<std::unique_ptr<ASTFieldDeclaration>> fields) noexcept
+    : ASTTypeExpression(location), fields_(std::move(fields)) {}
+std::generator<ASTNode*> ASTRecordType::get_children() const noexcept {
+    for (const auto& field : fields_) {
+        co_yield field.get();
+    }
+}
 void ASTRecordType::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent, ' ') << "RecordType"s << std::endl;
-    for (const auto& declaration : fields_) {
-        declaration->print(os, indent + 4);
+    // TODO
+}
+void ASTRecordType::first_analyze(TypeSystem& ts) {
+    ts.add(this);
+    for (const auto& field : fields_) {
+        field->first_analyze(ts);
     }
 }
-TypeRef ASTRecordType::eval(const TypeSystem& type_map) const noexcept {
-    std::map<std::string, TypeRef> field_types;
-    for (const auto& field : fields_) {
-        field_types.emplace(field->identifier_->name_, field->type_->eval(type_map));
-    }
+TypeRef ASTRecordType::eval(const TypeSystem& ts) const noexcept {
+    std::map<std::string, TypeRef> field_types = fields_
+        | std::views::transform([&](const auto& decl) { return std::pair(decl->identifier_, ts.eval(decl->type_.get())); })
+        | std::ranges::to<std::map>();
     return new RecordType(field_types);
 }
+std::generator<const ASTTypeExpression*> ASTRecordType::get_dependencies() const noexcept {
+    for (const auto& field : fields_) {
+        co_yield field->type_.get();
+    }
+}
 
-ASTDeclaration::ASTDeclaration(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> type, std::unique_ptr<ASTExpression> expr) noexcept
+ASTDeclaration::ASTDeclaration(const Location& location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTTypeExpression> type, std::unique_ptr<ASTValueExpression> expr) noexcept
     : ASTNode(location), identifier_(std::move(identifier)), type_(std::move(type)), expr_(std::move(expr)), inferred_type_() {} // TODO
 std::generator<ASTNode*> ASTDeclaration::get_children() const noexcept {
     co_yield type_.get();
-    co_yield identifier_.get();
     if (expr_) {
         co_yield expr_.get();
     }
@@ -251,15 +265,26 @@ void ASTDeclaration::execute(RuntimeStack& globals, RuntimeStack& locals) const 
     identifier_->eval(globals, locals) = value;
 }
 
-ASTTypeAlias::ASTTypeAlias(const Location &location, std::unique_ptr<ASTIdentifier> identifier, std::unique_ptr<ASTExpression> type) noexcept
+ASTFieldDeclaration::ASTFieldDeclaration(const Location& location, std::string identifier, std::unique_ptr<ASTTypeExpression> type) noexcept
     : ASTNode(location), identifier_(std::move(identifier)), type_(std::move(type)) {}
-void ASTTypeAlias::print(std::ostream& os, uint64_t indent) const noexcept {
-    os << std::string(indent, ' ') << "TypeAlias"s << std::endl;
-    identifier_->print(os, indent + 2);
+std::generator<ASTNode*> ASTFieldDeclaration::get_children() const noexcept {
+    co_yield type_.get();
+}
+void ASTFieldDeclaration::print(std::ostream& os, uint64_t indent) const noexcept {
+    os << std::string(indent, ' ') << "FieldDeclaration"s << std::endl;
+    os << std::string(indent + 2, ' ') << "Identifier: " << identifier_ << std::endl;
     type_->print(os, indent + 2);
 }
-void ASTTypeAlias::first_analyze(TypeSystem& ts) {
-    ts.add(type_.get());
+
+ASTTypeAlias::ASTTypeAlias(const Location &location, std::string identifier, std::unique_ptr<ASTExpression> type) noexcept
+    : ASTNode(location), identifier_(std::move(identifier)), type_(std::move(type)) {}
+std::generator<ASTNode*> ASTTypeAlias::get_children() const noexcept {
+    co_yield type_.get();
+}
+void ASTTypeAlias::print(std::ostream& os, uint64_t indent) const noexcept {
+    os << std::string(indent, ' ') << "TypeAlias"s << std::endl;
+    os << std::string(indent + 2, ' ') << "Identifier: " << identifier_ << std::endl;
+    type_->print(os, indent + 2);
 }
 
 ASTIfStatement::ASTIfStatement(const Location& location, std::unique_ptr<ASTExpression> condition, std::unique_ptr<ASTCodeBlock> if_block, std::unique_ptr<ASTCodeBlock> else_block) noexcept

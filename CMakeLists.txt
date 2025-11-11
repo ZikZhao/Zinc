@@ -13,8 +13,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
 endif()
 
-# Compiler flags (using -D_GLIBCXX_DEBUG with matching vcpkg antlr4 triplet)
-set(CMAKE_CXX_FLAGS_DEBUG "-D_GLIBCXX_DEBUG -g3 -O0 -fsanitize=undefined,address -fno-omit-frame-pointer")
+# Compiler flags (removed -D_GLIBCXX_DEBUG to use release std library)
+set(CMAKE_CXX_FLAGS_DEBUG "-g3 -O0 -fsanitize=undefined,address -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wno-unused-parameter -Wno-missing-field-initializers")
 
 # Linker flags for debug build

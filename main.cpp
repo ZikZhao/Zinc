@@ -34,7 +34,8 @@ private:
             | std::views::transform([this](auto ctx) { return StaticUniqueCast<Target>(transform(ctx)); })
             | std::ranges::to<std::vector>();
     }
-    Location loc(antlr4::ParserRuleContext* context) noexcept {
+    Location loc(const antlr4::ParserRuleContext* context) noexcept {
+        assert(context != nullptr);
         auto start = context->getStart();
         auto stop = context->getStop();
         Location location;
@@ -118,7 +119,7 @@ public:
     antlrcpp::Any visitType_alias_declaration(StainlessParser::Type_alias_declarationContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTTypeAlias>(
             loc(context),
-            StaticUniqueCast<ASTIdentifier>(transform(context->identifier_)),
+            context->identifier_->getText(),
             StaticUniqueCast<ASTTypeExpression>(transform(context->type_))
         );
         return {};
@@ -371,16 +372,15 @@ public:
     antlrcpp::Any visitRecordType(StainlessParser::RecordTypeContext* context) noexcept final {
         last_visited_ = std::make_unique<ASTRecordType>(
             loc(context),
-            transform_list<ASTDeclaration>(context->fields_)
+            transform_list<ASTFieldDeclaration>(context->fields_)
         );
         return {};
     }
     antlrcpp::Any visitRecord_field(StainlessParser::Record_fieldContext* context) noexcept final {
-        last_visited_ = std::make_unique<ASTDeclaration>(
+        last_visited_ = std::make_unique<ASTFieldDeclaration>(
             loc(context),
-            StaticUniqueCast<ASTIdentifier>(transform(context->identifier_)),
-            StaticUniqueCast<ASTTypeExpression>(transform(context->type_)),
-            nullptr
+            context->identifier_->getText(),
+            StaticUniqueCast<ASTTypeExpression>(transform(context->type_))
         );
         return {};
     }
@@ -440,6 +440,7 @@ int main(int argc, char* argv[]) {
     Scope builtins = Builtins::GetBuiltinsScope();
     TypeSystem ts;
     root->first_analyze(ts);
+    ts.resolve();
     root->second_analyze(ts, builtins);
     RuntimeStack globals = Builtins::GetBuiltinsStack();
     root->execute(globals, globals);

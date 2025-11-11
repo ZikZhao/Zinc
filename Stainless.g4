@@ -96,7 +96,7 @@ type
     ;
 
 record_field
-    : identifier_=identifier OP_COLON type_=type OP_SEMICOLON
+    : identifier_=T_IDENTIFIER OP_COLON type_=type OP_SEMICOLON
     ;
 
 KW_LET : 'let' ;

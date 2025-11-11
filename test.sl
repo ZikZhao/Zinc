@@ -3,6 +3,8 @@ type Data = {
     name: string;
 };
 
+type Alias = Data;
+
 let pi: float = 3.1415926;
 
 if (pi == 3) {

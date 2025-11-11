@@ -89,11 +89,8 @@
             "${workspaceFolder}/**",
             "${workspaceFolder}/build/out",
             "${workspaceFolder}/build/antlr4_generated",
-            "${env:HOME}/vcpkg/installed/x64-linux-debug/include",
-            "${env:HOME}/vcpkg/installed/x64-linux-debug/include/antlr4-runtime"
-        ],
-        "C_Cpp.default.defines": [
-            "_GLIBCXX_DEBUG"
+            "${env:HOME}/vcpkg/installed/x64-linux/include",
+            "${env:HOME}/vcpkg/installed/x64-linux/include/antlr4-runtime"
         ],
         "C_Cpp.default.cStandard": "c17",
         "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
@@ -103,11 +100,11 @@
         "cmake.useCMakePresets": "always",
         "cmake.configureSettings": {
             "CMAKE_TOOLCHAIN_FILE": "${env:HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
-            "VCPKG_TARGET_TRIPLET": "x64-linux-debug"
+            "VCPKG_TARGET_TRIPLET": "x64-linux"
         },
         "cmake.configureArgs": [
             "-DCMAKE_TOOLCHAIN_FILE=${env:HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
-            "-DVCPKG_TARGET_TRIPLET=x64-linux-debug"
+            "-DVCPKG_TARGET_TRIPLET=x64-linux"
         ]
     },
     "extensions": {
@@ -127,7 +124,7 @@
                     "-B", "build",
                     "-S", ".",
                     "-DCMAKE_TOOLCHAIN_FILE=${env:HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
-                    "-DVCPKG_TARGET_TRIPLET=x64-linux-debug"
+                    "-DVCPKG_TARGET_TRIPLET=x64-linux"
                 ],
                 "group": "build",
                 "presentation": {
