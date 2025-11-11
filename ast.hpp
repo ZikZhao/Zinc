@@ -30,20 +30,21 @@ class ASTFunctionSignature;
 class ASTFunctionDefinition;
 
 class TypeSystem {
-public:
-    using TypeMap = std::map<const ASTTypeExpression*, TypeRef>;
+private:
     struct CompareBySecond {
         constexpr bool operator () (const auto& left, const auto& right) const {
             return left.second == right.second ? left.first < right.first : left.second < right.second;
         }
     };
 private:
-    std::vector<const ASTTypeExpression*> types_;
-    std::map<const ASTTypeExpression*, TypeRef> type_map_;
+    std::set<const ASTTypeExpression*> types_;
+    std::map<std::string, const ASTTypeExpression*> aliases_;
+    std::map<const ASTTypeExpression*, TypeRef> resolved_;
 public:
     TypeSystem() = default;
     ~TypeSystem() noexcept = default;
-    void add(const ASTTypeExpression* expr);
+    void add(const ASTTypeExpression* expr) noexcept;
+    void add(std::string name, const ASTTypeExpression* expr);
     void resolve();
     TypeRef eval(const ASTTypeExpression* expr) const noexcept;
 };
@@ -279,6 +280,8 @@ using ASTRightShiftAssignOp = ASTBinaryOp<OperatorFunctors::RightShiftAssign>;
 
 template<TypeClass T>
 class ASTPrimitiveType final : public ASTTypeExpression {
+private:
+    static constexpr TypeRef type_instance_ = new T();
 public:
     ASTPrimitiveType(const Location& loc) noexcept : ASTTypeExpression(loc) {}
     void print(std::ostream& os, uint64_t indent) const noexcept final {
@@ -300,7 +303,7 @@ public:
         ts.add(this);
     }
     TypeRef eval(const TypeSystem& ts) const noexcept final {
-        return new T();
+        return type_instance_;
     }
     std::generator<const ASTTypeExpression*> get_dependencies() const noexcept final {
         co_return;
@@ -371,6 +374,7 @@ public:
     ~ASTTypeAlias() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
     void print(std::ostream& os, uint64_t indent) const noexcept final;
+    void first_analyze(TypeSystem& ts) final;
 };
 
 class ASTIfStatement final : public ASTNode {

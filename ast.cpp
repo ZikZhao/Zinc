@@ -3,14 +3,20 @@
 #include "object.hpp"
 #include "exception.hpp"
 
-void TypeSystem::add(const ASTTypeExpression* expr) {
-    types_.emplace_back(expr);
+void TypeSystem::add(const ASTTypeExpression* expr) noexcept {
+    types_.emplace(expr);
+}
+void TypeSystem::add(std::string name, const ASTTypeExpression* expr) {
+    if (auto pair = aliases_.try_emplace(std::move(name), expr); not pair.second) {
+        throw std::runtime_error("Type alias already defined: "s + pair.first->first);
+    }
+    types_.emplace(expr);
 }
 void TypeSystem::resolve() {
     std::map<const ASTTypeExpression*, std::set<const ASTTypeExpression*>> dependency_map;
     std::multimap<const ASTTypeExpression*, const ASTTypeExpression*> reverse_dependency_map;
     for (const auto& type_expr : types_) {
-        // generator -> set is not compilable in G++ 14
+        // generator | ranges::to<set> cannot compile in G++ 14
         auto& deps = dependency_map[type_expr];
         for (const auto& dep : type_expr->get_dependencies()) {
             deps.insert(dep);
@@ -22,7 +28,7 @@ void TypeSystem::resolve() {
         for (auto it = dependency_map.begin(); it != dependency_map.end(); ) {
             const auto& [type, dependents] = *it;
             if (dependents.empty()) {
-                type_map_[type] = type->eval(*this);
+                resolved_[type] = type->eval(*this);
                 auto range = reverse_dependency_map.equal_range(type);
                 for (auto rev_it = range.first; rev_it != range.second; ++rev_it) {
                     dependency_map[rev_it->second].erase(type);
@@ -40,7 +46,7 @@ void TypeSystem::resolve() {
     }
 }
 TypeRef TypeSystem::eval(const ASTTypeExpression* expr) const noexcept {
-    return type_map_.at(expr);
+    return resolved_.at(expr);
 }
 
 Scope::Scope(Scope& parent) noexcept : parent_(&parent) {}
@@ -285,6 +291,10 @@ void ASTTypeAlias::print(std::ostream& os, uint64_t indent) const noexcept {
     os << std::string(indent, ' ') << "TypeAlias"s << std::endl;
     os << std::string(indent + 2, ' ') << "Identifier: " << identifier_ << std::endl;
     type_->print(os, indent + 2);
+}
+void ASTTypeAlias::first_analyze(TypeSystem& ts) {
+    ts.add(identifier_, static_cast<ASTTypeExpression*>(type_.get()));
+    type_->first_analyze(ts);
 }
 
 ASTIfStatement::ASTIfStatement(const Location& location, std::unique_ptr<ASTExpression> condition, std::unique_ptr<ASTCodeBlock> if_block, std::unique_ptr<ASTCodeBlock> else_block) noexcept
