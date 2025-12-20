@@ -4,6 +4,9 @@ build/
 # ANTLR generated files
 .antlr/
 
+# Clangd cache
+.cache/
+
 # Temporary files
 *.tmp
 *.bak

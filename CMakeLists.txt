@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Generate compile_commands.json for better IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/src)
+
 # Set build type if not specified
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
@@ -32,7 +34,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out)
 
 # Include directories
-include_directories(${CMAKE_SOURCE_DIR})
+include_directories(${SOURCE_DIR})
 include_directories(${CMAKE_BINARY_DIR})
 
 # Set output directory for ANTLR4 generated files
@@ -57,21 +59,21 @@ add_custom_command(
         -o ${ANTLR4_OUTPUT_DIR}
         -visitor
         -listener
-        ${CMAKE_SOURCE_DIR}/Stainless.g4
-    DEPENDS ${CMAKE_SOURCE_DIR}/Stainless.g4
+        ${SOURCE_DIR}/Stainless.g4
+    DEPENDS ${SOURCE_DIR}/Stainless.g4
     COMMENT "Generating ANTLR4 parser and lexer from Stainless.g4"
     VERBATIM
 )
 
 # Precompiled header setup
-set(PCH_HEADER ${CMAKE_SOURCE_DIR}/pch.hpp)
+set(PCH_HEADER ${SOURCE_DIR}/pch.hpp)
 
 # Source files
 set(SOURCES
-    main.cpp
-    object.cpp
-    exception.cpp
-    ast.cpp
+    ${SOURCE_DIR}/main.cpp
+    ${SOURCE_DIR}/object.cpp
+    ${SOURCE_DIR}/exception.cpp
+    ${SOURCE_DIR}/ast.cpp
 )
 
 # Create a library for ANTLR generated code to suppress warnings
@@ -102,3 +104,20 @@ add_custom_target(clean-all
     COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/out
     COMMENT "Cleaning all build artifacts"
 )
+
+# Symlink compile_commands.json to a fixed location
+if (CMAKE_EXPORT_COMPILE_COMMANDS)
+    set(BUILD_ROOT "${CMAKE_SOURCE_DIR}/build")
+    file(MAKE_DIRECTORY "${BUILD_ROOT}")
+    get_filename_component(REAL_BINARY_DIR "${CMAKE_BINARY_DIR}" ABSOLUTE)
+    get_filename_component(REAL_BUILD_ROOT "${BUILD_ROOT}" ABSOLUTE)
+    
+    if (NOT "${REAL_BINARY_DIR}" STREQUAL "${REAL_BUILD_ROOT}")
+        file(CREATE_LINK 
+            "${CMAKE_BINARY_DIR}/compile_commands.json" 
+            "${BUILD_ROOT}/compile_commands.json" 
+            SYMBOLIC
+        )
+        message(STATUS "Symlinked compile_commands.json to ${BUILD_ROOT}")
+    endif()
+endif()

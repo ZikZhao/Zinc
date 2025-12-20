@@ -1,8 +1,8 @@
 #pragma once
-#include "pch.hpp"
 #include "exception.hpp"
+#include "pch.hpp"
 
-class Scope;
+class Context;
 
 enum class KIND : std::uint16_t {
     KIND_NO_RIGHT_OPERAND,
@@ -23,19 +23,26 @@ enum class KIND : std::uint16_t {
     KIND_TYPE_FLAG = 1 << (std::numeric_limits<std::underlying_type_t<KIND>>::digits - 1),
 };
 
-constexpr KIND operator & (KIND lhs, KIND rhs) noexcept {
-    return static_cast<KIND>(static_cast<std::underlying_type_t<KIND>>(lhs) & static_cast<std::underlying_type_t<KIND>>(rhs));
+constexpr KIND operator&(KIND lhs, KIND rhs) noexcept {
+    return static_cast<KIND>(
+        static_cast<std::underlying_type_t<KIND>>(lhs) &
+        static_cast<std::underlying_type_t<KIND>>(rhs)
+    );
 }
 
-constexpr KIND operator | (KIND lhs, KIND rhs) noexcept {
-    return static_cast<KIND>(static_cast<std::underlying_type_t<KIND>>(lhs) | static_cast<std::underlying_type_t<KIND>>(rhs));
+constexpr KIND operator|(KIND lhs, KIND rhs) noexcept {
+    return static_cast<KIND>(
+        static_cast<std::underlying_type_t<KIND>>(lhs) |
+        static_cast<std::underlying_type_t<KIND>>(rhs)
+    );
 }
 
-template<typename TargetType>
+template <typename TargetType>
 class Reference {
 private:
     std::shared_ptr<TargetType> ptr_;
     Reference* source_;
+
 public:
     Reference() = default;
     Reference(const Reference& other) = default;
@@ -44,14 +51,15 @@ public:
     Reference(std::shared_ptr<TargetType>&& other) : ptr_(std::move(other)), source_(nullptr) {}
     // Copy constructor that keeps track of source for assignment propagation
     Reference(Reference& other) : ptr_(other.ptr_), source_(&other) {}
+
 public:
     // Assignment operator with adaptation
-    Reference& operator = (const Reference& other) {
+    Reference& operator=(const Reference& other) {
         if (ptr_ != nullptr and (ptr_->kind_ != other.ptr_->kind_)) {
-            const auto result = ptr_->eval_operation(GetOperatorString<OperatorFunctors::Assign>(), *other.ptr_);
+            const auto result =
+                ptr_->eval_operation(GetOperatorString<OperatorFunctors::Assign>(), *other.ptr_);
             ptr_ = std::move(result.ptr_);
-        }
-        else {
+        } else {
             ptr_ = std::move(other.ptr_);
         }
         if (source_) {
@@ -60,32 +68,23 @@ public:
         }
         return *this;
     }
-    TargetType* operator -> () const noexcept {
-        return ptr_.get();
-    }
-    TargetType& operator * () const {
-        return *ptr_;
-    }
-    std::string repr() const {
-        return ptr_->repr();
-    }
-    template<typename Operator>
+    TargetType* operator->() const noexcept { return ptr_.get(); }
+    TargetType& operator*() const { return *ptr_; }
+    std::string repr() const { return ptr_->repr(); }
+    template <typename Operator>
     Reference eval_operation() const {
         return ptr_->eval_operation(GetOperatorString<Operator>());
     }
-    template<typename Operator>
+    template <typename Operator>
     Reference eval_operation(Reference& other) const {
         return ptr_->eval_operation(GetOperatorString<Operator>(), *other);
     }
-    bool is_truthy() const {
-        return ptr_->is_truthy();
-    }
-    bool contains(const Reference& other) const {
-        return ptr_->contains(*other);
-    }
-    Reference operator () (auto&&... args) {
+    bool is_truthy() const { return ptr_->is_truthy(); }
+    bool contains(const Reference& other) const { return ptr_->contains(*other); }
+    Reference operator()(auto&&... args) {
         return ptr_->operator()(std::forward<decltype(args)>(args)...);
     }
+    bool null() const noexcept { return ptr_ == nullptr; }
 };
 
 class TypeOrValue;
@@ -107,23 +106,24 @@ class SetValue;
 
 class Type;
 class AnyType;
-template<KIND Kind> class PrimitiveType;
+template <KIND Kind>
+class PrimitiveType;
 class InterfaceType;
 class StructType;
 class ClassType;
 class IntersectionType;
 class UnionType;
 
-template<typename T>
+template <typename T>
 concept TypeClass = std::derived_from<T, Type>;
-template<typename T>
+template <typename T>
 concept ValueClass = std::derived_from<T, Value>;
 
-using TypeRef = ObjRef; // Should always point to a Type
-using ValueRef = ObjRef; // Should always point to a Value
-using InterfaceTypeRef = ObjRef; // Should always point to an InterfaceType
-using ClassTypeRef = ObjRef; // Should always point to a ClassType
-using DictValueRef = ObjRef; // Should always point to a DictValue
+using TypeRef = ObjRef;           // Should always point to a Type
+using ValueRef = ObjRef;          // Should always point to a Value
+using InterfaceTypeRef = ObjRef;  // Should always point to an InterfaceType
+using ClassTypeRef = ObjRef;      // Should always point to a ClassType
+using DictValueRef = ObjRef;      // Should always point to a DictValue
 
 using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
@@ -132,8 +132,9 @@ struct OperationTuple {
     std::string_view op;
     KIND left_type;
     KIND right_type;
-    constexpr bool operator < (const OperationTuple& other) const {
-        return std::tie(op, left_type, right_type) < std::tie(other.op, other.left_type, other.right_type);
+    constexpr bool operator<(const OperationTuple& other) const {
+        return std::tie(op, left_type, right_type) <
+               std::tie(other.op, other.left_type, other.right_type);
     }
 };
 
@@ -157,6 +158,7 @@ public:
 class Type : public TypeOrValue {
 public:
     static TypeRef FromTypeIndex(const std::type_index& type);
+
 public:
     Type(KIND kind);
     ~Type() override = default;
@@ -166,16 +168,18 @@ public:
 class AnyType final : public Type {
 public:
     static constexpr KIND Kind = KIND::KIND_ANY | KIND::KIND_TYPE_FLAG;
+
 public:
     AnyType();
     std::string repr() const final;
     bool contains(const Type& other) const final;
 };
 
-template<KIND K>
+template <KIND K>
 class PrimitiveType final : public Type {
 public:
     static constexpr KIND Kind = K | KIND::KIND_TYPE_FLAG;
+
 public:
     PrimitiveType() : Type(Kind) {}
     std::string repr() const final {
@@ -189,43 +193,40 @@ public:
             std::unreachable();
         }
     }
-    bool contains(const Type& other) const final {
-        return other.kind_ == Kind;
-    }
+    bool contains(const Type& other) const final { return other.kind_ == Kind; }
 };
 
-template<>
+template <>
 class PrimitiveType<KIND::KIND_INTEGER> final : public Type {
 public:
     static constexpr KIND Kind = KIND::KIND_INTEGER | KIND::KIND_TYPE_FLAG;
+
 public:
     PrimitiveType() : Type(KIND::KIND_INTEGER) {}
-    std::string repr() const final {
-        return "integer";
-    }
+    std::string repr() const final { return "integer"; }
     bool contains(const Type& other) const final {
         return other.kind_ == KIND::KIND_INTEGER or other.kind_ == KIND::KIND_FLOAT;
     }
 };
 
-template<>
+template <>
 class PrimitiveType<KIND::KIND_FLOAT> final : public Type {
 public:
     static constexpr KIND Kind = KIND::KIND_FLOAT | KIND::KIND_TYPE_FLAG;
+
 public:
     PrimitiveType() : Type(KIND::KIND_FLOAT) {}
-    std::string repr() const final {
-        return "float";
-    }
+    std::string repr() const final { return "float"; }
     bool contains(const Type& other) const final {
         return other.kind_ == KIND::KIND_FLOAT or other.kind_ == KIND::KIND_INTEGER;
     }
 };
 
-template<>
+template <>
 class PrimitiveType<KIND::KIND_FUNCTION> final : public Type {
 public:
     static constexpr KIND Kind = KIND::KIND_FUNCTION | KIND::KIND_TYPE_FLAG;
+
 public:
     std::vector<TypeRef> parameters_;
     TypeRef spread_;
@@ -235,12 +236,8 @@ public:
           parameters_(std::move(parameters)),
           spread_(spread),
           return_type_(return_type) {}
-    std::string repr() const final {
-        return "function";
-    }
-    bool contains(const Type& other) const final {
-        return other.kind_ == KIND::KIND_FUNCTION;
-    }
+    std::string repr() const final { return "function"; }
+    bool contains(const Type& other) const final { return other.kind_ == KIND::KIND_FUNCTION; }
 };
 
 using NullType = PrimitiveType<KIND::KIND_NULL>;
@@ -258,7 +255,7 @@ public:
     bool contains(const Type& other) const final;
 };
 
-class RecordType: public Type {
+class RecordType : public Type {
 public:
     const std::map<std::string, TypeRef> fields_;
     RecordType(std::map<std::string, TypeRef> fields);
@@ -271,8 +268,13 @@ public:
     const std::string_view name;
     const std::vector<InterfaceTypeRef>& interfaces;
     const ClassTypeRef extends;
-    const Scope* properties;
-    ClassType(std::string_view name, const std::vector<InterfaceTypeRef>& interfaces, const ClassTypeRef extends, const Scope* properties);
+    const Context* properties;
+    ClassType(
+        std::string_view name,
+        const std::vector<InterfaceTypeRef>& interfaces,
+        const ClassTypeRef extends,
+        const Context* properties
+    );
     std::string repr() const override;
     bool contains(const Type& other) const override;
 };
@@ -295,21 +297,23 @@ class Value : public TypeOrValue {
 public:
     static constexpr KIND Kind = KIND::KIND_ANY;
     using Type = AnyType;
-    template<ValueClass V>
+    template <ValueClass V>
     static ValueRef FromLiteral(std::string_view literal) {
         if constexpr (std::is_same_v<V, NullValue>) {
             assert(literal == "null");
             return new V();
         } else if constexpr (std::is_same_v<V, IntegerValue>) {
             int64_t value;
-            auto [ptr, ec] = std::from_chars(literal.data(), literal.data() + literal.size(), value);
+            auto [ptr, ec] =
+                std::from_chars(literal.data(), literal.data() + literal.size(), value);
             if (ec != std::errc()) {
                 throw std::runtime_error("Invalid integer literal: "s + literal.data());
             }
             return new V(value);
         } else if constexpr (std::is_same_v<V, FloatValue>) {
             double value;
-            auto [ptr, ec] = std::from_chars(literal.data(), literal.data() + literal.size(), value);
+            auto [ptr, ec] =
+                std::from_chars(literal.data(), literal.data() + literal.size(), value);
             if (ec != std::errc()) {
                 throw std::runtime_error("Invalid float literal: "s + literal.data());
             }
@@ -327,6 +331,7 @@ public:
             static_assert(false, "Unknown literal type");
         }
     };
+
 public:
     Value(KIND kind);
     ~Value() override = default;
@@ -337,6 +342,7 @@ class NullValue final : public Value {
 public:
     static constexpr KIND Kind = KIND::KIND_NULL;
     using Type = NullType;
+
 public:
     NullValue();
     std::string repr() const final;
@@ -347,105 +353,113 @@ class IntegerValue final : public Value {
 public:
     static constexpr KIND Kind = KIND::KIND_INTEGER;
     using Type = IntegerType;
+
 public:
     const std::int64_t value_;
     IntegerValue(std::int64_t value);
     std::string repr() const final;
     bool is_truthy() const final;
-    IntegerValue* operator + (const IntegerValue& other) const;
-    IntegerValue* operator - (const IntegerValue& other) const;
-    IntegerValue* operator - () const;
-    IntegerValue* operator * (const IntegerValue& other) const;
-    IntegerValue* operator / (const IntegerValue& other) const;
-    IntegerValue* operator % (const IntegerValue& other) const;
-    BooleanValue* operator == (const IntegerValue& other) const;
-    BooleanValue* operator != (const IntegerValue& other) const;
-    BooleanValue* operator < (const IntegerValue& other) const;
-    BooleanValue* operator <= (const IntegerValue& other) const;
-    BooleanValue* operator > (const IntegerValue& other) const;
-    BooleanValue* operator >= (const IntegerValue& other) const;
-    IntegerValue* operator & (const IntegerValue& other) const;
-    IntegerValue* operator | (const IntegerValue& other) const;
-    IntegerValue* operator ^ (const IntegerValue& other) const;
-    IntegerValue* operator ~ () const;
-    IntegerValue* operator << (const IntegerValue& other) const;
-    IntegerValue* operator >> (const IntegerValue& other) const;
-    IntegerValue* operator = (const FloatValue& other) const;
+    IntegerValue* operator+(const IntegerValue& other) const;
+    IntegerValue* operator-(const IntegerValue& other) const;
+    IntegerValue* operator-() const;
+    IntegerValue* operator*(const IntegerValue& other) const;
+    IntegerValue* operator/(const IntegerValue& other) const;
+    IntegerValue* operator%(const IntegerValue& other) const;
+    BooleanValue* operator==(const IntegerValue& other) const;
+    BooleanValue* operator!=(const IntegerValue& other) const;
+    BooleanValue* operator<(const IntegerValue& other) const;
+    BooleanValue* operator<=(const IntegerValue& other) const;
+    BooleanValue* operator>(const IntegerValue& other) const;
+    BooleanValue* operator>=(const IntegerValue& other) const;
+    IntegerValue* operator&(const IntegerValue& other) const;
+    IntegerValue* operator|(const IntegerValue& other) const;
+    IntegerValue* operator^(const IntegerValue& other) const;
+    IntegerValue* operator~() const;
+    IntegerValue* operator<<(const IntegerValue& other) const;
+    IntegerValue* operator>>(const IntegerValue& other) const;
+    IntegerValue* operator=(const FloatValue& other) const;
 };
 
 class FloatValue final : public Value {
 public:
     static constexpr KIND Kind = KIND::KIND_FLOAT;
     using Type = FloatType;
+
 public:
     const double value_;
     FloatValue(double value);
     std::string repr() const final;
     bool is_truthy() const final;
-    FloatValue* operator + (const FloatValue& other) const;
-    FloatValue* operator - (const FloatValue& other) const;
-    FloatValue* operator - () const;
-    FloatValue* operator * (const FloatValue& other) const;
-    FloatValue* operator / (const FloatValue& other) const;
-    FloatValue* operator % (const FloatValue& other) const;
-    BooleanValue* operator == (const FloatValue& other) const;
-    BooleanValue* operator != (const FloatValue& other) const;
-    BooleanValue* operator < (const FloatValue& other) const;
-    BooleanValue* operator <= (const FloatValue& other) const;
-    BooleanValue* operator > (const FloatValue& other) const;
-    BooleanValue* operator >= (const FloatValue& other) const;
-    FloatValue* operator = (const IntegerValue& other) const;
+    FloatValue* operator+(const FloatValue& other) const;
+    FloatValue* operator-(const FloatValue& other) const;
+    FloatValue* operator-() const;
+    FloatValue* operator*(const FloatValue& other) const;
+    FloatValue* operator/(const FloatValue& other) const;
+    FloatValue* operator%(const FloatValue& other) const;
+    BooleanValue* operator==(const FloatValue& other) const;
+    BooleanValue* operator!=(const FloatValue& other) const;
+    BooleanValue* operator<(const FloatValue& other) const;
+    BooleanValue* operator<=(const FloatValue& other) const;
+    BooleanValue* operator>(const FloatValue& other) const;
+    BooleanValue* operator>=(const FloatValue& other) const;
+    FloatValue* operator=(const IntegerValue& other) const;
 };
 
 class StringValue final : public Value {
 public:
     static constexpr KIND Kind = KIND::KIND_STRING;
     using Type = StringType;
+
 public:
     const std::string value_;
     StringValue(std::string&& value);
     std::string repr() const final;
     bool is_truthy() const final;
-    StringValue* operator + (const StringValue& other) const;
-    StringValue* operator * (const IntegerValue& other) const;
-    BooleanValue* operator == (const StringValue& other) const;
-    BooleanValue* operator != (const StringValue& other) const;
+    StringValue* operator+(const StringValue& other) const;
+    StringValue* operator*(const IntegerValue& other) const;
+    BooleanValue* operator==(const StringValue& other) const;
+    BooleanValue* operator!=(const StringValue& other) const;
 };
 
 class BooleanValue final : public Value {
 public:
     static constexpr KIND Kind = KIND::KIND_BOOLEAN;
     using Type = BooleanType;
+
 public:
     const bool value_;
     BooleanValue(bool value);
     std::string repr() const final;
     bool is_truthy() const final;
-    BooleanValue* operator == (const BooleanValue& other) const;
-    BooleanValue* operator != (const BooleanValue& other) const;
-    BooleanValue* operator and (const BooleanValue& other) const;
-    BooleanValue* operator or (const BooleanValue& other) const;
-    BooleanValue* operator not () const;
+    BooleanValue* operator==(const BooleanValue& other) const;
+    BooleanValue* operator!=(const BooleanValue& other) const;
+    BooleanValue* operator and(const BooleanValue& other) const;
+    BooleanValue* operator or(const BooleanValue& other) const;
+    BooleanValue* operator not() const;
 };
 
 class FunctionValue final : public Value {
 public:
     static constexpr KIND Kind = KIND::KIND_FUNCTION;
     using Type = FunctionType;
+
 public:
-    const std::function<ValueRef (const Arguments&)> callback_;
+    const std::function<ValueRef(const Arguments&)> callback_;
     TypeRef function_type_;
     FunctionValue(auto&& callback, TypeRef function_type)
-        : Value(KIND::KIND_FUNCTION), callback_(std::forward<decltype(callback)>(callback)), function_type_(function_type) {}
+        : Value(KIND::KIND_FUNCTION),
+          callback_(std::forward<decltype(callback)>(callback)),
+          function_type_(function_type) {}
     std::string repr() const final;
     bool is_truthy() const final;
-    ValueRef operator () (const Arguments& args) const;
+    ValueRef operator()(const Arguments& args) const;
 };
 
 class ObjectValue : public Value {
 public:
     static constexpr KIND Kind = KIND::KIND_OBJECT;
     using Type = ClassType;
+
 public:
     ClassTypeRef class_type_;
     std::vector<ValueRef> attributes_;
@@ -457,13 +471,14 @@ class ListValue : public ObjectValue {
 private:
     static TypeRef ListClassInstance;
     static ValueRef Append(const std::vector<ValueRef>& args);
+
 public:
     std::vector<ValueRef> values;
     ListValue();
     ListValue(std::vector<ValueRef>&& values);
     std::string repr() const final;
     bool is_truthy() const final;
-    ListValue* operator + (const ListValue& other) const;
-    ListValue* operator * (const IntegerValue& other) const;
-    ValueRef operator [] (const Slice& indices) const;
+    ListValue* operator+(const ListValue& other) const;
+    ListValue* operator*(const IntegerValue& other) const;
+    ValueRef operator[](const Slice& indices) const;
 };
