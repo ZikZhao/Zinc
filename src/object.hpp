@@ -3,7 +3,7 @@
 
 class Context;
 
-enum class KIND : std::uint16_t {
+enum class Kind : std::uint16_t {
     KIND_NO_RIGHT_OPERAND,
     KIND_ANY,
     KIND_NULL,
@@ -11,6 +11,7 @@ enum class KIND : std::uint16_t {
     KIND_FLOAT,
     KIND_STRING,
     KIND_BOOLEAN,
+    NON_COMPOSITE_SIZE,
     KIND_FUNCTION,
     KIND_LIST,
     KIND_RECORD,
@@ -19,22 +20,7 @@ enum class KIND : std::uint16_t {
     KIND_OBJECT,
     KIND_INTERSECTION,
     KIND_UNION,
-    KIND_TYPE_FLAG = 1 << (std::numeric_limits<std::underlying_type_t<KIND>>::digits - 1),
 };
-
-constexpr KIND operator&(KIND lhs, KIND rhs) noexcept {
-    return static_cast<KIND>(
-        static_cast<std::underlying_type_t<KIND>>(lhs) &
-        static_cast<std::underlying_type_t<KIND>>(rhs)
-    );
-}
-
-constexpr KIND operator|(KIND lhs, KIND rhs) noexcept {
-    return static_cast<KIND>(
-        static_cast<std::underlying_type_t<KIND>>(lhs) |
-        static_cast<std::underlying_type_t<KIND>>(rhs)
-    );
-}
 
 template <typename TargetType>
 class Reference {
@@ -105,7 +91,7 @@ class SetValue;
 
 class Type;
 class AnyType;
-template <KIND Kind>
+template <Kind Kind>
 class PrimitiveType;
 class InterfaceType;
 class StructType;
@@ -127,24 +113,10 @@ using DictValueRef = ObjRef;      // Should always point to a DictValue
 using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
 
-struct OperationTuple {
-    std::string_view op;
-    KIND left_type;
-    KIND right_type;
-    constexpr bool operator<(const OperationTuple& other) const {
-        return std::tie(op, left_type, right_type) <
-               std::tie(other.op, other.left_type, other.right_type);
-    }
-};
-
-using SpecifiedOperatorFunc = TypeOrValue* (*)(TypeOrValue*, TypeOrValue*);
-
-extern const std::map<OperationTuple, SpecifiedOperatorFunc> OperationMap;
-
 class TypeOrValue {
 public:
-    const KIND kind_;
-    TypeOrValue(KIND kind);
+    const Kind kind_;
+    TypeOrValue(Kind kind);
     virtual ~TypeOrValue() = default;
     virtual std::string repr() const = 0;
     bool is_truthy() const;
@@ -159,14 +131,14 @@ public:
     static TypeRef FromTypeIndex(const std::type_index& type);
 
 public:
-    Type(KIND kind);
+    Type(Kind kind);
     ~Type() override = default;
     virtual bool contains(const Type& other) const = 0;
 };
 
 class AnyType final : public Type {
 public:
-    static constexpr KIND Kind = KIND::KIND_ANY | KIND::KIND_TYPE_FLAG;
+    static constexpr Kind kind = Kind::KIND_ANY;
 
 public:
     AnyType();
@@ -174,77 +146,77 @@ public:
     bool contains(const Type& other) const final;
 };
 
-template <KIND K>
+template <Kind K>
 class PrimitiveType final : public Type {
 public:
-    static constexpr KIND Kind = K | KIND::KIND_TYPE_FLAG;
+    static constexpr Kind kind = K;
 
 public:
-    PrimitiveType() : Type(Kind) {}
+    PrimitiveType() : Type(kind) {}
     std::string repr() const final {
-        if constexpr (K == KIND::KIND_STRING) {
+        if constexpr (K == Kind::KIND_STRING) {
             return "string";
-        } else if constexpr (K == KIND::KIND_BOOLEAN) {
+        } else if constexpr (K == Kind::KIND_BOOLEAN) {
             return "boolean";
-        } else if constexpr (K == KIND::KIND_FUNCTION) {
+        } else if constexpr (K == Kind::KIND_FUNCTION) {
             return "function";
         } else {
             std::unreachable();
         }
     }
-    bool contains(const Type& other) const final { return other.kind_ == Kind; }
+    bool contains(const Type& other) const final { return other.kind_ == kind; }
 };
 
 template <>
-class PrimitiveType<KIND::KIND_INTEGER> final : public Type {
+class PrimitiveType<Kind::KIND_INTEGER> final : public Type {
 public:
-    static constexpr KIND Kind = KIND::KIND_INTEGER | KIND::KIND_TYPE_FLAG;
+    static constexpr Kind kind = Kind::KIND_INTEGER;
 
 public:
-    PrimitiveType() : Type(KIND::KIND_INTEGER) {}
+    PrimitiveType() : Type(Kind::KIND_INTEGER) {}
     std::string repr() const final { return "integer"; }
     bool contains(const Type& other) const final {
-        return other.kind_ == KIND::KIND_INTEGER or other.kind_ == KIND::KIND_FLOAT;
+        return other.kind_ == Kind::KIND_INTEGER or other.kind_ == Kind::KIND_FLOAT;
     }
 };
 
 template <>
-class PrimitiveType<KIND::KIND_FLOAT> final : public Type {
+class PrimitiveType<Kind::KIND_FLOAT> final : public Type {
 public:
-    static constexpr KIND Kind = KIND::KIND_FLOAT | KIND::KIND_TYPE_FLAG;
+    static constexpr Kind kind = Kind::KIND_FLOAT;
 
 public:
-    PrimitiveType() : Type(KIND::KIND_FLOAT) {}
+    PrimitiveType() : Type(Kind::KIND_FLOAT) {}
     std::string repr() const final { return "float"; }
     bool contains(const Type& other) const final {
-        return other.kind_ == KIND::KIND_FLOAT or other.kind_ == KIND::KIND_INTEGER;
+        return other.kind_ == Kind::KIND_FLOAT or other.kind_ == Kind::KIND_INTEGER;
     }
 };
 
 template <>
-class PrimitiveType<KIND::KIND_FUNCTION> final : public Type {
+class PrimitiveType<Kind::KIND_FUNCTION> final : public Type {
 public:
-    static constexpr KIND Kind = KIND::KIND_FUNCTION | KIND::KIND_TYPE_FLAG;
+    static constexpr Kind kind = Kind::KIND_FUNCTION;
 
 public:
     std::vector<TypeRef> parameters_;
     TypeRef spread_;
     TypeRef return_type_;
     PrimitiveType(std::vector<TypeRef>&& parameters, TypeRef spread, TypeRef return_type)
-        : Type(KIND::KIND_FUNCTION),
+        : Type(Kind::KIND_FUNCTION),
           parameters_(std::move(parameters)),
           spread_(spread),
           return_type_(return_type) {}
     std::string repr() const final { return "function"; }
-    bool contains(const Type& other) const final { return other.kind_ == KIND::KIND_FUNCTION; }
+    bool contains(const Type& other) const final { return other.kind_ == Kind::KIND_FUNCTION; }
 };
 
-using NullType = PrimitiveType<KIND::KIND_NULL>;
-using IntegerType = PrimitiveType<KIND::KIND_INTEGER>;
-using FloatType = PrimitiveType<KIND::KIND_FLOAT>;
-using StringType = PrimitiveType<KIND::KIND_STRING>;
-using BooleanType = PrimitiveType<KIND::KIND_BOOLEAN>;
-using FunctionType = PrimitiveType<KIND::KIND_FUNCTION>;
+using NullType = PrimitiveType<Kind::KIND_NULL>;
+using IntegerType = PrimitiveType<Kind::KIND_INTEGER>;
+using FloatType = PrimitiveType<Kind::KIND_FLOAT>;
+using StringType = PrimitiveType<Kind::KIND_STRING>;
+using BooleanType = PrimitiveType<Kind::KIND_BOOLEAN>;
+using FunctionType = PrimitiveType<Kind::KIND_FUNCTION>;
 
 class ListType final : public Type {
 public:
@@ -294,7 +266,7 @@ public:
 
 class Value : public TypeOrValue {
 public:
-    static constexpr KIND Kind = KIND::KIND_ANY;
+    static constexpr Kind kind = Kind::KIND_ANY;
     using Type = AnyType;
     template <ValueClass V>
     static ValueRef FromLiteral(std::string_view literal) {
@@ -332,14 +304,14 @@ public:
     };
 
 public:
-    Value(KIND kind);
+    Value(Kind kind);
     ~Value() override = default;
     virtual bool is_truthy() const = 0;
 };
 
 class NullValue final : public Value {
 public:
-    static constexpr KIND Kind = KIND::KIND_NULL;
+    static constexpr Kind kind = Kind::KIND_NULL;
     using Type = NullType;
 
 public:
@@ -350,7 +322,7 @@ public:
 
 class IntegerValue final : public Value {
 public:
-    static constexpr KIND Kind = KIND::KIND_INTEGER;
+    static constexpr Kind kind = Kind::KIND_INTEGER;
     using Type = IntegerType;
 
 public:
@@ -381,7 +353,7 @@ public:
 
 class FloatValue final : public Value {
 public:
-    static constexpr KIND Kind = KIND::KIND_FLOAT;
+    static constexpr Kind kind = Kind::KIND_FLOAT;
     using Type = FloatType;
 
 public:
@@ -406,7 +378,7 @@ public:
 
 class StringValue final : public Value {
 public:
-    static constexpr KIND Kind = KIND::KIND_STRING;
+    static constexpr Kind kind = Kind::KIND_STRING;
     using Type = StringType;
 
 public:
@@ -422,7 +394,7 @@ public:
 
 class BooleanValue final : public Value {
 public:
-    static constexpr KIND Kind = KIND::KIND_BOOLEAN;
+    static constexpr Kind kind = Kind::KIND_BOOLEAN;
     using Type = BooleanType;
 
 public:
@@ -439,14 +411,14 @@ public:
 
 class FunctionValue final : public Value {
 public:
-    static constexpr KIND Kind = KIND::KIND_FUNCTION;
+    static constexpr Kind kind = Kind::KIND_FUNCTION;
     using Type = FunctionType;
 
 public:
     const std::function<ValueRef(const Arguments&)> callback_;
     TypeRef function_type_;
     FunctionValue(auto&& callback, TypeRef function_type)
-        : Value(KIND::KIND_FUNCTION),
+        : Value(Kind::KIND_FUNCTION),
           callback_(std::forward<decltype(callback)>(callback)),
           function_type_(function_type) {}
     std::string repr() const final;
@@ -456,8 +428,7 @@ public:
 
 class ObjectValue : public Value {
 public:
-    static constexpr KIND Kind = KIND::KIND_OBJECT;
-    using Type = ClassType;
+    static constexpr Kind kind = Kind::KIND_OBJECT;
 
 public:
     ClassTypeRef class_type_;

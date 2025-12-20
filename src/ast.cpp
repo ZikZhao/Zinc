@@ -1,10 +1,9 @@
 #include "ast.hpp"
 
 #include "pch.hpp"
+#include <string_view>
 
 #include "object.hpp"
-
-ConstantStringPool StringPool;
 
 Context::Context(Context& parent) noexcept : parent_(&parent) {}
 Context::Context(std::string_view name, Context& parent) noexcept : parent_(&parent), name_(name) {}
@@ -65,8 +64,8 @@ void ASTCodeBlock::analyze(Context& ctx) {
     }
 }
 
-ASTIdentifier::ASTIdentifier(const Location& loc, const std::string& name) noexcept
-    : ASTExpression(loc), name_(StringPool.make(name)) {}
+ASTIdentifier::ASTIdentifier(const Location& loc, std::string_view name) noexcept
+    : ASTExpression(loc), name_(name) {}
 
 ASTFunctionCall::ASTFunctionCall(
     const Location& location,
@@ -125,7 +124,7 @@ std::generator<ASTNode*> ASTDeclaration::get_children() const noexcept {
 }
 
 ASTFieldDeclaration::ASTFieldDeclaration(
-    const Location& location, std::string identifier, std::unique_ptr<ASTTypeExpression> type
+    const Location& location, std::string_view identifier, std::unique_ptr<ASTTypeExpression> type
 ) noexcept
     : ASTNode(location), identifier_(std::move(identifier)), type_(std::move(type)) {}
 std::generator<ASTNode*> ASTFieldDeclaration::get_children() const noexcept {
@@ -133,7 +132,7 @@ std::generator<ASTNode*> ASTFieldDeclaration::get_children() const noexcept {
 }
 
 ASTTypeAlias::ASTTypeAlias(
-    const Location& location, std::string identifier, std::unique_ptr<ASTExpression> type
+    const Location& location, std::string_view identifier, std::unique_ptr<ASTExpression> type
 ) noexcept
     : ASTNode(location), identifier_(std::move(identifier)), type_(std::move(type)) {}
 std::generator<ASTNode*> ASTTypeAlias::get_children() const noexcept { co_yield type_.get(); }

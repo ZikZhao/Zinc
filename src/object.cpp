@@ -4,116 +4,23 @@
 
 #include "exception.hpp"
 
-template <typename Left, typename Func, typename Right = void>
-consteval auto MakeBasicOperation() {
-    if constexpr (std::is_same_v<Right, void>) {
-        using ResultType = std::invoke_result_t<Func, Left>;
-        return std::array{
-            std::pair{
-                OperationTuple{GetOperatorString<Func>(), Left::Kind, KIND::KIND_NO_RIGHT_OPERAND},
-                SpecifiedOperatorFunc([](TypeOrValue* expr, TypeOrValue*) -> TypeOrValue* {
-                    return Func()(static_cast<Left&>(*expr));
-                }),
-            },
-            std::pair{
-                OperationTuple{
-                    GetOperatorString<Func>(), Left::Type::Kind, KIND::KIND_NO_RIGHT_OPERAND
-                },
-                SpecifiedOperatorFunc([](TypeOrValue*, TypeOrValue*) -> TypeOrValue* {
-                    return ResultType();
-                }),
-            },
-        };
-    } else {
-        using ResultType = std::invoke_result_t<Func, Left, Right>;
-        return std::array{
-            std::pair{
-                OperationTuple{GetOperatorString<Func>(), Left::Kind, Right::Kind},
-                SpecifiedOperatorFunc([](TypeOrValue* left, TypeOrValue* right) -> TypeOrValue* {
-                    return Func()(static_cast<Left&>(*left), static_cast<Right&>(*right));
-                }),
-            },
-            std::pair{
-                OperationTuple{GetOperatorString<Func>(), Left::Type::Kind, Right::Type::Kind},
-                SpecifiedOperatorFunc([](TypeOrValue*, TypeOrValue*) -> TypeOrValue* {
-                    return ResultType();
-                })
-            },
-        };
-    }
-}
-
-consteval auto MakeOperationMap() {
-    return std::array{
-               MakeBasicOperation<IntegerValue, OperatorFunctors::Add, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::Subtract, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::Negate>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::Multiply, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::Divide, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::Remainder, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::Equal, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::NotEqual, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::LessThan, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::LessEqual, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::GreaterThan, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::GreaterEqual, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::BitwiseAnd, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::BitwiseOr, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::BitwiseXor, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::BitwiseNot>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::LeftShift, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::RightShift, IntegerValue>(),
-               MakeBasicOperation<IntegerValue, OperatorFunctors::Assign, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::Add, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::Subtract, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::Negate>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::Multiply, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::Divide, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::Remainder, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::Equal, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::NotEqual, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::LessThan, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::LessEqual, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::GreaterThan, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::GreaterEqual, FloatValue>(),
-               MakeBasicOperation<FloatValue, OperatorFunctors::Assign, IntegerValue>(),
-               MakeBasicOperation<StringValue, OperatorFunctors::Add, StringValue>(),
-               MakeBasicOperation<StringValue, OperatorFunctors::Multiply, IntegerValue>(),
-               MakeBasicOperation<StringValue, OperatorFunctors::Equal, StringValue>(),
-               MakeBasicOperation<StringValue, OperatorFunctors::NotEqual, StringValue>(),
-               MakeBasicOperation<BooleanValue, OperatorFunctors::Equal, BooleanValue>(),
-               MakeBasicOperation<BooleanValue, OperatorFunctors::NotEqual, BooleanValue>(),
-               MakeBasicOperation<BooleanValue, OperatorFunctors::LogicalAnd, BooleanValue>(),
-               MakeBasicOperation<BooleanValue, OperatorFunctors::LogicalOr, BooleanValue>(),
-               MakeBasicOperation<BooleanValue, OperatorFunctors::LogicalNot>(),
-               // MakeBasicOperation<ListValue, OperatorFunctors::Add, ListValue>(),
-               // MakeBasicOperation<ListValue, OperatorFunctors::Multiply, IntegerValue>(),
-               // MakeBasicOperation<ListValue, OperatorFunctors::Equal, ListValue>(),
-               // MakeBasicOperation<ListValue, OperatorFunctors::NotEqual, ListValue>(),
-           } |
-           std::views::join;
-}
-
-const std::map<OperationTuple, SpecifiedOperatorFunc> OperationMap =
-    std::ranges::to<std::map<OperationTuple, SpecifiedOperatorFunc>>(MakeOperationMap());
-
-TypeOrValue::TypeOrValue(KIND kind) : kind_(kind) {}
+TypeOrValue::TypeOrValue(Kind kind) : kind_(kind) {}
 bool TypeOrValue::is_truthy() const {
-    if (static_cast<bool>(kind_ & KIND::KIND_TYPE_FLAG)) {
+    if (static_cast<bool>(kind_ & Kind::KIND_TYPE_FLAG)) {
         throw std::runtime_error("value expected, got type");
     }
     return static_cast<const Value*>(this)->is_truthy();
 }
 bool TypeOrValue::contains(const TypeOrValue& other) const {
-    if (not static_cast<bool>(kind_ & KIND::KIND_TYPE_FLAG) or
-        not static_cast<bool>(other.kind_ & KIND::KIND_TYPE_FLAG)) {
+    if (not static_cast<bool>(kind_ & Kind::KIND_TYPE_FLAG) or
+        not static_cast<bool>(other.kind_ & Kind::KIND_TYPE_FLAG)) {
         throw std::runtime_error("type expected, got value");
     }
     return static_cast<const Type*>(this)->contains(*static_cast<const Type*>(&other));
 }
 ObjRef TypeOrValue::eval_operation(std::string_view op) {
     auto it = OperationMap.find(
-        OperationTuple{std::string(op), this->kind_, KIND::KIND_NO_RIGHT_OPERAND}
+        OperationTuple{std::string(op), this->kind_, Kind::KIND_NO_RIGHT_OPERAND}
     );
     if (it != OperationMap.end()) {
         return it->second(this, nullptr);
@@ -123,12 +30,12 @@ ObjRef TypeOrValue::eval_operation(std::string_view op) {
 }
 ObjRef TypeOrValue::eval_operation(std::string_view op, TypeOrValue& other) {
     if (this->kind_ != other.kind_) {
-        if (this->kind_ == KIND::KIND_FLOAT and other.kind_ == KIND::KIND_INTEGER) {
+        if (this->kind_ == Kind::KIND_FLOAT and other.kind_ == Kind::KIND_INTEGER) {
             FloatValue promoted_other =
                 static_cast<double>(static_cast<const IntegerValue&>(other).value_);
             auto result = this->eval_operation(op, promoted_other);
             return result;
-        } else if (this->kind_ == KIND::KIND_INTEGER and other.kind_ == KIND::KIND_FLOAT) {
+        } else if (this->kind_ == Kind::KIND_INTEGER and other.kind_ == Kind::KIND_FLOAT) {
             FloatValue promoted_this =
                 static_cast<double>(static_cast<const IntegerValue&>(*this).value_);
             auto result = promoted_this.eval_operation(op, other);
@@ -158,14 +65,13 @@ TypeRef Type::FromTypeIndex(const std::type_index& type) {
         throw std::runtime_error("Unknown type index: "s + type.name());
     }
 }
-Type::Type(KIND kind) : TypeOrValue(kind) {}
+Type::Type(Kind kind) : TypeOrValue(kind) {}
 
-AnyType::AnyType() : Type(KIND::KIND_ANY) {}
+AnyType::AnyType() : Type(Kind::KIND_ANY) {}
 std::string AnyType::repr() const { return "any"; }
 bool AnyType::contains(const Type& other) const { return true; }
 
-ListType::ListType(TypeRef element_type)
-    : Type(KIND::KIND_LIST | KIND::KIND_TYPE_FLAG), element_type_(element_type) {}
+ListType::ListType(TypeRef element_type) : Type(Kind::KIND_LIST), element_type_(element_type) {}
 std::string ListType::repr() const { return "List<"s + element_type_->repr() + ">"s; }
 bool ListType::contains(const Type& other) const {
     if (other.kind_ != this->kind_) {
@@ -176,7 +82,7 @@ bool ListType::contains(const Type& other) const {
 }
 
 RecordType::RecordType(std::map<std::string, TypeRef> fields)
-    : Type(KIND::KIND_RECORD | KIND::KIND_TYPE_FLAG), fields_(std::move(fields)) {}
+    : Type(Kind::KIND_RECORD | Kind::KIND_TYPE_FLAG), fields_(std::move(fields)) {}
 std::string RecordType::repr() const {
     // TODO
     return {};
@@ -192,7 +98,7 @@ ClassType::ClassType(
     const ClassTypeRef extends,
     const Context* properties
 )
-    : Type(KIND::KIND_CLASS),
+    : Type(Kind::KIND_CLASS),
       name_(name),
       interfaces_(interfaces),
       extends_(extends),
@@ -203,13 +109,13 @@ bool ClassType::contains(const Type& other) const {
     return false;
 }
 
-Value::Value(KIND kind) : TypeOrValue(kind) {}
+Value::Value(Kind kind) : TypeOrValue(kind) {}
 
-NullValue::NullValue() : Value(KIND::KIND_NULL) {}
+NullValue::NullValue() : Value(Kind::KIND_NULL) {}
 std::string NullValue::repr() const { return "null"; }
 bool NullValue::is_truthy() const { return false; }
 
-IntegerValue::IntegerValue(int64_t value) : Value(KIND::KIND_INTEGER), value_(value) {}
+IntegerValue::IntegerValue(int64_t value) : Value(Kind::KIND_INTEGER), value_(value) {}
 std::string IntegerValue::repr() const { return std::to_string(value_); }
 bool IntegerValue::is_truthy() const { return this->value_ != 0; }
 IntegerValue* IntegerValue::operator+(const IntegerValue& other) const {
@@ -270,7 +176,7 @@ IntegerValue* IntegerValue::operator=(const FloatValue& other) const {
     return new IntegerValue(static_cast<std::int64_t>(other.value_));
 }
 
-FloatValue::FloatValue(double value) : Value(KIND::KIND_FLOAT), value_(value) {}
+FloatValue::FloatValue(double value) : Value(Kind::KIND_FLOAT), value_(value) {}
 std::string FloatValue::repr() const { return std::to_string(value_); }
 bool FloatValue::is_truthy() const { return this->value_ != 0.0; }
 FloatValue* FloatValue::operator+(const FloatValue& other) const {
@@ -314,7 +220,7 @@ FloatValue* FloatValue::operator=(const IntegerValue& other) const {
 }
 
 StringValue::StringValue(std::string&& value)
-    : Value(KIND::KIND_STRING), value_(std::move(value)) {}
+    : Value(Kind::KIND_STRING), value_(std::move(value)) {}
 std::string StringValue::repr() const { return "\"" + this->value_ + "\""; }
 bool StringValue::is_truthy() const { return not this->value_.empty(); }
 StringValue* StringValue::operator+(const StringValue& other) const {
@@ -336,7 +242,7 @@ BooleanValue* StringValue::operator!=(const StringValue& other) const {
     return new BooleanValue(this->value_ != other.value_);
 }
 
-BooleanValue::BooleanValue(bool value) : Value(KIND::KIND_BOOLEAN), value_(value) {}
+BooleanValue::BooleanValue(bool value) : Value(Kind::KIND_BOOLEAN), value_(value) {}
 std::string BooleanValue::repr() const { return this->value_ ? "true" : "false"; }
 bool BooleanValue::is_truthy() const { return this->value_; }
 BooleanValue* BooleanValue::operator==(const BooleanValue& other) const {
@@ -366,7 +272,7 @@ ValueRef FunctionValue::operator()(const Arguments& args) const {
     std::unreachable();
 }
 
-ObjectValue::ObjectValue(TypeRef cls) : Value(KIND::KIND_OBJECT), class_type_(cls) {}
+ObjectValue::ObjectValue(TypeRef cls) : Value(Kind::KIND_OBJECT), class_type_(cls) {}
 
 ValueRef ListValue::ListClassInstance =
     new ClassType("list"sv, std::vector<ValueRef>{}, {}, nullptr);

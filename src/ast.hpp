@@ -122,7 +122,7 @@ public:
 class ASTIdentifier final : public ASTExpression {
 public:
     const std::string_view name_;
-    ASTIdentifier(const Location& loc, const std::string& name) noexcept;
+    ASTIdentifier(const Location& loc, std::string_view name) noexcept;
 };
 
 template <OperatorFunctor Op>
@@ -288,10 +288,12 @@ public:
 
 class ASTFieldDeclaration final : public ASTNode {
 public:
-    const std::string identifier_;
+    const std::string_view identifier_;
     const std::unique_ptr<ASTTypeExpression> type_;
     ASTFieldDeclaration(
-        const Location& location, std::string identifier, std::unique_ptr<ASTTypeExpression> type
+        const Location& location,
+        std::string_view identifier,
+        std::unique_ptr<ASTTypeExpression> type
     ) noexcept;
     ~ASTFieldDeclaration() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
@@ -299,10 +301,12 @@ public:
 
 class ASTTypeAlias final : public ASTNode {
 public:
-    const std::string identifier_;
+    const std::string_view identifier_;
     const std::unique_ptr<ASTTypeExpression> type_;
     ASTTypeAlias(
-        const Location& location, std::string identifier, std::unique_ptr<ASTTypeExpression> type
+        const Location& location,
+        std::string_view identifier,
+        std::unique_ptr<ASTTypeExpression> type
     ) noexcept;
     ~ASTTypeAlias() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;

@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "StainlessParser.h"
 #include "antlr4-runtime.h"
 // IWYU pragma: end_exports
 
@@ -74,27 +75,6 @@ public:
     }
 };
 
-class ConstantStringPool {
-private:
-    std::pmr::monotonic_buffer_resource buffer_;
-    std::pmr::polymorphic_allocator<char> allocator_;
-
-public:
-    ConstantStringPool(std::size_t initial_size = 1024 * 1024)
-        : buffer_(initial_size), allocator_(&buffer_) {}
-    ~ConstantStringPool() = default;
-    std::string_view make(std::string_view str) {
-        char* mem = allocator_.allocate(str.size());
-        std::copy_n(str.data(), str.size(), mem);
-        return std::string_view(mem, str.size());
-    }
-    std::string_view make(const std::string& str) {
-        char* mem = allocator_.allocate(str.size());
-        std::copy_n(str.data(), str.size(), mem);
-        return std::string_view(mem, str.size());
-    }
-};
-
 template <std::size_t length>
 class FixedString {
 public:
@@ -119,74 +99,6 @@ constexpr std::unique_ptr<Derived, Deleter> StaticUniqueCast(std::unique_ptr<Bas
         static_cast<Derived*>(ptr.release()), std::move(ptr.get_deleter())
     );
 }
-
-namespace OperatorFunctors {
-struct Increment {
-    template <typename T>
-    auto operator()(const T& value) const {
-        return value++;
-    }
-};
-struct Decrement {
-    template <typename T>
-    auto operator()(const T& value) const {
-        return value--;
-    }
-};
-struct LeftShift {
-    template <typename T>
-    auto operator()(const T& left, const T& right) const {
-        return left << right;
-    }
-};
-struct RightShift {
-    template <typename T>
-    auto operator()(const T& left, const T& right) const {
-        return left >> right;
-    }
-};
-template <typename Functor = void>
-struct OperateAndAssign {};
-template <>
-struct OperateAndAssign<void> {
-    template <typename Left, typename Right>
-    auto operator()(const Left& left, const Right& right) const {
-        return left = right;
-    }
-};
-using Add = std::plus<>;
-using Subtract = std::minus<>;
-using Negate = std::negate<>;
-using Multiply = std::multiplies<>;
-using Divide = std::divides<>;
-using Remainder = std::modulus<>;
-using Equal = std::equal_to<>;
-using NotEqual = std::not_equal_to<>;
-using LessThan = std::less<>;
-using LessEqual = std::less_equal<>;
-using GreaterThan = std::greater<>;
-using GreaterEqual = std::greater_equal<>;
-using LogicalAnd = std::logical_and<>;
-using LogicalOr = std::logical_or<>;
-using LogicalNot = std::logical_not<>;
-using BitwiseAnd = std::bit_and<>;
-using BitwiseOr = std::bit_or<>;
-using BitwiseXor = std::bit_xor<>;
-using BitwiseNot = std::bit_not<>;
-using Assign = OperateAndAssign<>;
-using AddAssign = OperateAndAssign<Add>;
-using SubtractAssign = OperateAndAssign<Subtract>;
-using MultiplyAssign = OperateAndAssign<Multiply>;
-using DivideAssign = OperateAndAssign<Divide>;
-using RemainderAssign = OperateAndAssign<Remainder>;
-using LogicalAndAssign = OperateAndAssign<LogicalAnd>;
-using LogicalOrAssign = OperateAndAssign<LogicalOr>;
-using BitwiseAndAssign = OperateAndAssign<BitwiseAnd>;
-using BitwiseOrAssign = OperateAndAssign<BitwiseOr>;
-using BitwiseXorAssign = OperateAndAssign<BitwiseXor>;
-using LeftShiftAssign = OperateAndAssign<LeftShift>;
-using RightShiftAssign = OperateAndAssign<RightShift>;
-}  // namespace OperatorFunctors
 
 template <typename Functor>
 constexpr std::string_view GetOperatorString() {
