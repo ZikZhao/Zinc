@@ -113,12 +113,16 @@ IfMacros:
   - KJ_IF_MAYBE
 IncludeBlocks:   Regroup
 IncludeCategories:
-  - Regex:           '^<.*\.(h|hpp|hxx|hh)>'
-    Priority:        2
-    SortPriority:    0
-    CaseSensitive:   false
   - Regex:           '^<.*'
     Priority:        1
+    SortPriority:    0
+    CaseSensitive:   false
+  - Regex:           '^"pch\.hpp"$'
+    Priority:        1
+    SortPriority:    1
+    CaseSensitive:   false
+  - Regex:           '^<.*\.(h|hpp|hxx|hh)>'
+    Priority:        2
     SortPriority:    0
     CaseSensitive:   false
   - Regex:           '.*'

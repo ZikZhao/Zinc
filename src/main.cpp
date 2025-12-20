@@ -1,11 +1,11 @@
-﻿#include <string_view>
+﻿#include "pch.hpp"
 
 #include "StainlessBaseVisitor.h"
 #include "StainlessLexer.h"
 #include "StainlessParser.h"
 #include "ast.hpp"
+#include "exception.hpp"
 #include "object.hpp"
-#include "pch.hpp"
 
 class ASTBuilder final : private StainlessBaseVisitor {
 private:
@@ -35,10 +35,10 @@ private:
     template <typename Target = ASTNode>
         requires(std::is_base_of_v<ASTNode, Target>)
     std::vector<std::unique_ptr<Target>> transform_list(const auto& contexts) noexcept {
-        return contexts | std::views::transform([this](auto ctx) {
-                   return StaticUniqueCast<Target>(transform(ctx));
-               }) |
-               std::ranges::to<std::vector>();
+        auto rng = contexts | std::views::transform([this](auto ctx) {
+                       return StaticUniqueCast<Target>(transform(ctx));
+                   });
+        return std::vector(rng.begin(), rng.end());
     }
     Location loc(const antlr4::ParserRuleContext* context) noexcept {
         assert(context != nullptr);
@@ -69,10 +69,9 @@ public:
         return StaticUniqueCast<ASTCodeBlock>(transform(root));
     }
     antlrcpp::Any visitProgram(StainlessParser::ProgramContext* context) noexcept final {
-        std::vector<std::unique_ptr<ASTNode>> nodes =
-            context->statements_ |
-            std::views::transform([this](auto ctx) { return transform(ctx); }) |
-            std::ranges::to<std::vector>();
+        auto rng = context->statements_ |
+                   std::views::transform([this](auto ctx) { return transform(ctx); });
+        std::vector<std::unique_ptr<ASTNode>> nodes(rng.begin(), rng.end());
         last_visited_ = std::make_unique<ASTCodeBlock>(loc(context), std::move(nodes));
         return {};
     }
@@ -81,10 +80,9 @@ public:
         return {};
     }
     antlrcpp::Any visitCode_block(StainlessParser::Code_blockContext* context) noexcept final {
-        std::vector<std::unique_ptr<ASTNode>> nodes =
-            context->statements_ |
-            std::views::transform([this](auto ctx) { return transform(ctx); }) |
-            std::ranges::to<std::vector>();
+        auto rng = context->statements_ |
+                   std::views::transform([this](auto ctx) { return transform(ctx); });
+        std::vector<std::unique_ptr<ASTNode>> nodes(rng.begin(), rng.end());
         last_visited_ = std::make_unique<ASTCodeBlock>(loc(context), std::move(nodes));
         return {};
     }

@@ -16,6 +16,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <typeindex>
 #include <unordered_map>
 #include <utility>

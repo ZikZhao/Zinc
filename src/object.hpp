@@ -1,5 +1,4 @@
 #pragma once
-#include "exception.hpp"
 #include "pch.hpp"
 
 class Context;
@@ -265,10 +264,10 @@ public:
 
 class ClassType : public Type {
 public:
-    const std::string_view name;
-    const std::vector<InterfaceTypeRef>& interfaces;
-    const ClassTypeRef extends;
-    const Context* properties;
+    const std::string_view name_;
+    const std::vector<InterfaceTypeRef>& interfaces_;
+    const ClassTypeRef extends_;
+    const Context* properties_;
     ClassType(
         std::string_view name,
         const std::vector<InterfaceTypeRef>& interfaces,
@@ -321,7 +320,7 @@ public:
         } else if constexpr (std::is_same_v<V, StringValue>) {
             return new V(std::string(literal));
         } else if constexpr (std::is_same_v<V, BooleanValue>) {
-            [[assume(literal == "true" || literal == "false")]];
+            assert(literal == "true" || literal == "false");
             if (literal == "true") {
                 return new V(true);
             } else {
@@ -473,7 +472,7 @@ private:
     static ValueRef Append(const std::vector<ValueRef>& args);
 
 public:
-    std::vector<ValueRef> values;
+    std::vector<ValueRef> values_;
     ListValue();
     ListValue(std::vector<ValueRef>&& values);
     std::string repr() const final;

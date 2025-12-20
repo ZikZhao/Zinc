@@ -1,7 +1,8 @@
 #include "ast.hpp"
 
-#include "object.hpp"
 #include "pch.hpp"
+
+#include "object.hpp"
 
 ConstantStringPool StringPool;
 
@@ -91,11 +92,10 @@ std::generator<ASTNode*> ASTRecordType::get_children() const noexcept {
 }
 
 TypeRef ASTRecordType::eval(TypeResolver& tr) const noexcept {
-    std::map<std::string, TypeRef> field_types =
-        fields_ | std::views::transform([&](const auto& decl) {
-            return std::pair(decl->identifier_, tr.resolve(decl->identifier_));
-        }) |
-        std::ranges::to<std::map>();
+    auto rng = fields_ | std::views::transform([&](const auto& decl) {
+                   return std::pair(decl->identifier_, tr.resolve(decl->identifier_));
+               });
+    std::map<std::string, TypeRef> field_types(rng.begin(), rng.end());
     return new RecordType(field_types);
 }
 std::generator<const ASTIdentifier*> ASTRecordType::get_dependencies() const noexcept {

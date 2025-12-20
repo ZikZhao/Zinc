@@ -2,6 +2,8 @@
 
 #include "pch.hpp"
 
+#include "exception.hpp"
+
 template <typename Left, typename Func, typename Right = void>
 consteval auto MakeBasicOperation() {
     if constexpr (std::is_same_v<Right, void>) {
@@ -191,11 +193,11 @@ ClassType::ClassType(
     const Context* properties
 )
     : Type(KIND::KIND_CLASS),
-      name(name),
-      interfaces(interfaces),
-      extends(extends),
-      properties(properties) {}
-std::string ClassType::repr() const { return "class "s + std::string(name); }
+      name_(name),
+      interfaces_(interfaces),
+      extends_(extends),
+      properties_(properties) {}
+std::string ClassType::repr() const { return "class "s + std::string(name_); }
 bool ClassType::contains(const Type& other) const {
     // TODO
     return false;
@@ -373,7 +375,7 @@ ValueRef ListValue::Append(const std::vector<ValueRef>& args) {
         auto self = args.at(0);
         auto value = args.at(1);
         if (auto list_val = dynamic_cast<ListValue*>(&*self)) {
-            list_val->values.push_back(value);
+            list_val->values_.push_back(value);
             return new NullValue();
         }
         throw;
@@ -381,47 +383,47 @@ ValueRef ListValue::Append(const std::vector<ValueRef>& args) {
         throw ArgumentException(e.what());
     }
 }
-ListValue::ListValue() : ObjectValue(ListClassInstance), values() {}
+ListValue::ListValue() : ObjectValue(ListClassInstance), values_() {}
 ListValue::ListValue(std::vector<ValueRef>&& values)
-    : ObjectValue(ListClassInstance), values(std::forward<std::vector<ValueRef>>(values)) {}
+    : ObjectValue(ListClassInstance), values_(std::forward<std::vector<ValueRef>>(values)) {}
 std::string ListValue::repr() const {
     std::string result = "[";
-    for (size_t i = 0; i < this->values.size(); i++) {
-        result += this->values[i]->repr();
-        if (i < this->values.size() - 1) {
+    for (size_t i = 0; i < this->values_.size(); i++) {
+        result += this->values_[i]->repr();
+        if (i < this->values_.size() - 1) {
             result += ", ";
         }
     }
     result += "]";
     return result;
 }
-bool ListValue::is_truthy() const { return not this->values.empty(); }
+bool ListValue::is_truthy() const { return not this->values_.empty(); }
 ListValue* ListValue::operator+(const ListValue& other) const {
-    std::vector<ValueRef> new_values = this->values;
-    new_values.insert(new_values.end(), other.values.begin(), other.values.end());
+    std::vector<ValueRef> new_values = this->values_;
+    new_values.insert(new_values.end(), other.values_.begin(), other.values_.end());
     return new ListValue(std::move(new_values));
 }
 ListValue* ListValue::operator*(const IntegerValue& other) const {
     if (other.value_ <= 0) throw std::runtime_error("Can only multiply list by positive integer");
     std::vector<ValueRef> new_values;
-    new_values.reserve(this->values.size() * static_cast<std::uint64_t>(other.value_));
+    new_values.reserve(this->values_.size() * static_cast<std::uint64_t>(other.value_));
     for (uint64_t i = 0; i < static_cast<std::uint64_t>(other.value_); i++) {
-        new_values.insert(new_values.end(), this->values.begin(), this->values.end());
+        new_values.insert(new_values.end(), this->values_.begin(), this->values_.end());
     }
     return new ListValue(std::move(new_values));
 }
 ValueRef ListValue::operator[](const Slice& indices) const {
     const auto& [start_opt, end_opt, step_opt] = indices;
     int64_t start = start_opt ? start_opt->value_ : 0;
-    int64_t end = end_opt ? end_opt->value_ : static_cast<int64_t>(this->values.size());
+    int64_t end = end_opt ? end_opt->value_ : static_cast<int64_t>(this->values_.size());
     int64_t step = step_opt ? step_opt->value_ : 1;
-    if (start < 0) start += this->values.size();
-    if (end < 0) end += this->values.size();
-    if (start < 0 || static_cast<uint64_t>(start) > this->values.size() || end < start ||
-        static_cast<size_t>(end) > this->values.size()) {
+    if (start < 0) start += this->values_.size();
+    if (end < 0) end += this->values_.size();
+    if (start < 0 || static_cast<uint64_t>(start) > this->values_.size() || end < start ||
+        static_cast<size_t>(end) > this->values_.size()) {
         throw std::runtime_error("List index out of range");
     }
     return new ListValue(
-        std::vector<ValueRef>(this->values.begin() + start, this->values.begin() + end)
+        std::vector<ValueRef>(this->values_.begin() + start, this->values_.begin() + end)
     );
 }

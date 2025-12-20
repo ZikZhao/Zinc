@@ -1,9 +1,9 @@
 #pragma once
+#include "pch.hpp"
 #include <string_view>
 #include <utility>
 
 #include "object.hpp"
-#include "pch.hpp"
 
 template <typename Op>
 concept OperatorFunctor = requires { GetOperatorString<Op>(); };
