@@ -45,7 +45,7 @@ enum class OperatorCode {
     OPERATOR_RIGHT_SHIFT_ASSIGN,
 };
 
-OperatorCode MapOperatorEnum(int enum_value) {
+constexpr OperatorCode MapOperatorEnum(int enum_value) {
     switch (enum_value) {
     case StainlessParser::OP_ADD:
         return OperatorCode::OPERATOR_ADD;

@@ -4,50 +4,12 @@
 
 #include "exception.hpp"
 
-TypeOrValue::TypeOrValue(Kind kind) : kind_(kind) {}
-bool TypeOrValue::is_truthy() const {
-    if (static_cast<bool>(kind_ & Kind::KIND_TYPE_FLAG)) {
-        throw std::runtime_error("value expected, got type");
-    }
-    return static_cast<const Value*>(this)->is_truthy();
-}
+TypeOrValue::TypeOrValue(Kind kind, bool is_value) : kind_(kind), is_value_(is_value) {}
 bool TypeOrValue::contains(const TypeOrValue& other) const {
-    if (not static_cast<bool>(kind_ & Kind::KIND_TYPE_FLAG) or
-        not static_cast<bool>(other.kind_ & Kind::KIND_TYPE_FLAG)) {
+    if (is_value_ or other.is_value_) {
         throw std::runtime_error("type expected, got value");
     }
     return static_cast<const Type*>(this)->contains(*static_cast<const Type*>(&other));
-}
-ObjRef TypeOrValue::eval_operation(std::string_view op) {
-    auto it = OperationMap.find(
-        OperationTuple{std::string(op), this->kind_, Kind::KIND_NO_RIGHT_OPERAND}
-    );
-    if (it != OperationMap.end()) {
-        return it->second(this, nullptr);
-    } else {
-        throw std::runtime_error("Operation not supported");
-    }
-}
-ObjRef TypeOrValue::eval_operation(std::string_view op, TypeOrValue& other) {
-    if (this->kind_ != other.kind_) {
-        if (this->kind_ == Kind::KIND_FLOAT and other.kind_ == Kind::KIND_INTEGER) {
-            FloatValue promoted_other =
-                static_cast<double>(static_cast<const IntegerValue&>(other).value_);
-            auto result = this->eval_operation(op, promoted_other);
-            return result;
-        } else if (this->kind_ == Kind::KIND_INTEGER and other.kind_ == Kind::KIND_FLOAT) {
-            FloatValue promoted_this =
-                static_cast<double>(static_cast<const IntegerValue&>(*this).value_);
-            auto result = promoted_this.eval_operation(op, other);
-            return result;
-        }
-    }
-    auto it = OperationMap.find(OperationTuple{std::string(op), this->kind_, other.kind_});
-    if (it != OperationMap.end()) {
-        return it->second(this, &other);
-    } else {
-        throw std::runtime_error("Operation not supported");
-    }
 }
 
 TypeRef Type::FromTypeIndex(const std::type_index& type) {
@@ -65,7 +27,7 @@ TypeRef Type::FromTypeIndex(const std::type_index& type) {
         throw std::runtime_error("Unknown type index: "s + type.name());
     }
 }
-Type::Type(Kind kind) : TypeOrValue(kind) {}
+Type::Type(Kind kind) : TypeOrValue(kind, false) {}
 
 AnyType::AnyType() : Type(Kind::KIND_ANY) {}
 std::string AnyType::repr() const { return "any"; }
@@ -82,7 +44,7 @@ bool ListType::contains(const Type& other) const {
 }
 
 RecordType::RecordType(std::map<std::string, TypeRef> fields)
-    : Type(Kind::KIND_RECORD | Kind::KIND_TYPE_FLAG), fields_(std::move(fields)) {}
+    : Type(Kind::KIND_RECORD), fields_(std::move(fields)) {}
 std::string RecordType::repr() const {
     // TODO
     return {};
@@ -109,15 +71,35 @@ bool ClassType::contains(const Type& other) const {
     return false;
 }
 
-Value::Value(Kind kind) : TypeOrValue(kind) {}
+IntersectionType::IntersectionType(std::vector<TypeRef>&& types)
+    : Type(Kind::KIND_INTERSECTION), types_(std::move(types)) {}
+std::string IntersectionType::repr() const {
+    // TODO
+    return {};
+}
+bool IntersectionType::contains(const Type& other) const {
+    // TODO
+    return false;
+}
+
+UnionType::UnionType(std::vector<TypeRef>&& types)
+    : Type(Kind::KIND_UNION), types_(std::move(types)) {}
+std::string UnionType::repr() const {
+    // TODO
+    return {};
+}
+bool UnionType::contains(const Type& other) const {
+    // TODO
+    return false;
+}
+
+Value::Value(Kind kind) : TypeOrValue(kind, true) {}
 
 NullValue::NullValue() : Value(Kind::KIND_NULL) {}
 std::string NullValue::repr() const { return "null"; }
-bool NullValue::is_truthy() const { return false; }
 
 IntegerValue::IntegerValue(int64_t value) : Value(Kind::KIND_INTEGER), value_(value) {}
 std::string IntegerValue::repr() const { return std::to_string(value_); }
-bool IntegerValue::is_truthy() const { return this->value_ != 0; }
 IntegerValue* IntegerValue::operator+(const IntegerValue& other) const {
     return new IntegerValue(this->value_ + other.value_);
 }
@@ -178,7 +160,6 @@ IntegerValue* IntegerValue::operator=(const FloatValue& other) const {
 
 FloatValue::FloatValue(double value) : Value(Kind::KIND_FLOAT), value_(value) {}
 std::string FloatValue::repr() const { return std::to_string(value_); }
-bool FloatValue::is_truthy() const { return this->value_ != 0.0; }
 FloatValue* FloatValue::operator+(const FloatValue& other) const {
     return new FloatValue(this->value_ + other.value_);
 }
@@ -222,7 +203,6 @@ FloatValue* FloatValue::operator=(const IntegerValue& other) const {
 StringValue::StringValue(std::string&& value)
     : Value(Kind::KIND_STRING), value_(std::move(value)) {}
 std::string StringValue::repr() const { return "\"" + this->value_ + "\""; }
-bool StringValue::is_truthy() const { return not this->value_.empty(); }
 StringValue* StringValue::operator+(const StringValue& other) const {
     return new StringValue(this->value_ + other.value_);
 }
@@ -244,7 +224,6 @@ BooleanValue* StringValue::operator!=(const StringValue& other) const {
 
 BooleanValue::BooleanValue(bool value) : Value(Kind::KIND_BOOLEAN), value_(value) {}
 std::string BooleanValue::repr() const { return this->value_ ? "true" : "false"; }
-bool BooleanValue::is_truthy() const { return this->value_; }
 BooleanValue* BooleanValue::operator==(const BooleanValue& other) const {
     return new BooleanValue(this->value_ == other.value_);
 }
@@ -262,7 +241,6 @@ BooleanValue* BooleanValue::operator not() const { return new BooleanValue(!this
 std::string FunctionValue::repr() const {
     return std::format("<function at {:p}>", static_cast<const void*>(this));
 }
-bool FunctionValue::is_truthy() const { return true; }
 ValueRef FunctionValue::operator()(const Arguments& args) const {
     try {
         return callback_(args);
@@ -303,10 +281,9 @@ std::string ListValue::repr() const {
     result += "]";
     return result;
 }
-bool ListValue::is_truthy() const { return not this->values_.empty(); }
 ListValue* ListValue::operator+(const ListValue& other) const {
     std::vector<ValueRef> new_values = this->values_;
-    new_values.insert(new_values.end(), other.values_.begin(), other.values_.end());
+    // new_values.insert(new_values.end(), other.values_.begin(), other.values_.end());
     return new ListValue(std::move(new_values));
 }
 ListValue* ListValue::operator*(const IntegerValue& other) const {
@@ -314,7 +291,7 @@ ListValue* ListValue::operator*(const IntegerValue& other) const {
     std::vector<ValueRef> new_values;
     new_values.reserve(this->values_.size() * static_cast<std::uint64_t>(other.value_));
     for (uint64_t i = 0; i < static_cast<std::uint64_t>(other.value_); i++) {
-        new_values.insert(new_values.end(), this->values_.begin(), this->values_.end());
+        // new_values.insert(new_values.end(), this->values_.begin(), this->values_.end());
     }
     return new ListValue(std::move(new_values));
 }

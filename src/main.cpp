@@ -28,7 +28,7 @@ private:
         assert(
             (static_cast<std::size_t>(!!contexts) + ...) == 1 && "Exactly one ctx must be non-null"
         );
-        antlr4::tree::ParseTree* ctx;
+        antlr4::tree::ParseTree* ctx = nullptr;
         std::ignore = (... || (contexts ? (ctx = contexts, true) : false));
         return transform(ctx);
     }
@@ -78,8 +78,8 @@ public:
         return StaticUniqueCast<ASTCodeBlock>(transform(root));
     }
     antlrcpp::Any visitProgram(StainlessParser::ProgramContext* ctx) noexcept final {
-        auto rng =
-            ctx->statements_ | std::views::transform([this](auto ctx) { return transform(ctx); });
+        auto rng = ctx->statements_ |
+                   std::views::transform([this](auto child) { return transform(child); });
         std::vector<std::unique_ptr<ASTNode>> nodes(rng.begin(), rng.end());
         last_visited_ = std::make_unique<ASTCodeBlock>(loc(ctx), std::move(nodes));
         return {};
@@ -89,8 +89,8 @@ public:
         return {};
     }
     antlrcpp::Any visitCode_block(StainlessParser::Code_blockContext* ctx) noexcept final {
-        auto rng =
-            ctx->statements_ | std::views::transform([this](auto ctx) { return transform(ctx); });
+        auto rng = ctx->statements_ |
+                   std::views::transform([this](auto child) { return transform(child); });
         std::vector<std::unique_ptr<ASTNode>> nodes(rng.begin(), rng.end());
         last_visited_ = std::make_unique<ASTCodeBlock>(loc(ctx), std::move(nodes));
         return {};

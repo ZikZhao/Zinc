@@ -26,45 +26,15 @@ template <typename TargetType>
 class Reference {
 private:
     std::shared_ptr<TargetType> ptr_;
-    Reference* source_;
 
 public:
     Reference() = default;
-    Reference(const Reference& other) = default;
-    Reference(Reference&& other) = default;
-    Reference(TargetType* ptr) : ptr_(ptr), source_(nullptr) {}
-    Reference(std::shared_ptr<TargetType>&& other) : ptr_(std::move(other)), source_(nullptr) {}
-    // Copy constructor that keeps track of source for assignment propagation
-    Reference(Reference& other) : ptr_(other.ptr_), source_(&other) {}
+    Reference(TargetType* ptr) : ptr_(ptr) {}
 
 public:
-    // Assignment operator with adaptation
-    Reference& operator=(const Reference& other) {
-        if (ptr_ != nullptr and (ptr_->kind_ != other.ptr_->kind_)) {
-            const auto result =
-                ptr_->eval_operation(GetOperatorString<OperatorFunctors::Assign>(), *other.ptr_);
-            ptr_ = std::move(result.ptr_);
-        } else {
-            ptr_ = std::move(other.ptr_);
-        }
-        if (source_) {
-            *source_ = *this;
-            source_ = nullptr;
-        }
-        return *this;
-    }
     TargetType* operator->() const noexcept { return ptr_.get(); }
     TargetType& operator*() const { return *ptr_; }
     std::string repr() const { return ptr_->repr(); }
-    template <typename Operator>
-    Reference eval_operation() const {
-        return ptr_->eval_operation(GetOperatorString<Operator>());
-    }
-    template <typename Operator>
-    Reference eval_operation(Reference& other) const {
-        return ptr_->eval_operation(GetOperatorString<Operator>(), *other);
-    }
-    bool is_truthy() const { return ptr_->is_truthy(); }
     bool contains(const Reference& other) const { return ptr_->contains(*other); }
     Reference operator()(auto&&... args) {
         return ptr_->operator()(std::forward<decltype(args)>(args)...);
@@ -116,14 +86,11 @@ using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const Integer
 class TypeOrValue {
 public:
     const Kind kind_;
-    TypeOrValue(Kind kind);
+    const bool is_value_;
+    TypeOrValue(Kind kind, bool is_value);
     virtual ~TypeOrValue() = default;
     virtual std::string repr() const = 0;
-    bool is_truthy() const;
     bool contains(const TypeOrValue& other) const;
-    // Evaluations are not const because data structures may need to be modified
-    ObjRef eval_operation(std::string_view op);
-    ObjRef eval_operation(std::string_view op, TypeOrValue& other);
 };
 
 class Type : public TypeOrValue {
@@ -252,22 +219,22 @@ public:
 
 class IntersectionType final : public Type {
 public:
-    std::vector<TypeRef> types;
+    std::vector<TypeRef> types_;
     IntersectionType(std::vector<TypeRef>&& types);
+    std::string repr() const final;
     bool contains(const Type& other) const final;
 };
 
 class UnionType final : public Type {
 public:
-    std::vector<TypeRef> types;
+    std::vector<TypeRef> types_;
     UnionType(std::vector<TypeRef>&& types);
+    std::string repr() const final;
     bool contains(const Type& other) const final;
 };
 
 class Value : public TypeOrValue {
 public:
-    static constexpr Kind kind = Kind::KIND_ANY;
-    using Type = AnyType;
     template <ValueClass V>
     static ValueRef FromLiteral(std::string_view literal) {
         if constexpr (std::is_same_v<V, NullValue>) {
@@ -306,7 +273,6 @@ public:
 public:
     Value(Kind kind);
     ~Value() override = default;
-    virtual bool is_truthy() const = 0;
 };
 
 class NullValue final : public Value {
@@ -317,7 +283,6 @@ public:
 public:
     NullValue();
     std::string repr() const final;
-    bool is_truthy() const final;
 };
 
 class IntegerValue final : public Value {
@@ -329,7 +294,6 @@ public:
     const std::int64_t value_;
     IntegerValue(std::int64_t value);
     std::string repr() const final;
-    bool is_truthy() const final;
     IntegerValue* operator+(const IntegerValue& other) const;
     IntegerValue* operator-(const IntegerValue& other) const;
     IntegerValue* operator-() const;
@@ -360,7 +324,6 @@ public:
     const double value_;
     FloatValue(double value);
     std::string repr() const final;
-    bool is_truthy() const final;
     FloatValue* operator+(const FloatValue& other) const;
     FloatValue* operator-(const FloatValue& other) const;
     FloatValue* operator-() const;
@@ -385,7 +348,6 @@ public:
     const std::string value_;
     StringValue(std::string&& value);
     std::string repr() const final;
-    bool is_truthy() const final;
     StringValue* operator+(const StringValue& other) const;
     StringValue* operator*(const IntegerValue& other) const;
     BooleanValue* operator==(const StringValue& other) const;
@@ -401,7 +363,6 @@ public:
     const bool value_;
     BooleanValue(bool value);
     std::string repr() const final;
-    bool is_truthy() const final;
     BooleanValue* operator==(const BooleanValue& other) const;
     BooleanValue* operator!=(const BooleanValue& other) const;
     BooleanValue* operator and(const BooleanValue& other) const;
@@ -422,7 +383,6 @@ public:
           callback_(std::forward<decltype(callback)>(callback)),
           function_type_(function_type) {}
     std::string repr() const final;
-    bool is_truthy() const final;
     ValueRef operator()(const Arguments& args) const;
 };
 
@@ -447,7 +407,6 @@ public:
     ListValue();
     ListValue(std::vector<ValueRef>&& values);
     std::string repr() const final;
-    bool is_truthy() const final;
     ListValue* operator+(const ListValue& other) const;
     ListValue* operator*(const IntegerValue& other) const;
     ValueRef operator[](const Slice& indices) const;

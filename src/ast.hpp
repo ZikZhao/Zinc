@@ -4,9 +4,7 @@
 #include <utility>
 
 #include "object.hpp"
-
-template <typename Op>
-concept OperatorFunctor = requires { GetOperatorString<Op>(); };
+#include "operations.hpp"
 
 class ASTNode;
 class ASTExpression;
@@ -16,9 +14,9 @@ class ASTCodeBlock;
 template <ValueClass T>
 class ASTConstant;
 class ASTIdentifier;
-template <OperatorFunctor Op>
+template <typename Op>
 class ASTUnaryOp;
-template <OperatorFunctor Op>
+template <typename Op>
 class ASTBinaryOp;
 class ASTFunctionCall;
 template <TypeClass T>
@@ -125,7 +123,7 @@ public:
     ASTIdentifier(const Location& loc, std::string_view name) noexcept;
 };
 
-template <OperatorFunctor Op>
+template <typename Op>
 class ASTUnaryOp final : public ASTExpression {
 private:
     static constexpr auto Func = Op();
@@ -138,7 +136,7 @@ public:
     std::generator<ASTNode*> get_children() const noexcept final { co_yield expr_.get(); }
 };
 
-template <OperatorFunctor Op>
+template <typename Op>
 class ASTBinaryOp final : public ASTExpression {
 private:
     static constexpr auto Func = Op();
@@ -159,7 +157,7 @@ public:
     }
 };
 
-template <OperatorFunctor Op>
+template <typename Op>
 class ASTBinaryOp<OperatorFunctors::OperateAndAssign<Op>> final : public ASTExpression {
 private:
     using AssignOperator = OperatorFunctors::OperateAndAssign<Op>;
