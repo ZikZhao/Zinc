@@ -9,17 +9,25 @@ Context::Context(Context& parent) noexcept : parent_(&parent) {}
 Context::Context(std::string_view name, Context& parent) noexcept : parent_(&parent), name_(name) {}
 Context::Context(std::vector<std::pair<std::string_view, const ASTExpression*>> builtins) noexcept {
     for (const auto& [name, expr] : builtins) {
-        symbols_.emplace(name, expr);
+        variables_.emplace(name, expr);
     }
 }
-void Context::add_symbol(std::string_view identifier, const ASTValueExpression* expr) noexcept {
-    symbols_.emplace(identifier, expr);
-}
-void Context::add_type(std::string_view identifier, const ASTTypeExpression* expr) noexcept {
+void Context::add_type(std::string_view identifier, const ASTTypeExpression* expr) {
     types_.emplace(identifier, expr);
 }
+void Context::add_variable(std::string_view identifier, const ASTValueExpression* expr) {
+    if (types_.contains(identifier)) {
+        throw std::runtime_error(
+            "Variable '"s + std::string(identifier) + "' already declared as type"s
+        );
+    }
+    variables_.emplace(identifier, expr);
+}
 
-TypeResolver::TypeResolver(const Context& root) noexcept : current_(&root) {}
+TypeResolver::TypeResolver(Context& root) noexcept : current_(&root) {}
+void TypeResolver::add_variable(std::string_view identifier, const ASTValueExpression* expr) {
+    current_->add_variable(identifier, expr);
+}
 void TypeResolver::enter(const ASTCodeBlock* child) noexcept {
     current_ = child->local_scope_.get();
 }
@@ -33,18 +41,28 @@ TypeRef TypeResolver::resolve(std::string_view identifier) {
         throw std::runtime_error("Cyclic type dependency detected");
     }
     record.is_resolving = true;
-    record.type_ref = current_->types_.at(identifier)->eval(*this);
+    record.type_ref =
+        current_->types_.at(identifier)
+            ->eval_type(*this);  // TODO: identifier may be variable so get type of variable
     return record.type_ref;
 }
 
 ASTNode::ASTNode(const Location& loc) noexcept : location_(loc) {}
 std::generator<ASTNode*> ASTNode::get_children() const noexcept { co_return; }
-void ASTNode::analyze(Context& ctx) {
+void ASTNode::first_analyze(Context& ctx) {
     for (const auto& child : get_children()) {
         if (child == nullptr) {
             continue;
         }
-        child->analyze(ctx);
+        child->first_analyze(ctx);
+    }
+}
+void ASTNode::second_analyze(TypeResolver& tr) {
+    for (const auto& child : get_children()) {
+        if (child == nullptr) {
+            continue;
+        }
+        child->second_analyze(tr);
     }
 }
 
@@ -57,15 +75,16 @@ std::generator<ASTNode*> ASTCodeBlock::get_children() const noexcept {
         co_yield stmt.get();
     }
 }
-void ASTCodeBlock::analyze(Context& ctx) {
+void ASTCodeBlock::first_analyze(Context& ctx) {
     local_scope_ = std::make_unique<Context>(name_, ctx);
     for (auto& stmt : statements_) {
-        stmt->analyze(*local_scope_);
+        stmt->first_analyze(*local_scope_);
     }
 }
 
 ASTIdentifier::ASTIdentifier(const Location& loc, std::string_view name) noexcept
     : ASTExpression(loc), name_(name) {}
+TypeRef ASTIdentifier::eval_type(TypeResolver& tr) const noexcept { return tr.resolve(name_); }
 
 ASTFunctionCall::ASTFunctionCall(
     const Location& location,
@@ -80,6 +99,15 @@ std::generator<ASTNode*> ASTFunctionCall::get_children() const noexcept {
     }
 }
 
+ASTFunctionType::ASTFunctionType(FunctionType* func) noexcept
+    : ASTTypeExpression({0, {0, 0}, {0, 0}}), value_(func) {}
+ASTFunctionType::ASTFunctionType(const Location& loc, FunctionType* func) noexcept
+    : ASTTypeExpression(loc), value_(func) {}
+TypeRef ASTFunctionType::eval_type(TypeResolver& tr) const noexcept { return value_; }
+std::generator<const ASTIdentifier*> ASTFunctionType::get_dependencies() const noexcept {
+    co_return;
+}
+
 ASTRecordType::ASTRecordType(
     const Location& location, std::vector<std::unique_ptr<ASTFieldDeclaration>> fields
 ) noexcept
@@ -90,7 +118,7 @@ std::generator<ASTNode*> ASTRecordType::get_children() const noexcept {
     }
 }
 
-TypeRef ASTRecordType::eval(TypeResolver& tr) const noexcept {
+TypeRef ASTRecordType::eval_type(TypeResolver& tr) const noexcept {
     auto rng = fields_ | std::views::transform([&](const auto& decl) {
                    return std::pair(decl->identifier_, tr.resolve(decl->identifier_));
                });
@@ -114,13 +142,17 @@ ASTDeclaration::ASTDeclaration(
     : ASTNode(location),
       identifier_(std::move(identifier)),
       type_(std::move(type)),
-      expr_(std::move(expr)),
-      inferred_type_() {}  // TODO
+      expr_(std::move(expr)) {}
 std::generator<ASTNode*> ASTDeclaration::get_children() const noexcept {
     co_yield type_.get();
     if (expr_) {
         co_yield expr_.get();
     }
+}
+void ASTDeclaration::second_analyze(TypeResolver& tr) {
+    TypeRef inferred_type = expr_->eval_type(tr);
+    tr.add_variable(identifier_->name_, expr_.get());
+    ASTNode::second_analyze(tr);
 }
 
 ASTFieldDeclaration::ASTFieldDeclaration(
@@ -137,9 +169,9 @@ ASTTypeAlias::ASTTypeAlias(
     : ASTNode(location), identifier_(std::move(identifier)), type_(std::move(type)) {}
 std::generator<ASTNode*> ASTTypeAlias::get_children() const noexcept { co_yield type_.get(); }
 
-void ASTTypeAlias::analyze(Context& ctx) {
+void ASTTypeAlias::first_analyze(Context& ctx) {
     ctx.add_type(identifier_, type_.get());
-    type_->analyze(ctx);
+    type_->first_analyze(ctx);
 }
 
 ASTIfStatement::ASTIfStatement(

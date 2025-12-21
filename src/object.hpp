@@ -112,6 +112,7 @@ public:
 class AnyType final : public Type {
 public:
     static constexpr Kind kind = Kind::KIND_ANY;
+    static inline const TypeRef instance = TypeRef::from<AnyType>();
 
 public:
     AnyType() noexcept;
@@ -123,6 +124,7 @@ template <Kind K>
 class PrimitiveType final : public Type {
 public:
     static constexpr Kind kind = K;
+    static inline const TypeRef instance = TypeRef::from<PrimitiveType>();
 
 public:
     PrimitiveType() noexcept : Type(kind) {}
@@ -144,9 +146,10 @@ template <>
 class PrimitiveType<Kind::KIND_INTEGER> final : public Type {
 public:
     static constexpr Kind kind = Kind::KIND_INTEGER;
+    static inline const TypeRef instance = TypeRef::from<PrimitiveType>();
 
 public:
-    PrimitiveType() noexcept : Type(Kind::KIND_INTEGER) {}
+    PrimitiveType() noexcept : Type(kind) {}
     std::string repr() const final { return "integer"; }
     bool contains(const Type& other) const final {
         return other.kind_ == Kind::KIND_INTEGER or other.kind_ == Kind::KIND_FLOAT;
@@ -157,17 +160,17 @@ template <>
 class PrimitiveType<Kind::KIND_FLOAT> final : public Type {
 public:
     static constexpr Kind kind = Kind::KIND_FLOAT;
+    static inline const TypeRef instance = TypeRef::from<PrimitiveType>();
 
 public:
-    PrimitiveType() noexcept : Type(Kind::KIND_FLOAT) {}
+    PrimitiveType() noexcept : Type(kind) {}
     std::string repr() const final { return "float"; }
     bool contains(const Type& other) const final {
         return other.kind_ == Kind::KIND_FLOAT or other.kind_ == Kind::KIND_INTEGER;
     }
 };
 
-template <>
-class PrimitiveType<Kind::KIND_FUNCTION> final : public Type {
+class FunctionType final : public Type {
 public:
     static constexpr Kind kind = Kind::KIND_FUNCTION;
 
@@ -175,13 +178,13 @@ public:
     std::vector<TypeRef> parameters_;
     TypeRef spread_;
     TypeRef return_type_;
-    PrimitiveType(std::vector<TypeRef>&& parameters, TypeRef spread, TypeRef return_type) noexcept
-        : Type(Kind::KIND_FUNCTION),
+    FunctionType(std::vector<TypeRef>&& parameters, TypeRef spread, TypeRef return_type) noexcept
+        : Type(kind),
           parameters_(std::move(parameters)),
           spread_(spread),
           return_type_(return_type) {}
     std::string repr() const final { return "function"; }
-    bool contains(const Type& other) const final { return other.kind_ == Kind::KIND_FUNCTION; }
+    bool contains(const Type& other) const final { return other.kind_ == kind; }
 };
 
 using NullType = PrimitiveType<Kind::KIND_NULL>;
@@ -189,7 +192,6 @@ using IntegerType = PrimitiveType<Kind::KIND_INTEGER>;
 using FloatType = PrimitiveType<Kind::KIND_FLOAT>;
 using StringType = PrimitiveType<Kind::KIND_STRING>;
 using BooleanType = PrimitiveType<Kind::KIND_BOOLEAN>;
-using FunctionType = PrimitiveType<Kind::KIND_FUNCTION>;
 
 class ListType final : public Type {
 public:

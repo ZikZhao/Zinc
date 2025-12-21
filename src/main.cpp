@@ -511,6 +511,6 @@ int main(int argc, char* argv[]) {
 
     // Context ctx = Builtins::GetBuiltinsScope();
     Context ctx;
-    root->analyze(ctx);
+    root->first_analyze(ctx);
     TypeResolver tr(ctx);
 }
