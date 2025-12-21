@@ -24,14 +24,20 @@ enum class Kind : std::uint16_t {
 
 template <typename TargetType>
 class Reference {
+public:
+    template <typename Type, typename... Args>
+    static Reference<TargetType> from(Args... args) {
+        return new Type(std::forward<Args>(args)...);
+    }
+
 private:
     std::shared_ptr<TargetType> ptr_;
 
 public:
-    Reference() = default;
-    Reference(TargetType* ptr) : ptr_(ptr) {}
+    Reference() noexcept = default;
 
 public:
+    Reference(TargetType* ptr) noexcept : ptr_(ptr) {}
     TargetType* operator->() const noexcept { return ptr_.get(); }
     TargetType& operator*() const { return *ptr_; }
     std::string repr() const { return ptr_->repr(); }
@@ -42,8 +48,8 @@ public:
     bool null() const noexcept { return ptr_ == nullptr; }
 };
 
-class TypeOrValue;
-using ObjRef = Reference<TypeOrValue>;
+class Entity;
+using ObjRef = Reference<Entity>;
 
 class Value;
 class NullValue;
@@ -83,22 +89,22 @@ using DictValueRef = ObjRef;      // Should always point to a DictValue
 using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
 
-class TypeOrValue {
+class Entity {
 public:
     const Kind kind_;
     const bool is_value_;
-    TypeOrValue(Kind kind, bool is_value);
-    virtual ~TypeOrValue() = default;
+    Entity(Kind kind, bool is_value) noexcept;
+    virtual ~Entity() = default;
     virtual std::string repr() const = 0;
-    bool contains(const TypeOrValue& other) const;
+    bool contains(const Entity& other) const;
 };
 
-class Type : public TypeOrValue {
+class Type : public Entity {
 public:
     static TypeRef FromTypeIndex(const std::type_index& type);
 
 public:
-    Type(Kind kind);
+    Type(Kind kind) noexcept;
     ~Type() override = default;
     virtual bool contains(const Type& other) const = 0;
 };
@@ -108,7 +114,7 @@ public:
     static constexpr Kind kind = Kind::KIND_ANY;
 
 public:
-    AnyType();
+    AnyType() noexcept;
     std::string repr() const final;
     bool contains(const Type& other) const final;
 };
@@ -119,7 +125,7 @@ public:
     static constexpr Kind kind = K;
 
 public:
-    PrimitiveType() : Type(kind) {}
+    PrimitiveType() noexcept : Type(kind) {}
     std::string repr() const final {
         if constexpr (K == Kind::KIND_STRING) {
             return "string";
@@ -140,7 +146,7 @@ public:
     static constexpr Kind kind = Kind::KIND_INTEGER;
 
 public:
-    PrimitiveType() : Type(Kind::KIND_INTEGER) {}
+    PrimitiveType() noexcept : Type(Kind::KIND_INTEGER) {}
     std::string repr() const final { return "integer"; }
     bool contains(const Type& other) const final {
         return other.kind_ == Kind::KIND_INTEGER or other.kind_ == Kind::KIND_FLOAT;
@@ -153,7 +159,7 @@ public:
     static constexpr Kind kind = Kind::KIND_FLOAT;
 
 public:
-    PrimitiveType() : Type(Kind::KIND_FLOAT) {}
+    PrimitiveType() noexcept : Type(Kind::KIND_FLOAT) {}
     std::string repr() const final { return "float"; }
     bool contains(const Type& other) const final {
         return other.kind_ == Kind::KIND_FLOAT or other.kind_ == Kind::KIND_INTEGER;
@@ -169,7 +175,7 @@ public:
     std::vector<TypeRef> parameters_;
     TypeRef spread_;
     TypeRef return_type_;
-    PrimitiveType(std::vector<TypeRef>&& parameters, TypeRef spread, TypeRef return_type)
+    PrimitiveType(std::vector<TypeRef>&& parameters, TypeRef spread, TypeRef return_type) noexcept
         : Type(Kind::KIND_FUNCTION),
           parameters_(std::move(parameters)),
           spread_(spread),
@@ -188,7 +194,7 @@ using FunctionType = PrimitiveType<Kind::KIND_FUNCTION>;
 class ListType final : public Type {
 public:
     TypeRef element_type_;
-    ListType(TypeRef element_type);
+    ListType(TypeRef element_type) noexcept;
     std::string repr() const final;
     bool contains(const Type& other) const final;
 };
@@ -196,7 +202,7 @@ public:
 class RecordType : public Type {
 public:
     const std::map<std::string, TypeRef> fields_;
-    RecordType(std::map<std::string, TypeRef> fields);
+    RecordType(std::map<std::string, TypeRef> fields) noexcept;
     std::string repr() const final;
     bool contains(const Type& other) const final;
 };
@@ -212,28 +218,36 @@ public:
         const std::vector<InterfaceTypeRef>& interfaces,
         const ClassTypeRef extends,
         const Context* properties
-    );
+    ) noexcept;
     std::string repr() const override;
     bool contains(const Type& other) const override;
 };
 
 class IntersectionType final : public Type {
 public:
+    static constexpr Kind kind = Kind::KIND_INTERSECTION;
+
+public:
     std::vector<TypeRef> types_;
-    IntersectionType(std::vector<TypeRef>&& types);
+    IntersectionType(auto... args) noexcept : Type(kind) { (combine(args), ...); }
     std::string repr() const final;
     bool contains(const Type& other) const final;
+    IntersectionType& combine(TypeRef other);
 };
 
 class UnionType final : public Type {
 public:
+    static constexpr Kind kind = Kind::KIND_UNION;
+
+public:
     std::vector<TypeRef> types_;
-    UnionType(std::vector<TypeRef>&& types);
+    UnionType(auto... args) noexcept : Type(kind) { (combine(args), ...); }
     std::string repr() const final;
     bool contains(const Type& other) const final;
+    UnionType& combine(TypeRef other);
 };
 
-class Value : public TypeOrValue {
+class Value : public Entity {
 public:
     template <ValueClass V>
     static ValueRef FromLiteral(std::string_view literal) {
@@ -271,7 +285,7 @@ public:
     };
 
 public:
-    Value(Kind kind);
+    Value(Kind kind) noexcept;
     ~Value() override = default;
 };
 
@@ -281,7 +295,7 @@ public:
     using Type = NullType;
 
 public:
-    NullValue();
+    NullValue() noexcept;
     std::string repr() const final;
 };
 
@@ -292,7 +306,7 @@ public:
 
 public:
     const std::int64_t value_;
-    IntegerValue(std::int64_t value);
+    IntegerValue(std::int64_t value) noexcept;
     std::string repr() const final;
     IntegerValue* operator+(const IntegerValue& other) const;
     IntegerValue* operator-(const IntegerValue& other) const;
@@ -322,7 +336,7 @@ public:
 
 public:
     const double value_;
-    FloatValue(double value);
+    FloatValue(double value) noexcept;
     std::string repr() const final;
     FloatValue* operator+(const FloatValue& other) const;
     FloatValue* operator-(const FloatValue& other) const;
@@ -346,7 +360,7 @@ public:
 
 public:
     const std::string value_;
-    StringValue(std::string&& value);
+    StringValue(std::string value) noexcept;
     std::string repr() const final;
     StringValue* operator+(const StringValue& other) const;
     StringValue* operator*(const IntegerValue& other) const;
@@ -361,7 +375,7 @@ public:
 
 public:
     const bool value_;
-    BooleanValue(bool value);
+    BooleanValue(bool value) noexcept;
     std::string repr() const final;
     BooleanValue* operator==(const BooleanValue& other) const;
     BooleanValue* operator!=(const BooleanValue& other) const;
@@ -378,7 +392,7 @@ public:
 public:
     const std::function<ValueRef(const Arguments&)> callback_;
     TypeRef function_type_;
-    FunctionValue(auto&& callback, TypeRef function_type)
+    FunctionValue(auto&& callback, TypeRef function_type) noexcept
         : Value(Kind::KIND_FUNCTION),
           callback_(std::forward<decltype(callback)>(callback)),
           function_type_(function_type) {}
@@ -393,19 +407,19 @@ public:
 public:
     ClassTypeRef class_type_;
     std::vector<ValueRef> attributes_;
-    ObjectValue(ClassTypeRef cls);
-    ValueRef get(const std::string_view property) const;
+    ObjectValue(ClassTypeRef cls) noexcept;
+    ValueRef get(const std::string_view property) const noexcept;
 };
 
 class ListValue : public ObjectValue {
 private:
     static TypeRef ListClassInstance;
-    static ValueRef Append(const std::vector<ValueRef>& args);
+    static ValueRef Append(const std::vector<ValueRef>& args) noexcept;
 
 public:
     std::vector<ValueRef> values_;
-    ListValue();
-    ListValue(std::vector<ValueRef>&& values);
+    ListValue() noexcept;
+    ListValue(std::vector<ValueRef>&& values) noexcept;
     std::string repr() const final;
     ListValue* operator+(const ListValue& other) const;
     ListValue* operator*(const IntegerValue& other) const;

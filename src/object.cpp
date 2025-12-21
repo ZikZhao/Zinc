@@ -1,11 +1,12 @@
 #include "object.hpp"
 
 #include "pch.hpp"
+#include <utility>
 
 #include "exception.hpp"
 
-TypeOrValue::TypeOrValue(Kind kind, bool is_value) : kind_(kind), is_value_(is_value) {}
-bool TypeOrValue::contains(const TypeOrValue& other) const {
+Entity::Entity(Kind kind, bool is_value) noexcept : kind_(kind), is_value_(is_value) {}
+bool Entity::contains(const Entity& other) const {
     if (is_value_ or other.is_value_) {
         throw std::runtime_error("type expected, got value");
     }
@@ -27,13 +28,14 @@ TypeRef Type::FromTypeIndex(const std::type_index& type) {
         throw std::runtime_error("Unknown type index: "s + type.name());
     }
 }
-Type::Type(Kind kind) : TypeOrValue(kind, false) {}
+Type::Type(Kind kind) noexcept : Entity(kind, false) {}
 
-AnyType::AnyType() : Type(Kind::KIND_ANY) {}
+AnyType::AnyType() noexcept : Type(Kind::KIND_ANY) {}
 std::string AnyType::repr() const { return "any"; }
 bool AnyType::contains(const Type& other) const { return true; }
 
-ListType::ListType(TypeRef element_type) : Type(Kind::KIND_LIST), element_type_(element_type) {}
+ListType::ListType(TypeRef element_type) noexcept
+    : Type(Kind::KIND_LIST), element_type_(element_type) {}
 std::string ListType::repr() const { return "List<"s + element_type_->repr() + ">"s; }
 bool ListType::contains(const Type& other) const {
     if (other.kind_ != this->kind_) {
@@ -43,7 +45,7 @@ bool ListType::contains(const Type& other) const {
     return this->element_type_->contains(*other_list.element_type_);
 }
 
-RecordType::RecordType(std::map<std::string, TypeRef> fields)
+RecordType::RecordType(std::map<std::string, TypeRef> fields) noexcept
     : Type(Kind::KIND_RECORD), fields_(std::move(fields)) {}
 std::string RecordType::repr() const {
     // TODO
@@ -59,7 +61,7 @@ ClassType::ClassType(
     const std::vector<InterfaceTypeRef>& interfaces,
     const ClassTypeRef extends,
     const Context* properties
-)
+) noexcept
     : Type(Kind::KIND_CLASS),
       name_(name),
       interfaces_(interfaces),
@@ -71,8 +73,6 @@ bool ClassType::contains(const Type& other) const {
     return false;
 }
 
-IntersectionType::IntersectionType(std::vector<TypeRef>&& types)
-    : Type(Kind::KIND_INTERSECTION), types_(std::move(types)) {}
 std::string IntersectionType::repr() const {
     // TODO
     return {};
@@ -81,9 +81,20 @@ bool IntersectionType::contains(const Type& other) const {
     // TODO
     return false;
 }
+IntersectionType& IntersectionType::combine(TypeRef other) {
+    if (other->kind_ == Kind::KIND_INTERSECTION) {
+        const IntersectionType& other_intersection = static_cast<const IntersectionType&>(*other);
+        this->types_.reserve(this->types_.size() + other_intersection.types_.size());
+        for (const auto& type : other_intersection.types_) {
+            this->types_.emplace_back(type);
+        }
+    } else {
+        assert(other->kind_ == Kind::KIND_FUNCTION);
+        this->types_.emplace_back(other);
+    }
+    return *this;
+}
 
-UnionType::UnionType(std::vector<TypeRef>&& types)
-    : Type(Kind::KIND_UNION), types_(std::move(types)) {}
 std::string UnionType::repr() const {
     // TODO
     return {};
@@ -92,13 +103,25 @@ bool UnionType::contains(const Type& other) const {
     // TODO
     return false;
 }
+UnionType& UnionType::combine(TypeRef other) {
+    if (other->kind_ == Kind::KIND_UNION) {
+        const UnionType& other_union = static_cast<const UnionType&>(*other);
+        this->types_.reserve(this->types_.size() + other_union.types_.size());
+        for (const auto& type : other_union.types_) {
+            this->types_.emplace_back(type);
+        }
+    } else {
+        this->types_.emplace_back(other);
+    }
+    return *this;
+}
 
-Value::Value(Kind kind) : TypeOrValue(kind, true) {}
+Value::Value(Kind kind) noexcept : Entity(kind, true) {}
 
-NullValue::NullValue() : Value(Kind::KIND_NULL) {}
+NullValue::NullValue() noexcept : Value(Kind::KIND_NULL) {}
 std::string NullValue::repr() const { return "null"; }
 
-IntegerValue::IntegerValue(int64_t value) : Value(Kind::KIND_INTEGER), value_(value) {}
+IntegerValue::IntegerValue(int64_t value) noexcept : Value(Kind::KIND_INTEGER), value_(value) {}
 std::string IntegerValue::repr() const { return std::to_string(value_); }
 IntegerValue* IntegerValue::operator+(const IntegerValue& other) const {
     return new IntegerValue(this->value_ + other.value_);
@@ -158,7 +181,7 @@ IntegerValue* IntegerValue::operator=(const FloatValue& other) const {
     return new IntegerValue(static_cast<std::int64_t>(other.value_));
 }
 
-FloatValue::FloatValue(double value) : Value(Kind::KIND_FLOAT), value_(value) {}
+FloatValue::FloatValue(double value) noexcept : Value(Kind::KIND_FLOAT), value_(value) {}
 std::string FloatValue::repr() const { return std::to_string(value_); }
 FloatValue* FloatValue::operator+(const FloatValue& other) const {
     return new FloatValue(this->value_ + other.value_);
@@ -200,7 +223,7 @@ FloatValue* FloatValue::operator=(const IntegerValue& other) const {
     return new FloatValue(static_cast<double>(other.value_));
 }
 
-StringValue::StringValue(std::string&& value)
+StringValue::StringValue(std::string value) noexcept
     : Value(Kind::KIND_STRING), value_(std::move(value)) {}
 std::string StringValue::repr() const { return "\"" + this->value_ + "\""; }
 StringValue* StringValue::operator+(const StringValue& other) const {
@@ -222,7 +245,7 @@ BooleanValue* StringValue::operator!=(const StringValue& other) const {
     return new BooleanValue(this->value_ != other.value_);
 }
 
-BooleanValue::BooleanValue(bool value) : Value(Kind::KIND_BOOLEAN), value_(value) {}
+BooleanValue::BooleanValue(bool value) noexcept : Value(Kind::KIND_BOOLEAN), value_(value) {}
 std::string BooleanValue::repr() const { return this->value_ ? "true" : "false"; }
 BooleanValue* BooleanValue::operator==(const BooleanValue& other) const {
     return new BooleanValue(this->value_ == other.value_);
@@ -250,25 +273,21 @@ ValueRef FunctionValue::operator()(const Arguments& args) const {
     std::unreachable();
 }
 
-ObjectValue::ObjectValue(TypeRef cls) : Value(Kind::KIND_OBJECT), class_type_(cls) {}
+ObjectValue::ObjectValue(TypeRef cls) noexcept : Value(Kind::KIND_OBJECT), class_type_(cls) {}
 
 ValueRef ListValue::ListClassInstance =
     new ClassType("list"sv, std::vector<ValueRef>{}, {}, nullptr);
-ValueRef ListValue::Append(const std::vector<ValueRef>& args) {
-    try {
-        auto self = args.at(0);
-        auto value = args.at(1);
-        if (auto list_val = dynamic_cast<ListValue*>(&*self)) {
-            list_val->values_.push_back(value);
-            return new NullValue();
-        }
-        throw;
-    } catch (const std::out_of_range& e) {
-        throw ArgumentException(e.what());
+ValueRef ListValue::Append(const std::vector<ValueRef>& args) noexcept {
+    auto self = args.at(0);
+    auto value = args.at(1);
+    if (auto list_val = dynamic_cast<ListValue*>(&*self)) {
+        list_val->values_.push_back(value);
+        return new NullValue();
     }
+    std::unreachable();
 }
-ListValue::ListValue() : ObjectValue(ListClassInstance), values_() {}
-ListValue::ListValue(std::vector<ValueRef>&& values)
+ListValue::ListValue() noexcept : ObjectValue(ListClassInstance), values_() {}
+ListValue::ListValue(std::vector<ValueRef>&& values) noexcept
     : ObjectValue(ListClassInstance), values_(std::forward<std::vector<ValueRef>>(values)) {}
 std::string ListValue::repr() const {
     std::string result = "[";

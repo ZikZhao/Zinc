@@ -245,14 +245,14 @@ private:
 
 public:
     using Key = std::tuple<OperatorCode, Kind, Kind>;
-    using Value = std::pair<Kind, TypeOrValue* (*)(TypeOrValue*, TypeOrValue*)>;
+    using Value = std::pair<Kind, Entity* (*)(Entity*, Entity*)>;
 
 private:
     using Table = std::array<
         std::array<
-            std::array<Value, static_cast<int>(Kind::NON_COMPOSITE_SIZE)>,
-            static_cast<int>(Kind::NON_COMPOSITE_SIZE)>,
-        static_cast<int>(OperatorCode::SIZE)>;
+            std::array<Value, static_cast<std::size_t>(Kind::NON_COMPOSITE_SIZE)>,
+            static_cast<std::size_t>(Kind::NON_COMPOSITE_SIZE)>,
+        static_cast<std::size_t>(OperatorCode::SIZE)>;
 
 private:
     static constexpr Table make_operation_map() {
@@ -271,10 +271,10 @@ private:
     template <typename Operand, typename Operator>
         requires requires { Operator()(std::declval<Operand&>(), std::declval<Operand&>()); }
     static constexpr void register_op(Table& table) {
-        table[static_cast<int>(Operator::opcode)][static_cast<int>(Operand::kind)]
-             [static_cast<int>(Operand::kind)] = Value{
+        table[static_cast<std::size_t>(Operator::opcode)][static_cast<std::size_t>(Operand::kind)]
+             [static_cast<std::size_t>(Operand::kind)] = Value{
                  Operand::kind,
-                 [](TypeOrValue* left, TypeOrValue* right) -> TypeOrValue* {
+                 [](Entity* left, Entity* right) -> Entity* {
                      return Operator()(
                          static_cast<Operand&>(*left), static_cast<const Operand&>(*right)
                      );
@@ -284,10 +284,10 @@ private:
     template <typename Operand, typename Operator>
         requires requires { Operator()(std::declval<Operand&>()); }
     static constexpr void register_op(Table& table) {
-        table[static_cast<int>(Operator::opcode)][static_cast<int>(Operand::kind)]
-             [static_cast<int>(Operand::kind)] = Value{
+        table[static_cast<std::size_t>(Operator::opcode)][static_cast<std::size_t>(Operand::kind)]
+             [static_cast<std::size_t>(Operand::kind)] = Value{
                  Operand::kind,
-                 [](TypeOrValue* left, TypeOrValue* right) -> TypeOrValue* {
+                 [](Entity* left, Entity* right) -> Entity* {
                      return Operator()(static_cast<Operand&>(*left));
                  },
              };
@@ -298,5 +298,28 @@ private:
 
 public:
     constexpr OperationTable() : table_(make_operation_map()) {}
-    Value operator[](Key key) const;
+    constexpr Value eval_value_op(Key key) const {
+        return table_[static_cast<std::size_t>(std::get<0>(key))]
+                     [static_cast<std::size_t>(std::get<1>(key))]
+                     [static_cast<std::size_t>(std::get<2>(key))];
+    }
+    constexpr TypeRef eval_op(OperatorCode opcode, TypeRef left, TypeRef right = {}) const {
+        if (!left->is_value_ && (right.null() || !right->is_value_)) {
+            // type and type
+            switch (opcode) {
+            case OperatorCode::OPERATOR_BITWISE_AND:
+                return TypeRef::from<IntersectionType>(left, right);
+            case OperatorCode::OPERATOR_BITWISE_OR:
+                return TypeRef::from<UnionType>(left, right);
+            default:
+                assert(false && "Operation on two types not implemented");
+                std::unreachable();
+            }
+        } else if (left->is_value_ && (right.null() || right->is_value_)) {
+            assert(false && "Operation on two values should be handled elsewhere");
+            std::unreachable();
+        } else {
+            return {};
+        }
+    }
 };
