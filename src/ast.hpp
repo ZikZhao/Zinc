@@ -40,20 +40,20 @@ class Context {
 private:
     Context* const parent_ = nullptr;
     const std::string_view name_;
-    std::map<const std::string_view, const ASTValueExpression*> variables_;
+    std::map<const std::string_view, EntityRef>
+        variables_;  // store type if variable, value if constant
     std::map<const std::string_view, const ASTTypeExpression*> types_;
     std::vector<const Context*> anonymous_children_;
     std::map<const std::string_view, const Context*> children_;
 
 public:
     Context() noexcept = default;
-    Context(Context& parent) noexcept;
     Context(std::string_view name, Context& parent) noexcept;
     Context(std::vector<std::pair<std::string_view, const ASTExpression*>> builtins) noexcept;
     void add_type(std::string_view identifier, const ASTTypeExpression* expr);
 
 private:
-    void add_variable(std::string_view identifier, const ASTValueExpression* expr);
+    void add_variable(std::string_view identifier, EntityRef expr);
 };
 
 class TypeResolver {
@@ -73,10 +73,13 @@ public:
 
 public:
     TypeResolver(Context& root, const OperationTable& ops, TypeFactory& type_factory) noexcept;
-    void add_variable(std::string_view identifier, const ASTValueExpression* expr);
+    void add_variable(std::string_view identifier, EntityRef expr);
     void enter(const ASTCodeBlock* child) noexcept;
     void exit() noexcept;
     TypeRef resolve(std::string_view identifier);
+
+private:
+    TypeRef resolve_in(std::string_view identifier, Context& ctx);
 };
 
 class ASTNode {
@@ -84,12 +87,20 @@ public:
     Location location_;
     ASTNode(const Location& loc) noexcept;
     virtual ~ASTNode() noexcept = default;
-    virtual std::generator<ASTNode*> get_children() const noexcept;
     virtual void first_analyze(Context& ctx, OperationTable& ops);
     virtual void second_analyze(TypeResolver& tr);
 };
 
-class ASTCodeBlock : public ASTNode {
+class ASTRecursiveNode : public ASTNode {
+public:
+    ASTRecursiveNode(const Location& loc) noexcept;
+    ~ASTRecursiveNode() noexcept override = default;
+    virtual std::generator<ASTNode*> get_children() const noexcept = 0;
+    void first_analyze(Context& ctx, OperationTable& ops) override;
+    void second_analyze(TypeResolver& tr) override;
+};
+
+class ASTCodeBlock : public ASTRecursiveNode {
 public:
     std::vector<std::unique_ptr<ASTNode>> statements_;
     std::unique_ptr<Context> local_scope_;
@@ -102,24 +113,21 @@ public:
     ) noexcept;
     std::generator<ASTNode*> get_children() const noexcept final;
     void first_analyze(Context& ctx, OperationTable& ops) final;
+    void second_analyze(TypeResolver& tr) final;
 };
 
 class ASTExpression : public ASTNode {
 public:
-    ASTExpression(const Location& location) : ASTNode(location) {};
+    ASTExpression(const Location& loc) noexcept;
     virtual TypeRef eval_type(TypeResolver& tr) const noexcept = 0;
-    virtual std::generator<const ASTIdentifier*> get_dependencies() const noexcept {
-        assert(false && "Is not a type expression");
-        std::unreachable();
-    }
 };
 
 template <ValueClass V>
 class ASTConstant final : public ASTExpression {
 public:
-    const Value* value_;
+    ValueRef value_;
     ASTConstant(const Location& loc, std::string_view str)
-        : ASTExpression(loc), value_(Value::FromLiteral<V>(str)) {}
+        : ASTExpression(loc), value_(ValueRef::from_literal<V>(str)) {}
     TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         return resolver.type_factory_.make_kind(value_->kind_);
     }
@@ -139,10 +147,9 @@ private:
 
 public:
     const std::unique_ptr<ASTExpression> expr_;
-    ASTUnaryOp(const Location& location, std::unique_ptr<ASTExpression> expr) noexcept
-        : ASTExpression(location), expr_(std::move(expr)) {}
+    ASTUnaryOp(const Location& loc, std::unique_ptr<ASTExpression> expr) noexcept
+        : ASTExpression(loc), expr_(std::move(expr)) {}
     ~ASTUnaryOp() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final { co_yield expr_.get(); }
     TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         // TODO
         return {};
@@ -158,16 +165,12 @@ public:
     const std::unique_ptr<ASTExpression> left_;
     const std::unique_ptr<ASTExpression> right_;
     ASTBinaryOp(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<ASTExpression> left,
         std::unique_ptr<ASTExpression> right
     ) noexcept
-        : ASTExpression(location), left_(std::move(left)), right_(std::move(right)) {}
+        : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final {
-        co_yield left_.get();
-        co_yield right_.get();
-    }
     TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         // TODO
         return {};
@@ -184,16 +187,12 @@ public:
     const std::unique_ptr<ASTExpression> left_;
     const std::unique_ptr<ASTExpression> right_;
     ASTBinaryOp(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<ASTExpression> left,
         std::unique_ptr<ASTExpression> right
     ) noexcept
-        : ASTExpression(location), left_(std::move(left)), right_(std::move(right)) {}
+        : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final {
-        co_yield left_.get();
-        co_yield right_.get();
-    }
     TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         // TODO
         return {};
@@ -205,12 +204,11 @@ public:
     const std::unique_ptr<ASTValueExpression> function_;
     const std::vector<std::unique_ptr<ASTValueExpression>> arguments_;
     ASTFunctionCall(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<ASTValueExpression> function,
         std::vector<std::unique_ptr<ASTValueExpression>> arguments
     ) noexcept;
     ~ASTFunctionCall() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final;
     TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         // TODO
         return {};
@@ -265,7 +263,6 @@ public:
     TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         return resolver.type_factory_.make<T>();
     }
-    std::generator<const ASTIdentifier*> get_dependencies() const noexcept final { co_return; }
 };
 
 class ASTFunctionType final : public ASTTypeExpression {
@@ -274,19 +271,16 @@ public:
     ASTFunctionType(TypeRef func) noexcept;
     ASTFunctionType(const Location& loc, TypeRef func) noexcept;
     TypeRef eval_type(TypeResolver& resolver) const noexcept final;
-    std::generator<const ASTIdentifier*> get_dependencies() const noexcept final;
 };
 
 class ASTRecordType final : public ASTTypeExpression {
 public:
     const std::vector<std::unique_ptr<ASTFieldDeclaration>> fields_;
     ASTRecordType(
-        const Location& location, std::vector<std::unique_ptr<ASTFieldDeclaration>> fields
+        const Location& loc, std::vector<std::unique_ptr<ASTFieldDeclaration>> fields
     ) noexcept;
     ~ASTRecordType() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final;
     TypeRef eval_type(TypeResolver& resolver) const noexcept final;
-    std::generator<const ASTIdentifier*> get_dependencies() const noexcept final;
 };
 
 class ASTDeclaration final : public ASTNode {
@@ -295,13 +289,12 @@ public:
     const std::unique_ptr<ASTTypeExpression> type_;
     const std::unique_ptr<ASTValueExpression> expr_;
     ASTDeclaration(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<ASTIdentifier> identifier,
         std::unique_ptr<ASTTypeExpression> type,
         std::unique_ptr<ASTValueExpression> expr
     ) noexcept;
     ~ASTDeclaration() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final;
     void second_analyze(TypeResolver& tr) final;
 };
 
@@ -310,12 +303,9 @@ public:
     const std::string_view identifier_;
     const std::unique_ptr<ASTTypeExpression> type_;
     ASTFieldDeclaration(
-        const Location& location,
-        std::string_view identifier,
-        std::unique_ptr<ASTTypeExpression> type
+        const Location& loc, std::string_view identifier, std::unique_ptr<ASTTypeExpression> type
     ) noexcept;
     ~ASTFieldDeclaration() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final;
 };
 
 class ASTTypeAlias final : public ASTNode {
@@ -323,22 +313,19 @@ public:
     const std::string_view identifier_;
     const std::unique_ptr<ASTTypeExpression> type_;
     ASTTypeAlias(
-        const Location& location,
-        std::string_view identifier,
-        std::unique_ptr<ASTTypeExpression> type
+        const Location& loc, std::string_view identifier, std::unique_ptr<ASTTypeExpression> type
     ) noexcept;
     ~ASTTypeAlias() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final;
     void first_analyze(Context& ctx, OperationTable& ops) final;
 };
 
-class ASTIfStatement final : public ASTNode {
+class ASTIfStatement final : public ASTRecursiveNode {
 public:
     const std::unique_ptr<ASTExpression> condition_;
     const std::unique_ptr<ASTCodeBlock> if_block_;
     const std::unique_ptr<ASTCodeBlock> else_block_;
     ASTIfStatement(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<ASTExpression> condition,
         std::unique_ptr<ASTCodeBlock> if_block,
         std::unique_ptr<ASTCodeBlock> else_block = nullptr
@@ -347,51 +334,48 @@ public:
     std::generator<ASTNode*> get_children() const noexcept final;
 };
 
-class ASTForStatement final : public ASTNode {
+class ASTForStatement final : public ASTRecursiveNode {
 public:
     const std::unique_ptr<ASTNode> initializer_;  // Can be either a declaration or an expression
     const std::unique_ptr<ASTExpression> condition_;
     const std::unique_ptr<ASTExpression> increment_;
     const std::unique_ptr<ASTCodeBlock> body_;
     ASTForStatement(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<ASTDeclaration> initializer,
         std::unique_ptr<ASTExpression> condition,
         std::unique_ptr<ASTExpression> increment,
         std::unique_ptr<ASTCodeBlock> body
     ) noexcept;
     ASTForStatement(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<ASTValueExpression> initializer,
         std::unique_ptr<ASTExpression> condition,
         std::unique_ptr<ASTExpression> increment,
         std::unique_ptr<ASTCodeBlock> body
     ) noexcept;
-    ASTForStatement(const Location& location, std::unique_ptr<ASTCodeBlock> body) noexcept;
+    ASTForStatement(const Location& loc, std::unique_ptr<ASTCodeBlock> body) noexcept;
     ~ASTForStatement() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
 };
 
 class ASTContinueStatement final : public ASTNode {
 public:
-    ASTContinueStatement(const Location& location) noexcept;
+    ASTContinueStatement(const Location& loc) noexcept;
     ~ASTContinueStatement() noexcept final = default;
 };
 
 class ASTBreakStatement final : public ASTNode {
 public:
-    ASTBreakStatement(const Location& location) noexcept;
+    ASTBreakStatement(const Location& loc) noexcept;
     ~ASTBreakStatement() noexcept final = default;
 };
 
 class ASTReturnStatement final : public ASTNode {
 public:
     const std::unique_ptr<ASTExpression> expr_;
-    ASTReturnStatement(
-        const Location& location, std::unique_ptr<ASTExpression> expr = nullptr
-    ) noexcept;
+    ASTReturnStatement(const Location& loc, std::unique_ptr<ASTExpression> expr = nullptr) noexcept;
     ~ASTReturnStatement() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final;
 };
 
 class ASTFunctionParameter final : public ASTNode {
@@ -399,7 +383,7 @@ public:
     const std::unique_ptr<const ASTIdentifier> identifier_;
     const std::unique_ptr<const ASTExpression> type_;
     ASTFunctionParameter(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<const ASTIdentifier> identifier,
         std::unique_ptr<const ASTExpression> type
     ) noexcept;
@@ -412,7 +396,7 @@ public:
     std::unique_ptr<ASTFunctionParameter> spread_;
     std::unique_ptr<ASTExpression> return_type_;
     ASTFunctionSignature(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<ASTExpression> first_type,
         std::unique_ptr<ASTIdentifier> first_name
     ) noexcept;
@@ -436,7 +420,7 @@ public:
 
 public:
     ASTFunctionDefinition(
-        const Location& location,
+        const Location& loc,
         std::unique_ptr<const ASTIdentifier> name,
         std::unique_ptr<const ASTFunctionSignature> signature,
         std::unique_ptr<const ASTCodeBlock> body

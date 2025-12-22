@@ -57,6 +57,10 @@ concept ValueClass = std::derived_from<T, Value>;
 // using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
 
+class EntityRef;
+using ValueRef = EntityRef;
+using TypeRef = EntityRef;
+
 class Entity {
 public:
     const Kind kind_;
@@ -69,8 +73,13 @@ public:
 
 class Type : public Entity {
 public:
+    static bool contains(const Type& a, const Type& b) { return &a == &b || a.contains(b); }
+
+public:
     Type(Kind kind) noexcept;
     ~Type() override = default;
+
+protected:
     virtual bool contains(const Type& other) const = 0;
 };
 
@@ -211,9 +220,11 @@ public:
 };
 
 class Value : public Entity {
-public:
+    friend class EntityRef;
+
+private:
     template <ValueClass V>
-    static Value* FromLiteral(std::string_view literal) {
+    static Value* from_literal(std::string_view literal) {
         if constexpr (std::is_same_v<V, NullValue>) {
             assert(literal == "null");
             return new V();
@@ -388,23 +399,31 @@ public:
     Value* operator[](const Slice& indices) const;
 };
 
-class SharedRef {
+class EntityRef {
     friend class TypeFactory;
 
 public:
-    template <typename T, typename... Args>
-    static SharedRef create(Args&&... args);
+    template <ValueClass V>
+    static ValueRef from_literal(std::string_view literal) {
+        return ValueRef(Value::from_literal<V>(literal));
+    }
+
+private:
+    template <TypeClass T, typename... Args>
+    static TypeRef create(Args&&... args) {
+        return TypeRef(new T(std::forward<decltype(args)>(args)...));
+    }
 
 private:
     Entity* ptr_;
 
 public:
-    SharedRef() noexcept = default;
-    SharedRef(const SharedRef& other) noexcept;
-    SharedRef(SharedRef&& other) noexcept;
-    ~SharedRef() noexcept;
-    SharedRef& operator=(const SharedRef& other) noexcept;
-    SharedRef& operator=(SharedRef&& other) noexcept;
+    EntityRef() noexcept = default;
+    EntityRef(const EntityRef& other) noexcept;
+    EntityRef(EntityRef&& other) noexcept;
+    ~EntityRef() noexcept;
+    EntityRef& operator=(const EntityRef& other) noexcept;
+    EntityRef& operator=(EntityRef&& other) noexcept;
     operator bool() const noexcept;
     Entity* get() const noexcept;
     Entity& operator*() const noexcept;
@@ -413,13 +432,10 @@ public:
     Type* type() const noexcept;
 
 private:
-    SharedRef(Entity* ptr) noexcept;
+    EntityRef(Entity* ptr) noexcept;
     void retain() noexcept;
     void release() noexcept;
 };
-
-using ValueRef = SharedRef;
-using TypeRef = SharedRef;
 
 class TypeFactory {
 private:
@@ -431,6 +447,23 @@ private:
     BooleanType boolean_type_instance_;
 
 public:
+    TypeRef of(ValueRef value) {
+        assert(value && !value->is_type());
+        switch (value->kind_) {
+        case Kind::KIND_NULL:
+            return &any_type_instance_;
+        case Kind::KIND_INTEGER:
+            return &integer_type_instance_;
+        case Kind::KIND_FLOAT:
+            return &float_type_instance_;
+        case Kind::KIND_STRING:
+            return &string_type_instance_;
+        case Kind::KIND_BOOLEAN:
+            return &boolean_type_instance_;
+            // TODO: handle other kinds
+        }
+    }
+
     template <typename T, typename... Args>
     TypeRef make(Args&&... args) {
         if constexpr (TypeInTupleV<T, Primitives>) {

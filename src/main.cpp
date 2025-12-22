@@ -518,4 +518,5 @@ int main(int argc, char* argv[]) {
     OperationTable ops(type_factory);
     root->first_analyze(ctx, ops);
     TypeResolver tr(ctx, ops, type_factory);
+    root->second_analyze(tr);
 }

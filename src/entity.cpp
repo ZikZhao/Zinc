@@ -7,7 +7,7 @@
 #include "exception.hpp"
 
 Entity::Entity(Kind kind, bool is_value) noexcept
-    : kind_(kind), ref_count_(is_value ? 1 : std::numeric_limits<decltype(ref_count_)>::min()) {}
+    : kind_(kind), ref_count_(is_value ? 0 : std::numeric_limits<decltype(ref_count_)>::min()) {}
 
 Type::Type(Kind kind) noexcept : Entity(kind, false) {}
 
@@ -23,7 +23,7 @@ bool ListType::contains(const Type& other) const {
         return false;
     }
     const ListType& other_list = static_cast<const ListType&>(other);
-    return this->element_type_->contains(*other_list.element_type_);
+    return Type::contains(*this->element_type_, *other_list.element_type_);
 }
 
 RecordType::RecordType(std::map<std::string, Type*> fields) noexcept
@@ -256,10 +256,10 @@ Value* FunctionValue::operator()(const std::vector<Value*>& args) const {
 
 ObjectValue::ObjectValue(ClassType* cls) noexcept : Value(Kind::KIND_OBJECT), cls_(cls) {}
 
-SharedRef::SharedRef(const SharedRef& other) noexcept : ptr_(other.ptr_) { retain(); }
-SharedRef::SharedRef(SharedRef&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
-SharedRef::~SharedRef() noexcept { release(); }
-SharedRef& SharedRef::operator=(const SharedRef& other) noexcept {
+EntityRef::EntityRef(const EntityRef& other) noexcept : ptr_(other.ptr_) { retain(); }
+EntityRef::EntityRef(EntityRef&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
+EntityRef::~EntityRef() noexcept { release(); }
+EntityRef& EntityRef::operator=(const EntityRef& other) noexcept {
     if (this != &other) {
         release();
         ptr_ = other.ptr_;
@@ -267,7 +267,7 @@ SharedRef& SharedRef::operator=(const SharedRef& other) noexcept {
     }
     return *this;
 }
-SharedRef& SharedRef::operator=(SharedRef&& other) noexcept {
+EntityRef& EntityRef::operator=(EntityRef&& other) noexcept {
     if (this != &other) {
         release();
         ptr_ = other.ptr_;
@@ -276,24 +276,24 @@ SharedRef& SharedRef::operator=(SharedRef&& other) noexcept {
     return *this;
 }
 
-SharedRef::operator bool() const noexcept { return ptr_ != nullptr; }
-Entity& SharedRef::operator*() const noexcept { return *ptr_; }
-Entity* SharedRef::operator->() const noexcept { return ptr_; }
-Value* SharedRef::value() const noexcept {
+EntityRef::operator bool() const noexcept { return ptr_ != nullptr; }
+Entity& EntityRef::operator*() const noexcept { return *ptr_; }
+Entity* EntityRef::operator->() const noexcept { return ptr_; }
+Value* EntityRef::value() const noexcept {
     assert(ptr_ && !ptr_->is_type());
     return static_cast<Value*>(ptr_);
 }
-Type* SharedRef::type() const noexcept {
+Type* EntityRef::type() const noexcept {
     assert(ptr_ && ptr_->is_type());
     return static_cast<Type*>(ptr_);
 }
-SharedRef::SharedRef(Entity* ptr) noexcept : ptr_(ptr) { retain(); }
-void SharedRef::retain() noexcept {
+EntityRef::EntityRef(Entity* ptr) noexcept : ptr_(ptr) { retain(); }
+void EntityRef::retain() noexcept {
     if (ptr_) {
         ptr_->ref_count_++;
     }
 }
-void SharedRef::release() noexcept {
+void EntityRef::release() noexcept {
     if (ptr_) {
         ptr_->ref_count_--;
         if (ptr_->ref_count_ == 0) {

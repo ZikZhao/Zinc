@@ -247,7 +247,7 @@ public:
     using OperatorFn = Entity* (*)(Entity*, Entity*);
     using TableKey = std::tuple<OperatorCode, Kind, Kind>;
     using TableValue = std::pair<Kind, OperatorFn>;
-    using TypeAndFunctor = std::pair<SharedRef, OperatorFn>;
+    using TypeAndFunctor = std::pair<EntityRef, OperatorFn>;
 
 private:
     using Table = std::array<
