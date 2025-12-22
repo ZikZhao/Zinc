@@ -1,5 +1,7 @@
 #pragma once
 #include "pch.hpp"
+#include <string_view>
+#include <utility>
 
 class Context;
 
@@ -22,35 +24,7 @@ enum class Kind : std::uint16_t {
     KIND_UNION,
 };
 
-template <typename TargetType>
-class Reference {
-public:
-    template <typename Type, typename... Args>
-    static Reference<TargetType> from(Args... args) {
-        return new Type(std::forward<Args>(args)...);
-    }
-
-private:
-    std::shared_ptr<TargetType> ptr_;
-
-public:
-    Reference() noexcept = default;
-
-public:
-    Reference(TargetType* ptr) noexcept : ptr_(ptr) {}
-    TargetType* operator->() const noexcept { return ptr_.get(); }
-    TargetType& operator*() const { return *ptr_; }
-    std::string repr() const { return ptr_->repr(); }
-    bool contains(const Reference& other) const { return ptr_->contains(*other); }
-    Reference operator()(auto&&... args) {
-        return ptr_->operator()(std::forward<decltype(args)>(args)...);
-    }
-    bool null() const noexcept { return ptr_ == nullptr; }
-};
-
 class Entity;
-using ObjRef = Reference<Entity>;
-
 class Value;
 class NullValue;
 class IntegerValue;
@@ -80,29 +54,20 @@ concept TypeClass = std::derived_from<T, Type>;
 template <typename T>
 concept ValueClass = std::derived_from<T, Value>;
 
-using TypeRef = ObjRef;           // Should always point to a Type
-using ValueRef = ObjRef;          // Should always point to a Value
-using InterfaceTypeRef = ObjRef;  // Should always point to an InterfaceType
-using ClassTypeRef = ObjRef;      // Should always point to a ClassType
-using DictValueRef = ObjRef;      // Should always point to a DictValue
-
-using Arguments = std::vector<ValueRef>;
+// using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
 
 class Entity {
 public:
     const Kind kind_;
-    const bool is_value_;
+    mutable std::int64_t ref_count_;
     Entity(Kind kind, bool is_value) noexcept;
     virtual ~Entity() = default;
     virtual std::string repr() const = 0;
-    bool contains(const Entity& other) const;
+    constexpr bool is_type() const noexcept { return ref_count_ <= 0; }
 };
 
 class Type : public Entity {
-public:
-    static TypeRef FromTypeIndex(const std::type_index& type);
-
 public:
     Type(Kind kind) noexcept;
     ~Type() override = default;
@@ -112,7 +77,6 @@ public:
 class AnyType final : public Type {
 public:
     static constexpr Kind kind = Kind::KIND_ANY;
-    static inline const TypeRef instance = TypeRef::from<AnyType>();
 
 public:
     AnyType() noexcept;
@@ -124,7 +88,6 @@ template <Kind K>
 class PrimitiveType final : public Type {
 public:
     static constexpr Kind kind = K;
-    static inline const TypeRef instance = TypeRef::from<PrimitiveType>();
 
 public:
     PrimitiveType() noexcept : Type(kind) {}
@@ -146,7 +109,6 @@ template <>
 class PrimitiveType<Kind::KIND_INTEGER> final : public Type {
 public:
     static constexpr Kind kind = Kind::KIND_INTEGER;
-    static inline const TypeRef instance = TypeRef::from<PrimitiveType>();
 
 public:
     PrimitiveType() noexcept : Type(kind) {}
@@ -160,7 +122,6 @@ template <>
 class PrimitiveType<Kind::KIND_FLOAT> final : public Type {
 public:
     static constexpr Kind kind = Kind::KIND_FLOAT;
-    static inline const TypeRef instance = TypeRef::from<PrimitiveType>();
 
 public:
     PrimitiveType() noexcept : Type(kind) {}
@@ -175,10 +136,10 @@ public:
     static constexpr Kind kind = Kind::KIND_FUNCTION;
 
 public:
-    std::vector<TypeRef> parameters_;
-    TypeRef spread_;
-    TypeRef return_type_;
-    FunctionType(std::vector<TypeRef>&& parameters, TypeRef spread, TypeRef return_type) noexcept
+    std::vector<Type*> parameters_;
+    Type* spread_;
+    Type* return_type_;
+    FunctionType(std::vector<Type*>&& parameters, Type* spread, Type* return_type) noexcept
         : Type(kind),
           parameters_(std::move(parameters)),
           spread_(spread),
@@ -195,16 +156,16 @@ using BooleanType = PrimitiveType<Kind::KIND_BOOLEAN>;
 
 class ListType final : public Type {
 public:
-    TypeRef element_type_;
-    ListType(TypeRef element_type) noexcept;
+    Type* element_type_;
+    ListType(Type* element_type) noexcept;
     std::string repr() const final;
     bool contains(const Type& other) const final;
 };
 
 class RecordType : public Type {
 public:
-    const std::map<std::string, TypeRef> fields_;
-    RecordType(std::map<std::string, TypeRef> fields) noexcept;
+    const std::map<std::string, Type*> fields_;
+    RecordType(std::map<std::string, Type*> fields) noexcept;
     std::string repr() const final;
     bool contains(const Type& other) const final;
 };
@@ -212,14 +173,14 @@ public:
 class ClassType : public Type {
 public:
     const std::string_view name_;
-    const std::vector<InterfaceTypeRef>& interfaces_;
-    const ClassTypeRef extends_;
-    const Context* properties_;
+    const std::vector<InterfaceType*>& interfaces_;
+    const ClassType* extends_;
+    const std::map<std::string_view, Type*> properties_;
     ClassType(
         std::string_view name,
-        const std::vector<InterfaceTypeRef>& interfaces,
-        const ClassTypeRef extends,
-        const Context* properties
+        std::vector<InterfaceType*> interfaces,
+        const ClassType* extends,
+        std::map<std::string_view, Type*> properties
     ) noexcept;
     std::string repr() const override;
     bool contains(const Type& other) const override;
@@ -230,11 +191,11 @@ public:
     static constexpr Kind kind = Kind::KIND_INTERSECTION;
 
 public:
-    std::vector<TypeRef> types_;
+    std::vector<Type*> types_;
     IntersectionType(auto... args) noexcept : Type(kind) { (combine(args), ...); }
     std::string repr() const final;
     bool contains(const Type& other) const final;
-    IntersectionType& combine(TypeRef other);
+    IntersectionType& combine(Type* other);
 };
 
 class UnionType final : public Type {
@@ -242,17 +203,17 @@ public:
     static constexpr Kind kind = Kind::KIND_UNION;
 
 public:
-    std::vector<TypeRef> types_;
+    std::vector<Type*> types_;
     UnionType(auto... args) noexcept : Type(kind) { (combine(args), ...); }
     std::string repr() const final;
     bool contains(const Type& other) const final;
-    UnionType& combine(TypeRef other);
+    UnionType& combine(Type* other);
 };
 
 class Value : public Entity {
 public:
     template <ValueClass V>
-    static ValueRef FromLiteral(std::string_view literal) {
+    static Value* FromLiteral(std::string_view literal) {
         if constexpr (std::is_same_v<V, NullValue>) {
             assert(literal == "null");
             return new V();
@@ -392,14 +353,14 @@ public:
     using Type = FunctionType;
 
 public:
-    const std::function<ValueRef(const Arguments&)> callback_;
-    TypeRef function_type_;
-    FunctionValue(auto&& callback, TypeRef function_type) noexcept
+    const std::function<Value*(const std::vector<Value*>&)> callback_;
+    Type* function_type_;
+    FunctionValue(auto&& callback, Type* function_type) noexcept
         : Value(Kind::KIND_FUNCTION),
           callback_(std::forward<decltype(callback)>(callback)),
           function_type_(function_type) {}
     std::string repr() const final;
-    ValueRef operator()(const Arguments& args) const;
+    Value* operator()(const std::vector<Value*>& args) const;
 };
 
 class ObjectValue : public Value {
@@ -407,23 +368,95 @@ public:
     static constexpr Kind kind = Kind::KIND_OBJECT;
 
 public:
-    ClassTypeRef class_type_;
-    std::vector<ValueRef> attributes_;
-    ObjectValue(ClassTypeRef cls) noexcept;
-    ValueRef get(const std::string_view property) const noexcept;
+    ClassType* cls_;
+    std::vector<Value*> attributes_;
+    ObjectValue(ClassType* cls) noexcept;
+    Value* get(const std::string_view property) const noexcept;
 };
 
 class ListValue : public ObjectValue {
 private:
-    static TypeRef ListClassInstance;
-    static ValueRef Append(const std::vector<ValueRef>& args) noexcept;
+    static ListValue* Append(const std::vector<Value*>& args) noexcept;
 
 public:
-    std::vector<ValueRef> values_;
+    std::vector<Value*> values_;
     ListValue() noexcept;
-    ListValue(std::vector<ValueRef>&& values) noexcept;
+    ListValue(std::vector<Value*>&& values) noexcept;
     std::string repr() const final;
     ListValue* operator+(const ListValue& other) const;
     ListValue* operator*(const IntegerValue& other) const;
-    ValueRef operator[](const Slice& indices) const;
+    Value* operator[](const Slice& indices) const;
+};
+
+class SharedRef {
+    friend class TypeFactory;
+
+public:
+    template <typename T, typename... Args>
+    static SharedRef create(Args&&... args);
+
+private:
+    Entity* ptr_;
+
+public:
+    SharedRef() noexcept = default;
+    SharedRef(const SharedRef& other) noexcept;
+    SharedRef(SharedRef&& other) noexcept;
+    ~SharedRef() noexcept;
+    SharedRef& operator=(const SharedRef& other) noexcept;
+    SharedRef& operator=(SharedRef&& other) noexcept;
+    operator bool() const noexcept;
+    Entity* get() const noexcept;
+    Entity& operator*() const noexcept;
+    Entity* operator->() const noexcept;
+    Value* value() const noexcept;
+    Type* type() const noexcept;
+
+private:
+    SharedRef(Entity* ptr) noexcept;
+    void retain() noexcept;
+    void release() noexcept;
+};
+
+using ValueRef = SharedRef;
+using TypeRef = SharedRef;
+
+class TypeFactory {
+private:
+    using Primitives = std::tuple<AnyType, IntegerType, FloatType, StringType, BooleanType>;
+    AnyType any_type_instance_;
+    IntegerType integer_type_instance_;
+    FloatType float_type_instance_;
+    StringType string_type_instance_;
+    BooleanType boolean_type_instance_;
+
+public:
+    template <typename T, typename... Args>
+    TypeRef make(Args&&... args) {
+        if constexpr (TypeInTupleV<T, Primitives>) {
+            static T instance;
+            return &instance;
+        } else {
+            // return SharedRef::create<T>(std::forward<decltype(args)>(args)...);
+            return {};
+        }
+    }
+
+    TypeRef make_kind(Kind kind) {
+        switch (kind) {
+        case Kind::KIND_ANY:
+            return &any_type_instance_;
+        case Kind::KIND_INTEGER:
+            return &integer_type_instance_;
+        case Kind::KIND_FLOAT:
+            return &float_type_instance_;
+        case Kind::KIND_STRING:
+            return &string_type_instance_;
+        case Kind::KIND_BOOLEAN:
+            return &boolean_type_instance_;
+        default:
+            assert(false && "Unknown primitive kind");
+            std::unreachable();
+        }
+    }
 };

@@ -3,9 +3,9 @@
 #include <StainlessParser.h>
 #include <utility>
 
-#include "object.hpp"
+#include "entity.hpp"
 
-enum class OperatorCode {
+enum class OperatorCode : std::uint16_t {
     OPERATOR_ADD,
     OPERATOR_SUBTRACT,
     OPERATOR_NEGATE,
@@ -221,7 +221,7 @@ using LeftShiftAssign = OperateAndAssign<LeftShift>;
 using RightShiftAssign = OperateAndAssign<RightShift>;
 }  // namespace OperatorFunctors
 
-class OperationTable {
+class FundamentalOperationTable {
 private:
     using Arithmetic = std::tuple<
         OperatorFunctors::Add,
@@ -244,13 +244,15 @@ private:
         OperatorFunctors::BitwiseNot>;
 
 public:
-    using Key = std::tuple<OperatorCode, Kind, Kind>;
-    using Value = std::pair<Kind, Entity* (*)(Entity*, Entity*)>;
+    using OperatorFn = Entity* (*)(Entity*, Entity*);
+    using TableKey = std::tuple<OperatorCode, Kind, Kind>;
+    using TableValue = std::pair<Kind, OperatorFn>;
+    using TypeAndFunctor = std::pair<SharedRef, OperatorFn>;
 
 private:
     using Table = std::array<
         std::array<
-            std::array<Value, static_cast<std::size_t>(Kind::NON_COMPOSITE_SIZE)>,
+            std::array<TableValue, static_cast<std::size_t>(Kind::NON_COMPOSITE_SIZE)>,
             static_cast<std::size_t>(Kind::NON_COMPOSITE_SIZE)>,
         static_cast<std::size_t>(OperatorCode::SIZE)>;
 
@@ -272,7 +274,7 @@ private:
         requires requires { Operator()(std::declval<Operand&>(), std::declval<Operand&>()); }
     static constexpr void register_op(Table& table) {
         table[static_cast<std::size_t>(Operator::opcode)][static_cast<std::size_t>(Operand::kind)]
-             [static_cast<std::size_t>(Operand::kind)] = Value{
+             [static_cast<std::size_t>(Operand::kind)] = TableValue{
                  Operand::kind,
                  [](Entity* left, Entity* right) -> Entity* {
                      return Operator()(
@@ -285,7 +287,7 @@ private:
         requires requires { Operator()(std::declval<Operand&>()); }
     static constexpr void register_op(Table& table) {
         table[static_cast<std::size_t>(Operator::opcode)][static_cast<std::size_t>(Operand::kind)]
-             [static_cast<std::size_t>(Operand::kind)] = Value{
+             [static_cast<std::size_t>(Operand::kind)] = TableValue{
                  Operand::kind,
                  [](Entity* left, Entity* right) -> Entity* {
                      return Operator()(static_cast<Operand&>(*left));
@@ -293,33 +295,73 @@ private:
              };
     }
 
-private:
-    Table table_;
+protected:
+    TypeFactory& type_factory_;
+    const Table table_;
 
 public:
-    constexpr OperationTable() : table_(make_operation_map()) {}
-    constexpr Value eval_value_op(Key key) const {
-        return table_[static_cast<std::size_t>(std::get<0>(key))]
-                     [static_cast<std::size_t>(std::get<1>(key))]
-                     [static_cast<std::size_t>(std::get<2>(key))];
+    constexpr FundamentalOperationTable(TypeFactory& type_factory)
+        : type_factory_(type_factory), table_(make_operation_map()) {}
+
+    constexpr TypeAndFunctor eval_value_op(OperatorCode opcode, Type* left, Type* right) const {
+        const TableValue& value =
+            table_[static_cast<std::size_t>(opcode)][static_cast<std::size_t>(left->kind_)]
+                  [static_cast<std::size_t>(right->kind_)];
+        return {type_factory_.make_kind(value.first), value.second};
     }
-    constexpr TypeRef eval_op(OperatorCode opcode, TypeRef left, TypeRef right = {}) const {
-        if (!left->is_value_ && (right.null() || !right->is_value_)) {
+
+    constexpr TypeAndFunctor eval_op(OperatorCode opcode, Type* left, Type* right = {}) const {
+        if (left->is_type() && (right || right->is_type())) {
             // type and type
             switch (opcode) {
             case OperatorCode::OPERATOR_BITWISE_AND:
-                return TypeRef::from<IntersectionType>(left, right);
+                return {type_factory_.make<IntersectionType>(left, right), nullptr};
             case OperatorCode::OPERATOR_BITWISE_OR:
-                return TypeRef::from<UnionType>(left, right);
+                return {type_factory_.make<UnionType>(left, right), nullptr};
             default:
                 assert(false && "Operation on two types not implemented");
                 std::unreachable();
             }
-        } else if (left->is_value_ && (right.null() || right->is_value_)) {
+        } else if (!left->is_type() && (right || !right->is_type())) {
             assert(false && "Operation on two values should be handled elsewhere");
             std::unreachable();
         } else {
             return {};
+        }
+    }
+};
+
+class OperationTable final : public FundamentalOperationTable {
+private:
+    using CustomTableKey = std::tuple<OperatorCode, Type*, Type*>;
+    using CustomTableValue = std::pair<Type*, OperatorFn>;
+    std::map<CustomTableKey, CustomTableValue> custom_table_;
+
+public:
+    OperationTable(TypeFactory& type_factory)
+        : FundamentalOperationTable(type_factory), custom_table_() {}
+
+    void register_custom_op(
+        OperatorCode opcode,
+        TypeRef left_type,
+        TypeRef right_type,
+        TypeRef result_type,
+        Entity* (*func)(Entity*, Entity*)
+    ) {
+        custom_table_[{opcode, left_type.type(), right_type.type()}] = {result_type.type(), func};
+    }
+
+    TypeAndFunctor eval_op(OperatorCode opcode, Type* left, Type* right = {}) const {
+        if (left->kind_ < Kind::NON_COMPOSITE_SIZE &&
+            (right || right->kind_ < Kind::NON_COMPOSITE_SIZE)) {
+            // primitive and primitive
+            return FundamentalOperationTable::eval_op(opcode, left, right);
+        }
+        auto it = custom_table_.find({opcode, left, right});
+        if (it != custom_table_.end()) {
+            return {type_factory_.make<Type>(it->second.first), it->second.second};
+        } else {
+            throw std::runtime_error("Operation not defined for given types");
         }
     }
 };

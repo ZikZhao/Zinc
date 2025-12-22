@@ -5,8 +5,8 @@
 #include "StainlessLexer.h"
 #include "StainlessParser.h"
 #include "ast.hpp"
-#include "exception.hpp"
-#include "object.hpp"
+#include "entity.hpp"
+#include "operations.hpp"
 
 class ASTBuilder final : private StainlessBaseVisitor {
 private:
@@ -21,16 +21,6 @@ private:
         } else {
             return nullptr;
         }
-    }
-    template <typename... Args>
-        requires(sizeof...(Args) > 1)
-    std::unique_ptr<ASTNode> transform_group(Args... contexts) noexcept {
-        assert(
-            (static_cast<std::size_t>(!!contexts) + ...) == 1 && "Exactly one ctx must be non-null"
-        );
-        antlr4::tree::ParseTree* ctx = nullptr;
-        std::ignore = (... || (contexts ? (ctx = contexts, true) : false));
-        return transform(ctx);
     }
     template <typename Target = ASTNode>
         requires(std::is_base_of_v<ASTNode, Target>)
@@ -120,13 +110,26 @@ public:
         return {};
     }
     antlrcpp::Any visitFor_statement(StainlessParser::For_statementContext* ctx) noexcept final {
-        last_visited_ = std::make_unique<ASTForStatement>(
-            loc(ctx),
-            transform_group(ctx->init_decl_, ctx->init_expr_),
-            StaticUniqueCast<ASTExpression>(transform(ctx->condition_)),
-            StaticUniqueCast<ASTExpression>(transform(ctx->update_)),
-            StaticUniqueCast<ASTCodeBlock>(transform(ctx->body_))
-        );
+        if (ctx->init_decl_) {
+            last_visited_ = std::make_unique<ASTForStatement>(
+                loc(ctx),
+                StaticUniqueCast<ASTDeclaration>(transform(ctx->init_decl_)),
+                StaticUniqueCast<ASTExpression>(transform(ctx->condition_)),
+                StaticUniqueCast<ASTExpression>(transform(ctx->update_)),
+                StaticUniqueCast<ASTCodeBlock>(transform(ctx->body_))
+            );
+        } else if (ctx->init_expr_) {
+            last_visited_ = std::make_unique<ASTForStatement>(
+                loc(ctx),
+                StaticUniqueCast<ASTValueExpression>(transform(ctx->init_expr_)),
+                StaticUniqueCast<ASTExpression>(transform(ctx->condition_)),
+                StaticUniqueCast<ASTExpression>(transform(ctx->update_)),
+                StaticUniqueCast<ASTCodeBlock>(transform(ctx->body_))
+            );
+        } else {
+            assert(false);
+            std::unreachable();
+        }
         return {};
     }
     antlrcpp::Any visitBreak_statement(
@@ -461,36 +464,36 @@ public:
     }
 };
 
-namespace Builtins {
-struct BuiltinFunction {
-    const std::string_view name;
-    const TypeRef type;
-    const std::function<ValueRef(const Arguments&)> func;
-};
-BuiltinFunction Print = {
-    "print",
-    new FunctionType({}, TypeRef(new AnyType()), TypeRef(new NullType())),
-    [](const Arguments& args) -> ValueRef {
-        try {
-            std::cout << args.at(0)->repr() << std::endl;
-            return new NullValue();
-        } catch (const std::out_of_range& e) {
-            throw ArgumentException(e.what());
-        }
-    },
-};
-const std::vector<BuiltinFunction*> AllBuiltins = {
-    &Print,
-};
-// Context GetBuiltinsScope() {
-//     return Context(
-//         AllBuiltins | std::views::transform([](BuiltinFunction* builtin) {
-//             return std::pair(std::string_view(builtin->name), builtin->type);
-//         }) |
-//         std::ranges::to<std::vector<std::pair<std::string_view, TypeRef>>>()
-//     );
-// }
-}  // namespace Builtins
+// namespace Builtins {
+// struct BuiltinFunction {
+//     const std::string_view name;
+//     const TypeRef type;
+//     const std::function<ValueRef(const std::vector<ValueRef>&)> func;
+// };
+// BuiltinFunction Print = {
+//     "print",
+//     new FunctionType({}, TypeRef(new AnyType()), TypeRef(new NullType())),
+//     [](const std::vector<ValueRef>& args) -> ValueRef {
+//         try {
+//             std::cout << args.at(0)->repr() << std::endl;
+//             return new NullValue();
+//         } catch (const std::out_of_range& e) {
+//             throw ArgumentException(e.what());
+//         }
+//     },
+// };
+// const std::vector<BuiltinFunction*> AllBuiltins = {
+//     &Print,
+// };
+// // Context GetBuiltinsScope() {
+// //     return Context(
+// //         AllBuiltins | std::views::transform([](BuiltinFunction* builtin) {
+// //             return std::pair(std::string_view(builtin->name), builtin->type);
+// //         }) |
+// //         std::ranges::to<std::vector<std::pair<std::string_view, TypeRef>>>()
+// //     );
+// // }
+// }  // namespace Builtins
 
 int main(int argc, char* argv[]) {
     SourceManager source_manager;
@@ -511,6 +514,8 @@ int main(int argc, char* argv[]) {
 
     // Context ctx = Builtins::GetBuiltinsScope();
     Context ctx;
-    root->first_analyze(ctx);
-    TypeResolver tr(ctx);
+    TypeFactory type_factory;
+    OperationTable ops(type_factory);
+    root->first_analyze(ctx, ops);
+    TypeResolver tr(ctx, ops, type_factory);
 }

@@ -3,7 +3,7 @@
 #include "pch.hpp"
 #include <string_view>
 
-#include "object.hpp"
+#include "entity.hpp"
 
 Context::Context(Context& parent) noexcept : parent_(&parent) {}
 Context::Context(std::string_view name, Context& parent) noexcept : parent_(&parent), name_(name) {}
@@ -24,7 +24,10 @@ void Context::add_variable(std::string_view identifier, const ASTValueExpression
     variables_.emplace(identifier, expr);
 }
 
-TypeResolver::TypeResolver(Context& root) noexcept : current_(&root) {}
+TypeResolver::TypeResolver(
+    Context& root, const OperationTable& ops, TypeFactory& type_factory
+) noexcept
+    : current_(&root), ops_(ops), type_factory_(type_factory) {}
 void TypeResolver::add_variable(std::string_view identifier, const ASTValueExpression* expr) {
     current_->add_variable(identifier, expr);
 }
@@ -35,26 +38,26 @@ void TypeResolver::exit() noexcept { current_ = current_->parent_; }
 TypeRef TypeResolver::resolve(std::string_view identifier) {
     auto record = cache_[std::pair(current_, identifier)];
     if (record.is_resolving) {
-        if (!record.type_ref.null()) {
-            return record.type_ref;
+        if (record.type) {
+            return record.type;
         }
         throw std::runtime_error("Cyclic type dependency detected");
     }
     record.is_resolving = true;
-    record.type_ref =
+    record.type =
         current_->types_.at(identifier)
             ->eval_type(*this);  // TODO: identifier may be variable so get type of variable
-    return record.type_ref;
+    return record.type;
 }
 
 ASTNode::ASTNode(const Location& loc) noexcept : location_(loc) {}
 std::generator<ASTNode*> ASTNode::get_children() const noexcept { co_return; }
-void ASTNode::first_analyze(Context& ctx) {
+void ASTNode::first_analyze(Context& ctx, OperationTable& ops) {
     for (const auto& child : get_children()) {
         if (child == nullptr) {
             continue;
         }
-        child->first_analyze(ctx);
+        child->first_analyze(ctx, ops);
     }
 }
 void ASTNode::second_analyze(TypeResolver& tr) {
@@ -75,10 +78,10 @@ std::generator<ASTNode*> ASTCodeBlock::get_children() const noexcept {
         co_yield stmt.get();
     }
 }
-void ASTCodeBlock::first_analyze(Context& ctx) {
+void ASTCodeBlock::first_analyze(Context& ctx, OperationTable& ops) {
     local_scope_ = std::make_unique<Context>(name_, ctx);
     for (auto& stmt : statements_) {
-        stmt->first_analyze(*local_scope_);
+        stmt->first_analyze(*local_scope_, ops);
     }
 }
 
@@ -99,9 +102,9 @@ std::generator<ASTNode*> ASTFunctionCall::get_children() const noexcept {
     }
 }
 
-ASTFunctionType::ASTFunctionType(FunctionType* func) noexcept
+ASTFunctionType::ASTFunctionType(TypeRef func) noexcept
     : ASTTypeExpression({0, {0, 0}, {0, 0}}), value_(func) {}
-ASTFunctionType::ASTFunctionType(const Location& loc, FunctionType* func) noexcept
+ASTFunctionType::ASTFunctionType(const Location& loc, TypeRef func) noexcept
     : ASTTypeExpression(loc), value_(func) {}
 TypeRef ASTFunctionType::eval_type(TypeResolver& tr) const noexcept { return value_; }
 std::generator<const ASTIdentifier*> ASTFunctionType::get_dependencies() const noexcept {
@@ -123,7 +126,7 @@ TypeRef ASTRecordType::eval_type(TypeResolver& tr) const noexcept {
                    return std::pair(decl->identifier_, tr.resolve(decl->identifier_));
                });
     std::map<std::string, TypeRef> field_types(rng.begin(), rng.end());
-    return new RecordType(field_types);
+    return tr.type_factory_.make<RecordType>(field_types);
 }
 std::generator<const ASTIdentifier*> ASTRecordType::get_dependencies() const noexcept {
     for (const auto& field : fields_) {
@@ -169,9 +172,9 @@ ASTTypeAlias::ASTTypeAlias(
     : ASTNode(location), identifier_(std::move(identifier)), type_(std::move(type)) {}
 std::generator<ASTNode*> ASTTypeAlias::get_children() const noexcept { co_yield type_.get(); }
 
-void ASTTypeAlias::first_analyze(Context& ctx) {
+void ASTTypeAlias::first_analyze(Context& ctx, OperationTable& ops) {
     ctx.add_type(identifier_, type_.get());
-    type_->first_analyze(ctx);
+    type_->first_analyze(ctx, ops);
 }
 
 ASTIfStatement::ASTIfStatement(
@@ -194,7 +197,19 @@ std::generator<ASTNode*> ASTIfStatement::get_children() const noexcept {
 
 ASTForStatement::ASTForStatement(
     const Location& location,
-    std::unique_ptr<ASTNode> initializer,
+    std::unique_ptr<ASTDeclaration> initializer,
+    std::unique_ptr<ASTExpression> condition,
+    std::unique_ptr<ASTExpression> increment,
+    std::unique_ptr<ASTCodeBlock> body
+) noexcept
+    : ASTNode(location),
+      initializer_(std::move(initializer)),
+      condition_(std::move(condition)),
+      increment_(std::move(increment)),
+      body_(std::move(body)) {}
+ASTForStatement::ASTForStatement(
+    const Location& location,
+    std::unique_ptr<ASTValueExpression> initializer,
     std::unique_ptr<ASTExpression> condition,
     std::unique_ptr<ASTExpression> increment,
     std::unique_ptr<ASTCodeBlock> body

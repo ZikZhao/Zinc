@@ -3,7 +3,7 @@
 #include <string_view>
 #include <utility>
 
-#include "object.hpp"
+#include "entity.hpp"
 #include "operations.hpp"
 
 class ASTNode;
@@ -60,7 +60,7 @@ class TypeResolver {
 private:
     struct CacheRecord {
         bool is_resolving = false;
-        TypeRef type_ref = nullptr;
+        TypeRef type;
     };
 
 private:
@@ -68,7 +68,11 @@ private:
     std::map<std::pair<const Context*, std::string_view>, CacheRecord> cache_;
 
 public:
-    TypeResolver(Context& root) noexcept;
+    const OperationTable& ops_;
+    TypeFactory& type_factory_;
+
+public:
+    TypeResolver(Context& root, const OperationTable& ops, TypeFactory& type_factory) noexcept;
     void add_variable(std::string_view identifier, const ASTValueExpression* expr);
     void enter(const ASTCodeBlock* child) noexcept;
     void exit() noexcept;
@@ -81,7 +85,7 @@ public:
     ASTNode(const Location& loc) noexcept;
     virtual ~ASTNode() noexcept = default;
     virtual std::generator<ASTNode*> get_children() const noexcept;
-    virtual void first_analyze(Context& ctx);
+    virtual void first_analyze(Context& ctx, OperationTable& ops);
     virtual void second_analyze(TypeResolver& tr);
 };
 
@@ -97,7 +101,7 @@ public:
         std::vector<std::unique_ptr<ASTNode>> statements
     ) noexcept;
     std::generator<ASTNode*> get_children() const noexcept final;
-    void first_analyze(Context& ctx) final;
+    void first_analyze(Context& ctx, OperationTable& ops) final;
 };
 
 class ASTExpression : public ASTNode {
@@ -113,11 +117,11 @@ public:
 template <ValueClass V>
 class ASTConstant final : public ASTExpression {
 public:
-    const ValueRef value_;
+    const Value* value_;
     ASTConstant(const Location& loc, std::string_view str)
         : ASTExpression(loc), value_(Value::FromLiteral<V>(str)) {}
-    TypeRef eval_type(TypeResolver& tr) const noexcept final {
-        return Type::FromTypeIndex(typeid(typename V::Type));
+    TypeRef eval_type(TypeResolver& resolver) const noexcept final {
+        return resolver.type_factory_.make_kind(value_->kind_);
     }
 };
 
@@ -125,7 +129,7 @@ class ASTIdentifier final : public ASTExpression {
 public:
     const std::string_view name_;
     ASTIdentifier(const Location& loc, std::string_view name) noexcept;
-    TypeRef eval_type(TypeResolver& tr) const noexcept final;
+    TypeRef eval_type(TypeResolver& resolver) const noexcept final;
 };
 
 template <typename Op>
@@ -139,7 +143,7 @@ public:
         : ASTExpression(location), expr_(std::move(expr)) {}
     ~ASTUnaryOp() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final { co_yield expr_.get(); }
-    TypeRef eval_type(TypeResolver& tr) const noexcept final {
+    TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         // TODO
         return {};
     }
@@ -164,7 +168,7 @@ public:
         co_yield left_.get();
         co_yield right_.get();
     }
-    TypeRef eval_type(TypeResolver& tr) const noexcept final {
+    TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         // TODO
         return {};
     }
@@ -190,7 +194,7 @@ public:
         co_yield left_.get();
         co_yield right_.get();
     }
-    TypeRef eval_type(TypeResolver& tr) const noexcept final {
+    TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         // TODO
         return {};
     }
@@ -207,7 +211,7 @@ public:
     ) noexcept;
     ~ASTFunctionCall() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
-    TypeRef eval_type(TypeResolver& tr) const noexcept final {
+    TypeRef eval_type(TypeResolver& resolver) const noexcept final {
         // TODO
         return {};
     }
@@ -258,16 +262,18 @@ template <TypeClass T>
 class ASTPrimitiveType final : public ASTTypeExpression {
 public:
     ASTPrimitiveType(const Location& loc) noexcept : ASTTypeExpression(loc) {}
-    TypeRef eval_type(TypeResolver& tr) const noexcept final { return T::instance; }
+    TypeRef eval_type(TypeResolver& resolver) const noexcept final {
+        return resolver.type_factory_.make<T>();
+    }
     std::generator<const ASTIdentifier*> get_dependencies() const noexcept final { co_return; }
 };
 
 class ASTFunctionType final : public ASTTypeExpression {
 public:
     const TypeRef value_;
-    ASTFunctionType(FunctionType* func) noexcept;
-    ASTFunctionType(const Location& loc, FunctionType* func) noexcept;
-    TypeRef eval_type(TypeResolver& tr) const noexcept final;
+    ASTFunctionType(TypeRef func) noexcept;
+    ASTFunctionType(const Location& loc, TypeRef func) noexcept;
+    TypeRef eval_type(TypeResolver& resolver) const noexcept final;
     std::generator<const ASTIdentifier*> get_dependencies() const noexcept final;
 };
 
@@ -279,7 +285,7 @@ public:
     ) noexcept;
     ~ASTRecordType() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
-    TypeRef eval_type(TypeResolver& tr) const noexcept final;
+    TypeRef eval_type(TypeResolver& resolver) const noexcept final;
     std::generator<const ASTIdentifier*> get_dependencies() const noexcept final;
 };
 
@@ -323,7 +329,7 @@ public:
     ) noexcept;
     ~ASTTypeAlias() noexcept final = default;
     std::generator<ASTNode*> get_children() const noexcept final;
-    void first_analyze(Context& ctx) final;
+    void first_analyze(Context& ctx, OperationTable& ops) final;
 };
 
 class ASTIfStatement final : public ASTNode {
@@ -349,7 +355,14 @@ public:
     const std::unique_ptr<ASTCodeBlock> body_;
     ASTForStatement(
         const Location& location,
-        std::unique_ptr<ASTNode> initializer,
+        std::unique_ptr<ASTDeclaration> initializer,
+        std::unique_ptr<ASTExpression> condition,
+        std::unique_ptr<ASTExpression> increment,
+        std::unique_ptr<ASTCodeBlock> body
+    ) noexcept;
+    ASTForStatement(
+        const Location& location,
+        std::unique_ptr<ASTValueExpression> initializer,
         std::unique_ptr<ASTExpression> condition,
         std::unique_ptr<ASTExpression> increment,
         std::unique_ptr<ASTCodeBlock> body

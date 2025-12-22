@@ -29,6 +29,15 @@
 using namespace std::literals::string_literals;
 using namespace std::literals::string_view_literals;
 
+template <typename T, typename Tuple>
+struct TypeInTuple;
+
+template <typename T, typename... Ts>
+struct TypeInTuple<T, std::tuple<Ts...>> : std::disjunction<std::is_same<T, Ts>...> {};
+
+template <typename T, typename... Ts>
+inline constexpr bool TypeInTupleV = TypeInTuple<T, std::tuple<Ts...>>::value;
+
 struct Location {
     std::size_t id;
     struct {
