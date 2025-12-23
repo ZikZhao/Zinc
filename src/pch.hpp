@@ -3,6 +3,7 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <compare>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -29,14 +30,43 @@
 using namespace std::literals::string_literals;
 using namespace std::literals::string_view_literals;
 
+namespace GlobalMemory {
+inline std::pmr::memory_resource* memory_resource() {
+    constexpr std::size_t buffer_size = 1024 * 1024;  // 1 MB
+    alignas(std::max_align_t) static std::array<std::byte, buffer_size> buffer;
+    static std::pmr::monotonic_buffer_resource resource(
+        buffer.data(), buffer.size(), std::pmr::new_delete_resource()
+    );
+    return &resource;
+};
+
+template <typename T, typename... Args>
+constexpr T* allocate(Args&&... args) {
+    void* ptr = memory_resource()->allocate(sizeof(T), alignof(T));
+    return new (ptr) T(std::forward<Args>(args)...);
+}
+
+template <typename T>
+constexpr std::span<T> allocate_array(std::size_t n) {
+    void* ptr = memory_resource()->allocate(n * sizeof(T), alignof(T));
+    if constexpr (std::is_trivially_default_constructible_v<T>) {
+        return std::span<T>(static_cast<T*>(ptr), n);
+    } else {
+        T* typed_ptr = static_cast<T*>(ptr);
+        std::uninitialized_default_construct(typed_ptr, typed_ptr + n);
+        return std::span<T>(typed_ptr, n);
+    }
+}
+}  // namespace GlobalMemory
+
 template <typename T, typename Tuple>
 struct TypeInTuple;
 
 template <typename T, typename... Ts>
 struct TypeInTuple<T, std::tuple<Ts...>> : std::disjunction<std::is_same<T, Ts>...> {};
 
-template <typename T, typename... Ts>
-inline constexpr bool TypeInTupleV = TypeInTuple<T, std::tuple<Ts...>>::value;
+template <typename T, typename Tuple>
+inline constexpr bool TypeInTupleV = TypeInTuple<T, Tuple>::value;
 
 struct Location {
     std::size_t id;
@@ -90,6 +120,134 @@ public:
     const char str_[length];
     constexpr FixedString(const char (&str)[length]) { std::copy_n(str, length, str_); }
     constexpr std::string_view operator*() const { return std::string_view(str_, length); }
+};
+
+template <typename Key, typename Value, typename Comp = std::less<Key>>
+class FlatMap {
+private:
+    template <bool IsConst>
+    class IteratorImpl {
+    private:
+        using KeyType = const Key;
+        using ValueType = std::conditional_t<IsConst, const Value, Value>;
+        KeyType* key_ptr_;
+        ValueType* value_ptr_;
+
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = std::pair<KeyType, ValueType>;
+        using pointer = value_type*;
+        using reference = value_type&;
+        IteratorImpl(KeyType* key_ptr, ValueType* value_ptr)
+            : key_ptr_(key_ptr), value_ptr_(value_ptr) {}
+        IteratorImpl& operator++() {
+            ++key_ptr_;
+            ++value_ptr_;
+            return *this;
+        }
+        IteratorImpl operator++(int) {
+            IteratorImpl temp = *this;
+            ++(*this);
+            return temp;
+        }
+        bool operator==(const IteratorImpl& other) const noexcept {
+            return key_ptr_ == other.key_ptr_;
+        }
+        bool operator!=(const IteratorImpl& other) const noexcept { return !(*this == other); }
+        value_type operator*() const {
+            return std::pair<KeyType, ValueType>{*key_ptr_, *value_ptr_};
+        }
+    };
+
+public:
+    using iterator = IteratorImpl<false>;
+    using const_iterator = IteratorImpl<true>;
+
+private:
+    std::vector<Key> keys_;
+    std::vector<Value> values_;
+
+public:
+    template <std::ranges::input_range R>
+    FlatMap(std::from_range_t, R&& range) {
+        std::vector<Key> unsorted_keys;
+        std::vector<Value> unsorted_values;
+        if constexpr (std::ranges::sized_range<R>) {
+            unsorted_keys.reserve(std::ranges::size(range));
+            unsorted_values.reserve(std::ranges::size(range));
+        }
+        for (auto&& pair : range) {
+            unsorted_keys.push_back(std::forward<decltype(pair.first)>(pair.first));
+            unsorted_values.push_back(std::forward<decltype(pair.second)>(pair.second));
+        }
+        std::vector<std::size_t> indices(unsorted_keys.size());
+        std::ranges::iota(indices.begin(), indices.end(), 0);
+        std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
+            return Comp()(unsorted_keys[a], unsorted_keys[b]);
+        });
+        std::unique(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
+            return unsorted_keys[a] == unsorted_keys[b];
+        });
+        keys_.reserve(unsorted_keys.size());
+        values_.reserve(unsorted_values.size());
+        for (std::size_t index : indices) {
+            keys_.push_back(std::move(unsorted_keys[index]));
+            values_.push_back(std::move(unsorted_values[index]));
+        }
+    }
+    constexpr std::size_t size() const noexcept { return keys_.size(); }
+    void emplace(std::pair<Key, Value> pair) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), pair.first, Comp());
+        std::size_t index = std::distance(keys_.begin(), it);
+        keys_.insert(it, std::move(pair.first));
+        values_.insert(values_.begin() + index, std::move(pair.second));
+    }
+    Value remove(const Key& key) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        if (it != keys_.end() && *it == key) {
+            std::size_t index = std::distance(keys_.begin(), it);
+            keys_.erase(it);
+            Value value = std::move(values_[index]);
+            values_.erase(values_.begin() + index);
+            return value;
+        } else {
+            throw std::out_of_range("Key not found in FlatMap");
+        }
+    }
+    Value* at(const Key& key) const {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        if (it != keys_.end() && *it == key) {
+            std::size_t index = std::distance(keys_.begin(), it);
+            return &values_[index];
+        } else {
+            throw std::out_of_range("Key not found in FlatMap");
+        }
+    }
+
+    iterator begin() noexcept { return iterator(keys_.data(), values_.data()); }
+    iterator end() noexcept {
+        return iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
+    }
+    const_iterator begin() const noexcept { return const_iterator(keys_.data(), values_.data()); }
+    const_iterator end() const noexcept {
+        return const_iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
+    }
+};
+
+template <typename Key, typename Comp = std::less<Key>>
+class FlatSet {
+private:
+    std::vector<Key> keys_;
+
+public:
+    Key& try_emplace(Key key) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        if (it == keys_.end() || *it != key) {
+            return *keys_.emplace(it, std::move(key));
+        }
+        return *it;
+    }
 };
 
 template <typename Derived, typename Base>

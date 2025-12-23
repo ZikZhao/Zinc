@@ -5,22 +5,22 @@
 
 #include "entity.hpp"
 
-Context::Context(std::string_view name, Context& parent) noexcept : parent_(&parent), name_(name) {
+Scope::Scope(std::string_view name, Scope& parent) noexcept : parent_(&parent), name_(name) {
     if (name.empty()) {
         parent_->anonymous_children_.push_back(this);
     } else {
         parent_->children_.emplace(name, this);
     }
 }
-Context::Context(std::vector<std::pair<std::string_view, const ASTExpression*>> builtins) noexcept {
+Scope::Scope(std::vector<std::pair<std::string_view, const ASTExpression*>> builtins) noexcept {
     // for (const auto& [name, expr] : builtins) {
     //     variables_.emplace(name, expr);
     // }
 }
-void Context::add_type(std::string_view identifier, const ASTTypeExpression* expr) {
+void Scope::add_type(std::string_view identifier, const ASTTypeExpression* expr) {
     types_.emplace(identifier, expr);
 }
-void Context::add_variable(std::string_view identifier, EntityRef expr) {
+void Scope::add_variable(std::string_view identifier, EntityRef expr) {
     if (types_.contains(identifier)) {
         throw std::runtime_error(
             "Variable '"s + std::string(identifier) + "' already declared as type"s
@@ -29,14 +29,12 @@ void Context::add_variable(std::string_view identifier, EntityRef expr) {
     variables_.emplace(identifier, expr);
 }
 
-TypeResolver::TypeResolver(
-    Context& root, const OperationTable& ops, TypeFactory& type_factory
-) noexcept
+TypeChecker::TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& type_factory) noexcept
     : current_(&root), ops_(ops), type_factory_(type_factory) {}
-void TypeResolver::add_variable(std::string_view identifier, EntityRef expr) {
+void TypeChecker::add_variable(std::string_view identifier, EntityRef expr) {
     current_->add_variable(identifier, expr);
 }
-void TypeResolver::enter(const ASTCodeBlock* child) noexcept {
+void TypeChecker::enter(const ASTCodeBlock* child) noexcept {
     assert(
         child->name_.empty()
             ? std::ranges::contains(current_->anonymous_children_, child->local_scope_.get())
@@ -44,11 +42,11 @@ void TypeResolver::enter(const ASTCodeBlock* child) noexcept {
     );
     current_ = child->local_scope_.get();
 }
-void TypeResolver::exit() noexcept { current_ = current_->parent_; }
-TypeRef TypeResolver::resolve(std::string_view identifier) {
+void TypeChecker::exit() noexcept { current_ = current_->parent_; }
+TypeRef TypeChecker::resolve(std::string_view identifier) {
     return resolve_in(identifier, *current_);
 }
-TypeRef TypeResolver::resolve_in(std::string_view identifier, Context& ctx) {
+TypeRef TypeChecker::resolve_in(std::string_view identifier, Scope& ctx) {
     // Check cache
     auto record = cache_[std::pair(current_, identifier)];
     if (record.is_resolving) {
@@ -78,24 +76,24 @@ TypeRef TypeResolver::resolve_in(std::string_view identifier, Context& ctx) {
 }
 
 ASTNode::ASTNode(const Location& loc) noexcept : location_(loc) {}
-void ASTNode::first_analyze(Context& ctx, OperationTable& ops) {}
-void ASTNode::second_analyze(TypeResolver& tr) {}
+void ASTNode::collect_types(Scope& ctx, OpDispatcher& ops) {}
+void ASTNode::check_types(TypeChecker& checker) {}
 
 ASTRecursiveNode::ASTRecursiveNode(const Location& loc) noexcept : ASTNode(loc) {}
-void ASTRecursiveNode::first_analyze(Context& ctx, OperationTable& ops) {
+void ASTRecursiveNode::collect_types(Scope& ctx, OpDispatcher& ops) {
     for (const auto& child : get_children()) {
         if (child == nullptr) {
             continue;
         }
-        child->first_analyze(ctx, ops);
+        child->collect_types(ctx, ops);
     }
 }
-void ASTRecursiveNode::second_analyze(TypeResolver& tr) {
+void ASTRecursiveNode::check_types(TypeChecker& checker) {
     for (const auto& child : get_children()) {
         if (child == nullptr) {
             continue;
         }
-        child->second_analyze(tr);
+        child->check_types(checker);
     }
 }
 
@@ -108,25 +106,27 @@ std::generator<ASTNode*> ASTCodeBlock::get_children() const noexcept {
         co_yield stmt.get();
     }
 }
-void ASTCodeBlock::first_analyze(Context& ctx, OperationTable& ops) {
-    local_scope_ = std::make_unique<Context>(name_, ctx);
+void ASTCodeBlock::collect_types(Scope& ctx, OpDispatcher& ops) {
+    local_scope_ = std::make_unique<Scope>(name_, ctx);
     for (auto& stmt : statements_) {
-        stmt->first_analyze(*local_scope_, ops);
+        stmt->collect_types(*local_scope_, ops);
     }
 }
-void ASTCodeBlock::second_analyze(TypeResolver& tr) {
-    tr.enter(this);
+void ASTCodeBlock::check_types(TypeChecker& checker) {
+    checker.enter(this);
     for (auto& stmt : statements_) {
-        stmt->second_analyze(tr);
+        stmt->check_types(checker);
     }
-    tr.exit();
+    checker.exit();
 }
 
 ASTExpression::ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
 
 ASTIdentifier::ASTIdentifier(const Location& loc, std::string_view name) noexcept
     : ASTExpression(loc), name_(name) {}
-TypeRef ASTIdentifier::eval_type(TypeResolver& tr) const noexcept { return tr.resolve(name_); }
+TypeRef ASTIdentifier::eval_type(TypeChecker& checker) const noexcept {
+    return checker.resolve(name_);
+}
 
 ASTFunctionCall::ASTFunctionCall(
     const Location& loc,
@@ -139,19 +139,19 @@ ASTFunctionType::ASTFunctionType(TypeRef func) noexcept
     : ASTTypeExpression({0, {0, 0}, {0, 0}}), value_(func) {}
 ASTFunctionType::ASTFunctionType(const Location& loc, TypeRef func) noexcept
     : ASTTypeExpression(loc), value_(func) {}
-TypeRef ASTFunctionType::eval_type(TypeResolver& tr) const noexcept { return value_; }
+TypeRef ASTFunctionType::eval_type(TypeChecker& checker) const noexcept { return value_; }
 
 ASTRecordType::ASTRecordType(
     const Location& loc, std::vector<std::unique_ptr<ASTFieldDeclaration>> fields
 ) noexcept
     : ASTTypeExpression(loc), fields_(std::move(fields)) {}
 
-TypeRef ASTRecordType::eval_type(TypeResolver& tr) const noexcept {
+TypeRef ASTRecordType::eval_type(TypeChecker& checker) const noexcept {
     auto rng = fields_ | std::views::transform([&](const auto& decl) {
-                   return std::pair(decl->identifier_, tr.resolve(decl->identifier_));
+                   return std::pair(decl->identifier_, checker.resolve(decl->identifier_).type());
                });
-    std::map<std::string, TypeRef> field_types(rng.begin(), rng.end());
-    return tr.type_factory_.make<RecordType>(field_types);
+    FlatMap<std::string_view, Type*> field_types(std::from_range, std::move(rng));
+    return checker.type_factory_.get<RecordType>(field_types);
 }
 
 ASTDeclaration::ASTDeclaration(
@@ -164,9 +164,9 @@ ASTDeclaration::ASTDeclaration(
       identifier_(std::move(identifier)),
       type_(std::move(type)),
       expr_(std::move(expr)) {}
-void ASTDeclaration::second_analyze(TypeResolver& tr) {
-    TypeRef inferred_type = expr_->eval_type(tr);
-    TypeRef declared_type = type_->eval_type(tr);
+void ASTDeclaration::check_types(TypeChecker& checker) {
+    TypeRef inferred_type = expr_->eval_type(checker);
+    TypeRef declared_type = type_->eval_type(checker);
     if (!declared_type) {
         declared_type = inferred_type;
     } else if (!Type::contains(*declared_type.type(), *inferred_type.type())) {
@@ -175,7 +175,7 @@ void ASTDeclaration::second_analyze(TypeResolver& tr) {
             "': expected " + declared_type->repr() + ", got " + inferred_type->repr()
         );
     }
-    tr.add_variable(identifier_->name_, declared_type);
+    checker.add_variable(identifier_->name_, declared_type);
 }
 
 ASTFieldDeclaration::ASTFieldDeclaration(
@@ -188,7 +188,7 @@ ASTTypeAlias::ASTTypeAlias(
 ) noexcept
     : ASTNode(loc), identifier_(std::move(identifier)), type_(std::move(type)) {}
 
-void ASTTypeAlias::first_analyze(Context& ctx, OperationTable& ops) {
+void ASTTypeAlias::collect_types(Scope& ctx, OpDispatcher& ops) {
     ctx.add_type(identifier_, type_.get());
 }
 

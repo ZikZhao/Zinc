@@ -221,7 +221,7 @@ using LeftShiftAssign = OperateAndAssign<LeftShift>;
 using RightShiftAssign = OperateAndAssign<RightShift>;
 }  // namespace OperatorFunctors
 
-class FundamentalOperationTable {
+class IntrinsicOpTable {
 private:
     using Arithmetic = std::tuple<
         OperatorFunctors::Add,
@@ -257,7 +257,7 @@ private:
         static_cast<std::size_t>(OperatorCode::SIZE)>;
 
 private:
-    static constexpr Table make_operation_map() {
+    static constexpr Table build_operation_map() {
         Table table;
         register_group<IntegerValue>(table, Arithmetic{});
         register_group<FloatValue>(table, Arithmetic{});
@@ -277,9 +277,7 @@ private:
              [static_cast<std::size_t>(Operand::kind)] = TableValue{
                  Operand::kind,
                  [](Entity* left, Entity* right) -> Entity* {
-                     return Operator()(
-                         static_cast<Operand&>(*left), static_cast<const Operand&>(*right)
-                     );
+                     return Operator()(static_cast<Operand&>(*left), static_cast<Operand&>(*right));
                  },
              };
     }
@@ -296,18 +294,18 @@ private:
     }
 
 protected:
-    TypeFactory& type_factory_;
+    TypeRegistry& type_factory_;
     const Table table_;
 
 public:
-    constexpr FundamentalOperationTable(TypeFactory& type_factory)
-        : type_factory_(type_factory), table_(make_operation_map()) {}
+    constexpr IntrinsicOpTable(TypeRegistry& type_factory)
+        : type_factory_(type_factory), table_(build_operation_map()) {}
 
     constexpr TypeAndFunctor eval_value_op(OperatorCode opcode, Type* left, Type* right) const {
         const TableValue& value =
             table_[static_cast<std::size_t>(opcode)][static_cast<std::size_t>(left->kind_)]
                   [static_cast<std::size_t>(right->kind_)];
-        return {type_factory_.make_kind(value.first), value.second};
+        return {type_factory_.get_kind(value.first), value.second};
     }
 
     constexpr TypeAndFunctor eval_op(OperatorCode opcode, Type* left, Type* right = {}) const {
@@ -315,9 +313,9 @@ public:
             // type and type
             switch (opcode) {
             case OperatorCode::OPERATOR_BITWISE_AND:
-                return {type_factory_.make<IntersectionType>(left, right), nullptr};
+                return {type_factory_.get<IntersectionType>(left, right), nullptr};
             case OperatorCode::OPERATOR_BITWISE_OR:
-                return {type_factory_.make<UnionType>(left, right), nullptr};
+                return {type_factory_.get<UnionType>(left, right), nullptr};
             default:
                 assert(false && "Operation on two types not implemented");
                 std::unreachable();
@@ -331,15 +329,14 @@ public:
     }
 };
 
-class OperationTable final : public FundamentalOperationTable {
+class OpDispatcher final : public IntrinsicOpTable {
 private:
     using CustomTableKey = std::tuple<OperatorCode, Type*, Type*>;
-    using CustomTableValue = std::pair<Type*, OperatorFn>;
+    using CustomTableValue = std::pair<TypeRef, OperatorFn>;
     std::map<CustomTableKey, CustomTableValue> custom_table_;
 
 public:
-    OperationTable(TypeFactory& type_factory)
-        : FundamentalOperationTable(type_factory), custom_table_() {}
+    OpDispatcher(TypeRegistry& type_factory) : IntrinsicOpTable(type_factory), custom_table_() {}
 
     void register_custom_op(
         OperatorCode opcode,
@@ -348,18 +345,18 @@ public:
         TypeRef result_type,
         Entity* (*func)(Entity*, Entity*)
     ) {
-        custom_table_[{opcode, left_type.type(), right_type.type()}] = {result_type.type(), func};
+        custom_table_[{opcode, left_type.type(), right_type.type()}] = {result_type, func};
     }
 
     TypeAndFunctor eval_op(OperatorCode opcode, Type* left, Type* right = {}) const {
         if (left->kind_ < Kind::NON_COMPOSITE_SIZE &&
             (right || right->kind_ < Kind::NON_COMPOSITE_SIZE)) {
             // primitive and primitive
-            return FundamentalOperationTable::eval_op(opcode, left, right);
+            return IntrinsicOpTable::eval_op(opcode, left, right);
         }
         auto it = custom_table_.find({opcode, left, right});
         if (it != custom_table_.end()) {
-            return {type_factory_.make<Type>(it->second.first), it->second.second};
+            return {it->second.first, it->second.second};
         } else {
             throw std::runtime_error("Operation not defined for given types");
         }

@@ -513,10 +513,10 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<ASTCodeBlock> root = builder(tree);
 
     // Context ctx = Builtins::GetBuiltinsScope();
-    Context ctx;
-    TypeFactory type_factory;
-    OperationTable ops(type_factory);
-    root->first_analyze(ctx, ops);
-    TypeResolver tr(ctx, ops, type_factory);
-    root->second_analyze(tr);
+    Scope ctx;
+    TypeRegistry types;
+    OpDispatcher ops(types);
+    root->collect_types(ctx, ops);
+    TypeChecker checker(ctx, ops, types);
+    root->check_types(checker);
 }

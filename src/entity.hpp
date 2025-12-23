@@ -1,9 +1,10 @@
 #pragma once
 #include "pch.hpp"
+#include <compare>
 #include <string_view>
 #include <utility>
 
-class Context;
+class Scope;
 
 enum class Kind : std::uint16_t {
     KIND_NO_RIGHT_OPERAND,
@@ -40,9 +41,14 @@ class DictValue;
 class SetValue;
 
 class Type;
-class AnyType;
 template <Kind Kind>
 class PrimitiveType;
+using AnyType = PrimitiveType<Kind::KIND_ANY>;
+using NullType = PrimitiveType<Kind::KIND_NULL>;
+using IntegerType = PrimitiveType<Kind::KIND_INTEGER>;
+using FloatType = PrimitiveType<Kind::KIND_FLOAT>;
+using StringType = PrimitiveType<Kind::KIND_STRING>;
+using BooleanType = PrimitiveType<Kind::KIND_BOOLEAN>;
 class InterfaceType;
 class StructType;
 class ClassType;
@@ -62,9 +68,13 @@ using ValueRef = EntityRef;
 using TypeRef = EntityRef;
 
 class Entity {
+    friend class EntityRef;
+
+private:
+    mutable std::int32_t ref_count_;
+
 public:
-    const Kind kind_;
-    mutable std::int64_t ref_count_;
+    Kind kind_;
     Entity(Kind kind, bool is_value) noexcept;
     virtual ~Entity() = default;
     virtual std::string repr() const = 0;
@@ -83,16 +93,6 @@ protected:
     virtual bool contains(const Type& other) const = 0;
 };
 
-class AnyType final : public Type {
-public:
-    static constexpr Kind kind = Kind::KIND_ANY;
-
-public:
-    AnyType() noexcept;
-    std::string repr() const final;
-    bool contains(const Type& other) const final;
-};
-
 template <Kind K>
 class PrimitiveType final : public Type {
 public:
@@ -101,14 +101,18 @@ public:
 public:
     PrimitiveType() noexcept : Type(kind) {}
     std::string repr() const final {
-        if constexpr (K == Kind::KIND_STRING) {
+        if constexpr (K == Kind::KIND_ANY) {
+            return "any";
+        } else if constexpr (K == Kind::KIND_NULL) {
+            return "null";
+        } else if constexpr (K == Kind::KIND_STRING) {
             return "string";
         } else if constexpr (K == Kind::KIND_BOOLEAN) {
             return "boolean";
         } else if constexpr (K == Kind::KIND_FUNCTION) {
             return "function";
         } else {
-            std::unreachable();
+            static_assert(false);
         }
     }
     bool contains(const Type& other) const final { return other.kind_ == kind; }
@@ -145,23 +149,17 @@ public:
     static constexpr Kind kind = Kind::KIND_FUNCTION;
 
 public:
-    std::vector<Type*> parameters_;
+    std::span<Type*> parameters_;
     Type* spread_;
     Type* return_type_;
-    FunctionType(std::vector<Type*>&& parameters, Type* spread, Type* return_type) noexcept
-        : Type(kind),
-          parameters_(std::move(parameters)),
-          spread_(spread),
-          return_type_(return_type) {}
+    FunctionType(std::span<Type*> parameters, Type* spread, Type* return_type) noexcept
+        : Type(kind), parameters_(parameters), spread_(spread), return_type_(return_type) {}
     std::string repr() const final { return "function"; }
     bool contains(const Type& other) const final { return other.kind_ == kind; }
+    std::strong_ordering operator<=>(const FunctionType& other) const noexcept;
+    bool operator==(const FunctionType& other) const noexcept;
+    bool operator!=(const FunctionType& other) const noexcept;
 };
-
-using NullType = PrimitiveType<Kind::KIND_NULL>;
-using IntegerType = PrimitiveType<Kind::KIND_INTEGER>;
-using FloatType = PrimitiveType<Kind::KIND_FLOAT>;
-using StringType = PrimitiveType<Kind::KIND_STRING>;
-using BooleanType = PrimitiveType<Kind::KIND_BOOLEAN>;
 
 class ListType final : public Type {
 public:
@@ -173,23 +171,25 @@ public:
 
 class RecordType : public Type {
 public:
-    const std::map<std::string, Type*> fields_;
-    RecordType(std::map<std::string, Type*> fields) noexcept;
+    FlatMap<std::string_view, Type*> fields_;
+    RecordType(FlatMap<std::string_view, Type*> fields) noexcept;
     std::string repr() const final;
     bool contains(const Type& other) const final;
+    std::strong_ordering operator<=>(const RecordType& other) const noexcept;
+    bool operator==(const RecordType& other) const noexcept;
 };
 
 class ClassType : public Type {
 public:
-    const std::string_view name_;
-    const std::vector<InterfaceType*>& interfaces_;
+    std::string_view name_;
+    std::span<InterfaceType*> interfaces_;
     const ClassType* extends_;
-    const std::map<std::string_view, Type*> properties_;
+    FlatMap<std::string_view, Type*> properties_;
     ClassType(
         std::string_view name,
-        std::vector<InterfaceType*> interfaces,
+        std::span<InterfaceType*> interfaces,
         const ClassType* extends,
-        std::map<std::string_view, Type*> properties
+        FlatMap<std::string_view, Type*> properties
     ) noexcept;
     std::string repr() const override;
     bool contains(const Type& other) const override;
@@ -199,24 +199,34 @@ class IntersectionType final : public Type {
 public:
     static constexpr Kind kind = Kind::KIND_INTERSECTION;
 
+private:
+    static std::span<Type*> combine(Type* left, Type* right);
+
 public:
-    std::vector<Type*> types_;
-    IntersectionType(auto... args) noexcept : Type(kind) { (combine(args), ...); }
+    std::span<Type*> types_;
+    IntersectionType(Type* left, Type* right) noexcept;
     std::string repr() const final;
     bool contains(const Type& other) const final;
-    IntersectionType& combine(Type* other);
+    std::strong_ordering operator<=>(const IntersectionType& other) const noexcept;
+    bool operator==(const IntersectionType& other) const noexcept;
+    bool operator!=(const IntersectionType& other) const noexcept;
 };
 
 class UnionType final : public Type {
 public:
     static constexpr Kind kind = Kind::KIND_UNION;
 
+private:
+    static std::span<Type*> combine(Type* left, Type* right);
+
 public:
-    std::vector<Type*> types_;
-    UnionType(auto... args) noexcept : Type(kind) { (combine(args), ...); }
+    std::span<Type*> types_;
+    UnionType(Type* left, Type* right) noexcept;
     std::string repr() const final;
     bool contains(const Type& other) const final;
-    UnionType& combine(Type* other);
+    std::strong_ordering operator<=>(const UnionType& other) const noexcept;
+    bool operator==(const UnionType& other) const noexcept;
+    bool operator!=(const UnionType& other) const noexcept;
 };
 
 class Value : public Entity {
@@ -400,18 +410,18 @@ public:
 };
 
 class EntityRef {
-    friend class TypeFactory;
+    friend class TypeRegistry;
 
 public:
     template <ValueClass V>
-    static ValueRef from_literal(std::string_view literal) {
+    static ValueRef alloc_literal(std::string_view literal) {
         return ValueRef(Value::from_literal<V>(literal));
     }
 
 private:
     template <TypeClass T, typename... Args>
-    static TypeRef create(Args&&... args) {
-        return TypeRef(new T(std::forward<decltype(args)>(args)...));
+    static TypeRef alloc(Args&&... args) {
+        return TypeRef(GlobalMemory::allocate<T>(std::forward<decltype(args)>(args)...));
     }
 
 private:
@@ -422,10 +432,8 @@ public:
     EntityRef(const EntityRef& other) noexcept;
     EntityRef(EntityRef&& other) noexcept;
     ~EntityRef() noexcept;
-    EntityRef& operator=(const EntityRef& other) noexcept;
-    EntityRef& operator=(EntityRef&& other) noexcept;
+    EntityRef& operator=(EntityRef other) noexcept;
     operator bool() const noexcept;
-    Entity* get() const noexcept;
     Entity& operator*() const noexcept;
     Entity* operator->() const noexcept;
     Value* value() const noexcept;
@@ -437,14 +445,20 @@ private:
     void release() noexcept;
 };
 
-class TypeFactory {
+class TypeRegistry {
 private:
-    using Primitives = std::tuple<AnyType, IntegerType, FloatType, StringType, BooleanType>;
+    using Primitives =
+        std::tuple<AnyType, NullType, IntegerType, FloatType, StringType, BooleanType>;
     AnyType any_type_instance_;
     IntegerType integer_type_instance_;
     FloatType float_type_instance_;
     StringType string_type_instance_;
     BooleanType boolean_type_instance_;
+    FlatSet<FunctionType> function_types_;
+    FlatSet<ListType> list_types_;
+    FlatSet<RecordType> record_types_;
+    FlatSet<IntersectionType> intersection_types_;
+    FlatSet<UnionType> union_types_;
 
 public:
     TypeRef of(ValueRef value) {
@@ -460,22 +474,41 @@ public:
             return &string_type_instance_;
         case Kind::KIND_BOOLEAN:
             return &boolean_type_instance_;
+        case Kind::KIND_FUNCTION:
+            return static_cast<FunctionValue*>(value.value())->function_type_;
+        case Kind::KIND_OBJECT:
+            return static_cast<ObjectValue*>(value.value())->cls_;
             // TODO: handle other kinds
         }
     }
 
-    template <typename T, typename... Args>
-    TypeRef make(Args&&... args) {
+    template <TypeClass T>
+    TypeRef get(auto&&... args) {
         if constexpr (TypeInTupleV<T, Primitives>) {
             static T instance;
             return &instance;
+        } else if constexpr (std::is_same_v<T, FunctionType>) {
+            return get_cached<FunctionType>(function_types_, std::forward<decltype(args)>(args)...);
+        } else if constexpr (std::is_same_v<T, ListType>) {
+            return get_cached<ListType>(list_types_, std::forward<decltype(args)>(args)...);
+        } else if constexpr (std::is_same_v<T, RecordType>) {
+            return get_cached<RecordType>(record_types_, std::forward<decltype(args)>(args)...);
+        } else if constexpr (std::is_same_v<T, IntersectionType>) {
+            return get_cached<IntersectionType>(
+                intersection_types_, std::forward<decltype(args)>(args)...
+            );
+        } else if constexpr (std::is_same_v<T, UnionType>) {
+            return get_cached<UnionType>(union_types_, std::forward<decltype(args)>(args)...);
+        } else if constexpr (std::is_same_v<T, ClassType>) {
+            // classes with same definition are distinct types
+            return TypeRef::alloc<T>(std::forward<decltype(args)>(args)...);
         } else {
-            // return SharedRef::create<T>(std::forward<decltype(args)>(args)...);
-            return {};
+            static_assert(false, "Unknown type for TypeRegistry::get");
+            // TODO: handle other types
         }
     }
 
-    TypeRef make_kind(Kind kind) {
+    TypeRef get_kind(Kind kind) {
         switch (kind) {
         case Kind::KIND_ANY:
             return &any_type_instance_;
@@ -492,4 +525,14 @@ public:
             std::unreachable();
         }
     }
+
+private:
+    template <typename T>
+    TypeRef get_cached(FlatSet<T>& instances, auto&&... args) {
+        T type(std::forward<decltype(args)>(args)...);
+        T& result = instances.try_emplace(type);
+        return TypeRef(&result);
+    }
 };
+
+// TODO: implement unique cast static caching
