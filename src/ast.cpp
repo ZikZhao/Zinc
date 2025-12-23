@@ -43,27 +43,39 @@ void TypeChecker::enter(const ASTCodeBlock* child) noexcept {
     current_ = child->local_scope_.get();
 }
 void TypeChecker::exit() noexcept { current_ = current_->parent_; }
-TypeRef TypeChecker::resolve(std::string_view identifier) {
+EntityRef TypeChecker::resolve(std::string_view identifier) {
     return resolve_in(identifier, *current_);
 }
-TypeRef TypeChecker::resolve_in(std::string_view identifier, Scope& ctx) {
+TypeRef TypeChecker::type_of(std::string_view identifier) {
+    if (auto it_var = current_->variables_.find(identifier); it_var != current_->variables_.end()) {
+        return it_var->second;
+    }
+    if (auto it_type = current_->types_.find(identifier); it_type != current_->types_.end()) {
+        throw std::runtime_error(
+            "Identifier '"s + std::string(identifier) + "' is a type, not a variable"s
+        );
+    }
+    throw std::runtime_error("Unknown identifier: '"s + std::string(identifier) + "'"s);
+}
+EntityRef TypeChecker::resolve_in(std::string_view identifier, Scope& ctx) {
     // Check cache
-    auto record = cache_[std::pair(current_, identifier)];
+    auto& record = cache_[std::pair(current_, identifier)];
     if (record.is_resolving) {
-        if (record.type) {
-            return record.type;
+        if (record.result) {
+            return record.result;
         }
         throw std::runtime_error("Cyclic type dependency detected");
     }
     // Cache miss; resolve
     record.is_resolving = true;
     if (auto it_type = current_->types_.find(identifier); it_type != current_->types_.end()) {
-        return it_type->second->eval_type(*this);
+        return it_type->second->eval(*this);
     }
     if (auto it_var = current_->variables_.find(identifier); it_var != current_->variables_.end()) {
-        if (it_var->second->is_type()) {
-            // mutable variable (it_var->second is the type of the variable)
-            return it_var->second;
+        if (it_var->second.is_type()) {
+            throw std::runtime_error(
+                "Identifier '"s + std::string(identifier) + "' is a mutable variable"s
+            );
         } else {
             // constant (it_var->second is the value stored)
             return type_factory_.of(it_var->second);
@@ -124,8 +136,9 @@ ASTExpression::ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
 
 ASTIdentifier::ASTIdentifier(const Location& loc, std::string_view name) noexcept
     : ASTExpression(loc), name_(name) {}
-TypeRef ASTIdentifier::eval_type(TypeChecker& checker) const noexcept {
-    return checker.resolve(name_);
+EntityRef ASTIdentifier::eval(TypeChecker& checker) const { return checker.resolve(name_); }
+TypeRef ASTIdentifier::get_result_type(TypeChecker& checker) const {
+    return checker.type_of(name_);
 }
 
 ASTFunctionCall::ASTFunctionCall(
@@ -135,23 +148,52 @@ ASTFunctionCall::ASTFunctionCall(
 ) noexcept
     : ASTExpression(loc), function_(std::move(function)), arguments_(std::move(arguments)) {}
 
+ASTFunctionType::ASTFunctionType(
+    const Location& loc,
+    std::unique_ptr<ASTTypeExpression> return_type,
+    ComparableSpan<std::unique_ptr<ASTTypeExpression>> parameter_types,
+    std::unique_ptr<ASTTypeExpression> variadic_type
+) noexcept
+    : ASTTypeExpression(loc),
+      representation_(
+          Components(std::move(return_type), std::move(parameter_types), std::move(variadic_type))
+      ) {}
 ASTFunctionType::ASTFunctionType(TypeRef func) noexcept
-    : ASTTypeExpression({0, {0, 0}, {0, 0}}), value_(func) {}
-ASTFunctionType::ASTFunctionType(const Location& loc, TypeRef func) noexcept
-    : ASTTypeExpression(loc), value_(func) {}
-TypeRef ASTFunctionType::eval_type(TypeChecker& checker) const noexcept { return value_; }
+    : ASTTypeExpression({}), representation_(func) {}
+EntityRef ASTFunctionType::eval(TypeChecker& checker) const {
+    if (std::holds_alternative<TypeRef>(representation_)) {
+        return std::get<TypeRef>(representation_);
+    } else {
+        const auto& comps = std::get<Components>(representation_);
+        Type* return_type = std::get<0>(comps)->eval(checker).type();
+        auto param_rng = std::get<1>(comps) | std::views::transform([&](const auto& param_expr) {
+                             return param_expr->eval(checker).type();
+                         });
+        ComparableSpan<Type*> param_types = GlobalMemory::collect_range<Type*>(param_rng);
+        Type* variadic_type = nullptr;
+        if (const auto& opt_variadic = std::get<2>(comps)) {
+            variadic_type = opt_variadic->eval(checker).type();
+        }
+        return checker.type_factory_.get<FunctionType>(return_type, param_types, variadic_type);
+    }
+}
+TypeRef ASTFunctionType::get_result_type(TypeChecker& checker) const {
+    throw std::runtime_error("Function types cannot be used as values"s);
+}
 
 ASTRecordType::ASTRecordType(
     const Location& loc, std::vector<std::unique_ptr<ASTFieldDeclaration>> fields
 ) noexcept
     : ASTTypeExpression(loc), fields_(std::move(fields)) {}
-
-TypeRef ASTRecordType::eval_type(TypeChecker& checker) const noexcept {
+EntityRef ASTRecordType::eval(TypeChecker& checker) const {
     auto rng = fields_ | std::views::transform([&](const auto& decl) {
                    return std::pair(decl->identifier_, checker.resolve(decl->identifier_).type());
                });
     FlatMap<std::string_view, Type*> field_types(std::from_range, std::move(rng));
     return checker.type_factory_.get<RecordType>(field_types);
+}
+TypeRef ASTRecordType::get_result_type(TypeChecker& checker) const {
+    throw std::runtime_error("Record types cannot be used as values"s);
 }
 
 ASTDeclaration::ASTDeclaration(
@@ -165,8 +207,8 @@ ASTDeclaration::ASTDeclaration(
       type_(std::move(type)),
       expr_(std::move(expr)) {}
 void ASTDeclaration::check_types(TypeChecker& checker) {
-    TypeRef inferred_type = expr_->eval_type(checker);
-    TypeRef declared_type = type_->eval_type(checker);
+    TypeRef inferred_type = expr_->get_result_type(checker);
+    TypeRef declared_type = type_->eval(checker);
     if (!declared_type) {
         declared_type = inferred_type;
     } else if (!declared_type.type()->assignable_from(*inferred_type.type())) {

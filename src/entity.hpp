@@ -2,6 +2,7 @@
 #include "pch.hpp"
 #include <compare>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 class Scope;
@@ -78,7 +79,6 @@ public:
     Entity(Kind kind, bool is_value) noexcept;
     virtual ~Entity() = default;
     virtual std::string repr() const = 0;
-    constexpr bool is_type() const noexcept { return ref_count_ <= 0; }
     constexpr std::strong_ordering operator<=>(const Entity& other) const noexcept {
         if (kind_ != other.kind_) {
             return kind_ <=> other.kind_;
@@ -88,6 +88,9 @@ public:
     constexpr bool operator==(const Entity& other) const noexcept {
         return kind_ == other.kind_ && is_type() == other.is_type();
     }
+
+private:
+    constexpr bool is_type() const noexcept { return ref_count_ <= 0; }
 };
 
 class Type : public Entity {
@@ -126,7 +129,13 @@ public:
             static_assert(false);
         }
     }
-    bool assignable_from_impl(const Type& source) const final { return source.kind_ == kind; }
+    bool assignable_from_impl(const Type& source) const final {
+        if constexpr (K == Kind::KIND_ANY) {
+            return true;
+        } else {
+            return source.kind_ == kind;
+        }
+    }
 };
 
 class FunctionType final : public Type {
@@ -134,11 +143,11 @@ public:
     static constexpr Kind kind = Kind::KIND_FUNCTION;
 
 public:
+    Type* return_type_;
     ComparableSpan<Type*> parameters_;
     Type* spread_;
-    Type* return_type_;
-    FunctionType(ComparableSpan<Type*> parameters, Type* spread, Type* return_type) noexcept
-        : Type(kind), parameters_(parameters), spread_(spread), return_type_(return_type) {}
+    FunctionType(Type* return_type, ComparableSpan<Type*> parameters, Type* spread) noexcept
+        : Type(kind), return_type_(return_type), parameters_(parameters), spread_(spread) {}
     std::string repr() const final;
     bool assignable_from_impl(const Type& source) const final;
     std::strong_ordering operator<=>(const FunctionType& other) const noexcept = default;
@@ -353,11 +362,11 @@ public:
 
 public:
     const std::function<Value*(const std::vector<Value*>&)> callback_;
-    Type* function_type_;
+    Type* type_;
     FunctionValue(auto&& callback, Type* function_type) noexcept
         : Value(Kind::KIND_FUNCTION),
           callback_(std::forward<decltype(callback)>(callback)),
-          function_type_(function_type) {}
+          type_(function_type) {}
     std::string repr() const final;
     Value* operator()(const std::vector<Value*>& args) const;
 };
@@ -396,6 +405,8 @@ public:
         return ValueRef(Value::from_literal<V>(literal));
     }
 
+    static ValueRef alloc_value(std::function<Value*()> fn) { return ValueRef(fn()); }
+
 private:
     template <TypeClass T, typename... Args>
     static TypeRef alloc(Args&&... args) {
@@ -414,11 +425,13 @@ public:
     operator bool() const noexcept;
     Entity& operator*() const noexcept;
     Entity* operator->() const noexcept;
+    bool is_type() const noexcept { return ptr_ ? ptr_->is_type() : true; }
+    bool is_value() const noexcept { return ptr_ ? !ptr_->is_type() : true; }
     Value* value() const noexcept;
     Type* type() const noexcept;
 
 private:
-    EntityRef(Entity* ptr) noexcept;
+    explicit EntityRef(Entity* ptr) noexcept;
     void retain() noexcept;
     void release() noexcept;
 };
@@ -440,22 +453,22 @@ private:
 
 public:
     TypeRef of(ValueRef value) {
-        assert(value && !value->is_type());
+        assert(value && value.is_value());
         switch (value->kind_) {
         case Kind::KIND_NULL:
-            return &any_type_instance_;
+            return TypeRef(&any_type_instance_);
         case Kind::KIND_INTEGER:
-            return &integer_type_instance_;
+            return TypeRef(&integer_type_instance_);
         case Kind::KIND_FLOAT:
-            return &float_type_instance_;
+            return TypeRef(&float_type_instance_);
         case Kind::KIND_STRING:
-            return &string_type_instance_;
+            return TypeRef(&string_type_instance_);
         case Kind::KIND_BOOLEAN:
-            return &boolean_type_instance_;
+            return TypeRef(&boolean_type_instance_);
         case Kind::KIND_FUNCTION:
-            return static_cast<FunctionValue*>(value.value())->function_type_;
+            return TypeRef(static_cast<FunctionValue*>(value.value())->type_);
         case Kind::KIND_OBJECT:
-            return static_cast<ObjectValue*>(value.value())->cls_;
+            return TypeRef(static_cast<ObjectValue*>(value.value())->cls_);
             // TODO: handle other kinds
         }
     }
@@ -463,8 +476,7 @@ public:
     template <TypeClass T>
     TypeRef get(auto&&... args) {
         if constexpr (TypeInTupleV<T, Primitives>) {
-            static T instance;
-            return &instance;
+            return get_kind(T::kind);
         } else if constexpr (std::is_same_v<T, FunctionType>) {
             return get_cached<FunctionType>(function_types_, std::forward<decltype(args)>(args)...);
         } else if constexpr (std::is_same_v<T, ListType>) {
@@ -489,15 +501,15 @@ public:
     TypeRef get_kind(Kind kind) {
         switch (kind) {
         case Kind::KIND_ANY:
-            return &any_type_instance_;
+            return TypeRef(&any_type_instance_);
         case Kind::KIND_INTEGER:
-            return &integer_type_instance_;
+            return TypeRef(&integer_type_instance_);
         case Kind::KIND_FLOAT:
-            return &float_type_instance_;
+            return TypeRef(&float_type_instance_);
         case Kind::KIND_STRING:
-            return &string_type_instance_;
+            return TypeRef(&string_type_instance_);
         case Kind::KIND_BOOLEAN:
-            return &boolean_type_instance_;
+            return TypeRef(&boolean_type_instance_);
         default:
             assert(false && "Unknown primitive kind");
             std::unreachable();

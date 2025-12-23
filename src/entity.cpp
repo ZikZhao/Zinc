@@ -17,6 +17,23 @@ bool Type::assignable_from(const Type& source) const {
     return this == &source || assignable_from_impl(source);
 }
 
+std::string FunctionType::repr() const {
+    std::string result = "function("s;
+    for (std::size_t i = 0; i < parameters_.size(); ++i) {
+        result += parameters_[i]->repr();
+        if (i + 1 < parameters_.size()) {
+            result += ", "s;
+        }
+    }
+    if (spread_) {
+        if (!parameters_.empty()) {
+            result += ", "s;
+        }
+        result += "..."s + spread_->repr();
+    }
+    result += ") => "s + return_type_->repr();
+    return result;
+}
 bool FunctionType::assignable_from_impl(const Type& source) const {
     // (Base) => Derived is assignable to (Derived) => Base
     // i.e., parameters are contravariant, return type is covariant

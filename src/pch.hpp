@@ -71,6 +71,23 @@ constexpr ComparableSpan<T> allocate_array(std::size_t n) {
         return ComparableSpan<T>(typed_ptr, n);
     }
 }
+
+template <typename T, std::ranges::input_range R>
+constexpr ComparableSpan<T> collect_range(R&& range) {
+    if constexpr (std::ranges::sized_range<R>) {
+        ComparableSpan<T> span = allocate_array<T>(std::ranges::size(range));
+        std::uninitialized_copy(std::ranges::begin(range), std::ranges::end(range), span.data());
+        return span;
+    } else {
+        std::vector<T> temp;
+        for (auto&& item : range) {
+            temp.push_back(std::forward<decltype(item)>(item));
+        }
+        ComparableSpan<T> span = allocate_array<T>(temp.size());
+        std::uninitialized_copy(temp.begin(), temp.end(), span.data());
+        return span;
+    }
+}
 }  // namespace GlobalMemory
 
 template <typename T, typename Tuple>

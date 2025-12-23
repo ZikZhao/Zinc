@@ -244,10 +244,9 @@ private:
         OperatorFunctors::BitwiseNot>;
 
 public:
-    using OperatorFn = Entity* (*)(Entity*, Entity*);
+    using OperatorFn = Value* (*)(Value*, Value*);
     using TableKey = std::tuple<OperatorCode, Kind, Kind>;
     using TableValue = std::pair<Kind, OperatorFn>;
-    using TypeAndFunctor = std::pair<EntityRef, OperatorFn>;
 
 private:
     using Table = std::array<
@@ -276,7 +275,7 @@ private:
         table[static_cast<std::size_t>(Operator::opcode)][static_cast<std::size_t>(Operand::kind)]
              [static_cast<std::size_t>(Operand::kind)] = TableValue{
                  Operand::kind,
-                 [](Entity* left, Entity* right) -> Entity* {
+                 [](Value* left, Value* right) -> Value* {
                      return Operator()(static_cast<Operand&>(*left), static_cast<Operand&>(*right));
                  },
              };
@@ -287,7 +286,7 @@ private:
         table[static_cast<std::size_t>(Operator::opcode)][static_cast<std::size_t>(Operand::kind)]
              [static_cast<std::size_t>(Operand::kind)] = TableValue{
                  Operand::kind,
-                 [](Entity* left, Entity* right) -> Entity* {
+                 [](Value* left, Value* right) -> Value* {
                      return Operator()(static_cast<Operand&>(*left));
                  },
              };
@@ -301,35 +300,51 @@ public:
     constexpr IntrinsicOpTable(TypeRegistry& type_factory)
         : type_factory_(type_factory), table_(build_operation_map()) {}
 
-    constexpr TypeAndFunctor eval_value_op(OperatorCode opcode, Type* left, Type* right) const {
+    constexpr EntityRef eval_op(OperatorCode opcode, EntityRef left, EntityRef right = {}) const {
+        if (left.is_type() && right.is_type()) {
+            return eval_type_op(opcode, left, right);
+        } else if (left.is_value() && right.is_value()) {
+            return eval_value_op(opcode, left, right);
+        } else {
+            return eval_type_value_op(opcode, left, right);
+        }
+    }
+
+    TypeRef get_result_type(OperatorCode opcode, TypeRef left_type, TypeRef right_type) const {
+        const TableValue& value =
+            table_[static_cast<std::size_t>(opcode)][static_cast<std::size_t>(left_type->kind_)]
+                  [static_cast<std::size_t>(right_type->kind_)];
+        return type_factory_.get_kind(value.first);
+    }
+
+private:
+    ValueRef eval_value_op(OperatorCode opcode, EntityRef left, EntityRef right) const {
         const TableValue& value =
             table_[static_cast<std::size_t>(opcode)][static_cast<std::size_t>(left->kind_)]
                   [static_cast<std::size_t>(right->kind_)];
-        return {type_factory_.get_kind(value.first), value.second};
+        return ValueRef::alloc_value([&] { return value.second(left.value(), right.value()); });
     }
 
-    constexpr TypeAndFunctor eval_op(OperatorCode opcode, Type* left, Type* right = {}) const {
-        if (left->is_type() && (right || right->is_type())) {
-            // type and type
-            switch (opcode) {
-            case OperatorCode::OPERATOR_BITWISE_AND:
-                return {type_factory_.get<IntersectionType>(left, right), nullptr};
-            case OperatorCode::OPERATOR_BITWISE_OR:
-                return {type_factory_.get<UnionType>(left, right), nullptr};
-            default:
-                assert(false && "Operation on two types not implemented");
-                std::unreachable();
-            }
-        } else if (!left->is_type() && (right || !right->is_type())) {
-            assert(false && "Operation on two values should be handled elsewhere");
+    TypeRef eval_type_op(OperatorCode opcode, TypeRef left, TypeRef right) const {
+        // type and type
+        switch (opcode) {
+        case OperatorCode::OPERATOR_BITWISE_AND:
+            return type_factory_.get<IntersectionType>(left.type(), right.type());
+        case OperatorCode::OPERATOR_BITWISE_OR:
+            return type_factory_.get<UnionType>(left.type(), right.type());
+        default:
+            assert(false && "Unsupported operation on types");
             std::unreachable();
-        } else {
-            return {};
         }
+    }
+
+    TypeRef eval_type_value_op(OperatorCode opcode, EntityRef left, EntityRef right) const {
+        // TODO (array index, integer + 1, etc.)
+        return {};
     }
 };
 
-class OpDispatcher final : public IntrinsicOpTable {
+class OpDispatcher final : private IntrinsicOpTable {
 private:
     using CustomTableKey = std::tuple<OperatorCode, Type*, Type*>;
     using CustomTableValue = std::pair<TypeRef, OperatorFn>;
@@ -343,20 +358,38 @@ public:
         TypeRef left_type,
         TypeRef right_type,
         TypeRef result_type,
-        Entity* (*func)(Entity*, Entity*)
+        OperatorFn func
     ) {
         custom_table_[{opcode, left_type.type(), right_type.type()}] = {result_type, func};
     }
 
-    TypeAndFunctor eval_op(OperatorCode opcode, Type* left, Type* right = {}) const {
-        if (left->kind_ < Kind::NON_COMPOSITE_SIZE &&
-            (right || right->kind_ < Kind::NON_COMPOSITE_SIZE)) {
-            // primitive and primitive
+    EntityRef eval_op(OperatorCode opcode, EntityRef left, EntityRef right = {}) const {
+        bool both_types = left.is_type() && right.is_type();
+        bool both_primitive_values = left.is_value() && right.is_value() &&
+                                     left.value()->kind_ < Kind::NON_COMPOSITE_SIZE &&
+                                     right.value()->kind_ < Kind::NON_COMPOSITE_SIZE;
+        if (both_types || both_primitive_values) {
             return IntrinsicOpTable::eval_op(opcode, left, right);
         }
-        auto it = custom_table_.find({opcode, left, right});
+        // operation on values only
+        auto it = custom_table_.find({opcode, left.type(), right.type()});
         if (it != custom_table_.end()) {
-            return {it->second.first, it->second.second};
+            return ValueRef::alloc_value([&] {
+                return (*it).second.second(left.value(), right.value());
+            });
+        } else {
+            throw std::runtime_error("Operation not defined for given types");
+        }
+    }
+
+    TypeRef get_result_type(OperatorCode opcode, TypeRef left_type, TypeRef right_type = {}) const {
+        if (left_type->kind_ < Kind::NON_COMPOSITE_SIZE &&
+            (right_type ? right_type->kind_ < Kind::NON_COMPOSITE_SIZE : true)) {
+            return IntrinsicOpTable::get_result_type(opcode, left_type, right_type);
+        }
+        auto it = custom_table_.find({opcode, left_type.type(), right_type.type()});
+        if (it != custom_table_.end()) {
+            return (*it).second.first;
         } else {
             throw std::runtime_error("Operation not defined for given types");
         }
