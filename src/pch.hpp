@@ -30,6 +30,20 @@
 using namespace std::literals::string_literals;
 using namespace std::literals::string_view_literals;
 
+template <typename T>
+class ComparableSpan : public std::span<T> {
+public:
+    using std::span<T>::span;
+    std::strong_ordering operator<=>(const ComparableSpan<T>& other) const noexcept {
+        return std::lexicographical_compare_three_way(
+            this->begin(), this->end(), other.begin(), other.end()
+        );
+    }
+    bool operator==(const ComparableSpan<T>& other) const noexcept {
+        return std::equal(this->begin(), this->end(), other.begin(), other.end());
+    }
+};
+
 namespace GlobalMemory {
 inline std::pmr::memory_resource* memory_resource() {
     constexpr std::size_t buffer_size = 1024 * 1024;  // 1 MB
@@ -47,14 +61,14 @@ constexpr T* allocate(Args&&... args) {
 }
 
 template <typename T>
-constexpr std::span<T> allocate_array(std::size_t n) {
+constexpr ComparableSpan<T> allocate_array(std::size_t n) {
     void* ptr = memory_resource()->allocate(n * sizeof(T), alignof(T));
     if constexpr (std::is_trivially_default_constructible_v<T>) {
-        return std::span<T>(static_cast<T*>(ptr), n);
+        return ComparableSpan<T>(static_cast<T*>(ptr), n);
     } else {
         T* typed_ptr = static_cast<T*>(ptr);
         std::uninitialized_default_construct(typed_ptr, typed_ptr + n);
-        return std::span<T>(typed_ptr, n);
+        return ComparableSpan<T>(typed_ptr, n);
     }
 }
 }  // namespace GlobalMemory
@@ -215,16 +229,22 @@ public:
             throw std::out_of_range("Key not found in FlatMap");
         }
     }
-    Value* at(const Key& key) const {
+    iterator find(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
-        if (it != keys_.end() && *it == key) {
-            std::size_t index = std::distance(keys_.begin(), it);
-            return &values_[index];
-        } else {
-            throw std::out_of_range("Key not found in FlatMap");
+        if (it == keys_.end() || *it != key) {
+            return this->end();
         }
+        std::size_t index = std::distance(keys_.begin(), it);
+        return iterator(&keys_[index], &values_[index]);
     }
-
+    const_iterator find(const Key& key) const {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        if (it == keys_.end() || *it != key) {
+            return this->end();
+        }
+        std::size_t index = std::distance(keys_.begin(), it);
+        return const_iterator(&keys_[index], &values_[index]);
+    }
     iterator begin() noexcept { return iterator(keys_.data(), values_.data()); }
     iterator end() noexcept {
         return iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
@@ -232,6 +252,14 @@ public:
     const_iterator begin() const noexcept { return const_iterator(keys_.data(), values_.data()); }
     const_iterator end() const noexcept {
         return const_iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
+    }
+    std::strong_ordering operator<=>(const FlatMap<Key, Value, Comp>& other) const noexcept {
+        return std::lexicographical_compare_three_way(
+            this->begin(), this->end(), other.begin(), other.end()
+        );
+    }
+    bool operator==(const FlatMap<Key, Value, Comp>& other) const noexcept {
+        return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
 };
 
@@ -247,6 +275,17 @@ public:
             return *keys_.emplace(it, std::move(key));
         }
         return *it;
+    }
+    std::size_t size() const noexcept { return keys_.size(); }
+    typename std::vector<Key>::const_iterator begin() const noexcept { return keys_.begin(); }
+    typename std::vector<Key>::const_iterator end() const noexcept { return keys_.end(); }
+    std::strong_ordering operator<=>(const FlatSet<Key, Comp>& other) const noexcept {
+        return std::lexicographical_compare_three_way(
+            this->begin(), this->end(), other.begin(), other.end()
+        );
+    }
+    bool operator==(const FlatSet<Key, Comp>& other) const noexcept {
+        return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
 };
 

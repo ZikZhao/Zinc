@@ -169,7 +169,7 @@ void ASTDeclaration::check_types(TypeChecker& checker) {
     TypeRef declared_type = type_->eval_type(checker);
     if (!declared_type) {
         declared_type = inferred_type;
-    } else if (!Type::contains(*declared_type.type(), *inferred_type.type())) {
+    } else if (!declared_type.type()->assignable_from(*inferred_type.type())) {
         throw std::runtime_error(
             "Type mismatch in declaration of '"s + std::string(identifier_->name_) +
             "': expected " + declared_type->repr() + ", got " + inferred_type->repr()

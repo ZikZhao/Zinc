@@ -79,18 +79,25 @@ public:
     virtual ~Entity() = default;
     virtual std::string repr() const = 0;
     constexpr bool is_type() const noexcept { return ref_count_ <= 0; }
+    constexpr std::strong_ordering operator<=>(const Entity& other) const noexcept {
+        if (kind_ != other.kind_) {
+            return kind_ <=> other.kind_;
+        }
+        return is_type() <=> other.is_type();
+    }
+    constexpr bool operator==(const Entity& other) const noexcept {
+        return kind_ == other.kind_ && is_type() == other.is_type();
+    }
 };
 
 class Type : public Entity {
 public:
-    static bool contains(const Type& a, const Type& b) { return &a == &b || a.contains(b); }
-
-public:
     Type(Kind kind) noexcept;
     ~Type() override = default;
+    bool assignable_from(const Type& source) const;
 
 protected:
-    virtual bool contains(const Type& other) const = 0;
+    virtual bool assignable_from_impl(const Type& source) const = 0;
 };
 
 template <Kind K>
@@ -105,6 +112,10 @@ public:
             return "any";
         } else if constexpr (K == Kind::KIND_NULL) {
             return "null";
+        } else if constexpr (K == Kind::KIND_INTEGER) {
+            return "integer";
+        } else if constexpr (K == Kind::KIND_FLOAT) {
+            return "float";
         } else if constexpr (K == Kind::KIND_STRING) {
             return "string";
         } else if constexpr (K == Kind::KIND_BOOLEAN) {
@@ -115,33 +126,7 @@ public:
             static_assert(false);
         }
     }
-    bool contains(const Type& other) const final { return other.kind_ == kind; }
-};
-
-template <>
-class PrimitiveType<Kind::KIND_INTEGER> final : public Type {
-public:
-    static constexpr Kind kind = Kind::KIND_INTEGER;
-
-public:
-    PrimitiveType() noexcept : Type(kind) {}
-    std::string repr() const final { return "integer"; }
-    bool contains(const Type& other) const final {
-        return other.kind_ == Kind::KIND_INTEGER or other.kind_ == Kind::KIND_FLOAT;
-    }
-};
-
-template <>
-class PrimitiveType<Kind::KIND_FLOAT> final : public Type {
-public:
-    static constexpr Kind kind = Kind::KIND_FLOAT;
-
-public:
-    PrimitiveType() noexcept : Type(kind) {}
-    std::string repr() const final { return "float"; }
-    bool contains(const Type& other) const final {
-        return other.kind_ == Kind::KIND_FLOAT or other.kind_ == Kind::KIND_INTEGER;
-    }
+    bool assignable_from_impl(const Type& source) const final { return source.kind_ == kind; }
 };
 
 class FunctionType final : public Type {
@@ -149,16 +134,14 @@ public:
     static constexpr Kind kind = Kind::KIND_FUNCTION;
 
 public:
-    std::span<Type*> parameters_;
+    ComparableSpan<Type*> parameters_;
     Type* spread_;
     Type* return_type_;
-    FunctionType(std::span<Type*> parameters, Type* spread, Type* return_type) noexcept
+    FunctionType(ComparableSpan<Type*> parameters, Type* spread, Type* return_type) noexcept
         : Type(kind), parameters_(parameters), spread_(spread), return_type_(return_type) {}
-    std::string repr() const final { return "function"; }
-    bool contains(const Type& other) const final { return other.kind_ == kind; }
-    std::strong_ordering operator<=>(const FunctionType& other) const noexcept;
-    bool operator==(const FunctionType& other) const noexcept;
-    bool operator!=(const FunctionType& other) const noexcept;
+    std::string repr() const final;
+    bool assignable_from_impl(const Type& source) const final;
+    std::strong_ordering operator<=>(const FunctionType& other) const noexcept = default;
 };
 
 class ListType final : public Type {
@@ -166,7 +149,7 @@ public:
     Type* element_type_;
     ListType(Type* element_type) noexcept;
     std::string repr() const final;
-    bool contains(const Type& other) const final;
+    bool assignable_from_impl(const Type& source) const final;
 };
 
 class RecordType : public Type {
@@ -174,25 +157,24 @@ public:
     FlatMap<std::string_view, Type*> fields_;
     RecordType(FlatMap<std::string_view, Type*> fields) noexcept;
     std::string repr() const final;
-    bool contains(const Type& other) const final;
-    std::strong_ordering operator<=>(const RecordType& other) const noexcept;
-    bool operator==(const RecordType& other) const noexcept;
+    bool assignable_from_impl(const Type& source) const final;
+    std::strong_ordering operator<=>(const RecordType& other) const noexcept = default;
 };
 
 class ClassType : public Type {
 public:
     std::string_view name_;
-    std::span<InterfaceType*> interfaces_;
+    ComparableSpan<InterfaceType*> interfaces_;
     const ClassType* extends_;
     FlatMap<std::string_view, Type*> properties_;
     ClassType(
         std::string_view name,
-        std::span<InterfaceType*> interfaces,
+        ComparableSpan<InterfaceType*> interfaces,
         const ClassType* extends,
         FlatMap<std::string_view, Type*> properties
     ) noexcept;
     std::string repr() const override;
-    bool contains(const Type& other) const override;
+    bool assignable_from_impl(const Type& source) const override;
 };
 
 class IntersectionType final : public Type {
@@ -200,16 +182,14 @@ public:
     static constexpr Kind kind = Kind::KIND_INTERSECTION;
 
 private:
-    static std::span<Type*> combine(Type* left, Type* right);
+    static ComparableSpan<Type*> combine(Type* left, Type* right);
 
 public:
-    std::span<Type*> types_;
+    ComparableSpan<Type*> types_;
     IntersectionType(Type* left, Type* right) noexcept;
     std::string repr() const final;
-    bool contains(const Type& other) const final;
-    std::strong_ordering operator<=>(const IntersectionType& other) const noexcept;
-    bool operator==(const IntersectionType& other) const noexcept;
-    bool operator!=(const IntersectionType& other) const noexcept;
+    bool assignable_from_impl(const Type& source) const final;
+    std::strong_ordering operator<=>(const IntersectionType& other) const noexcept = default;
 };
 
 class UnionType final : public Type {
@@ -217,16 +197,14 @@ public:
     static constexpr Kind kind = Kind::KIND_UNION;
 
 private:
-    static std::span<Type*> combine(Type* left, Type* right);
+    static ComparableSpan<Type*> combine(Type* left, Type* right);
 
 public:
-    std::span<Type*> types_;
+    ComparableSpan<Type*> types_;
     UnionType(Type* left, Type* right) noexcept;
     std::string repr() const final;
-    bool contains(const Type& other) const final;
-    std::strong_ordering operator<=>(const UnionType& other) const noexcept;
-    bool operator==(const UnionType& other) const noexcept;
-    bool operator!=(const UnionType& other) const noexcept;
+    bool assignable_from_impl(const Type& source) const final;
+    std::strong_ordering operator<=>(const UnionType& other) const noexcept = default;
 };
 
 class Value : public Entity {
