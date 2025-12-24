@@ -35,22 +35,26 @@ class ASTFunctionParameter;
 class ASTFunctionSignature;
 class ASTFunctionDefinition;
 
+struct VarInfo {
+    TypeRef type_ref;
+    bool is_mutable = false;
+    bool is_rvalue = false;
+};
+
 class Scope {
     friend class TypeChecker;
 
 private:
     Scope* const parent_ = nullptr;
     const std::string_view name_;
-    std::map<const std::string_view, EntityRef>
-        variables_;  // store type if variable, value if constant
-    std::map<const std::string_view, const ASTTypeExpression*> types_;
+    FlatMap<std::string_view, EntityRef> variables_;
+    FlatMap<std::string_view, const ASTTypeExpression*> types_;
     std::vector<const Scope*> anonymous_children_;
-    std::map<const std::string_view, const Scope*> children_;
+    FlatMap<std::string_view, const Scope*> children_;
 
 public:
     Scope() noexcept = default;
     Scope(std::string_view name, Scope& parent) noexcept;
-    Scope(std::vector<std::pair<std::string_view, const ASTExpression*>> builtins) noexcept;
     void add_type(std::string_view identifier, const ASTTypeExpression* expr);
 
 private:
@@ -66,7 +70,7 @@ private:
 
 private:
     Scope* current_;
-    std::map<std::pair<const Scope*, std::string_view>, CacheRecord> cache_;
+    FlatMap<std::pair<const Scope*, std::string_view>, CacheRecord> cache_;
 
 public:
     const OpDispatcher& ops_;
@@ -78,10 +82,11 @@ public:
     void enter(const ASTCodeBlock* child) noexcept;
     void exit() noexcept;
     EntityRef resolve(std::string_view identifier);
-    TypeRef type_of(std::string_view identifier);
+    VarInfo type_of(std::string_view identifier);
 
 private:
-    EntityRef resolve_in(std::string_view identifier, Scope& ctx);
+    EntityRef resolve_in(std::string_view identifier, Scope& scope);
+    VarInfo type_of_in(std::string_view identifier, Scope& scope);
 };
 
 class ASTNode {
@@ -89,7 +94,7 @@ public:
     Location location_;
     ASTNode(const Location& loc) noexcept;
     virtual ~ASTNode() noexcept = default;
-    virtual void collect_types(Scope& ctx, OpDispatcher& ops);
+    virtual void collect_types(Scope& scope, OpDispatcher& ops);
     virtual void check_types(TypeChecker& checker);
 };
 
@@ -98,7 +103,7 @@ public:
     ASTRecursiveNode(const Location& loc) noexcept;
     ~ASTRecursiveNode() noexcept override = default;
     virtual std::generator<ASTNode*> get_children() const noexcept = 0;
-    void collect_types(Scope& ctx, OpDispatcher& ops) override;
+    void collect_types(Scope& scope, OpDispatcher& ops) override;
     void check_types(TypeChecker& checker) override;
 };
 
@@ -114,7 +119,7 @@ public:
         std::vector<std::unique_ptr<ASTNode>> statements
     ) noexcept;
     std::generator<ASTNode*> get_children() const noexcept final;
-    void collect_types(Scope& ctx, OpDispatcher& ops) final;
+    void collect_types(Scope& scope, OpDispatcher& ops) final;
     void check_types(TypeChecker& checker) final;
 };
 
@@ -122,7 +127,7 @@ class ASTExpression : public ASTNode {
 public:
     ASTExpression(const Location& loc) noexcept;
     virtual EntityRef eval(TypeChecker& checker) const = 0;
-    virtual TypeRef get_result_type(TypeChecker& checker) const = 0;
+    virtual VarInfo get_result_type(TypeChecker& checker) const = 0;
 };
 
 template <ValueClass V>
@@ -132,8 +137,8 @@ public:
     ASTConstant(const Location& loc, std::string_view str)
         : ASTExpression(loc), value_(ValueRef::alloc_literal<V>(str)) {}
     EntityRef eval(TypeChecker& checker) const final { return value_; }
-    TypeRef get_result_type(TypeChecker& checker) const final {
-        return checker.type_factory_.get_kind(value_->kind_);
+    VarInfo get_result_type(TypeChecker& checker) const final {
+        return {checker.type_factory_.get_kind(value_->kind_), false};
     }
 };
 
@@ -142,7 +147,7 @@ public:
     const std::string_view name_;
     ASTIdentifier(const Location& loc, std::string_view name) noexcept;
     EntityRef eval(TypeChecker& checker) const final;
-    TypeRef get_result_type(TypeChecker& checker) const final;
+    VarInfo get_result_type(TypeChecker& checker) const final;
 };
 
 template <typename Op>
@@ -156,9 +161,9 @@ public:
         EntityRef expr_result = expr_->eval(checker);
         return checker.ops_.eval_op(Op::opcode, expr_result);
     }
-    TypeRef get_result_type(TypeChecker& checker) const final {
-        TypeRef expr_type = expr_->get_result_type(checker);
-        return checker.ops_.get_result_type(Op::opcode, expr_type);
+    VarInfo get_result_type(TypeChecker& checker) const final {
+        VarInfo expr_type = expr_->get_result_type(checker);
+        return {checker.ops_.get_result_type(Op::opcode, expr_type.type_ref), false};
     }
 };
 
@@ -179,10 +184,14 @@ public:
         EntityRef right_result = right_->eval(checker);
         return checker.ops_.eval_op(Op::opcode, left_result, right_result);
     }
-    TypeRef get_result_type(TypeChecker& checker) const final {
-        TypeRef left_type = left_->get_result_type(checker);
-        TypeRef right_type = right_->get_result_type(checker);
-        return checker.ops_.get_result_type(Op::opcode, left_type, right_type);
+    VarInfo get_result_type(TypeChecker& checker) const final {
+        VarInfo left_type = left_->get_result_type(checker);
+        VarInfo right_type = right_->get_result_type(checker);
+        return {
+            checker.ops_.get_result_type(Op::opcode, left_type.type_ref, right_type.type_ref),
+            false,
+            true
+        };
     }
 };
 
@@ -201,15 +210,26 @@ public:
     ) noexcept
         : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
+    void check_types(TypeChecker& checker) override { std::ignore = get_result_type(checker); }
     EntityRef eval(TypeChecker& checker) const final {
         EntityRef left_result = left_->eval(checker);
         EntityRef right_result = right_->eval(checker);
         return checker.ops_.eval_op(Op::opcode, left_result, right_result);
     }
-    TypeRef get_result_type(TypeChecker& checker) const final {
-        TypeRef left_type = left_->get_result_type(checker);
-        TypeRef right_type = right_->get_result_type(checker);
-        return checker.ops_.get_result_type(Op::opcode, left_type, right_type);
+    VarInfo get_result_type(TypeChecker& checker) const final {
+        VarInfo left_type = left_->get_result_type(checker);
+        VarInfo right_type = right_->get_result_type(checker);
+        if (!left_type.is_mutable) {
+            throw std::runtime_error("Left-hand side of assignment must be mutable"s);
+        }
+        if (left_type.is_rvalue) {
+            throw std::runtime_error("Left-hand side of assignment must be an lvalue"s);
+        }
+        return {
+            checker.ops_.get_result_type(Op::opcode, left_type.type_ref, right_type.type_ref),
+            true,
+            false
+        };
     }
 };
 
@@ -227,7 +247,7 @@ public:
         // TODO
         return {};
     }
-    TypeRef get_result_type(TypeChecker& checker) const final {
+    VarInfo get_result_type(TypeChecker& checker) const final {
         // TODO
         return {};
     }
@@ -279,7 +299,7 @@ class ASTPrimitiveType final : public ASTTypeExpression {
 public:
     ASTPrimitiveType(const Location& loc) noexcept : ASTTypeExpression(loc) {}
     EntityRef eval(TypeChecker& checker) const final { return checker.type_factory_.get<T>(); }
-    TypeRef get_result_type(TypeChecker& checker) const final {
+    VarInfo get_result_type(TypeChecker& checker) const final {
         throw std::logic_error("Type expressions do not have result types");
     }
 };
@@ -301,7 +321,7 @@ public:
     ) noexcept;
     ASTFunctionType(TypeRef func) noexcept;
     EntityRef eval(TypeChecker& checker) const final;
-    TypeRef get_result_type(TypeChecker& checker) const final;
+    VarInfo get_result_type(TypeChecker& checker) const final;
 };
 
 class ASTRecordType final : public ASTTypeExpression {
@@ -312,7 +332,7 @@ public:
     ) noexcept;
     ~ASTRecordType() noexcept final = default;
     EntityRef eval(TypeChecker& checker) const final;
-    TypeRef get_result_type(TypeChecker& checker) const final;
+    VarInfo get_result_type(TypeChecker& checker) const final;
 };
 
 class ASTDeclaration final : public ASTNode {
@@ -320,11 +340,13 @@ public:
     const std::unique_ptr<ASTIdentifier> identifier_;
     const std::unique_ptr<ASTTypeExpression> type_;
     const std::unique_ptr<ASTValueExpression> expr_;
+    const bool is_mutable_;
     ASTDeclaration(
         const Location& loc,
         std::unique_ptr<ASTIdentifier> identifier,
         std::unique_ptr<ASTTypeExpression> type,
-        std::unique_ptr<ASTValueExpression> expr
+        std::unique_ptr<ASTValueExpression> expr,
+        bool is_mutable
     ) noexcept;
     ~ASTDeclaration() noexcept final = default;
     void check_types(TypeChecker& checker) final;
@@ -348,7 +370,7 @@ public:
         const Location& loc, std::string_view identifier, std::unique_ptr<ASTTypeExpression> type
     ) noexcept;
     ~ASTTypeAlias() noexcept final = default;
-    void collect_types(Scope& ctx, OpDispatcher& ops) final;
+    void collect_types(Scope& scope, OpDispatcher& ops) final;
 };
 
 class ASTIfStatement final : public ASTRecursiveNode {

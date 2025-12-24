@@ -1,6 +1,7 @@
 #pragma once
 #include "pch.hpp"
 #include <StainlessParser.h>
+#include <type_traits>
 #include <utility>
 
 #include "entity.hpp"
@@ -144,6 +145,7 @@ struct Decrement {
 struct LeftShift {
     static constexpr OperatorCode opcode = OperatorCode::OPERATOR_LEFT_SHIFT;
     template <typename T>
+        requires requires { std::declval<T>() << std::declval<T>(); }
     auto operator()(const T& left, const T& right) const {
         return left << right;
     }
@@ -152,6 +154,7 @@ struct LeftShift {
 struct RightShift {
     static constexpr OperatorCode opcode = OperatorCode::OPERATOR_RIGHT_SHIFT;
     template <typename T>
+        requires requires { std::declval<T>() >> std::declval<T>(); }
     auto operator()(const T& left, const T& right) const {
         return left >> right;
     }
@@ -161,9 +164,12 @@ template <typename Functor = void>
 struct OperateAndAssign {
     static constexpr OperatorCode opcode = Functor::opcode;
     template <typename Left, typename Right>
+        requires requires { Functor()(std::declval<Left&>(), std::declval<const Right&>()); }
     auto operator()(Left& left, const Right& right) const {
         Functor func;
-        left = func(left, right);
+        using ResultType = std::remove_pointer_t<decltype(func(left, right))>;
+        std::unique_ptr<ResultType> result = std::make_unique<ResultType>(func(left, right));
+        left = *result;
         return left;
     }
 };
@@ -172,7 +178,7 @@ template <>
 struct OperateAndAssign<void> {
     static constexpr OperatorCode opcode = OperatorCode::OPERATOR_ASSIGN;
     template <typename Left, typename Right>
-    auto operator()(const Left& left, const Right& right) const {
+    auto operator()(Left& left, const Right& right) const {
         return left = right;
     }
 };
@@ -244,7 +250,7 @@ private:
         OperatorFunctors::BitwiseNot>;
 
 public:
-    using OperatorFn = Value* (*)(Value*, Value*);
+    using OperatorFn = ValueRef (*)(ValueRef, ValueRef);
     using TableKey = std::tuple<OperatorCode, Kind, Kind>;
     using TableValue = std::pair<Kind, OperatorFn>;
 
@@ -258,6 +264,7 @@ private:
 private:
     static constexpr Table build_operation_map() {
         Table table;
+        register_assignments(table);
         register_group<IntegerValue>(table, Arithmetic{});
         register_group<FloatValue>(table, Arithmetic{});
         register_group<IntegerValue>(table, Comparison{});
@@ -265,31 +272,69 @@ private:
         register_group<IntegerValue>(table, Bitwise{});
         return table;
     }
+
+    static constexpr void register_assignments(Table& table) {
+        using all_types =
+            std::tuple<NullValue, IntegerValue, FloatValue, StringValue, BooleanValue>;
+        using all_assignments = std::tuple<
+            OperatorFunctors::Assign,
+            OperatorFunctors::AddAssign,
+            OperatorFunctors::SubtractAssign,
+            OperatorFunctors::MultiplyAssign,
+            OperatorFunctors::DivideAssign,
+            OperatorFunctors::RemainderAssign,
+            OperatorFunctors::LogicalAndAssign,
+            OperatorFunctors::LogicalOrAssign,
+            OperatorFunctors::BitwiseAndAssign,
+            OperatorFunctors::BitwiseOrAssign,
+            OperatorFunctors::BitwiseXorAssign,
+            OperatorFunctors::LeftShiftAssign,
+            OperatorFunctors::RightShiftAssign>;
+        [&]<typename... Ts>(std::type_identity<std::tuple<Ts...>>) {
+            auto fn = [&]<typename T, typename... Us>(
+                          std::type_identity<T>, std::type_identity<std::tuple<Us...>>
+                      ) { (register_op<T, Us>(table), ...); };
+            (fn(std::type_identity<Ts>{}, std::type_identity<all_assignments>{}), ...);
+        }(std::type_identity<all_types>{});
+    }
+
     template <typename Operand, typename... Operators>
     static constexpr void register_group(Table& table, std::tuple<Operators...>) {
         (register_op<Operand, Operators>(table), ...);
     }
+
     template <typename Operand, typename Operator>
-        requires requires { Operator()(std::declval<Operand&>(), std::declval<Operand&>()); }
     static constexpr void register_op(Table& table) {
-        table[static_cast<std::size_t>(Operator::opcode)][static_cast<std::size_t>(Operand::kind)]
-             [static_cast<std::size_t>(Operand::kind)] = TableValue{
-                 Operand::kind,
-                 [](Value* left, Value* right) -> Value* {
-                     return Operator()(static_cast<Operand&>(*left), static_cast<Operand&>(*right));
-                 },
-             };
-    }
-    template <typename Operand, typename Operator>
-        requires requires { Operator()(std::declval<Operand&>()); }
-    static constexpr void register_op(Table& table) {
-        table[static_cast<std::size_t>(Operator::opcode)][static_cast<std::size_t>(Operand::kind)]
-             [static_cast<std::size_t>(Operand::kind)] = TableValue{
-                 Operand::kind,
-                 [](Value* left, Value* right) -> Value* {
-                     return Operator()(static_cast<Operand&>(*left));
-                 },
-             };
+        constexpr bool has_binary =
+            requires { Operator()(std::declval<Operand&>(), std::declval<Operand&>()); };
+        constexpr bool has_unary = requires { Operator()(std::declval<Operand&>()); };
+        if constexpr (has_binary) {
+            table[static_cast<std::size_t>(Operator::opcode)]
+                 [static_cast<std::size_t>(Operand::kind)]
+                 [static_cast<std::size_t>(Operand::kind)] = TableValue{
+                     Operand::kind,
+                     [](ValueRef left, ValueRef right) -> ValueRef {
+                         auto result = Operator()(
+                             static_cast<Operand&>(*left.value()),
+                             static_cast<Operand&>(*right.value())
+                         );
+                         auto boxed = GlobalMemory::allocate<decltype(result)>(std::move(result));
+                         return ValueRef(boxed);
+                     },
+                 };
+        }
+        if constexpr (has_unary) {
+            table[static_cast<std::size_t>(Operator::opcode)]
+                 [static_cast<std::size_t>(Operand::kind)]
+                 [static_cast<std::size_t>(Operand::kind)] = TableValue{
+                     Operand::kind,
+                     [](ValueRef left, ValueRef right) -> ValueRef {
+                         auto result = Operator()(static_cast<Operand&>(*left.value()));
+                         auto boxed = GlobalMemory::allocate<decltype(result)>(std::move(result));
+                         return ValueRef(boxed);
+                     },
+                 };
+        }
     }
 
 protected:
@@ -322,7 +367,7 @@ private:
         const TableValue& value =
             table_[static_cast<std::size_t>(opcode)][static_cast<std::size_t>(left->kind_)]
                   [static_cast<std::size_t>(right->kind_)];
-        return ValueRef::alloc_value([&] { return value.second(left.value(), right.value()); });
+        return value.second(left, right);
     }
 
     TypeRef eval_type_op(OperatorCode opcode, TypeRef left, TypeRef right) const {
@@ -374,9 +419,7 @@ public:
         // operation on values only
         auto it = custom_table_.find({opcode, left.type(), right.type()});
         if (it != custom_table_.end()) {
-            return ValueRef::alloc_value([&] {
-                return (*it).second.second(left.value(), right.value());
-            });
+            return it->second.second(left, right);
         } else {
             throw std::runtime_error("Operation not defined for given types");
         }

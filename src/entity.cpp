@@ -249,143 +249,137 @@ std::string NullValue::repr() const { return "null"; }
 
 IntegerValue::IntegerValue(int64_t value) noexcept : Value(Kind::KIND_INTEGER), value_(value) {}
 std::string IntegerValue::repr() const { return std::to_string(value_); }
-IntegerValue* IntegerValue::operator+(const IntegerValue& other) const {
-    return new IntegerValue(this->value_ + other.value_);
+IntegerValue IntegerValue::operator+(const IntegerValue& other) const {
+    return IntegerValue(this->value_ + other.value_);
 }
-IntegerValue* IntegerValue::operator-(const IntegerValue& other) const {
-    return new IntegerValue(this->value_ - other.value_);
+IntegerValue IntegerValue::operator-(const IntegerValue& other) const {
+    return IntegerValue(this->value_ - other.value_);
 }
-IntegerValue* IntegerValue::operator-() const { return new IntegerValue(-this->value_); }
-IntegerValue* IntegerValue::operator*(const IntegerValue& other) const {
-    return new IntegerValue(this->value_ * other.value_);
+IntegerValue IntegerValue::operator-() const { return IntegerValue(-this->value_); }
+IntegerValue IntegerValue::operator*(const IntegerValue& other) const {
+    return IntegerValue(this->value_ * other.value_);
 }
-IntegerValue* IntegerValue::operator/(const IntegerValue& other) const {
+IntegerValue IntegerValue::operator/(const IntegerValue& other) const {
     if (other.value_ == 0) throw std::runtime_error("Division by zero");
-    return new IntegerValue(this->value_ / other.value_);
+    return IntegerValue(this->value_ / other.value_);
 }
-IntegerValue* IntegerValue::operator%(const IntegerValue& other) const {
+IntegerValue IntegerValue::operator%(const IntegerValue& other) const {
     if (other.value_ == 0) throw std::runtime_error("Division by zero");
-    return new IntegerValue(this->value_ % other.value_);
+    return IntegerValue(this->value_ % other.value_);
 }
-BooleanValue* IntegerValue::operator==(const IntegerValue& other) const {
-    return new BooleanValue(this->value_ == other.value_);
+BooleanValue IntegerValue::operator==(const IntegerValue& other) const {
+    return BooleanValue(this->value_ == other.value_);
 }
-BooleanValue* IntegerValue::operator!=(const IntegerValue& other) const {
-    return new BooleanValue(this->value_ != other.value_);
+BooleanValue IntegerValue::operator!=(const IntegerValue& other) const {
+    return BooleanValue(this->value_ != other.value_);
 }
-BooleanValue* IntegerValue::operator<(const IntegerValue& other) const {
-    return new BooleanValue(this->value_ < other.value_);
+BooleanValue IntegerValue::operator<(const IntegerValue& other) const {
+    return BooleanValue(this->value_ < other.value_);
 }
-BooleanValue* IntegerValue::operator<=(const IntegerValue& other) const {
-    return new BooleanValue(this->value_ <= other.value_);
+BooleanValue IntegerValue::operator<=(const IntegerValue& other) const {
+    return BooleanValue(this->value_ <= other.value_);
 }
-BooleanValue* IntegerValue::operator>(const IntegerValue& other) const {
-    return new BooleanValue(this->value_ > other.value_);
+BooleanValue IntegerValue::operator>(const IntegerValue& other) const {
+    return BooleanValue(this->value_ > other.value_);
 }
-BooleanValue* IntegerValue::operator>=(const IntegerValue& other) const {
-    return new BooleanValue(this->value_ >= other.value_);
+BooleanValue IntegerValue::operator>=(const IntegerValue& other) const {
+    return BooleanValue(this->value_ >= other.value_);
 }
-IntegerValue* IntegerValue::operator&(const IntegerValue& other) const {
-    return new IntegerValue(this->value_ & other.value_);
+IntegerValue IntegerValue::operator&(const IntegerValue& other) const {
+    return IntegerValue(this->value_ & other.value_);
 }
-IntegerValue* IntegerValue::operator|(const IntegerValue& other) const {
-    return new IntegerValue(this->value_ | other.value_);
+IntegerValue IntegerValue::operator|(const IntegerValue& other) const {
+    return IntegerValue(this->value_ | other.value_);
 }
-IntegerValue* IntegerValue::operator^(const IntegerValue& other) const {
-    return new IntegerValue(this->value_ ^ other.value_);
+IntegerValue IntegerValue::operator^(const IntegerValue& other) const {
+    return IntegerValue(this->value_ ^ other.value_);
 }
-IntegerValue* IntegerValue::operator~() const { return new IntegerValue(~this->value_); }
-IntegerValue* IntegerValue::operator<<(const IntegerValue& other) const {
+IntegerValue IntegerValue::operator~() const { return IntegerValue(~this->value_); }
+IntegerValue IntegerValue::operator<<(const IntegerValue& other) const {
     if (other.value_ < 0) throw std::runtime_error("Cannot left shift by negative amount");
-    return new IntegerValue(this->value_ << other.value_);
+    return IntegerValue(this->value_ << other.value_);
 }
-IntegerValue* IntegerValue::operator>>(const IntegerValue& other) const {
+IntegerValue IntegerValue::operator>>(const IntegerValue& other) const {
     if (other.value_ < 0) throw std::runtime_error("Cannot right shift by negative amount");
-    return new IntegerValue(this->value_ >> other.value_);
-}
-IntegerValue* IntegerValue::operator=(const FloatValue& other) const {
-    return new IntegerValue(static_cast<std::int64_t>(other.value_));
+    return IntegerValue(this->value_ >> other.value_);
 }
 
 FloatValue::FloatValue(double value) noexcept : Value(Kind::KIND_FLOAT), value_(value) {}
 std::string FloatValue::repr() const { return std::to_string(value_); }
-FloatValue* FloatValue::operator+(const FloatValue& other) const {
-    return new FloatValue(this->value_ + other.value_);
+FloatValue FloatValue::operator+(const FloatValue& other) const {
+    return FloatValue(this->value_ + other.value_);
 }
-FloatValue* FloatValue::operator-(const FloatValue& other) const {
-    return new FloatValue(this->value_ - other.value_);
+FloatValue FloatValue::operator-(const FloatValue& other) const {
+    return FloatValue(this->value_ - other.value_);
 }
-FloatValue* FloatValue::operator-() const { return new FloatValue(-this->value_); }
-FloatValue* FloatValue::operator*(const FloatValue& other) const {
-    return new FloatValue(this->value_ * other.value_);
+FloatValue FloatValue::operator-() const { return FloatValue(-this->value_); }
+FloatValue FloatValue::operator*(const FloatValue& other) const {
+    return FloatValue(this->value_ * other.value_);
 }
-FloatValue* FloatValue::operator/(const FloatValue& other) const {
+FloatValue FloatValue::operator/(const FloatValue& other) const {
     if (other.value_ == 0.0) throw std::runtime_error("Division by zero");
-    return new FloatValue(this->value_ / other.value_);
+    return FloatValue(this->value_ / other.value_);
 }
-FloatValue* FloatValue::operator%(const FloatValue& other) const {
+FloatValue FloatValue::operator%(const FloatValue& other) const {
     if (other.value_ == 0.0) throw std::runtime_error("Division by zero");
-    return new FloatValue(std::fmod(this->value_, other.value_));
+    return FloatValue(std::fmod(this->value_, other.value_));
 }
-BooleanValue* FloatValue::operator==(const FloatValue& other) const {
-    return new BooleanValue(this->value_ == other.value_);
+BooleanValue FloatValue::operator==(const FloatValue& other) const {
+    return BooleanValue(this->value_ == other.value_);
 }
-BooleanValue* FloatValue::operator!=(const FloatValue& other) const {
-    return new BooleanValue(this->value_ != other.value_);
+BooleanValue FloatValue::operator!=(const FloatValue& other) const {
+    return BooleanValue(this->value_ != other.value_);
 }
-BooleanValue* FloatValue::operator<(const FloatValue& other) const {
-    return new BooleanValue(this->value_ < other.value_);
+BooleanValue FloatValue::operator<(const FloatValue& other) const {
+    return BooleanValue(this->value_ < other.value_);
 }
-BooleanValue* FloatValue::operator<=(const FloatValue& other) const {
-    return new BooleanValue(this->value_ <= other.value_);
+BooleanValue FloatValue::operator<=(const FloatValue& other) const {
+    return BooleanValue(this->value_ <= other.value_);
 }
-BooleanValue* FloatValue::operator>(const FloatValue& other) const {
-    return new BooleanValue(this->value_ > other.value_);
+BooleanValue FloatValue::operator>(const FloatValue& other) const {
+    return BooleanValue(this->value_ > other.value_);
 }
-BooleanValue* FloatValue::operator>=(const FloatValue& other) const {
-    return new BooleanValue(this->value_ >= other.value_);
-}
-FloatValue* FloatValue::operator=(const IntegerValue& other) const {
-    return new FloatValue(static_cast<double>(other.value_));
+BooleanValue FloatValue::operator>=(const FloatValue& other) const {
+    return BooleanValue(this->value_ >= other.value_);
 }
 
 StringValue::StringValue(std::string value) noexcept
     : Value(Kind::KIND_STRING), value_(std::move(value)) {}
 std::string StringValue::repr() const { return "\"" + this->value_ + "\""; }
-StringValue* StringValue::operator+(const StringValue& other) const {
-    return new StringValue(this->value_ + other.value_);
+StringValue StringValue::operator+(const StringValue& other) const {
+    return StringValue(this->value_ + other.value_);
 }
-StringValue* StringValue::operator*(const IntegerValue& other) const {
+StringValue StringValue::operator*(const IntegerValue& other) const {
     if (other.value_ <= 0) throw std::runtime_error("Can only multiply string by positive integer");
     std::string result;
     result.reserve(this->value_.size() * static_cast<std::uint64_t>(other.value_));
     for (uint64_t i = 0; i < static_cast<std::uint64_t>(other.value_); i++) {
         result += this->value_;
     }
-    return new StringValue(std::move(result));
+    return StringValue(std::move(result));
 }
-BooleanValue* StringValue::operator==(const StringValue& other) const {
-    return new BooleanValue(this->value_ == other.value_);
+BooleanValue StringValue::operator==(const StringValue& other) const {
+    return BooleanValue(this->value_ == other.value_);
 }
-BooleanValue* StringValue::operator!=(const StringValue& other) const {
-    return new BooleanValue(this->value_ != other.value_);
+BooleanValue StringValue::operator!=(const StringValue& other) const {
+    return BooleanValue(this->value_ != other.value_);
 }
 
 BooleanValue::BooleanValue(bool value) noexcept : Value(Kind::KIND_BOOLEAN), value_(value) {}
 std::string BooleanValue::repr() const { return this->value_ ? "true" : "false"; }
-BooleanValue* BooleanValue::operator==(const BooleanValue& other) const {
-    return new BooleanValue(this->value_ == other.value_);
+BooleanValue BooleanValue::operator==(const BooleanValue& other) const {
+    return BooleanValue(this->value_ == other.value_);
 }
-BooleanValue* BooleanValue::operator!=(const BooleanValue& other) const {
-    return new BooleanValue(this->value_ != other.value_);
+BooleanValue BooleanValue::operator!=(const BooleanValue& other) const {
+    return BooleanValue(this->value_ != other.value_);
 }
-BooleanValue* BooleanValue::operator and(const BooleanValue& other) const {
-    return new BooleanValue(this->value_ && other.value_);
+BooleanValue BooleanValue::operator and(const BooleanValue& other) const {
+    return BooleanValue(this->value_ && other.value_);
 }
-BooleanValue* BooleanValue::operator or(const BooleanValue& other) const {
-    return new BooleanValue(this->value_ || other.value_);
+BooleanValue BooleanValue::operator or(const BooleanValue& other) const {
+    return BooleanValue(this->value_ || other.value_);
 }
-BooleanValue* BooleanValue::operator not() const { return new BooleanValue(!this->value_); }
+BooleanValue BooleanValue::operator not() const { return BooleanValue(!this->value_); }
 
 std::string FunctionValue::repr() const {
     return std::format("<function at {:p}>", static_cast<const void*>(this));

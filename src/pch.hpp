@@ -119,6 +119,16 @@ private:
     template <bool IsConst>
     class IteratorImpl {
     private:
+        class Proxy {
+        private:
+            std::pair<const Key&, Value&> pair_;
+
+        public:
+            Proxy(const Key& key, Value& value) : pair_(key, value) {}
+            std::pair<const Key&, Value&>* operator->() { return &pair_; }
+        };
+
+    private:
         using KeyType = const Key;
         using ValueType = std::conditional_t<IsConst, const Value, Value>;
         KeyType* key_ptr_;
@@ -149,6 +159,7 @@ private:
         value_type operator*() const {
             return std::pair<KeyType, ValueType>{*key_ptr_, *value_ptr_};
         }
+        Proxy operator->() const { return Proxy(*key_ptr_, *value_ptr_); }
     };
 
 public:
@@ -160,6 +171,8 @@ private:
     std::vector<Value> values_;
 
 public:
+    FlatMap() noexcept = default;
+
     template <std::ranges::input_range R>
     FlatMap(std::from_range_t, R&& range) {
         std::vector<Key> unsorted_keys;
@@ -188,11 +201,11 @@ public:
         }
     }
     constexpr std::size_t size() const noexcept { return keys_.size(); }
-    void emplace(std::pair<Key, Value> pair) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), pair.first, Comp());
+    void insert(Key key, Value value) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
         std::size_t index = std::distance(keys_.begin(), it);
-        keys_.insert(it, std::move(pair.first));
-        values_.insert(values_.begin() + index, std::move(pair.second));
+        keys_.insert(it, std::move(key));
+        values_.insert(values_.begin() + index, std::move(value));
     }
     Value remove(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
@@ -221,6 +234,30 @@ public:
         }
         std::size_t index = std::distance(keys_.begin(), it);
         return const_iterator(&keys_[index], &values_[index]);
+    }
+    bool contains(const Key& key) const {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        return it != keys_.end() && *it == key;
+    }
+    Value& at(const Key& key) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        if (it == keys_.end() || *it != key) {
+            throw std::out_of_range("Key not found in FlatMap");
+        }
+        std::size_t index = std::distance(keys_.begin(), it);
+        return values_[index];
+    }
+    Value& operator[](const Key& key) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        if (it == keys_.end() || *it != key) {
+            std::size_t index = std::distance(keys_.begin(), it);
+            keys_.insert(it, key);
+            values_.insert(values_.begin() + index, Value{});
+            return values_[index];
+        } else {
+            std::size_t index = std::distance(keys_.begin(), it);
+            return values_[index];
+        }
     }
     iterator begin() noexcept { return iterator(keys_.data(), values_.data()); }
     iterator end() noexcept {

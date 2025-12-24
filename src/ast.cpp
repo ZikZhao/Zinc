@@ -9,16 +9,11 @@ Scope::Scope(std::string_view name, Scope& parent) noexcept : parent_(&parent), 
     if (name.empty()) {
         parent_->anonymous_children_.push_back(this);
     } else {
-        parent_->children_.emplace(name, this);
+        parent_->children_.insert(name, this);
     }
 }
-Scope::Scope(std::vector<std::pair<std::string_view, const ASTExpression*>> builtins) noexcept {
-    // for (const auto& [name, expr] : builtins) {
-    //     variables_.emplace(name, expr);
-    // }
-}
 void Scope::add_type(std::string_view identifier, const ASTTypeExpression* expr) {
-    types_.emplace(identifier, expr);
+    types_.insert(identifier, expr);
 }
 void Scope::add_variable(std::string_view identifier, EntityRef expr) {
     if (types_.contains(identifier)) {
@@ -26,7 +21,7 @@ void Scope::add_variable(std::string_view identifier, EntityRef expr) {
             "Variable '"s + std::string(identifier) + "' already declared as type"s
         );
     }
-    variables_.emplace(identifier, expr);
+    variables_.insert(identifier, expr);
 }
 
 TypeChecker::TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& type_factory) noexcept
@@ -46,20 +41,12 @@ void TypeChecker::exit() noexcept { current_ = current_->parent_; }
 EntityRef TypeChecker::resolve(std::string_view identifier) {
     return resolve_in(identifier, *current_);
 }
-TypeRef TypeChecker::type_of(std::string_view identifier) {
-    if (auto it_var = current_->variables_.find(identifier); it_var != current_->variables_.end()) {
-        return it_var->second;
-    }
-    if (auto it_type = current_->types_.find(identifier); it_type != current_->types_.end()) {
-        throw std::runtime_error(
-            "Identifier '"s + std::string(identifier) + "' is a type, not a variable"s
-        );
-    }
-    throw std::runtime_error("Unknown identifier: '"s + std::string(identifier) + "'"s);
+VarInfo TypeChecker::type_of(std::string_view identifier) {
+    return type_of_in(identifier, *current_);
 }
-EntityRef TypeChecker::resolve_in(std::string_view identifier, Scope& ctx) {
+EntityRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
     // Check cache
-    auto& record = cache_[std::pair(current_, identifier)];
+    auto& record = cache_[std::pair(&scope, identifier)];
     if (record.is_resolving) {
         if (record.result) {
             return record.result;
@@ -68,36 +55,53 @@ EntityRef TypeChecker::resolve_in(std::string_view identifier, Scope& ctx) {
     }
     // Cache miss; resolve
     record.is_resolving = true;
-    if (auto it_type = current_->types_.find(identifier); it_type != current_->types_.end()) {
-        return it_type->second->eval(*this);
+    if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
+        record.result = it_type->second->eval(*this);
+        return record.result;
     }
-    if (auto it_var = current_->variables_.find(identifier); it_var != current_->variables_.end()) {
+    if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
         if (it_var->second.is_type()) {
             throw std::runtime_error(
                 "Identifier '"s + std::string(identifier) + "' is a mutable variable"s
             );
         } else {
             // constant (it_var->second is the value stored)
-            return type_factory_.of(it_var->second);
+            record.result = type_factory_.of(it_var->second);
+            return record.result;
         }
     }
-    if (current_->parent_ != nullptr) {
-        return resolve_in(identifier, *current_->parent_);
+    if (scope.parent_ != nullptr) {
+        record.result = resolve_in(identifier, *scope.parent_);
+        return record.result;
     }
     throw std::runtime_error("Unknown type identifier: '"s + std::string(identifier) + "'");
 }
+VarInfo TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
+    if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
+        return VarInfo{it_var->second, it_var->second.is_type()};
+    }
+    if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
+        throw std::runtime_error(
+            "Identifier '"s + std::string(identifier) + "' is a type, not a variable"s
+        );
+    }
+    if (scope.parent_ != nullptr) {
+        return type_of_in(identifier, *scope.parent_);
+    }
+    throw std::runtime_error("Unknown identifier: '"s + std::string(identifier) + "'"s);
+}
 
 ASTNode::ASTNode(const Location& loc) noexcept : location_(loc) {}
-void ASTNode::collect_types(Scope& ctx, OpDispatcher& ops) {}
+void ASTNode::collect_types(Scope& scope, OpDispatcher& ops) {}
 void ASTNode::check_types(TypeChecker& checker) {}
 
 ASTRecursiveNode::ASTRecursiveNode(const Location& loc) noexcept : ASTNode(loc) {}
-void ASTRecursiveNode::collect_types(Scope& ctx, OpDispatcher& ops) {
+void ASTRecursiveNode::collect_types(Scope& scope, OpDispatcher& ops) {
     for (const auto& child : get_children()) {
         if (child == nullptr) {
             continue;
         }
-        child->collect_types(ctx, ops);
+        child->collect_types(scope, ops);
     }
 }
 void ASTRecursiveNode::check_types(TypeChecker& checker) {
@@ -118,8 +122,8 @@ std::generator<ASTNode*> ASTCodeBlock::get_children() const noexcept {
         co_yield stmt.get();
     }
 }
-void ASTCodeBlock::collect_types(Scope& ctx, OpDispatcher& ops) {
-    local_scope_ = std::make_unique<Scope>(name_, ctx);
+void ASTCodeBlock::collect_types(Scope& scope, OpDispatcher& ops) {
+    local_scope_ = std::make_unique<Scope>(name_, scope);
     for (auto& stmt : statements_) {
         stmt->collect_types(*local_scope_, ops);
     }
@@ -137,7 +141,7 @@ ASTExpression::ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
 ASTIdentifier::ASTIdentifier(const Location& loc, std::string_view name) noexcept
     : ASTExpression(loc), name_(name) {}
 EntityRef ASTIdentifier::eval(TypeChecker& checker) const { return checker.resolve(name_); }
-TypeRef ASTIdentifier::get_result_type(TypeChecker& checker) const {
+VarInfo ASTIdentifier::get_result_type(TypeChecker& checker) const {
     return checker.type_of(name_);
 }
 
@@ -177,7 +181,7 @@ EntityRef ASTFunctionType::eval(TypeChecker& checker) const {
         return checker.type_factory_.get<FunctionType>(return_type, param_types, variadic_type);
     }
 }
-TypeRef ASTFunctionType::get_result_type(TypeChecker& checker) const {
+VarInfo ASTFunctionType::get_result_type(TypeChecker& checker) const {
     throw std::runtime_error("Function types cannot be used as values"s);
 }
 
@@ -192,7 +196,7 @@ EntityRef ASTRecordType::eval(TypeChecker& checker) const {
     FlatMap<std::string_view, Type*> field_types(std::from_range, std::move(rng));
     return checker.type_factory_.get<RecordType>(field_types);
 }
-TypeRef ASTRecordType::get_result_type(TypeChecker& checker) const {
+VarInfo ASTRecordType::get_result_type(TypeChecker& checker) const {
     throw std::runtime_error("Record types cannot be used as values"s);
 }
 
@@ -200,21 +204,24 @@ ASTDeclaration::ASTDeclaration(
     const Location& loc,
     std::unique_ptr<ASTIdentifier> identifier,
     std::unique_ptr<ASTTypeExpression> type,
-    std::unique_ptr<ASTValueExpression> expr
+    std::unique_ptr<ASTValueExpression> expr,
+    bool is_mutable
 ) noexcept
     : ASTNode(loc),
       identifier_(std::move(identifier)),
       type_(std::move(type)),
-      expr_(std::move(expr)) {}
+      expr_(std::move(expr)),
+      is_mutable_(is_mutable) {}
 void ASTDeclaration::check_types(TypeChecker& checker) {
-    TypeRef inferred_type = expr_->get_result_type(checker);
+    VarInfo inferred_type = expr_->get_result_type(checker);
     TypeRef declared_type = type_->eval(checker);
     if (!declared_type) {
-        declared_type = inferred_type;
-    } else if (!declared_type.type()->assignable_from(*inferred_type.type())) {
+        declared_type = inferred_type.type_ref;
+    } else if (!declared_type.type()->assignable_from(*inferred_type.type_ref.type())) {
         throw std::runtime_error(
             "Type mismatch in declaration of '"s + std::string(identifier_->name_) +
-            "': expected " + declared_type->repr() + ", got " + inferred_type->repr()
+            "': expected " + declared_type->repr() + ", got " +
+            inferred_type.type_ref.type()->repr()
         );
     }
     checker.add_variable(identifier_->name_, declared_type);
@@ -230,8 +237,8 @@ ASTTypeAlias::ASTTypeAlias(
 ) noexcept
     : ASTNode(loc), identifier_(std::move(identifier)), type_(std::move(type)) {}
 
-void ASTTypeAlias::collect_types(Scope& ctx, OpDispatcher& ops) {
-    ctx.add_type(identifier_, type_.get());
+void ASTTypeAlias::collect_types(Scope& scope, OpDispatcher& ops) {
+    scope.add_type(identifier_, type_.get());
 }
 
 ASTIfStatement::ASTIfStatement(

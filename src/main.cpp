@@ -97,7 +97,8 @@ public:
             loc(ctx),
             StaticUniqueCast<ASTIdentifier>(transform(ctx->identifier_)),
             StaticUniqueCast<ASTTypeExpression>(transform(ctx->type_)),
-            StaticUniqueCast<ASTValueExpression>(transform(ctx->value_))
+            StaticUniqueCast<ASTValueExpression>(transform(ctx->value_)),
+            ctx->KW_MUT() != nullptr
         );
         return {};
     }

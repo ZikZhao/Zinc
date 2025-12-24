@@ -276,28 +276,27 @@ public:
     using Type = IntegerType;
 
 public:
-    const std::int64_t value_;
+    std::int64_t value_;
     IntegerValue(std::int64_t value) noexcept;
     std::string repr() const final;
-    IntegerValue* operator+(const IntegerValue& other) const;
-    IntegerValue* operator-(const IntegerValue& other) const;
-    IntegerValue* operator-() const;
-    IntegerValue* operator*(const IntegerValue& other) const;
-    IntegerValue* operator/(const IntegerValue& other) const;
-    IntegerValue* operator%(const IntegerValue& other) const;
-    BooleanValue* operator==(const IntegerValue& other) const;
-    BooleanValue* operator!=(const IntegerValue& other) const;
-    BooleanValue* operator<(const IntegerValue& other) const;
-    BooleanValue* operator<=(const IntegerValue& other) const;
-    BooleanValue* operator>(const IntegerValue& other) const;
-    BooleanValue* operator>=(const IntegerValue& other) const;
-    IntegerValue* operator&(const IntegerValue& other) const;
-    IntegerValue* operator|(const IntegerValue& other) const;
-    IntegerValue* operator^(const IntegerValue& other) const;
-    IntegerValue* operator~() const;
-    IntegerValue* operator<<(const IntegerValue& other) const;
-    IntegerValue* operator>>(const IntegerValue& other) const;
-    IntegerValue* operator=(const FloatValue& other) const;
+    IntegerValue operator+(const IntegerValue& other) const;
+    IntegerValue operator-(const IntegerValue& other) const;
+    IntegerValue operator-() const;
+    IntegerValue operator*(const IntegerValue& other) const;
+    IntegerValue operator/(const IntegerValue& other) const;
+    IntegerValue operator%(const IntegerValue& other) const;
+    BooleanValue operator==(const IntegerValue& other) const;
+    BooleanValue operator!=(const IntegerValue& other) const;
+    BooleanValue operator<(const IntegerValue& other) const;
+    BooleanValue operator<=(const IntegerValue& other) const;
+    BooleanValue operator>(const IntegerValue& other) const;
+    BooleanValue operator>=(const IntegerValue& other) const;
+    IntegerValue operator&(const IntegerValue& other) const;
+    IntegerValue operator|(const IntegerValue& other) const;
+    IntegerValue operator^(const IntegerValue& other) const;
+    IntegerValue operator~() const;
+    IntegerValue operator<<(const IntegerValue& other) const;
+    IntegerValue operator>>(const IntegerValue& other) const;
 };
 
 class FloatValue final : public Value {
@@ -306,22 +305,21 @@ public:
     using Type = FloatType;
 
 public:
-    const double value_;
+    double value_;
     FloatValue(double value) noexcept;
     std::string repr() const final;
-    FloatValue* operator+(const FloatValue& other) const;
-    FloatValue* operator-(const FloatValue& other) const;
-    FloatValue* operator-() const;
-    FloatValue* operator*(const FloatValue& other) const;
-    FloatValue* operator/(const FloatValue& other) const;
-    FloatValue* operator%(const FloatValue& other) const;
-    BooleanValue* operator==(const FloatValue& other) const;
-    BooleanValue* operator!=(const FloatValue& other) const;
-    BooleanValue* operator<(const FloatValue& other) const;
-    BooleanValue* operator<=(const FloatValue& other) const;
-    BooleanValue* operator>(const FloatValue& other) const;
-    BooleanValue* operator>=(const FloatValue& other) const;
-    FloatValue* operator=(const IntegerValue& other) const;
+    FloatValue operator+(const FloatValue& other) const;
+    FloatValue operator-(const FloatValue& other) const;
+    FloatValue operator-() const;
+    FloatValue operator*(const FloatValue& other) const;
+    FloatValue operator/(const FloatValue& other) const;
+    FloatValue operator%(const FloatValue& other) const;
+    BooleanValue operator==(const FloatValue& other) const;
+    BooleanValue operator!=(const FloatValue& other) const;
+    BooleanValue operator<(const FloatValue& other) const;
+    BooleanValue operator<=(const FloatValue& other) const;
+    BooleanValue operator>(const FloatValue& other) const;
+    BooleanValue operator>=(const FloatValue& other) const;
 };
 
 class StringValue final : public Value {
@@ -330,13 +328,13 @@ public:
     using Type = StringType;
 
 public:
-    const std::string value_;
+    std::string value_;
     StringValue(std::string value) noexcept;
     std::string repr() const final;
-    StringValue* operator+(const StringValue& other) const;
-    StringValue* operator*(const IntegerValue& other) const;
-    BooleanValue* operator==(const StringValue& other) const;
-    BooleanValue* operator!=(const StringValue& other) const;
+    StringValue operator+(const StringValue& other) const;
+    StringValue operator*(const IntegerValue& other) const;
+    BooleanValue operator==(const StringValue& other) const;
+    BooleanValue operator!=(const StringValue& other) const;
 };
 
 class BooleanValue final : public Value {
@@ -345,14 +343,14 @@ public:
     using Type = BooleanType;
 
 public:
-    const bool value_;
+    bool value_;
     BooleanValue(bool value) noexcept;
     std::string repr() const final;
-    BooleanValue* operator==(const BooleanValue& other) const;
-    BooleanValue* operator!=(const BooleanValue& other) const;
-    BooleanValue* operator and(const BooleanValue& other) const;
-    BooleanValue* operator or(const BooleanValue& other) const;
-    BooleanValue* operator not() const;
+    BooleanValue operator==(const BooleanValue& other) const;
+    BooleanValue operator!=(const BooleanValue& other) const;
+    BooleanValue operator&&(const BooleanValue& other) const;
+    BooleanValue operator||(const BooleanValue& other) const;
+    BooleanValue operator!() const;
 };
 
 class FunctionValue final : public Value {
@@ -397,6 +395,7 @@ public:
 };
 
 class EntityRef {
+    friend class IntrinsicOpTable;
     friend class TypeRegistry;
 
 public:
@@ -404,8 +403,6 @@ public:
     static ValueRef alloc_literal(std::string_view literal) {
         return ValueRef(Value::from_literal<V>(literal));
     }
-
-    static ValueRef alloc_value(std::function<Value*()> fn) { return ValueRef(fn()); }
 
 private:
     template <TypeClass T, typename... Args>
