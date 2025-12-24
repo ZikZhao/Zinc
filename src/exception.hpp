@@ -1,6 +1,8 @@
 #pragma once
 #include "pch.hpp"
 
+#include "source.hpp"
+
 class Exception : public std::runtime_error {
 public:
     Location location_;
@@ -18,7 +20,7 @@ public:
     ContinueException();
 };
 
-template<typename TargetType>
+template <typename TargetType>
 class ReturnException : public Exception {
 public:
     TargetType value_;

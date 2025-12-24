@@ -7,6 +7,7 @@
 #include "ast.hpp"
 #include "entity.hpp"
 #include "operations.hpp"
+#include "source.hpp"
 
 class ASTBuilder final : private StainlessBaseVisitor {
 private:

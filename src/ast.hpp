@@ -5,6 +5,7 @@
 
 #include "entity.hpp"
 #include "operations.hpp"
+#include "source.hpp"
 
 class ASTNode;
 class ASTExpression;
