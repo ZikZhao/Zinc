@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/src)
+set(TEST_DIR ${CMAKE_SOURCE_DIR}/test)
 
 # Set build type if not specified
 if(NOT CMAKE_BUILD_TYPE)
@@ -107,7 +108,7 @@ add_custom_target(clean-all
 
 # Symlink compile_commands.json to a fixed location
 if (CMAKE_EXPORT_COMPILE_COMMANDS)
-    set(BUILD_ROOT "${CMAKE_SOURCE_DIR}/build")
+    set(BUILD_ROOT "${CMAKE_SOURCE_DIR}/build-debug")
     file(MAKE_DIRECTORY "${BUILD_ROOT}")
     get_filename_component(REAL_BINARY_DIR "${CMAKE_BINARY_DIR}" ABSOLUTE)
     get_filename_component(REAL_BUILD_ROOT "${BUILD_ROOT}" ABSOLUTE)
@@ -121,3 +122,30 @@ if (CMAKE_EXPORT_COMPILE_COMMANDS)
         message(STATUS "Symlinked compile_commands.json to ${BUILD_ROOT}")
     endif()
 endif()
+
+# Unit tests
+enable_testing()
+
+find_package(GTest CONFIG REQUIRED)
+find_package(benchmark CONFIG REQUIRED)
+
+add_executable(unit_tests
+    ${TEST_DIR}/test_main.cpp
+    ${SOURCE_DIR}/object.cpp 
+    ${SOURCE_DIR}/exception.cpp
+    ${SOURCE_DIR}/ast.cpp
+)
+add_executable(benchmarks
+    ${TEST_DIR}/bench_main.cpp
+    ${SOURCE_DIR}/object.cpp 
+    ${SOURCE_DIR}/exception.cpp
+    ${SOURCE_DIR}/ast.cpp
+)
+
+target_link_libraries(unit_tests PRIVATE GTest::gtest_main antlr4_generated_lib)
+target_link_libraries(benchmarks PRIVATE benchmark::benchmark antlr4_generated_lib)
+target_precompile_headers(unit_tests PRIVATE ${PCH_HEADER})
+target_precompile_headers(benchmarks PRIVATE ${PCH_HEADER})
+
+include(GoogleTest)
+gtest_discover_tests(unit_tests)

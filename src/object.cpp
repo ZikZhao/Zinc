@@ -122,7 +122,7 @@ ComparableSpan<Type*> IntersectionType::combine(Type* left, Type* right) {
         assert(right->kind_ == Kind::Function);
         size++;
     }
-    ComparableSpan<Type*> buffer = GlobalMemory::allocate_array<Type*>(size);
+    ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
     std::size_t index = 0;
     if (left->kind_ == Kind::Intersection) {
         const IntersectionType& left_intersection = static_cast<const IntersectionType&>(*left);
@@ -186,7 +186,7 @@ ComparableSpan<Type*> UnionType::combine(Type* left, Type* right) {
     } else {
         size++;
     }
-    ComparableSpan<Type*> buffer = GlobalMemory::allocate_array<Type*>(size);
+    ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
     std::size_t index = 0;
     if (left->kind_ == Kind::Union) {
         const UnionType& left_union = static_cast<const UnionType&>(*left);

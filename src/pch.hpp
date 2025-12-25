@@ -43,14 +43,16 @@ inline constexpr bool TypeInTupleV = TypeInTuple<T, Tuple>::value;
 
 template <typename Derived, typename Base>
     requires(std::has_virtual_destructor_v<Base>)
-constexpr std::unique_ptr<Derived> StaticUniqueCast(std::unique_ptr<Base>&& ptr) {
+constexpr std::unique_ptr<Derived> static_unique_cast(std::unique_ptr<Base>&& ptr) {
     assert(dynamic_cast<Derived*>(ptr.get()) != nullptr);
     return std::unique_ptr<Derived>(static_cast<Derived*>(ptr.release()));
 }
 
 template <typename Derived, typename Base, typename Deleter>
     requires(!std::is_same_v<Deleter, std::default_delete<Base>>)
-constexpr std::unique_ptr<Derived, Deleter> StaticUniqueCast(std::unique_ptr<Base, Deleter>&& ptr) {
+constexpr std::unique_ptr<Derived, Deleter> static_unique_cast(
+    std::unique_ptr<Base, Deleter>&& ptr
+) {
     return std::unique_ptr<Derived, Deleter>(
         static_cast<Derived*>(ptr.release()), std::move(ptr.get_deleter())
     );
@@ -81,13 +83,13 @@ inline std::pmr::memory_resource* memory_resource() {
 };
 
 template <typename T, typename... Args>
-constexpr T* allocate(Args&&... args) {
+constexpr T* alloc(Args&&... args) {
     void* ptr = memory_resource()->allocate(sizeof(T), alignof(T));
     return new (ptr) T(std::forward<Args>(args)...);
 }
 
 template <typename T>
-constexpr ComparableSpan<T> allocate_array(std::size_t n) {
+constexpr ComparableSpan<T> alloc_array(std::size_t n) {
     void* ptr = memory_resource()->allocate(n * sizeof(T), alignof(T));
     if constexpr (std::is_trivially_default_constructible_v<T>) {
         return ComparableSpan<T>(static_cast<T*>(ptr), n);
@@ -101,7 +103,7 @@ constexpr ComparableSpan<T> allocate_array(std::size_t n) {
 template <typename T, std::ranges::input_range R>
 constexpr ComparableSpan<T> collect_range(R&& range) {
     if constexpr (std::ranges::sized_range<R>) {
-        ComparableSpan<T> span = allocate_array<T>(std::ranges::size(range));
+        ComparableSpan<T> span = alloc_array<T>(std::ranges::size(range));
         std::uninitialized_copy(std::ranges::begin(range), std::ranges::end(range), span.data());
         return span;
     } else {
@@ -109,7 +111,7 @@ constexpr ComparableSpan<T> collect_range(R&& range) {
         for (auto&& item : range) {
             temp.push_back(std::forward<decltype(item)>(item));
         }
-        ComparableSpan<T> span = allocate_array<T>(temp.size());
+        ComparableSpan<T> span = alloc_array<T>(temp.size());
         std::uninitialized_copy(temp.begin(), temp.end(), span.data());
         return span;
     }
@@ -122,18 +124,20 @@ private:
     template <bool IsConst>
     class IteratorImpl {
     private:
-        class Proxy {
-        private:
-            std::pair<const Key&, Value&> pair_;
-
-        public:
-            Proxy(const Key& key, Value& value) : pair_(key, value) {}
-            std::pair<const Key&, Value&>* operator->() { return &pair_; }
-        };
-
     private:
         using KeyType = const Key;
         using ValueType = std::conditional_t<IsConst, const Value, Value>;
+
+        class Proxy {
+        private:
+            const std::pair<KeyType&, ValueType&> pair_;
+
+        public:
+            Proxy(KeyType& key, ValueType& value) : pair_(key, value) {}
+            const std::pair<KeyType&, ValueType&>* operator->() { return &pair_; }
+        };
+
+    private:
         KeyType* key_ptr_;
         ValueType* value_ptr_;
 
@@ -162,7 +166,7 @@ private:
         value_type operator*() const {
             return std::pair<KeyType, ValueType>{*key_ptr_, *value_ptr_};
         }
-        Proxy operator->() const { return Proxy(*key_ptr_, *value_ptr_); }
+        Proxy operator->() { return Proxy(*key_ptr_, *value_ptr_); }
     };
 
 public:
@@ -191,7 +195,7 @@ public:
         std::vector<std::size_t> indices(unsorted_keys.size());
         std::ranges::iota(indices.begin(), indices.end(), 0);
         std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
-            return Comp()(unsorted_keys[a], unsorted_keys[b]);
+            return Comp{}(unsorted_keys[a], unsorted_keys[b]);
         });
         std::unique(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
             return unsorted_keys[a] == unsorted_keys[b];
@@ -205,13 +209,13 @@ public:
     }
     constexpr std::size_t size() const noexcept { return keys_.size(); }
     void insert(Key key, Value value) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         std::size_t index = std::distance(keys_.begin(), it);
         keys_.insert(it, std::move(key));
         values_.insert(values_.begin() + index, std::move(value));
     }
     Value remove(const Key& key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it != keys_.end() && *it == key) {
             std::size_t index = std::distance(keys_.begin(), it);
             keys_.erase(it);
@@ -223,7 +227,7 @@ public:
         }
     }
     iterator find(const Key& key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || *it != key) {
             return this->end();
         }
@@ -231,7 +235,7 @@ public:
         return iterator(&keys_[index], &values_[index]);
     }
     const_iterator find(const Key& key) const {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || *it != key) {
             return this->end();
         }
@@ -239,11 +243,19 @@ public:
         return const_iterator(&keys_[index], &values_[index]);
     }
     bool contains(const Key& key) const {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         return it != keys_.end() && *it == key;
     }
     Value& at(const Key& key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
+        if (it == keys_.end() || *it != key) {
+            throw std::out_of_range("Key not found in FlatMap");
+        }
+        std::size_t index = std::distance(keys_.begin(), it);
+        return values_[index];
+    }
+    const Value& at(const Key& key) const {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || *it != key) {
             throw std::out_of_range("Key not found in FlatMap");
         }
@@ -251,7 +263,7 @@ public:
         return values_[index];
     }
     Value& operator[](const Key& key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || *it != key) {
             std::size_t index = std::distance(keys_.begin(), it);
             keys_.insert(it, key);
@@ -287,7 +299,7 @@ private:
 
 public:
     Key& try_emplace(Key key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp());
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || *it != key) {
             return *keys_.emplace(it, std::move(key));
         }

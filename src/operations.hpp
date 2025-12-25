@@ -164,7 +164,7 @@ template <typename Functor = void>
 struct OperateAndAssign {
     static constexpr OperatorCode opcode = Functor::opcode;
     template <typename Left, typename Right>
-        requires requires { Functor()(std::declval<Left&>(), std::declval<const Right&>()); }
+        requires requires { Functor{}(std::declval<Left&>(), std::declval<const Right&>()); }
     auto operator()(Left& left, const Right& right) const {
         Functor func;
         using ResultType = std::remove_pointer_t<decltype(func(left, right))>;
@@ -289,7 +289,7 @@ private:
                 decltype(Op{}(std::declval<Left&>(), std::declval<Right&>()))::kind,
                 [](ValueRef left, ValueRef right) -> ValueRef {
                     auto result = Op{}(static_cast<Left&>(*left), static_cast<Right&>(*right));
-                    auto boxed = GlobalMemory::allocate<decltype(result)>(std::move(result));
+                    auto boxed = GlobalMemory::alloc<decltype(result)>(std::move(result));
                     return ValueRef(boxed);
                 },
             };
@@ -368,7 +368,7 @@ class OpDispatcher final : private IntrinsicOpTable {
 private:
     using CustomTableKey = std::tuple<OperatorCode, Type*, Type*>;
     using CustomTableValue = std::pair<TypeRef, OperatorFn>;
-    std::map<CustomTableKey, CustomTableValue> custom_table_;
+    FlatMap<CustomTableKey, CustomTableValue> custom_table_;
 
 public:
     OpDispatcher(TypeRegistry& type_factory) : IntrinsicOpTable(type_factory), custom_table_() {}

@@ -136,7 +136,7 @@ class ASTConstant final : public ASTExpression {
 public:
     ValueRef value_;
     ASTConstant(const Location& loc, std::string_view str)
-        : ASTExpression(loc), value_(ValueRef::alloc_literal<V>(str)) {}
+        : ASTExpression(loc), value_(ValueRef::make_literal<V>(str)) {}
     ObjectRef eval(TypeChecker& checker) const final { return value_; }
     ExprResult get_result_type(TypeChecker& checker) const final {
         return {checker.type_registry_.get_kind(value_->kind_), false};

@@ -11,7 +11,7 @@ struct Location {
 
 class SourceManager {
 public:
-    std::map<std::string, std::string> files_;
+    FlatMap<std::string, std::string> files_;
     std::vector<std::string> file_order_;
 
 public:

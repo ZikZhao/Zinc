@@ -407,7 +407,7 @@ class Reference {
 
 public:
     template <typename V, typename = std::enable_if_t<std::is_base_of_v<Value, V>>>
-    static Reference alloc_literal(std::string_view literal) {
+    static Reference make_literal(std::string_view literal) {
         return Reference(Value::from_literal<V>(literal));
     }
 
@@ -416,8 +416,8 @@ private:
         TypeClass U,
         typename... Args,
         typename = std::enable_if_t<std::is_base_of_v<Type, U>>>
-    static Reference alloc(Args&&... args) {
-        return Reference(GlobalMemory::allocate<U>(std::forward<decltype(args)>(args)...));
+    static Reference make(Args&&... args) {
+        return Reference(GlobalMemory::alloc<U>(std::forward<decltype(args)>(args)...));
     }
 
 private:
@@ -550,7 +550,7 @@ public:
             return get_cached<UnionType>(union_types_, std::forward<decltype(args)>(args)...);
         } else if constexpr (std::is_same_v<T, ClassType>) {
             // classes with same definition are distinct types
-            return TypeRef::alloc<T>(std::forward<decltype(args)>(args)...);
+            return TypeRef::make<T>(std::forward<decltype(args)>(args)...);
         } else {
             static_assert(false, "Unknown type for TypeRegistry::get");
             // TODO: handle other types
