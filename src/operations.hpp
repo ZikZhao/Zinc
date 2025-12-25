@@ -288,9 +288,7 @@ private:
             return TableValue{
                 decltype(Op{}(std::declval<Left&>(), std::declval<Right&>()))::kind,
                 [](ValueRef left, ValueRef right) -> ValueRef {
-                    auto result = Op{}(
-                        static_cast<Left&>(*left.value()), static_cast<Right&>(*right.value())
-                    );
+                    auto result = Op{}(static_cast<Left&>(*left), static_cast<Right&>(*right));
                     auto boxed = GlobalMemory::allocate<decltype(result)>(std::move(result));
                     return ValueRef(boxed);
                 },
@@ -318,32 +316,30 @@ private:
     }
 
 protected:
-    TypeRegistry& type_factory_;
+    TypeRegistry& type_registry_;
 
 public:
-    constexpr IntrinsicOpTable(TypeRegistry& type_factory) : type_factory_(type_factory) {}
+    constexpr IntrinsicOpTable(TypeRegistry& type_factory) : type_registry_(type_factory) {}
 
     constexpr ObjectRef eval_op(OperatorCode opcode, ObjectRef left, ObjectRef right = {}) const {
         if (left.is_type() && right.is_type()) {
-            return eval_type_op(opcode, left, right);
+            return eval_type_op(opcode, left.as_type(), right.as_type());
         } else if (left.is_value() && right.is_value()) {
-            return eval_value_op(opcode, left, right);
+            return eval_value_op(opcode, left.as_value(), right.as_value());
         } else {
             return eval_type_value_op(opcode, left, right);
         }
     }
 
     TypeRef get_result_type(OperatorCode opcode, TypeRef left_type, TypeRef right_type) const {
-        std::cout << "Getting result type for opcode " << static_cast<std::size_t>(opcode)
-                  << " with left type " << left_type->repr();
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left_type->kind_)]
                                                    [static_cast<std::size_t>(right_type->kind_)];
-        return type_factory_.get_kind(value.first);
+        return type_registry_.get_kind(value.first);
     }
 
 private:
-    ValueRef eval_value_op(OperatorCode opcode, ObjectRef left, ObjectRef right) const {
+    ValueRef eval_value_op(OperatorCode opcode, ValueRef left, ValueRef right) const {
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left->kind_)]
                                                    [static_cast<std::size_t>(right->kind_)];
@@ -351,12 +347,11 @@ private:
     }
 
     TypeRef eval_type_op(OperatorCode opcode, TypeRef left, TypeRef right) const {
-        // type and type
         switch (opcode) {
         case OperatorCode::OPERATOR_BITWISE_AND:
-            return type_factory_.get<IntersectionType>(left.type(), right.type());
+            return type_registry_.get<IntersectionType>(left, right);
         case OperatorCode::OPERATOR_BITWISE_OR:
-            return type_factory_.get<UnionType>(left.type(), right.type());
+            return type_registry_.get<UnionType>(left, right);
         default:
             assert(false && "Unsupported operation on types");
             std::unreachable();
@@ -385,21 +380,25 @@ public:
         TypeRef result_type,
         OperatorFn func
     ) {
-        custom_table_[{opcode, left_type.type(), right_type.type()}] = {result_type, func};
+        custom_table_[{opcode, left_type, right_type}] = {result_type, func};
     }
 
     ObjectRef eval_op(OperatorCode opcode, ObjectRef left, ObjectRef right = {}) const {
         bool both_types = left.is_type() && right.is_type();
         bool both_primitive_values = left.is_value() && right.is_value() &&
-                                     left.value()->kind_ < Kind::NonCompositeSize &&
-                                     right.value()->kind_ < Kind::NonCompositeSize;
+                                     left.as_value()->kind_ < Kind::NonCompositeSize &&
+                                     right.as_value()->kind_ < Kind::NonCompositeSize;
         if (both_types || both_primitive_values) {
             return IntrinsicOpTable::eval_op(opcode, left, right);
         }
         // operation on values only
-        auto it = custom_table_.find({opcode, left.type(), right.type()});
+        ValueRef left_value = left.as_value();
+        ValueRef right_value = right.as_value();
+        auto it = custom_table_.find(
+            {opcode, type_registry_.of(left_value), type_registry_.of(right_value)}
+        );
         if (it != custom_table_.end()) {
-            return it->second.second(left, right);
+            return it->second.second(left_value, right_value);
         } else {
             throw std::runtime_error("Operation not defined for given types");
         }
@@ -410,7 +409,7 @@ public:
             (right_type ? right_type->kind_ < Kind::NonCompositeSize : true)) {
             return IntrinsicOpTable::get_result_type(opcode, left_type, right_type);
         }
-        auto it = custom_table_.find({opcode, left_type.type(), right_type.type()});
+        auto it = custom_table_.find({opcode, left_type, right_type});
         if (it != custom_table_.end()) {
             return (*it).second.first;
         } else {

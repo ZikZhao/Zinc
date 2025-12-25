@@ -59,18 +59,21 @@ class UnionType;
 
 template <typename T>
 concept TypeClass = std::derived_from<T, Type>;
-template <typename T>
-concept ValueClass = std::derived_from<T, Value>;
+template <typename V>
+concept ValueClass = std::derived_from<V, Value>;
 
 // using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
 
-class ObjectRef;
-using ValueRef = ObjectRef;
-using TypeRef = ObjectRef;
+template <typename U>
+class Reference;
+using ObjectRef = Reference<Object>;
+using TypeRef = Reference<Type>;
+using ValueRef = Reference<Value>;
 
 class Object {
-    friend class ObjectRef;
+    template <typename>
+    friend class Reference;
 
 private:
     mutable std::int32_t ref_count_;
@@ -218,7 +221,7 @@ public:
 };
 
 class Value : public Object {
-    friend class ObjectRef;
+    friend ValueRef;
 
 private:
     template <ValueClass V>
@@ -395,43 +398,101 @@ public:
     Value* operator[](const Slice& indices) const;
 };
 
-class ObjectRef {
+template <typename T>
+class Reference {
+    template <typename>
+    friend class Reference;
     friend class IntrinsicOpTable;
     friend class TypeRegistry;
 
 public:
-    template <ValueClass V>
-    static ValueRef alloc_literal(std::string_view literal) {
-        return ValueRef(Value::from_literal<V>(literal));
+    template <typename V, typename = std::enable_if_t<std::is_base_of_v<Value, V>>>
+    static Reference alloc_literal(std::string_view literal) {
+        return Reference(Value::from_literal<V>(literal));
     }
 
 private:
-    template <TypeClass T, typename... Args>
-    static TypeRef alloc(Args&&... args) {
-        return TypeRef(GlobalMemory::allocate<T>(std::forward<decltype(args)>(args)...));
+    template <
+        TypeClass U,
+        typename... Args,
+        typename = std::enable_if_t<std::is_base_of_v<Type, U>>>
+    static Reference alloc(Args&&... args) {
+        return Reference(GlobalMemory::allocate<U>(std::forward<decltype(args)>(args)...));
     }
 
 private:
-    Object* ptr_;
+    T* ptr_;
 
 public:
-    ObjectRef() noexcept = default;
-    ObjectRef(const ObjectRef& other) noexcept;
-    ObjectRef(ObjectRef&& other) noexcept;
-    ~ObjectRef() noexcept;
-    ObjectRef& operator=(ObjectRef other) noexcept;
-    operator bool() const noexcept;
-    Object& operator*() const noexcept;
-    Object* operator->() const noexcept;
-    bool is_type() const noexcept { return ptr_ ? ptr_->is_type() : true; }
-    bool is_value() const noexcept { return ptr_ ? !ptr_->is_type() : true; }
-    Value* value() const noexcept;
-    Type* type() const noexcept;
+    Reference() noexcept = default;
+    Reference(const Reference& other) noexcept : ptr_(other.ptr_) { retain(); }
+    template <typename U>
+        requires std::is_base_of_v<T, U>
+    Reference(const Reference<U>& other) noexcept : ptr_(other.ptr_) {
+        retain();
+    }
+    Reference(Reference&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
+    template <typename U>
+        requires std::is_base_of_v<T, U>
+    Reference(Reference<U>&& other) noexcept : ptr_(other.ptr_) {
+        other.ptr_ = nullptr;
+    }
+    ~Reference() noexcept { release(); }
+    Reference& operator=(Reference other) noexcept {
+        std::swap(ptr_, other.ptr_);
+        return *this;
+    }
+    operator bool() const noexcept { return ptr_ != nullptr; }
+    T& operator*() const noexcept { return *ptr_; }
+    T* operator->() const noexcept { return ptr_; }
+
+    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Object>>>
+    bool is_type() const noexcept {
+        assert(ptr_);
+        return static_cast<Object*>(ptr_)->is_type();
+    }
+
+    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Object>>>
+    bool is_value() const noexcept {
+        assert(ptr_);
+        return !static_cast<Object*>(ptr_)->is_type();
+    }
+
+    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Object>>>
+    Reference<Type> as_type() const noexcept {
+        return Reference<Type>(static_cast<Type*>((ptr_ && ptr_->is_type()) ? ptr_ : nullptr));
+    }
+
+    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Object>>>
+    Reference<Value> as_value() const noexcept {
+        return Reference<Value>(static_cast<Value*>((ptr_ && !ptr_->is_type()) ? ptr_ : nullptr));
+    }
+
+    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Type>>>
+    operator Type*() const noexcept {
+        return ptr_;
+    }
+
+    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Value>>>
+    operator Value*() const noexcept {
+        return ptr_;
+    }
 
 private:
-    explicit ObjectRef(Object* ptr) noexcept;
-    void retain() noexcept;
-    void release() noexcept;
+    explicit Reference(T* ptr) noexcept : ptr_(ptr) { retain(); }
+    void retain() noexcept {
+        if (ptr_) {
+            ptr_->ref_count_++;
+        }
+    }
+    void release() noexcept {
+        if (ptr_) {
+            ptr_->ref_count_--;
+            if (ptr_->ref_count_ == 0) {
+                delete ptr_;
+            }
+        }
+    }
 };
 
 class TypeRegistry {
@@ -451,7 +512,7 @@ private:
 
 public:
     TypeRef of(ValueRef value) {
-        assert(value && value.is_value());
+        assert(value);
         switch (value->kind_) {
         case Kind::Null:
             return TypeRef(&any_type_instance_);
@@ -464,9 +525,9 @@ public:
         case Kind::Boolean:
             return TypeRef(&boolean_type_instance_);
         case Kind::Function:
-            return TypeRef(static_cast<FunctionValue*>(value.value())->type_);
+            return TypeRef(static_cast<FunctionValue&>(*value).type_);
         case Kind::Instance:
-            return TypeRef(static_cast<InstanceValue*>(value.value())->cls_);
+            return TypeRef(static_cast<InstanceValue&>(*value).cls_);
             // TODO: handle other kinds
         }
     }

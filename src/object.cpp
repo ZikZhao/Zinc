@@ -393,36 +393,3 @@ Value* FunctionValue::operator()(const std::vector<Value*>& args) const {
 }
 
 InstanceValue::InstanceValue(ClassType* cls) noexcept : Value(Kind::Instance), cls_(cls) {}
-
-ObjectRef::ObjectRef(const ObjectRef& other) noexcept : ptr_(other.ptr_) { retain(); }
-ObjectRef::ObjectRef(ObjectRef&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
-ObjectRef::~ObjectRef() noexcept { release(); }
-ObjectRef& ObjectRef::operator=(ObjectRef other) noexcept {
-    std::swap(ptr_, other.ptr_);
-    return *this;
-}
-ObjectRef::operator bool() const noexcept { return ptr_ != nullptr; }
-Object& ObjectRef::operator*() const noexcept { return *ptr_; }
-Object* ObjectRef::operator->() const noexcept { return ptr_; }
-Value* ObjectRef::value() const noexcept {
-    assert(ptr_ && !ptr_->is_type());
-    return static_cast<Value*>(ptr_);
-}
-Type* ObjectRef::type() const noexcept {
-    assert(ptr_ && ptr_->is_type());
-    return static_cast<Type*>(ptr_);
-}
-ObjectRef::ObjectRef(Object* ptr) noexcept : ptr_(ptr) { retain(); }
-void ObjectRef::retain() noexcept {
-    if (ptr_) {
-        ptr_->ref_count_++;
-    }
-}
-void ObjectRef::release() noexcept {
-    if (ptr_) {
-        ptr_->ref_count_--;
-        if (ptr_->ref_count_ == 0) {
-            delete ptr_;
-        }
-    }
-}

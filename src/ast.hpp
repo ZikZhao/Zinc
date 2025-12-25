@@ -74,7 +74,7 @@ private:
 
 public:
     const OpDispatcher& ops_;
-    TypeRegistry& type_factory_;
+    TypeRegistry& type_registry_;
 
 public:
     TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& type_factory) noexcept;
@@ -139,7 +139,7 @@ public:
         : ASTExpression(loc), value_(ValueRef::alloc_literal<V>(str)) {}
     ObjectRef eval(TypeChecker& checker) const final { return value_; }
     ExprResult get_result_type(TypeChecker& checker) const final {
-        return {checker.type_factory_.get_kind(value_->kind_), false};
+        return {checker.type_registry_.get_kind(value_->kind_), false};
     }
 };
 
@@ -225,10 +225,10 @@ public:
         if (left_type.is_rvalue) {
             throw std::runtime_error("Left-hand side of assignment must be an lvalue"s);
         }
-        if (!left_type.type_ref.type()->assignable_from(*right_type.type_ref.type())) {
+        if (!left_type.type_ref->assignable_from(*right_type.type_ref)) {
             throw std::runtime_error(
-                "Type mismatch in assignment: cannot assign "s +
-                right_type.type_ref.type()->repr() + " to " + left_type.type_ref.type()->repr()
+                "Type mismatch in assignment: cannot assign "s + right_type.type_ref->repr() +
+                " to " + left_type.type_ref->repr()
             );
         }
         return {left_type.type_ref, true, false};
@@ -300,7 +300,7 @@ template <TypeClass T>
 class ASTPrimitiveType final : public ASTTypeExpression {
 public:
     ASTPrimitiveType(const Location& loc) noexcept : ASTTypeExpression(loc) {}
-    ObjectRef eval(TypeChecker& checker) const final { return checker.type_factory_.get<T>(); }
+    ObjectRef eval(TypeChecker& checker) const final { return checker.type_registry_.get<T>(); }
     ExprResult get_result_type(TypeChecker& checker) const final {
         throw std::logic_error("Type expressions do not have result types");
     }
