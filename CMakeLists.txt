@@ -108,7 +108,7 @@ add_custom_target(clean-all
 
 # Symlink compile_commands.json to a fixed location
 if (CMAKE_EXPORT_COMPILE_COMMANDS)
-    set(BUILD_ROOT "${CMAKE_SOURCE_DIR}/build-debug")
+    set(BUILD_ROOT "${CMAKE_SOURCE_DIR}/build")
     file(MAKE_DIRECTORY "${BUILD_ROOT}")
     get_filename_component(REAL_BINARY_DIR "${CMAKE_BINARY_DIR}" ABSOLUTE)
     get_filename_component(REAL_BUILD_ROOT "${BUILD_ROOT}" ABSOLUTE)
@@ -142,8 +142,10 @@ add_executable(benchmarks
     ${SOURCE_DIR}/ast.cpp
 )
 
-target_link_libraries(unit_tests PRIVATE GTest::gtest_main antlr4_generated_lib)
-target_link_libraries(benchmarks PRIVATE benchmark::benchmark antlr4_generated_lib)
+target_link_libraries(unit_tests PRIVATE GTest::gtest_main antlr4_generated_lib antlr4_static)
+target_link_libraries(benchmarks PRIVATE benchmark::benchmark antlr4_generated_lib antlr4_static)
+target_include_directories(unit_tests PRIVATE ${ANTLR4_OUTPUT_DIR})
+target_include_directories(benchmarks PRIVATE ${ANTLR4_OUTPUT_DIR})
 target_precompile_headers(unit_tests PRIVATE ${PCH_HEADER})
 target_precompile_headers(benchmarks PRIVATE ${PCH_HEADER})
 

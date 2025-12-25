@@ -24,8 +24,8 @@ void Scope::add_variable(std::string_view identifier, ObjectRef expr) {
     variables_.insert(identifier, expr);
 }
 
-TypeChecker::TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& type_factory) noexcept
-    : current_scope_(&root), ops_(ops), type_registry_(type_factory) {}
+TypeChecker::TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& types) noexcept
+    : current_scope_(&root), ops_(ops), types_(types) {}
 void TypeChecker::add_variable(std::string_view identifier, ObjectRef expr) {
     current_scope_->add_variable(identifier, expr);
 }
@@ -66,7 +66,7 @@ ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
             );
         } else {
             // constant (it_var->second is the value stored)
-            record.result = type_registry_.of(it_var->second.as_value());
+            record.result = types_.of(it_var->second.as_value());
             return record.result;
         }
     }
@@ -79,7 +79,7 @@ ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
 ExprResult TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
         TypeRef type_ref = it_var->second.is_type() ? it_var->second.as_type()
-                                                    : type_registry_.of(it_var->second.as_value());
+                                                    : types_.of(it_var->second.as_value());
         return ExprResult{type_ref, it_var->second.is_type()};
     }
     if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
@@ -186,7 +186,7 @@ ObjectRef ASTFunctionType::eval(TypeChecker& checker) const {
                 throw std::runtime_error("Function variadic type cannot be a value"s);
             }
         }
-        return checker.type_registry_.get<FunctionType>(return_type, param_types, variadic_type);
+        return checker.types_.get<FunctionType>(return_type, param_types, variadic_type);
     }
 
     throw std::runtime_error("Function return type cannot be a value"s);
@@ -210,7 +210,7 @@ ObjectRef ASTRecordType::eval(TypeChecker& checker) const {
                    );
                });
     FlatMap<std::string_view, Type*> field_types(std::from_range, std::move(rng));
-    return checker.type_registry_.get<RecordType>(field_types);
+    return checker.types_.get<RecordType>(field_types);
 }
 ExprResult ASTRecordType::get_result_type(TypeChecker& checker) const {
     throw std::runtime_error("Record types cannot be used as values"s);
@@ -229,18 +229,41 @@ ASTDeclaration::ASTDeclaration(
       expr_(std::move(expr)),
       is_mutable_(is_mutable) {}
 void ASTDeclaration::check_types(TypeChecker& checker) {
-    ExprResult inferred_type = expr_->get_result_type(checker);
-    TypeRef declared_type;
-    if (!type_) {
-        declared_type = inferred_type.type_ref;
-    } else if (declared_type = type_->eval(checker).as_type();
-               !declared_type || !declared_type->assignable_from(*inferred_type.type_ref)) {
-        throw std::runtime_error(
-            "Type mismatch in declaration of '"s + std::string(identifier_->name_) +
-            "': expected " + declared_type->repr() + ", got " + inferred_type.type_ref->repr()
-        );
+    if (is_mutable_) {
+        ExprResult inferred_type = expr_->get_result_type(checker);
+        TypeRef declared_type = get_declared_type(checker, inferred_type.type_ref);
+        checker.add_variable(identifier_->name_, declared_type);
+    } else {
+        ObjectRef value = expr_->eval(checker);
+        if (value.is_type()) {
+            throw std::runtime_error(
+                "Cannot declare constant variable '"s + std::string(identifier_->name_) +
+                "' with a type as its value"s
+            );
+        }
+        std::ignore = get_declared_type(checker, checker.types_.of(value.as_value()));
+        checker.add_variable(identifier_->name_, value);
     }
-    checker.add_variable(identifier_->name_, declared_type);
+}
+TypeRef ASTDeclaration::get_declared_type(TypeChecker& checker, TypeRef inferred_type) const {
+    if (type_) {
+        TypeRef declared_type = type_->eval(checker).as_type();
+        if (!declared_type) {
+            throw std::runtime_error(
+                "Declared type of variable '"s + std::string(identifier_->name_) +
+                "' cannot be a value"s
+            );
+        }
+        if (!declared_type->assignable_from(*inferred_type)) {
+            throw std::runtime_error(
+                "Type mismatch in declaration of '"s + std::string(identifier_->name_) +
+                "': expected " + declared_type->repr() + ", got " + inferred_type->repr()
+            );
+        }
+        return declared_type;
+    } else {
+        return inferred_type;
+    }
 }
 
 ASTFieldDeclaration::ASTFieldDeclaration(

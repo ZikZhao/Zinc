@@ -74,10 +74,10 @@ private:
 
 public:
     const OpDispatcher& ops_;
-    TypeRegistry& type_registry_;
+    TypeRegistry& types_;
 
 public:
-    TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& type_factory) noexcept;
+    TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& types) noexcept;
     void add_variable(std::string_view identifier, ObjectRef expr);
     void enter(const ASTCodeBlock* child) noexcept;
     void exit() noexcept;
@@ -114,9 +114,7 @@ public:
     std::string_view name_;
     ASTCodeBlock(const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements) noexcept;
     ASTCodeBlock(
-        const Location& loc,
-        const std::string& name,
-        std::vector<std::unique_ptr<ASTNode>> statements
+        const Location& loc, std::string_view name, std::vector<std::unique_ptr<ASTNode>> statements
     ) noexcept;
     std::generator<ASTNode*> get_children() const noexcept final;
     void collect_types(Scope& scope, OpDispatcher& ops) final;
@@ -139,7 +137,7 @@ public:
         : ASTExpression(loc), value_(ValueRef::make_literal<V>(str)) {}
     ObjectRef eval(TypeChecker& checker) const final { return value_; }
     ExprResult get_result_type(TypeChecker& checker) const final {
-        return {checker.type_registry_.get_kind(value_->kind_), false};
+        return {checker.types_.get_kind(value_->kind_), false};
     }
 };
 
@@ -300,7 +298,7 @@ template <TypeClass T>
 class ASTPrimitiveType final : public ASTTypeExpression {
 public:
     ASTPrimitiveType(const Location& loc) noexcept : ASTTypeExpression(loc) {}
-    ObjectRef eval(TypeChecker& checker) const final { return checker.type_registry_.get<T>(); }
+    ObjectRef eval(TypeChecker& checker) const final { return checker.types_.get<T>(); }
     ExprResult get_result_type(TypeChecker& checker) const final {
         throw std::logic_error("Type expressions do not have result types");
     }
@@ -352,6 +350,7 @@ public:
     ) noexcept;
     ~ASTDeclaration() noexcept final = default;
     void check_types(TypeChecker& checker) final;
+    TypeRef get_declared_type(TypeChecker& checker, TypeRef inferred_type) const;
 };
 
 class ASTFieldDeclaration final : public ASTNode {

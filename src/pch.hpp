@@ -43,16 +43,14 @@ inline constexpr bool TypeInTupleV = TypeInTuple<T, Tuple>::value;
 
 template <typename Derived, typename Base>
     requires(std::has_virtual_destructor_v<Base>)
-constexpr std::unique_ptr<Derived> static_unique_cast(std::unique_ptr<Base>&& ptr) {
-    assert(dynamic_cast<Derived*>(ptr.get()) != nullptr);
+constexpr std::unique_ptr<Derived> static_unique_cast(std::unique_ptr<Base> ptr) {
+    assert(ptr ? dynamic_cast<Derived*>(ptr.get()) != nullptr : true);
     return std::unique_ptr<Derived>(static_cast<Derived*>(ptr.release()));
 }
 
 template <typename Derived, typename Base, typename Deleter>
     requires(!std::is_same_v<Deleter, std::default_delete<Base>>)
-constexpr std::unique_ptr<Derived, Deleter> static_unique_cast(
-    std::unique_ptr<Base, Deleter>&& ptr
-) {
+constexpr std::unique_ptr<Derived, Deleter> static_unique_cast(std::unique_ptr<Base, Deleter> ptr) {
     return std::unique_ptr<Derived, Deleter>(
         static_cast<Derived*>(ptr.release()), std::move(ptr.get_deleter())
     );

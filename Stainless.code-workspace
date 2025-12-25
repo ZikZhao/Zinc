@@ -87,14 +87,14 @@
         "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
         "C_Cpp.default.includePath": [
             "${workspaceFolder}/**",
-            "${workspaceFolder}/build-debug/out",
-            "${workspaceFolder}/build-debug/antlr4_generated",
+            "${workspaceFolder}/build/out",
+            "${workspaceFolder}/build/antlr4_generated",
             "${env:HOME}/vcpkg/installed/x64-linux/include",
             "${env:HOME}/vcpkg/installed/x64-linux/include/antlr4-runtime"
         ],
         "C_Cpp.default.cStandard": "c17",
-        "C_Cpp.default.compileCommands": "${workspaceFolder}/build-debug/compile_commands.json",
-        "cmake.buildDirectory": "${workspaceFolder}/build-debug",
+        "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+        "cmake.buildDirectory": "${workspaceFolder}/build",
         "cmake.sourceDirectory": "${workspaceFolder}",
         "cmake.configureOnOpen": true,
         "cmake.useCMakePresets": "always",
@@ -122,7 +122,7 @@
                 "command": "cmake",
                 "args": [
                     "-B",
-                    "build-debug",
+                    "build",
                     "-S",
                     ".",
                     "-DCMAKE_BUILD_TYPE=Debug",
@@ -141,7 +141,7 @@
                 "command": "cmake",
                 "args": [
                     "--build",
-                    "build-debug",
+                    "build",
                     "--target",
                     "interpreter",
                     "-j",
@@ -162,7 +162,7 @@
                 "command": "cmake",
                 "args": [
                     "--build",
-                    "build-debug",
+                    "build",
                     "--target",
                     "unit_tests",
                     "-j",
@@ -219,7 +219,7 @@
                 "name": "Debug Interpreter",
                 "type": "cppdbg",
                 "request": "launch",
-                "program": "${workspaceFolder}/build-debug/out/interpreter",
+                "program": "${workspaceFolder}/build/out/interpreter",
                 "args": [
                     "${workspaceFolder}/test.sl"
                 ],
@@ -325,7 +325,7 @@
                 "name": "Debug Unit Tests",
                 "type": "cppdbg",
                 "request": "launch",
-                "program": "${workspaceFolder}/build-debug/out/unit_tests",
+                "program": "${workspaceFolder}/build/out/unit_tests",
                 "args": [],
                 "stopAtEntry": false,
                 "cwd": "${workspaceFolder}",

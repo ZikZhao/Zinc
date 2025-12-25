@@ -1,5 +1,6 @@
 # Build output directory
-build-**/
+build/
+build-release/
 
 # ANTLR generated files
 .antlr/

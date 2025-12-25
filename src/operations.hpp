@@ -316,10 +316,10 @@ private:
     }
 
 protected:
-    TypeRegistry& type_registry_;
+    TypeRegistry& types_;
 
 public:
-    constexpr IntrinsicOpTable(TypeRegistry& type_factory) : type_registry_(type_factory) {}
+    constexpr IntrinsicOpTable(TypeRegistry& types) : types_(types) {}
 
     constexpr ObjectRef eval_op(OperatorCode opcode, ObjectRef left, ObjectRef right = {}) const {
         if (left.is_type() && right.is_type()) {
@@ -335,7 +335,7 @@ public:
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left_type->kind_)]
                                                    [static_cast<std::size_t>(right_type->kind_)];
-        return type_registry_.get_kind(value.first);
+        return types_.get_kind(value.first);
     }
 
 private:
@@ -349,9 +349,9 @@ private:
     TypeRef eval_type_op(OperatorCode opcode, TypeRef left, TypeRef right) const {
         switch (opcode) {
         case OperatorCode::OPERATOR_BITWISE_AND:
-            return type_registry_.get<IntersectionType>(left, right);
+            return types_.get<IntersectionType>(left, right);
         case OperatorCode::OPERATOR_BITWISE_OR:
-            return type_registry_.get<UnionType>(left, right);
+            return types_.get<UnionType>(left, right);
         default:
             assert(false && "Unsupported operation on types");
             std::unreachable();
@@ -371,7 +371,7 @@ private:
     FlatMap<CustomTableKey, CustomTableValue> custom_table_;
 
 public:
-    OpDispatcher(TypeRegistry& type_factory) : IntrinsicOpTable(type_factory), custom_table_() {}
+    OpDispatcher(TypeRegistry& types) : IntrinsicOpTable(types), custom_table_() {}
 
     void register_custom_op(
         OperatorCode opcode,
@@ -394,9 +394,7 @@ public:
         // operation on values only
         ValueRef left_value = left.as_value();
         ValueRef right_value = right.as_value();
-        auto it = custom_table_.find(
-            {opcode, type_registry_.of(left_value), type_registry_.of(right_value)}
-        );
+        auto it = custom_table_.find({opcode, types_.of(left_value), types_.of(right_value)});
         if (it != custom_table_.end()) {
             return it->second.second(left_value, right_value);
         } else {
