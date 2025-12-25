@@ -5,7 +5,7 @@
 #include "StainlessLexer.h"
 #include "StainlessParser.h"
 #include "ast.hpp"
-#include "entity.hpp"
+#include "object.hpp"
 #include "operations.hpp"
 #include "source.hpp"
 
@@ -36,7 +36,7 @@ private:
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
         Location location;
-        location.id = source_manager_.index(start->getTokenSource()->getSourceName());
+        location.id = source_manager_.get_file_id(start->getTokenSource()->getSourceName());
         location.begin.line = start->getLine();
         location.begin.column = start->getCharPositionInLine();
         location.end.line = stop->getLine();
@@ -49,7 +49,7 @@ private:
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
         const std::string& source =
-            source_manager_[source_manager_.index(start->getTokenSource()->getSourceName())];
+            source_manager_[source_manager_.get_file_id(start->getTokenSource()->getSourceName())];
         std::size_t begin_offset = start->getStartIndex();
         std::size_t end_offset = stop->getStopIndex() + 1;
         return std::string_view(source.data() + begin_offset, end_offset - begin_offset);
@@ -57,7 +57,7 @@ private:
     std::string_view text(const antlr4::Token* token) noexcept {
         assert(token != nullptr);
         const std::string& source =
-            source_manager_[source_manager_.index(token->getTokenSource()->getSourceName())];
+            source_manager_[source_manager_.get_file_id(token->getTokenSource()->getSourceName())];
         std::size_t begin_offset = token->getStartIndex();
         std::size_t end_offset = token->getStopIndex() + 1;
         return std::string_view(source.data() + begin_offset, end_offset - begin_offset);

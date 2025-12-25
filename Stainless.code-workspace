@@ -196,20 +196,12 @@
                         "value": "halt_on_error=1:detect_leaks=1:abort_on_error=1:symbolize=1:fast_unwind_on_fatal=0"
                     }
                 ],
-                "sourceFileMap": {
-                    "/build": "${workspaceFolder}"
-                },
                 "externalConsole": false,
                 "MIMode": "gdb",
                 "setupCommands": [
                     {
                         "description": "Enable pretty-printing for gdb",
                         "text": "-enable-pretty-printing",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Set substitute-path for sanitizer sources to prevent stepping",
-                        "text": "set substitute-path /build /dev/null",
                         "ignoreFailures": true
                     },
                     {

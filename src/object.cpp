@@ -1,4 +1,4 @@
-#include "entity.hpp"
+#include "object.hpp"
 
 #include "pch.hpp"
 #include <limits>
@@ -6,10 +6,10 @@
 
 #include "exception.hpp"
 
-Entity::Entity(Kind kind, bool is_value) noexcept
+Object::Object(Kind kind, bool is_value) noexcept
     : ref_count_(is_value ? 0 : std::numeric_limits<decltype(ref_count_)>::min()), kind_(kind) {}
 
-Type::Type(Kind kind) noexcept : Entity(kind, false) {}
+Type::Type(Kind kind) noexcept : Object(kind, false) {}
 bool Type::assignable_from(const Type& source) const {
     assert(
         this == &source ? assignable_from_impl(source) : true
@@ -37,7 +37,7 @@ std::string FunctionType::repr() const {
 bool FunctionType::assignable_from_impl(const Type& source) const {
     // (Base) => Derived is assignable to (Derived) => Base
     // i.e., parameters are contravariant, return type is covariant
-    if (source.kind_ != Kind::KIND_FUNCTION) {
+    if (source.kind_ != Kind::Function) {
         return false;
     }
     const FunctionType& func_other = static_cast<const FunctionType&>(source);
@@ -59,8 +59,7 @@ bool FunctionType::assignable_from_impl(const Type& source) const {
     return return_type_->assignable_from(*func_other.return_type_);
 }
 
-ListType::ListType(Type* element_type) noexcept
-    : Type(Kind::KIND_LIST), element_type_(element_type) {}
+ListType::ListType(Type* element_type) noexcept : Type(Kind::List), element_type_(element_type) {}
 std::string ListType::repr() const { return "List<"s + element_type_->repr() + ">"s; }
 bool ListType::assignable_from_impl(const Type& source) const {
     if (source.kind_ != this->kind_) {
@@ -71,7 +70,7 @@ bool ListType::assignable_from_impl(const Type& source) const {
 }
 
 RecordType::RecordType(FlatMap<std::string_view, Type*> fields) noexcept
-    : Type(Kind::KIND_RECORD), fields_(std::move(fields)) {}
+    : Type(Kind::Record), fields_(std::move(fields)) {}
 std::string RecordType::repr() const {
     // TODO
     return {};
@@ -98,7 +97,7 @@ ClassType::ClassType(
     const ClassType* extends,
     FlatMap<std::string_view, Type*> properties
 ) noexcept
-    : Type(Kind::KIND_CLASS),
+    : Type(Kind::Class),
       name_(name),
       interfaces_(interfaces),
       extends_(extends),
@@ -109,23 +108,23 @@ bool ClassType::assignable_from_impl(const Type& other) const { return false; }
 ComparableSpan<Type*> IntersectionType::combine(Type* left, Type* right) {
     std::size_t size = 0;
     if (right < left) std::swap(left, right);
-    if (left->kind_ == Kind::KIND_INTERSECTION) {
+    if (left->kind_ == Kind::Intersection) {
         const IntersectionType& left_intersection = static_cast<const IntersectionType&>(*left);
         size += left_intersection.types_.size();
     } else {
-        assert(left->kind_ == Kind::KIND_FUNCTION);
+        assert(left->kind_ == Kind::Function);
         size++;
     }
-    if (right->kind_ == Kind::KIND_INTERSECTION) {
+    if (right->kind_ == Kind::Intersection) {
         const IntersectionType& right_intersection = static_cast<const IntersectionType&>(*right);
         size += right_intersection.types_.size();
     } else {
-        assert(right->kind_ == Kind::KIND_FUNCTION);
+        assert(right->kind_ == Kind::Function);
         size++;
     }
     ComparableSpan<Type*> buffer = GlobalMemory::allocate_array<Type*>(size);
     std::size_t index = 0;
-    if (left->kind_ == Kind::KIND_INTERSECTION) {
+    if (left->kind_ == Kind::Intersection) {
         const IntersectionType& left_intersection = static_cast<const IntersectionType&>(*left);
         for (const auto& type : left_intersection.types_) {
             buffer[index++] = type;
@@ -133,7 +132,7 @@ ComparableSpan<Type*> IntersectionType::combine(Type* left, Type* right) {
     } else {
         buffer[index++] = left;
     }
-    if (right->kind_ == Kind::KIND_INTERSECTION) {
+    if (right->kind_ == Kind::Intersection) {
         const IntersectionType& right_intersection = static_cast<const IntersectionType&>(*right);
         for (const auto& type : right_intersection.types_) {
             buffer[index++] = type;
@@ -144,7 +143,7 @@ ComparableSpan<Type*> IntersectionType::combine(Type* left, Type* right) {
     return buffer;
 }
 IntersectionType::IntersectionType(Type* left, Type* right) noexcept
-    : Type(Kind::KIND_INTERSECTION), types_{combine(left, right)} {}
+    : Type(Kind::Intersection), types_{combine(left, right)} {}
 std::string IntersectionType::repr() const {
     // TODO
     return {};
@@ -152,7 +151,7 @@ std::string IntersectionType::repr() const {
 bool IntersectionType::assignable_from_impl(const Type& source) const {
     // (a & b & c) is assignable to (a & b)
     // i.e., source supports at least all the function overloads of this
-    if (source.kind_ == Kind::KIND_INTERSECTION) {
+    if (source.kind_ == Kind::Intersection) {
         const IntersectionType& other_intersection = static_cast<const IntersectionType&>(source);
         for (const auto& type : types_) {
             bool found = false;
@@ -175,13 +174,13 @@ bool IntersectionType::assignable_from_impl(const Type& source) const {
 ComparableSpan<Type*> UnionType::combine(Type* left, Type* right) {
     std::size_t size = 0;
     if (right < left) std::swap(left, right);
-    if (left->kind_ == Kind::KIND_UNION) {
+    if (left->kind_ == Kind::Union) {
         const UnionType& left_union = static_cast<const UnionType&>(*left);
         size += left_union.types_.size();
     } else {
         size++;
     }
-    if (right->kind_ == Kind::KIND_UNION) {
+    if (right->kind_ == Kind::Union) {
         const UnionType& right_union = static_cast<const UnionType&>(*right);
         size += right_union.types_.size();
     } else {
@@ -189,7 +188,7 @@ ComparableSpan<Type*> UnionType::combine(Type* left, Type* right) {
     }
     ComparableSpan<Type*> buffer = GlobalMemory::allocate_array<Type*>(size);
     std::size_t index = 0;
-    if (left->kind_ == Kind::KIND_UNION) {
+    if (left->kind_ == Kind::Union) {
         const UnionType& left_union = static_cast<const UnionType&>(*left);
         for (const auto& type : left_union.types_) {
             buffer[index++] = type;
@@ -197,7 +196,7 @@ ComparableSpan<Type*> UnionType::combine(Type* left, Type* right) {
     } else {
         buffer[index++] = left;
     }
-    if (right->kind_ == Kind::KIND_UNION) {
+    if (right->kind_ == Kind::Union) {
         const UnionType& right_union = static_cast<const UnionType&>(*right);
         for (const auto& type : right_union.types_) {
             buffer[index++] = type;
@@ -208,7 +207,7 @@ ComparableSpan<Type*> UnionType::combine(Type* left, Type* right) {
     return buffer;
 }
 UnionType::UnionType(Type* left, Type* right) noexcept
-    : Type(Kind::KIND_UNION), types_(combine(left, right)) {}
+    : Type(Kind::Union), types_(combine(left, right)) {}
 std::string UnionType::repr() const {
     // TODO
     return {};
@@ -216,7 +215,7 @@ std::string UnionType::repr() const {
 bool UnionType::assignable_from_impl(const Type& source) const {
     // (a | b) is assignable to (a | b | c)
     // i.e., source must be assignable to at least one of the types in this
-    if (source.kind_ == Kind::KIND_UNION) {
+    if (source.kind_ == Kind::Union) {
         const UnionType& other_union = static_cast<const UnionType&>(source);
         for (const auto& type : other_union.types_) {
             bool found = false;
@@ -232,7 +231,7 @@ bool UnionType::assignable_from_impl(const Type& source) const {
         }
         return true;
     } else {
-        assert(source.kind_ == Kind::KIND_FUNCTION);
+        assert(source.kind_ == Kind::Function);
         for (const auto& type : types_) {
             if (type->assignable_from(source)) {
                 return true;
@@ -242,12 +241,12 @@ bool UnionType::assignable_from_impl(const Type& source) const {
     }
 }
 
-Value::Value(Kind kind) noexcept : Entity(kind, true) {}
+Value::Value(Kind kind) noexcept : Object(kind, true) {}
 
-NullValue::NullValue() noexcept : Value(Kind::KIND_NULL) {}
+NullValue::NullValue() noexcept : Value(Kind::Null) {}
 std::string NullValue::repr() const { return "null"; }
 
-IntegerValue::IntegerValue(int64_t value) noexcept : Value(Kind::KIND_INTEGER), value_(value) {}
+IntegerValue::IntegerValue(int64_t value) noexcept : Value(Kind::Integer), value_(value) {}
 std::string IntegerValue::repr() const { return std::to_string(value_); }
 IntegerValue IntegerValue::operator+(const IntegerValue& other) const {
     return IntegerValue(this->value_ + other.value_);
@@ -304,7 +303,7 @@ IntegerValue IntegerValue::operator>>(const IntegerValue& other) const {
     return IntegerValue(this->value_ >> other.value_);
 }
 
-FloatValue::FloatValue(double value) noexcept : Value(Kind::KIND_FLOAT), value_(value) {}
+FloatValue::FloatValue(double value) noexcept : Value(Kind::Float), value_(value) {}
 std::string FloatValue::repr() const { return std::to_string(value_); }
 FloatValue FloatValue::operator+(const FloatValue& other) const {
     return FloatValue(this->value_ + other.value_);
@@ -344,7 +343,7 @@ BooleanValue FloatValue::operator>=(const FloatValue& other) const {
 }
 
 StringValue::StringValue(std::string value) noexcept
-    : Value(Kind::KIND_STRING), value_(std::move(value)) {}
+    : Value(Kind::String), value_(std::move(value)) {}
 std::string StringValue::repr() const { return "\"" + this->value_ + "\""; }
 StringValue StringValue::operator+(const StringValue& other) const {
     return StringValue(this->value_ + other.value_);
@@ -365,7 +364,7 @@ BooleanValue StringValue::operator!=(const StringValue& other) const {
     return BooleanValue(this->value_ != other.value_);
 }
 
-BooleanValue::BooleanValue(bool value) noexcept : Value(Kind::KIND_BOOLEAN), value_(value) {}
+BooleanValue::BooleanValue(bool value) noexcept : Value(Kind::Boolean), value_(value) {}
 std::string BooleanValue::repr() const { return this->value_ ? "true" : "false"; }
 BooleanValue BooleanValue::operator==(const BooleanValue& other) const {
     return BooleanValue(this->value_ == other.value_);
@@ -393,33 +392,33 @@ Value* FunctionValue::operator()(const std::vector<Value*>& args) const {
     std::unreachable();
 }
 
-ObjectValue::ObjectValue(ClassType* cls) noexcept : Value(Kind::KIND_OBJECT), cls_(cls) {}
+InstanceValue::InstanceValue(ClassType* cls) noexcept : Value(Kind::Instance), cls_(cls) {}
 
-EntityRef::EntityRef(const EntityRef& other) noexcept : ptr_(other.ptr_) { retain(); }
-EntityRef::EntityRef(EntityRef&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
-EntityRef::~EntityRef() noexcept { release(); }
-EntityRef& EntityRef::operator=(EntityRef other) noexcept {
+ObjectRef::ObjectRef(const ObjectRef& other) noexcept : ptr_(other.ptr_) { retain(); }
+ObjectRef::ObjectRef(ObjectRef&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
+ObjectRef::~ObjectRef() noexcept { release(); }
+ObjectRef& ObjectRef::operator=(ObjectRef other) noexcept {
     std::swap(ptr_, other.ptr_);
     return *this;
 }
-EntityRef::operator bool() const noexcept { return ptr_ != nullptr; }
-Entity& EntityRef::operator*() const noexcept { return *ptr_; }
-Entity* EntityRef::operator->() const noexcept { return ptr_; }
-Value* EntityRef::value() const noexcept {
+ObjectRef::operator bool() const noexcept { return ptr_ != nullptr; }
+Object& ObjectRef::operator*() const noexcept { return *ptr_; }
+Object* ObjectRef::operator->() const noexcept { return ptr_; }
+Value* ObjectRef::value() const noexcept {
     assert(ptr_ && !ptr_->is_type());
     return static_cast<Value*>(ptr_);
 }
-Type* EntityRef::type() const noexcept {
+Type* ObjectRef::type() const noexcept {
     assert(ptr_ && ptr_->is_type());
     return static_cast<Type*>(ptr_);
 }
-EntityRef::EntityRef(Entity* ptr) noexcept : ptr_(ptr) { retain(); }
-void EntityRef::retain() noexcept {
+ObjectRef::ObjectRef(Object* ptr) noexcept : ptr_(ptr) { retain(); }
+void ObjectRef::retain() noexcept {
     if (ptr_) {
         ptr_->ref_count_++;
     }
 }
-void EntityRef::release() noexcept {
+void ObjectRef::release() noexcept {
     if (ptr_) {
         ptr_->ref_count_--;
         if (ptr_->ref_count_ == 0) {

@@ -13,11 +13,14 @@
 #include <map>
 #include <memory>
 #include <memory_resource>
+#include <numeric>
 #include <ranges>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <type_traits>
 #include <typeindex>
 #include <unordered_map>
 #include <utility>

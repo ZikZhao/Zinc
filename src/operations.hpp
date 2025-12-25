@@ -4,7 +4,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "entity.hpp"
+#include "object.hpp"
 
 enum class OperatorCode : std::uint16_t {
     OPERATOR_ADD,
@@ -178,6 +178,7 @@ template <>
 struct OperateAndAssign<void> {
     static constexpr OperatorCode opcode = OperatorCode::OPERATOR_ASSIGN;
     template <typename Left, typename Right>
+        requires requires { std::declval<Left&>() = std::declval<Right&>(); }
     auto operator()(Left& left, const Right& right) const {
         return left = right;
     }
@@ -229,123 +230,100 @@ using RightShiftAssign = OperateAndAssign<RightShift>;
 
 class IntrinsicOpTable {
 private:
-    using Arithmetic = std::tuple<
+    /// Placeholder for right operand absence
+    struct NoOperand : public Value {
+        static constexpr Kind kind = Kind::Nothing;
+        NoOperand() = delete;
+        NoOperand(const NoOperand&) = delete;
+        NoOperand& operator=(const NoOperand&) = delete;
+    };
+
+    /// Placeholder to ensure Kind enum can be directly used as array index
+    struct AnyValue : public Value {
+        static constexpr Kind kind = Kind::Any;
+        AnyValue() = delete;
+        AnyValue(const AnyValue&) = delete;
+        AnyValue& operator=(const AnyValue&) = delete;
+    };
+
+    using AllOperations = std::tuple<
         OperatorFunctors::Add,
         OperatorFunctors::Subtract,
         OperatorFunctors::Negate,
         OperatorFunctors::Multiply,
         OperatorFunctors::Divide,
-        OperatorFunctors::Remainder>;
-    using Comparison = std::tuple<
+        OperatorFunctors::Remainder,
+        OperatorFunctors::Increment,
+        OperatorFunctors::Decrement,
         OperatorFunctors::Equal,
         OperatorFunctors::NotEqual,
         OperatorFunctors::LessThan,
         OperatorFunctors::LessEqual,
         OperatorFunctors::GreaterThan,
-        OperatorFunctors::GreaterEqual>;
-    using Bitwise = std::tuple<
+        OperatorFunctors::GreaterEqual,
+        OperatorFunctors::LogicalAnd,
+        OperatorFunctors::LogicalOr,
+        OperatorFunctors::LogicalNot,
         OperatorFunctors::BitwiseAnd,
         OperatorFunctors::BitwiseOr,
         OperatorFunctors::BitwiseXor,
-        OperatorFunctors::BitwiseNot>;
+        OperatorFunctors::BitwiseNot,
+        OperatorFunctors::LeftShift,
+        OperatorFunctors::RightShift,
+        OperatorFunctors::Assign>;
+
+    using AllPrimitiveValues = std::
+        tuple<NoOperand, AnyValue, NullValue, IntegerValue, FloatValue, StringValue, BooleanValue>;
 
 public:
     using OperatorFn = ValueRef (*)(ValueRef, ValueRef);
-    using TableKey = std::tuple<OperatorCode, Kind, Kind>;
     using TableValue = std::pair<Kind, OperatorFn>;
 
 private:
-    using Table = std::array<
-        std::array<
-            std::array<TableValue, static_cast<std::size_t>(Kind::NON_COMPOSITE_SIZE)>,
-            static_cast<std::size_t>(Kind::NON_COMPOSITE_SIZE)>,
-        static_cast<std::size_t>(OperatorCode::SIZE)>;
+    template <typename Op, typename Left, typename Right>
+    static consteval TableValue make_single_op() {
+        constexpr bool valid =
+            requires { Op{}(std::declval<Left&>(), std::declval<Right&>()).kind; };
+        if constexpr (valid) {
+            return TableValue{
+                decltype(Op{}(std::declval<Left&>(), std::declval<Right&>()))::kind,
+                [](ValueRef left, ValueRef right) -> ValueRef {
+                    auto result = Op{}(
+                        static_cast<Left&>(*left.value()), static_cast<Right&>(*right.value())
+                    );
+                    auto boxed = GlobalMemory::allocate<decltype(result)>(std::move(result));
+                    return ValueRef(boxed);
+                },
+            };
+        } else {
+            return TableValue{Kind::Nothing, nullptr};
+        }
+    }
 
-private:
-    static constexpr Table build_operation_map() {
-        Table table;
-        register_assignments(table);
-        register_group<IntegerValue>(table, Arithmetic{});
-        register_group<FloatValue>(table, Arithmetic{});
-        register_group<IntegerValue>(table, Comparison{});
-        register_group<FloatValue>(table, Comparison{});
-        register_group<IntegerValue>(table, Bitwise{});
+    static constexpr const auto& operation_table() {
+        static constexpr auto table = []<typename... Ops>(std::type_identity<std::tuple<Ops...>>) {
+            return std::array{[]<typename... Ls>(std::type_identity<std::tuple<Ls...>>) {
+                using Op = Ops;
+                return std::array{[]<typename... Rs>(std::type_identity<std::tuple<Rs...>>) {
+                    using L = Ls;
+                    return std::array{make_single_op<Op, L, Rs>()...};
+                }(std::type_identity<AllPrimitiveValues>{})...};
+            }(std::type_identity<AllPrimitiveValues>{})...};
+        }(std::type_identity<AllOperations>{});
+        static_assert(table.size() == static_cast<std::size_t>(OperatorCode::SIZE));
+        static_assert(table[0].size() == static_cast<std::size_t>(Kind::NonCompositeSize));
+        static_assert(table[0][0].size() == static_cast<std::size_t>(Kind::NonCompositeSize));
+
         return table;
-    }
-
-    static constexpr void register_assignments(Table& table) {
-        using all_types =
-            std::tuple<NullValue, IntegerValue, FloatValue, StringValue, BooleanValue>;
-        using all_assignments = std::tuple<
-            OperatorFunctors::Assign,
-            OperatorFunctors::AddAssign,
-            OperatorFunctors::SubtractAssign,
-            OperatorFunctors::MultiplyAssign,
-            OperatorFunctors::DivideAssign,
-            OperatorFunctors::RemainderAssign,
-            OperatorFunctors::LogicalAndAssign,
-            OperatorFunctors::LogicalOrAssign,
-            OperatorFunctors::BitwiseAndAssign,
-            OperatorFunctors::BitwiseOrAssign,
-            OperatorFunctors::BitwiseXorAssign,
-            OperatorFunctors::LeftShiftAssign,
-            OperatorFunctors::RightShiftAssign>;
-        [&]<typename... Ts>(std::type_identity<std::tuple<Ts...>>) {
-            auto fn = [&]<typename T, typename... Us>(
-                          std::type_identity<T>, std::type_identity<std::tuple<Us...>>
-                      ) { (register_op<T, Us>(table), ...); };
-            (fn(std::type_identity<Ts>{}, std::type_identity<all_assignments>{}), ...);
-        }(std::type_identity<all_types>{});
-    }
-
-    template <typename Operand, typename... Operators>
-    static constexpr void register_group(Table& table, std::tuple<Operators...>) {
-        (register_op<Operand, Operators>(table), ...);
-    }
-
-    template <typename Operand, typename Operator>
-    static constexpr void register_op(Table& table) {
-        constexpr bool has_binary =
-            requires { Operator()(std::declval<Operand&>(), std::declval<Operand&>()); };
-        constexpr bool has_unary = requires { Operator()(std::declval<Operand&>()); };
-        if constexpr (has_binary) {
-            table[static_cast<std::size_t>(Operator::opcode)]
-                 [static_cast<std::size_t>(Operand::kind)]
-                 [static_cast<std::size_t>(Operand::kind)] = TableValue{
-                     Operand::kind,
-                     [](ValueRef left, ValueRef right) -> ValueRef {
-                         auto result = Operator()(
-                             static_cast<Operand&>(*left.value()),
-                             static_cast<Operand&>(*right.value())
-                         );
-                         auto boxed = GlobalMemory::allocate<decltype(result)>(std::move(result));
-                         return ValueRef(boxed);
-                     },
-                 };
-        }
-        if constexpr (has_unary) {
-            table[static_cast<std::size_t>(Operator::opcode)]
-                 [static_cast<std::size_t>(Operand::kind)]
-                 [static_cast<std::size_t>(Operand::kind)] = TableValue{
-                     Operand::kind,
-                     [](ValueRef left, ValueRef right) -> ValueRef {
-                         auto result = Operator()(static_cast<Operand&>(*left.value()));
-                         auto boxed = GlobalMemory::allocate<decltype(result)>(std::move(result));
-                         return ValueRef(boxed);
-                     },
-                 };
-        }
     }
 
 protected:
     TypeRegistry& type_factory_;
-    const Table table_;
 
 public:
-    constexpr IntrinsicOpTable(TypeRegistry& type_factory)
-        : type_factory_(type_factory), table_(build_operation_map()) {}
+    constexpr IntrinsicOpTable(TypeRegistry& type_factory) : type_factory_(type_factory) {}
 
-    constexpr EntityRef eval_op(OperatorCode opcode, EntityRef left, EntityRef right = {}) const {
+    constexpr ObjectRef eval_op(OperatorCode opcode, ObjectRef left, ObjectRef right = {}) const {
         if (left.is_type() && right.is_type()) {
             return eval_type_op(opcode, left, right);
         } else if (left.is_value() && right.is_value()) {
@@ -356,17 +334,19 @@ public:
     }
 
     TypeRef get_result_type(OperatorCode opcode, TypeRef left_type, TypeRef right_type) const {
-        const TableValue& value =
-            table_[static_cast<std::size_t>(opcode)][static_cast<std::size_t>(left_type->kind_)]
-                  [static_cast<std::size_t>(right_type->kind_)];
+        std::cout << "Getting result type for opcode " << static_cast<std::size_t>(opcode)
+                  << " with left type " << left_type->repr();
+        const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
+                                                   [static_cast<std::size_t>(left_type->kind_)]
+                                                   [static_cast<std::size_t>(right_type->kind_)];
         return type_factory_.get_kind(value.first);
     }
 
 private:
-    ValueRef eval_value_op(OperatorCode opcode, EntityRef left, EntityRef right) const {
-        const TableValue& value =
-            table_[static_cast<std::size_t>(opcode)][static_cast<std::size_t>(left->kind_)]
-                  [static_cast<std::size_t>(right->kind_)];
+    ValueRef eval_value_op(OperatorCode opcode, ObjectRef left, ObjectRef right) const {
+        const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
+                                                   [static_cast<std::size_t>(left->kind_)]
+                                                   [static_cast<std::size_t>(right->kind_)];
         return value.second(left, right);
     }
 
@@ -383,7 +363,7 @@ private:
         }
     }
 
-    TypeRef eval_type_value_op(OperatorCode opcode, EntityRef left, EntityRef right) const {
+    TypeRef eval_type_value_op(OperatorCode opcode, ObjectRef left, ObjectRef right) const {
         // TODO (array index, integer + 1, etc.)
         return {};
     }
@@ -408,11 +388,11 @@ public:
         custom_table_[{opcode, left_type.type(), right_type.type()}] = {result_type, func};
     }
 
-    EntityRef eval_op(OperatorCode opcode, EntityRef left, EntityRef right = {}) const {
+    ObjectRef eval_op(OperatorCode opcode, ObjectRef left, ObjectRef right = {}) const {
         bool both_types = left.is_type() && right.is_type();
         bool both_primitive_values = left.is_value() && right.is_value() &&
-                                     left.value()->kind_ < Kind::NON_COMPOSITE_SIZE &&
-                                     right.value()->kind_ < Kind::NON_COMPOSITE_SIZE;
+                                     left.value()->kind_ < Kind::NonCompositeSize &&
+                                     right.value()->kind_ < Kind::NonCompositeSize;
         if (both_types || both_primitive_values) {
             return IntrinsicOpTable::eval_op(opcode, left, right);
         }
@@ -426,8 +406,8 @@ public:
     }
 
     TypeRef get_result_type(OperatorCode opcode, TypeRef left_type, TypeRef right_type = {}) const {
-        if (left_type->kind_ < Kind::NON_COMPOSITE_SIZE &&
-            (right_type ? right_type->kind_ < Kind::NON_COMPOSITE_SIZE : true)) {
+        if (left_type->kind_ < Kind::NonCompositeSize &&
+            (right_type ? right_type->kind_ < Kind::NonCompositeSize : true)) {
             return IntrinsicOpTable::get_result_type(opcode, left_type, right_type);
         }
         auto it = custom_table_.find({opcode, left_type.type(), right_type.type()});

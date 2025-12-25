@@ -8,25 +8,26 @@
 class Scope;
 
 enum class Kind : std::uint16_t {
-    KIND_NO_RIGHT_OPERAND,
-    KIND_ANY,
-    KIND_NULL,
-    KIND_INTEGER,
-    KIND_FLOAT,
-    KIND_STRING,
-    KIND_BOOLEAN,
-    NON_COMPOSITE_SIZE,
-    KIND_FUNCTION,
-    KIND_LIST,
-    KIND_RECORD,
-    KIND_INTERFACE,
-    KIND_CLASS,
-    KIND_OBJECT,
-    KIND_INTERSECTION,
-    KIND_UNION,
+    Nothing,
+    Any,
+    Null,
+    Integer,
+    Float,
+    String,
+    Boolean,
+    NonCompositeSize,
+    Function,
+    List,
+    Record,
+    Interface,
+    Class,
+    Instance,
+    Intersection,
+    Union,
 };
 
-class Entity;
+class Object;
+
 class Value;
 class NullValue;
 class IntegerValue;
@@ -36,7 +37,7 @@ class BooleanValue;
 class FunctionValue;
 class InterfaceValue;
 class ClassValue;
-class ObjectValue;
+class InstanceValue;
 class ListValue;
 class DictValue;
 class SetValue;
@@ -44,12 +45,12 @@ class SetValue;
 class Type;
 template <Kind Kind>
 class PrimitiveType;
-using AnyType = PrimitiveType<Kind::KIND_ANY>;
-using NullType = PrimitiveType<Kind::KIND_NULL>;
-using IntegerType = PrimitiveType<Kind::KIND_INTEGER>;
-using FloatType = PrimitiveType<Kind::KIND_FLOAT>;
-using StringType = PrimitiveType<Kind::KIND_STRING>;
-using BooleanType = PrimitiveType<Kind::KIND_BOOLEAN>;
+using AnyType = PrimitiveType<Kind::Any>;
+using NullType = PrimitiveType<Kind::Null>;
+using IntegerType = PrimitiveType<Kind::Integer>;
+using FloatType = PrimitiveType<Kind::Float>;
+using StringType = PrimitiveType<Kind::String>;
+using BooleanType = PrimitiveType<Kind::Boolean>;
 class InterfaceType;
 class StructType;
 class ClassType;
@@ -64,28 +65,28 @@ concept ValueClass = std::derived_from<T, Value>;
 // using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
 
-class EntityRef;
-using ValueRef = EntityRef;
-using TypeRef = EntityRef;
+class ObjectRef;
+using ValueRef = ObjectRef;
+using TypeRef = ObjectRef;
 
-class Entity {
-    friend class EntityRef;
+class Object {
+    friend class ObjectRef;
 
 private:
     mutable std::int32_t ref_count_;
 
 public:
     Kind kind_;
-    Entity(Kind kind, bool is_value) noexcept;
-    virtual ~Entity() = default;
+    Object(Kind kind, bool is_value) noexcept;
+    virtual ~Object() = default;
     virtual std::string repr() const = 0;
-    constexpr std::strong_ordering operator<=>(const Entity& other) const noexcept {
+    constexpr std::strong_ordering operator<=>(const Object& other) const noexcept {
         if (kind_ != other.kind_) {
             return kind_ <=> other.kind_;
         }
         return is_type() <=> other.is_type();
     }
-    constexpr bool operator==(const Entity& other) const noexcept {
+    constexpr bool operator==(const Object& other) const noexcept {
         return kind_ == other.kind_ && is_type() == other.is_type();
     }
 
@@ -93,7 +94,7 @@ private:
     constexpr bool is_type() const noexcept { return ref_count_ <= 0; }
 };
 
-class Type : public Entity {
+class Type : public Object {
 public:
     Type(Kind kind) noexcept;
     ~Type() override = default;
@@ -111,26 +112,26 @@ public:
 public:
     PrimitiveType() noexcept : Type(kind) {}
     std::string repr() const final {
-        if constexpr (K == Kind::KIND_ANY) {
+        if constexpr (K == Kind::Any) {
             return "any";
-        } else if constexpr (K == Kind::KIND_NULL) {
+        } else if constexpr (K == Kind::Null) {
             return "null";
-        } else if constexpr (K == Kind::KIND_INTEGER) {
+        } else if constexpr (K == Kind::Integer) {
             return "integer";
-        } else if constexpr (K == Kind::KIND_FLOAT) {
+        } else if constexpr (K == Kind::Float) {
             return "float";
-        } else if constexpr (K == Kind::KIND_STRING) {
+        } else if constexpr (K == Kind::String) {
             return "string";
-        } else if constexpr (K == Kind::KIND_BOOLEAN) {
+        } else if constexpr (K == Kind::Boolean) {
             return "boolean";
-        } else if constexpr (K == Kind::KIND_FUNCTION) {
+        } else if constexpr (K == Kind::Function) {
             return "function";
         } else {
             static_assert(false);
         }
     }
     bool assignable_from_impl(const Type& source) const final {
-        if constexpr (K == Kind::KIND_ANY) {
+        if constexpr (K == Kind::Any) {
             return true;
         } else {
             return source.kind_ == kind;
@@ -140,7 +141,7 @@ public:
 
 class FunctionType final : public Type {
 public:
-    static constexpr Kind kind = Kind::KIND_FUNCTION;
+    static constexpr Kind kind = Kind::Function;
 
 public:
     Type* return_type_;
@@ -188,7 +189,7 @@ public:
 
 class IntersectionType final : public Type {
 public:
-    static constexpr Kind kind = Kind::KIND_INTERSECTION;
+    static constexpr Kind kind = Kind::Intersection;
 
 private:
     static ComparableSpan<Type*> combine(Type* left, Type* right);
@@ -203,7 +204,7 @@ public:
 
 class UnionType final : public Type {
 public:
-    static constexpr Kind kind = Kind::KIND_UNION;
+    static constexpr Kind kind = Kind::Union;
 
 private:
     static ComparableSpan<Type*> combine(Type* left, Type* right);
@@ -216,8 +217,8 @@ public:
     std::strong_ordering operator<=>(const UnionType& other) const noexcept = default;
 };
 
-class Value : public Entity {
-    friend class EntityRef;
+class Value : public Object {
+    friend class ObjectRef;
 
 private:
     template <ValueClass V>
@@ -262,7 +263,7 @@ public:
 
 class NullValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::KIND_NULL;
+    static constexpr Kind kind = Kind::Null;
     using Type = NullType;
 
 public:
@@ -272,7 +273,7 @@ public:
 
 class IntegerValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::KIND_INTEGER;
+    static constexpr Kind kind = Kind::Integer;
     using Type = IntegerType;
 
 public:
@@ -301,7 +302,7 @@ public:
 
 class FloatValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::KIND_FLOAT;
+    static constexpr Kind kind = Kind::Float;
     using Type = FloatType;
 
 public:
@@ -324,7 +325,7 @@ public:
 
 class StringValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::KIND_STRING;
+    static constexpr Kind kind = Kind::String;
     using Type = StringType;
 
 public:
@@ -339,7 +340,7 @@ public:
 
 class BooleanValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::KIND_BOOLEAN;
+    static constexpr Kind kind = Kind::Boolean;
     using Type = BooleanType;
 
 public:
@@ -355,32 +356,32 @@ public:
 
 class FunctionValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::KIND_FUNCTION;
+    static constexpr Kind kind = Kind::Function;
     using Type = FunctionType;
 
 public:
     const std::function<Value*(const std::vector<Value*>&)> callback_;
     Type* type_;
     FunctionValue(auto&& callback, Type* function_type) noexcept
-        : Value(Kind::KIND_FUNCTION),
+        : Value(Kind::Function),
           callback_(std::forward<decltype(callback)>(callback)),
           type_(function_type) {}
     std::string repr() const final;
     Value* operator()(const std::vector<Value*>& args) const;
 };
 
-class ObjectValue : public Value {
+class InstanceValue : public Value {
 public:
-    static constexpr Kind kind = Kind::KIND_OBJECT;
+    static constexpr Kind kind = Kind::Instance;
 
 public:
     ClassType* cls_;
     std::vector<Value*> attributes_;
-    ObjectValue(ClassType* cls) noexcept;
+    InstanceValue(ClassType* cls) noexcept;
     Value* get(const std::string_view property) const noexcept;
 };
 
-class ListValue : public ObjectValue {
+class ListValue : public InstanceValue {
 private:
     static ListValue* Append(const std::vector<Value*>& args) noexcept;
 
@@ -394,7 +395,7 @@ public:
     Value* operator[](const Slice& indices) const;
 };
 
-class EntityRef {
+class ObjectRef {
     friend class IntrinsicOpTable;
     friend class TypeRegistry;
 
@@ -411,24 +412,24 @@ private:
     }
 
 private:
-    Entity* ptr_;
+    Object* ptr_;
 
 public:
-    EntityRef() noexcept = default;
-    EntityRef(const EntityRef& other) noexcept;
-    EntityRef(EntityRef&& other) noexcept;
-    ~EntityRef() noexcept;
-    EntityRef& operator=(EntityRef other) noexcept;
+    ObjectRef() noexcept = default;
+    ObjectRef(const ObjectRef& other) noexcept;
+    ObjectRef(ObjectRef&& other) noexcept;
+    ~ObjectRef() noexcept;
+    ObjectRef& operator=(ObjectRef other) noexcept;
     operator bool() const noexcept;
-    Entity& operator*() const noexcept;
-    Entity* operator->() const noexcept;
+    Object& operator*() const noexcept;
+    Object* operator->() const noexcept;
     bool is_type() const noexcept { return ptr_ ? ptr_->is_type() : true; }
     bool is_value() const noexcept { return ptr_ ? !ptr_->is_type() : true; }
     Value* value() const noexcept;
     Type* type() const noexcept;
 
 private:
-    explicit EntityRef(Entity* ptr) noexcept;
+    explicit ObjectRef(Object* ptr) noexcept;
     void retain() noexcept;
     void release() noexcept;
 };
@@ -452,20 +453,20 @@ public:
     TypeRef of(ValueRef value) {
         assert(value && value.is_value());
         switch (value->kind_) {
-        case Kind::KIND_NULL:
+        case Kind::Null:
             return TypeRef(&any_type_instance_);
-        case Kind::KIND_INTEGER:
+        case Kind::Integer:
             return TypeRef(&integer_type_instance_);
-        case Kind::KIND_FLOAT:
+        case Kind::Float:
             return TypeRef(&float_type_instance_);
-        case Kind::KIND_STRING:
+        case Kind::String:
             return TypeRef(&string_type_instance_);
-        case Kind::KIND_BOOLEAN:
+        case Kind::Boolean:
             return TypeRef(&boolean_type_instance_);
-        case Kind::KIND_FUNCTION:
+        case Kind::Function:
             return TypeRef(static_cast<FunctionValue*>(value.value())->type_);
-        case Kind::KIND_OBJECT:
-            return TypeRef(static_cast<ObjectValue*>(value.value())->cls_);
+        case Kind::Instance:
+            return TypeRef(static_cast<InstanceValue*>(value.value())->cls_);
             // TODO: handle other kinds
         }
     }
@@ -497,15 +498,15 @@ public:
 
     TypeRef get_kind(Kind kind) {
         switch (kind) {
-        case Kind::KIND_ANY:
+        case Kind::Any:
             return TypeRef(&any_type_instance_);
-        case Kind::KIND_INTEGER:
+        case Kind::Integer:
             return TypeRef(&integer_type_instance_);
-        case Kind::KIND_FLOAT:
+        case Kind::Float:
             return TypeRef(&float_type_instance_);
-        case Kind::KIND_STRING:
+        case Kind::String:
             return TypeRef(&string_type_instance_);
-        case Kind::KIND_BOOLEAN:
+        case Kind::Boolean:
             return TypeRef(&boolean_type_instance_);
         default:
             assert(false && "Unknown primitive kind");

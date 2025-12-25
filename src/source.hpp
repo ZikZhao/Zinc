@@ -37,7 +37,7 @@ public:
         assert(index < file_order_.size());
         return files_.at(file_order_.at(index));
     }
-    std::size_t index(std::string filename) const noexcept {
+    std::size_t get_file_id(std::string filename) const noexcept {
         for (std::size_t i = 0; i < file_order_.size(); ++i) {
             if (file_order_[i] == filename) {
                 return i;

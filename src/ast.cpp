@@ -3,7 +3,7 @@
 #include "pch.hpp"
 #include <string_view>
 
-#include "entity.hpp"
+#include "object.hpp"
 
 Scope::Scope(std::string_view name, Scope& parent) noexcept : parent_(&parent), name_(name) {
     if (name.empty()) {
@@ -15,7 +15,7 @@ Scope::Scope(std::string_view name, Scope& parent) noexcept : parent_(&parent), 
 void Scope::add_type(std::string_view identifier, const ASTTypeExpression* expr) {
     types_.insert(identifier, expr);
 }
-void Scope::add_variable(std::string_view identifier, EntityRef expr) {
+void Scope::add_variable(std::string_view identifier, ObjectRef expr) {
     if (types_.contains(identifier)) {
         throw std::runtime_error(
             "Variable '"s + std::string(identifier) + "' already declared as type"s
@@ -25,26 +25,26 @@ void Scope::add_variable(std::string_view identifier, EntityRef expr) {
 }
 
 TypeChecker::TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& type_factory) noexcept
-    : current_(&root), ops_(ops), type_factory_(type_factory) {}
-void TypeChecker::add_variable(std::string_view identifier, EntityRef expr) {
-    current_->add_variable(identifier, expr);
+    : current_scope_(&root), ops_(ops), type_factory_(type_factory) {}
+void TypeChecker::add_variable(std::string_view identifier, ObjectRef expr) {
+    current_scope_->add_variable(identifier, expr);
 }
 void TypeChecker::enter(const ASTCodeBlock* child) noexcept {
     assert(
         child->name_.empty()
-            ? std::ranges::contains(current_->anonymous_children_, child->local_scope_.get())
-            : current_->children_.at(child->name_) == child->local_scope_.get()
+            ? std::ranges::contains(current_scope_->anonymous_children_, child->local_scope_.get())
+            : current_scope_->children_.at(child->name_) == child->local_scope_.get()
     );
-    current_ = child->local_scope_.get();
+    current_scope_ = child->local_scope_.get();
 }
-void TypeChecker::exit() noexcept { current_ = current_->parent_; }
-EntityRef TypeChecker::resolve(std::string_view identifier) {
-    return resolve_in(identifier, *current_);
+void TypeChecker::exit() noexcept { current_scope_ = current_scope_->parent_; }
+ObjectRef TypeChecker::resolve(std::string_view identifier) {
+    return resolve_in(identifier, *current_scope_);
 }
-VarInfo TypeChecker::type_of(std::string_view identifier) {
-    return type_of_in(identifier, *current_);
+ExprResult TypeChecker::type_of(std::string_view identifier) {
+    return type_of_in(identifier, *current_scope_);
 }
-EntityRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
+ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
     // Check cache
     auto& record = cache_[std::pair(&scope, identifier)];
     if (record.is_resolving) {
@@ -76,9 +76,9 @@ EntityRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
     }
     throw std::runtime_error("Unknown type identifier: '"s + std::string(identifier) + "'");
 }
-VarInfo TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
+ExprResult TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
-        return VarInfo{it_var->second, it_var->second.is_type()};
+        return ExprResult{it_var->second, it_var->second.is_type()};
     }
     if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
         throw std::runtime_error(
@@ -137,11 +137,12 @@ void ASTCodeBlock::check_types(TypeChecker& checker) {
 }
 
 ASTExpression::ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
+void ASTExpression::check_types(TypeChecker& checker) { std::ignore = get_result_type(checker); }
 
 ASTIdentifier::ASTIdentifier(const Location& loc, std::string_view name) noexcept
     : ASTExpression(loc), name_(name) {}
-EntityRef ASTIdentifier::eval(TypeChecker& checker) const { return checker.resolve(name_); }
-VarInfo ASTIdentifier::get_result_type(TypeChecker& checker) const {
+ObjectRef ASTIdentifier::eval(TypeChecker& checker) const { return checker.resolve(name_); }
+ExprResult ASTIdentifier::get_result_type(TypeChecker& checker) const {
     return checker.type_of(name_);
 }
 
@@ -164,7 +165,7 @@ ASTFunctionType::ASTFunctionType(
       ) {}
 ASTFunctionType::ASTFunctionType(TypeRef func) noexcept
     : ASTTypeExpression({}), representation_(func) {}
-EntityRef ASTFunctionType::eval(TypeChecker& checker) const {
+ObjectRef ASTFunctionType::eval(TypeChecker& checker) const {
     if (std::holds_alternative<TypeRef>(representation_)) {
         return std::get<TypeRef>(representation_);
     } else {
@@ -181,7 +182,7 @@ EntityRef ASTFunctionType::eval(TypeChecker& checker) const {
         return checker.type_factory_.get<FunctionType>(return_type, param_types, variadic_type);
     }
 }
-VarInfo ASTFunctionType::get_result_type(TypeChecker& checker) const {
+ExprResult ASTFunctionType::get_result_type(TypeChecker& checker) const {
     throw std::runtime_error("Function types cannot be used as values"s);
 }
 
@@ -189,14 +190,14 @@ ASTRecordType::ASTRecordType(
     const Location& loc, std::vector<std::unique_ptr<ASTFieldDeclaration>> fields
 ) noexcept
     : ASTTypeExpression(loc), fields_(std::move(fields)) {}
-EntityRef ASTRecordType::eval(TypeChecker& checker) const {
+ObjectRef ASTRecordType::eval(TypeChecker& checker) const {
     auto rng = fields_ | std::views::transform([&](const auto& decl) {
                    return std::pair(decl->identifier_, checker.resolve(decl->identifier_).type());
                });
     FlatMap<std::string_view, Type*> field_types(std::from_range, std::move(rng));
     return checker.type_factory_.get<RecordType>(field_types);
 }
-VarInfo ASTRecordType::get_result_type(TypeChecker& checker) const {
+ExprResult ASTRecordType::get_result_type(TypeChecker& checker) const {
     throw std::runtime_error("Record types cannot be used as values"s);
 }
 
@@ -213,7 +214,7 @@ ASTDeclaration::ASTDeclaration(
       expr_(std::move(expr)),
       is_mutable_(is_mutable) {}
 void ASTDeclaration::check_types(TypeChecker& checker) {
-    VarInfo inferred_type = expr_->get_result_type(checker);
+    ExprResult inferred_type = expr_->get_result_type(checker);
     TypeRef declared_type = type_->eval(checker);
     if (!declared_type) {
         declared_type = inferred_type.type_ref;

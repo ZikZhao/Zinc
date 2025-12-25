@@ -71,7 +71,7 @@ set(PCH_HEADER ${SOURCE_DIR}/pch.hpp)
 # Source files
 set(SOURCES
     ${SOURCE_DIR}/main.cpp
-    ${SOURCE_DIR}/entity.cpp
+    ${SOURCE_DIR}/object.cpp
     ${SOURCE_DIR}/exception.cpp
     ${SOURCE_DIR}/ast.cpp
 )
