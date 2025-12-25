@@ -4,7 +4,7 @@
 #include <limits>
 #include <utility>
 
-#include "exception.hpp"
+#include "diagnosis.hpp"
 
 Object::Object(Kind kind, bool is_value) noexcept
     : ref_count_(is_value ? 0 : std::numeric_limits<decltype(ref_count_)>::min()), kind_(kind) {}
@@ -259,11 +259,11 @@ IntegerValue IntegerValue::operator*(const IntegerValue& other) const {
     return IntegerValue(this->value_ * other.value_);
 }
 IntegerValue IntegerValue::operator/(const IntegerValue& other) const {
-    if (other.value_ == 0) throw std::runtime_error("Division by zero");
+    if (other.value_ == 0) throw UnlocatedProblem::make<DivisionByZeroError>();
     return IntegerValue(this->value_ / other.value_);
 }
 IntegerValue IntegerValue::operator%(const IntegerValue& other) const {
-    if (other.value_ == 0) throw std::runtime_error("Division by zero");
+    if (other.value_ == 0) throw UnlocatedProblem::make<DivisionByZeroError>();
     return IntegerValue(this->value_ % other.value_);
 }
 BooleanValue IntegerValue::operator==(const IntegerValue& other) const {
@@ -295,11 +295,11 @@ IntegerValue IntegerValue::operator^(const IntegerValue& other) const {
 }
 IntegerValue IntegerValue::operator~() const { return IntegerValue(~this->value_); }
 IntegerValue IntegerValue::operator<<(const IntegerValue& other) const {
-    if (other.value_ < 0) throw std::runtime_error("Cannot left shift by negative amount");
+    if (other.value_ < 0) throw UnlocatedProblem::make<ShiftByNegativeError>();
     return IntegerValue(this->value_ << other.value_);
 }
 IntegerValue IntegerValue::operator>>(const IntegerValue& other) const {
-    if (other.value_ < 0) throw std::runtime_error("Cannot right shift by negative amount");
+    if (other.value_ < 0) throw UnlocatedProblem::make<ShiftByNegativeError>();
     return IntegerValue(this->value_ >> other.value_);
 }
 
@@ -316,11 +316,11 @@ FloatValue FloatValue::operator*(const FloatValue& other) const {
     return FloatValue(this->value_ * other.value_);
 }
 FloatValue FloatValue::operator/(const FloatValue& other) const {
-    if (other.value_ == 0.0) throw std::runtime_error("Division by zero");
+    if (other.value_ == 0.0) throw UnlocatedProblem::make<DivisionByZeroError>();
     return FloatValue(this->value_ / other.value_);
 }
 FloatValue FloatValue::operator%(const FloatValue& other) const {
-    if (other.value_ == 0.0) throw std::runtime_error("Division by zero");
+    if (other.value_ == 0.0) throw UnlocatedProblem::make<DivisionByZeroError>();
     return FloatValue(std::fmod(this->value_, other.value_));
 }
 BooleanValue FloatValue::operator==(const FloatValue& other) const {
@@ -382,14 +382,6 @@ BooleanValue BooleanValue::operator not() const { return BooleanValue(!this->val
 
 std::string FunctionValue::repr() const {
     return std::format("<function at {:p}>", static_cast<const void*>(this));
-}
-Value* FunctionValue::operator()(const std::vector<Value*>& args) const {
-    try {
-        return callback_(args);
-    } catch (ReturnException<Value*>& e) {
-        return e.value_;
-    }
-    std::unreachable();
 }
 
 InstanceValue::InstanceValue(ClassType* cls) noexcept : Value(Kind::Instance), cls_(cls) {}

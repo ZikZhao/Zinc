@@ -1,44 +1,49 @@
 #pragma once
 #include "pch.hpp"
 
+class FileNotFoundError final : public std::runtime_error {
+public:
+    FileNotFoundError(std::string_view filename)
+        : std::runtime_error(std::format("File not found: {}", filename)) {}
+};
+
 struct Location {
-    std::size_t id = 0uz;
-    struct {
-        std::size_t line;
-        std::size_t column;
-    } begin = {0, 0}, end = {0, 0};
+    std::uint32_t id = 0;
+    std::uint32_t begin = 0;
+    std::uint32_t end = 0;
 };
 
 class SourceManager {
+public:
 public:
     FlatMap<std::string, std::string> files_;
     std::vector<std::string> file_order_;
 
 public:
     SourceManager() = default;
-    auto operator[](std::string_view filename) {
+    auto load(std::string_view filename) noexcept {
         struct SourceFile {
             std::string path;
-            const std::string& content;
+            const std::string* content;
         };
+        std::string absolute_path = std::filesystem::canonical(filename).string();
         std::ifstream file_stream(filename.data());
         if (file_stream.fail()) {
-            throw std::runtime_error("Cannot open source file: "s + filename.data());
+            return SourceFile{.path = "", .content = nullptr};
         }
-        std::string absolute_path = std::filesystem::canonical(filename).string();
         std::string content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
         );
         const std::string& file_content = (files_[absolute_path] = std::move(content));
         file_order_.push_back(absolute_path);
-        return SourceFile{.path = absolute_path, .content = file_content};
+        return SourceFile{.path = absolute_path, .content = &file_content};
     }
-    const std::string& operator[](std::size_t index) const noexcept {
-        assert(index < file_order_.size());
-        return files_.at(file_order_.at(index));
+    const std::string& operator[](std::size_t id) const noexcept {
+        assert(id < file_order_.size());
+        return files_.at(file_order_.at(id));
     }
-    std::size_t get_file_id(std::string filename) const noexcept {
-        for (std::size_t i = 0; i < file_order_.size(); ++i) {
+    std::uint32_t get_file_id(std::string filename) const noexcept {
+        for (std::uint32_t i = 0; i < file_order_.size(); ++i) {
             if (file_order_[i] == filename) {
                 return i;
             }

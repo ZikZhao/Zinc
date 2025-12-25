@@ -5,6 +5,7 @@
 #include "StainlessLexer.h"
 #include "StainlessParser.h"
 #include "ast.hpp"
+#include "diagnosis.hpp"
 #include "object.hpp"
 #include "operations.hpp"
 #include "source.hpp"
@@ -35,13 +36,11 @@ private:
         assert(ctx != nullptr);
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
-        Location location;
-        location.id = source_manager_.get_file_id(start->getTokenSource()->getSourceName());
-        location.begin.line = start->getLine();
-        location.begin.column = start->getCharPositionInLine();
-        location.end.line = stop->getLine();
-        location.end.column =
-            stop->getCharPositionInLine() + stop->getStopIndex() - stop->getStartIndex();
+        Location location{
+            .id = source_manager_.get_file_id(start->getTokenSource()->getSourceName()),
+            .begin = static_cast<std::uint32_t>(start->getStartIndex()),
+            .end = static_cast<std::uint32_t>(stop->getStopIndex() + 1)
+        };
         return location;
     }
     std::string_view text(const antlr4::ParserRuleContext* ctx) noexcept {
@@ -501,8 +500,14 @@ int main(int argc, char* argv[]) {
     SourceManager source_manager;
 
     std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
-    auto file = source_manager[input_path];
-    antlr4::ANTLRInputStream stream(file.content);
+    auto file = source_manager.load(input_path);
+
+    if (file.content == nullptr) {
+        std::cerr << "Error: Cannot open source file: " << input_path << std::endl;
+        return 1;
+    }
+
+    antlr4::ANTLRInputStream stream(*file.content);
     stream.name = file.path;
     StainlessLexer lexer(&stream);
     antlr4::CommonTokenStream tokens(&lexer);
@@ -521,4 +526,5 @@ int main(int argc, char* argv[]) {
     root->collect_types(ctx, ops);
     TypeChecker checker(ctx, ops, types);
     root->check_types(checker);
+    Diagnostic::output();
 }

@@ -73,7 +73,6 @@ set(PCH_HEADER ${SOURCE_DIR}/pch.hpp)
 set(SOURCES
     ${SOURCE_DIR}/main.cpp
     ${SOURCE_DIR}/object.cpp
-    ${SOURCE_DIR}/exception.cpp
     ${SOURCE_DIR}/ast.cpp
 )
 
@@ -131,15 +130,11 @@ find_package(benchmark CONFIG REQUIRED)
 
 add_executable(unit_tests
     ${TEST_DIR}/test_main.cpp
-    ${SOURCE_DIR}/object.cpp 
-    ${SOURCE_DIR}/exception.cpp
-    ${SOURCE_DIR}/ast.cpp
+    ${SOURCES}
 )
 add_executable(benchmarks
     ${TEST_DIR}/bench_main.cpp
-    ${SOURCE_DIR}/object.cpp 
-    ${SOURCE_DIR}/exception.cpp
-    ${SOURCE_DIR}/ast.cpp
+    ${SOURCES}
 )
 
 target_link_libraries(unit_tests PRIVATE GTest::gtest_main antlr4_generated_lib antlr4_static)

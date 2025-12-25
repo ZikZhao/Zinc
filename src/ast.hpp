@@ -3,6 +3,7 @@
 #include <string_view>
 #include <utility>
 
+#include "diagnosis.hpp"
 #include "object.hpp"
 #include "operations.hpp"
 #include "source.hpp"
@@ -210,24 +211,21 @@ public:
         : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
     ObjectRef eval(TypeChecker& checker) const final {
-        throw std::runtime_error(
-            "Assignment operations cannot be used in constant expressions or type expressions"s
-        );
+        Diagnostic::report(SymbolCategoryMismatchError(location_, false));
     }
     ExprResult get_result_type(TypeChecker& checker) const final {
         ExprResult left_type = left_->get_result_type(checker);
         ExprResult right_type = right_->get_result_type(checker);
         if (!left_type.is_mutable) {
-            throw std::runtime_error("Left-hand side of assignment must be mutable"s);
+            Diagnostic::report(ImmutableMutationError(location_));
         }
         if (left_type.is_rvalue) {
-            throw std::runtime_error("Left-hand side of assignment must be an lvalue"s);
+            Diagnostic::report(InvalidAssignmentTargetError(location_));
         }
         if (!left_type.type_ref->assignable_from(*right_type.type_ref)) {
-            throw std::runtime_error(
-                "Type mismatch in assignment: cannot assign "s + right_type.type_ref->repr() +
-                " to " + left_type.type_ref->repr()
-            );
+            Diagnostic::report(TypeMismatchError(
+                location_, left_type.type_ref->repr(), right_type.type_ref->repr()
+            ));
         }
         return {left_type.type_ref, true, false};
     }

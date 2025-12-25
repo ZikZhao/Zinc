@@ -4,6 +4,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "diagnosis.hpp"
 #include "object.hpp"
 
 enum class OperatorCode : std::uint16_t {
@@ -398,7 +399,9 @@ public:
         if (it != custom_table_.end()) {
             return it->second.second(left_value, right_value);
         } else {
-            throw std::runtime_error("Operation not defined for given types");
+            throw UnlocatedProblem::make<OperationNotDefinedError>(
+                "", left_value->repr(), right_value->repr()
+            );
         }
     }
 
@@ -411,7 +414,9 @@ public:
         if (it != custom_table_.end()) {
             return (*it).second.first;
         } else {
-            throw std::runtime_error("Operation not defined for given types");
+            throw UnlocatedProblem::make<OperationNotDefinedError>(
+                "", left_type->repr(), right_type->repr()
+            );
         }
     }
 };

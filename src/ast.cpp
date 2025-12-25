@@ -3,6 +3,7 @@
 #include "pch.hpp"
 #include <string_view>
 
+#include "diagnosis.hpp"
 #include "object.hpp"
 
 Scope::Scope(std::string_view name, Scope& parent) noexcept : parent_(&parent), name_(name) {
@@ -17,9 +18,7 @@ void Scope::add_type(std::string_view identifier, const ASTTypeExpression* expr)
 }
 void Scope::add_variable(std::string_view identifier, ObjectRef expr) {
     if (types_.contains(identifier)) {
-        throw std::runtime_error(
-            "Variable '"s + std::string(identifier) + "' already declared as type"s
-        );
+        throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
     }
     variables_.insert(identifier, expr);
 }
@@ -51,7 +50,7 @@ ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
         if (record.result) {
             return record.result;
         }
-        throw std::runtime_error("Cyclic type dependency detected");
+        throw UnlocatedProblem::make<CircularTypeDependencyError>(identifier);
     }
     // Cache miss; resolve
     record.is_resolving = true;
@@ -61,9 +60,7 @@ ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
     }
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
         if (it_var->second.is_type()) {
-            throw std::runtime_error(
-                "Identifier '"s + std::string(identifier) + "' is a mutable variable"s
-            );
+            throw UnlocatedProblem::make<NotConstantExpressionError>();
         } else {
             // constant (it_var->second is the value stored)
             record.result = types_.of(it_var->second.as_value());
@@ -74,7 +71,7 @@ ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
         record.result = resolve_in(identifier, *scope.parent_);
         return record.result;
     }
-    throw std::runtime_error("Unknown type identifier: '"s + std::string(identifier) + "'");
+    throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
 }
 ExprResult TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
@@ -83,14 +80,12 @@ ExprResult TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
         return ExprResult{type_ref, it_var->second.is_type()};
     }
     if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
-        throw std::runtime_error(
-            "Identifier '"s + std::string(identifier) + "' is a type, not a variable"s
-        );
+        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
     }
     if (scope.parent_ != nullptr) {
         return type_of_in(identifier, *scope.parent_);
     }
-    throw std::runtime_error("Unknown identifier: '"s + std::string(identifier) + "'"s);
+    throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
 }
 
 ASTNode::ASTNode(const Location& loc) noexcept : location_(loc) {}
@@ -173,27 +168,27 @@ ObjectRef ASTFunctionType::eval(TypeChecker& checker) const {
     }
     const auto& comps = std::get<Components>(representation_);
     if (Type* return_type = std::get<0>(comps)->eval(checker).as_type()) {
-        auto param_rng = std::get<1>(comps) | std::views::transform([&](const auto& param_expr) {
-                             if (Type* param_type = param_expr->eval(checker).as_type()) {
-                                 return param_type;
-                             }
-                             throw std::runtime_error("Function parameter type cannot be a value"s);
-                         });
+        auto param_rng =
+            std::get<1>(comps) | std::views::transform([&](const auto& param_expr) {
+                if (Type* param_type = param_expr->eval(checker).as_type()) {
+                    return param_type;
+                }
+                Diagnostic::report(SymbolCategoryMismatchError(param_expr->location_, true));
+            });
         ComparableSpan<Type*> param_types = GlobalMemory::collect_range<Type*>(param_rng);
         TypeRef variadic_type;  // TODO: check if TypeRef compiles
         if (const auto& opt_variadic = std::get<2>(comps)) {
             if (variadic_type = opt_variadic->eval(checker).as_type(); variadic_type) {
-                throw std::runtime_error("Function variadic type cannot be a value"s);
+                throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
             }
         }
         return checker.types_.get<FunctionType>(return_type, param_types, variadic_type);
     }
-
-    throw std::runtime_error("Function return type cannot be a value"s);
+    Diagnostic::report(SymbolCategoryMismatchError(std::get<0>(comps)->location_, true));
 }
 
 ExprResult ASTFunctionType::get_result_type(TypeChecker& checker) const {
-    throw std::runtime_error("Function types cannot be used as values"s);
+    Diagnostic::report(SymbolCategoryMismatchError(location_, false));
 }
 
 ASTRecordType::ASTRecordType(
@@ -205,15 +200,13 @@ ObjectRef ASTRecordType::eval(TypeChecker& checker) const {
                    if (TypeRef type = checker.resolve(decl->identifier_).as_type()) {
                        return std::pair(decl->identifier_, type);
                    }
-                   throw std::runtime_error(
-                       "Field '"s + std::string(decl->identifier_) + "' type cannot be a value"s
-                   );
+                   throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
                });
     FlatMap<std::string_view, Type*> field_types(std::from_range, std::move(rng));
     return checker.types_.get<RecordType>(field_types);
 }
 ExprResult ASTRecordType::get_result_type(TypeChecker& checker) const {
-    throw std::runtime_error("Record types cannot be used as values"s);
+    Diagnostic::report(SymbolCategoryMismatchError(location_, false));
 }
 
 ASTDeclaration::ASTDeclaration(
@@ -236,10 +229,7 @@ void ASTDeclaration::check_types(TypeChecker& checker) {
     } else {
         ObjectRef value = expr_->eval(checker);
         if (value.is_type()) {
-            throw std::runtime_error(
-                "Cannot declare constant variable '"s + std::string(identifier_->name_) +
-                "' with a type as its value"s
-            );
+            Diagnostic::report(SymbolCategoryMismatchError(expr_->location_, false));
         }
         std::ignore = get_declared_type(checker, checker.types_.of(value.as_value()));
         checker.add_variable(identifier_->name_, value);
@@ -249,15 +239,11 @@ TypeRef ASTDeclaration::get_declared_type(TypeChecker& checker, TypeRef inferred
     if (type_) {
         TypeRef declared_type = type_->eval(checker).as_type();
         if (!declared_type) {
-            throw std::runtime_error(
-                "Declared type of variable '"s + std::string(identifier_->name_) +
-                "' cannot be a value"s
-            );
+            Diagnostic::report(SymbolCategoryMismatchError(type_->location_, true));
         }
         if (!declared_type->assignable_from(*inferred_type)) {
-            throw std::runtime_error(
-                "Type mismatch in declaration of '"s + std::string(identifier_->name_) +
-                "': expected " + declared_type->repr() + ", got " + inferred_type->repr()
+            Diagnostic::report(
+                TypeMismatchError(location_, declared_type->repr(), inferred_type->repr())
             );
         }
         return declared_type;
