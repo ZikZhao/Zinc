@@ -16,6 +16,7 @@ struct Location {
 class SourceManager {
 public:
     struct File {
+        std::uint32_t id;
         std::string path;
         std::string content;
     };
@@ -35,9 +36,15 @@ public:
         std::string content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
         );
-        files.push_back(File{.path = path, .content = std::move(content)});
+        files.push_back(
+            File{
+                .id = static_cast<std::uint32_t>(files.size()),
+                .path = path,
+                .content = std::move(content)
+            }
+        );
         file_id_map_.insert(path, static_cast<std::uint32_t>(files.size()) - 1);
-        return static_cast<std::uint32_t>(files.size()) - 1;
+        return files.back().id;
     }
     const File& operator[](std::size_t id) const noexcept {
         assert(id < file_id_map_.size());

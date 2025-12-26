@@ -108,7 +108,14 @@ public:
     void check_types(TypeChecker& checker) override;
 };
 
-class ASTCodeBlock : public ASTRecursiveNode {
+class ASTRoot final : public ASTRecursiveNode {
+public:
+    std::vector<std::unique_ptr<ASTNode>> children_;
+    ASTRoot(const Location& loc, std::vector<std::unique_ptr<ASTNode>> children) noexcept;
+    std::generator<ASTNode*> get_children() const noexcept final;
+};
+
+class ASTCodeBlock final : public ASTRecursiveNode {
 public:
     std::vector<std::unique_ptr<ASTNode>> statements_;
     std::unique_ptr<Scope> local_scope_;

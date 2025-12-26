@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.hpp"
+#include <format>
 #include <string_view>
 
 #include "source.hpp"
@@ -164,28 +165,43 @@ public:
 class Diagnostic {
 private:
     static inline std::mutex print_mutex_;
-
-private:
-    static Diagnostic& current_diagnostic_() {
-        thread_local Diagnostic instance;
-        return instance;
-    }
+    static inline std::vector<Problem> problems_;
 
 public:
-    static void report(Problem&& problem) {
-        current_diagnostic_().problems_.push_back(std::move(problem));
-    }
+    static void report(Problem&& problem) { problems_.push_back(std::move(problem)); }
 
     static void print(SourceManager& sources) {
         std::lock_guard lock(print_mutex_);
-        for (const Problem& problem : current_diagnostic_().problems_) {
-            output_problem(sources, problem);
+        for (const Problem& problem : problems_) {
+            print_problem(sources, problem);
         }
         std::cerr.flush();
     }
 
+    static auto problem_count() noexcept {
+        struct {
+            std::size_t info = 0;
+            std::size_t warning = 0;
+            std::size_t error = 0;
+        } counts;
+        for (const Problem& problem : problems_) {
+            switch (problem.severity_) {
+            case Problem::Severity::Info:
+                ++counts.info;
+                break;
+            case Problem::Severity::Warning:
+                ++counts.warning;
+                break;
+            case Problem::Severity::Error:
+                ++counts.error;
+                break;
+            }
+        }
+        return counts;
+    }
+
 private:
-    static void output_problem(
+    static void print_problem(
         SourceManager& sources, const Problem& problem, std::size_t indent = 0
     ) {
         std::string_view prefix;
@@ -207,93 +223,82 @@ private:
         std::print(
             std::cerr, "{}[{}]{} {}\n", colour, prefix, ColourEscape::RESET, problem.message_
         );
-        print_code(sources, problem.location_, indent);
+        print_code(sources, problem.location_, indent + 2);
         for (const Problem& sub_problem : problem.sub_problems()) {
-            output_problem(sources, sub_problem, indent + 2);
+            print_problem(sources, sub_problem, indent + 2);
         }
     }
 
     static void print_code(
         SourceManager& sources, const Location& location, std::size_t indent = 0
     ) {
-        const auto& [_, content] = sources[location.id];
+        const auto& [_, path, content] = sources[location.id];
 
-        std::size_t first_line_start = content.rfind('\n', location.begin);
-        first_line_start = (first_line_start == std::string::npos) ? 0 : first_line_start + 1;
-        std::size_t first_line_end = content.find('\n', location.begin);
-        first_line_end = (first_line_end == std::string::npos) ? content.size() : first_line_end;
+        std::size_t context_start = content.rfind('\n', location.begin);
+        context_start = (context_start == std::string::npos) ? 0 : context_start + 1;
 
-        std::size_t last_line_start = content.rfind('\n', location.end - 1);
-        last_line_start = (last_line_start == std::string::npos) ? 0 : last_line_start + 1;
-        std::size_t last_line_end = content.find('\n', location.end);
-        last_line_end = (last_line_end == std::string::npos) ? content.size() : last_line_end;
+        std::size_t context_end = content.find('\n', location.end);
+        context_end = (context_end == std::string::npos) ? content.size() : context_end;
 
-        std::int64_t line_number = get_line_number(content, first_line_start);
-        const std::size_t start_col = location.begin - first_line_start + 1;
+        std::int64_t start_line_num = get_line_number(content, context_start);
+        std::int64_t end_line_num = get_line_number(content, context_end);
+        std::size_t line_num_width = std::formatted_size("{}", end_line_num);
 
-        std::print(
-            std::cerr,
-            "{:>{}} --> {}:{}:{}\n",
-            " ",
-            indent,
-            sources[location.id].path,
-            line_number,
-            start_col
-        );
+        std::size_t col_num = location.begin - context_start + 1;
+        std::print(std::cerr, "{:{}}--> {}:{}:{}\n", "", indent, path, start_line_num, col_num);
 
-        std::string_view first_line_unrelevant =
-            std::string_view(content.data() + first_line_start, location.begin - first_line_start);
-        std::string_view first_line_relevant =
-            std::string_view(content.data() + location.begin, first_line_end - location.begin);
-        std::print(
-            std::cerr,
-            "{}{:>4} |{} {} {}{}",
-            ColourEscape::DIM,
-            line_number++,
-            ColourEscape::RESET,
-            first_line_unrelevant,
-            ColourEscape::MAGENTA,
-            first_line_relevant
-        );
-
-        if (first_line_start == last_line_start) {
-            // Single line case
-            std::string_view last_line_unrelevant =
-                std::string_view(content.data() + first_line_end, last_line_end - first_line_end);
-            std::print(std::cerr, "{}{}\n", ColourEscape::RESET, last_line_unrelevant);
-            return;
-        }
-
-        std::string_view main_lines = std::string_view(
-            content.data() + first_line_end + 1, last_line_start - first_line_end - 1
-        );
-        for (const auto& subrange : main_lines | std::views::split('\n')) {
-            std::string_view line(
-                &*subrange.begin(), static_cast<std::size_t>(std::ranges::distance(subrange))
-            );
+        auto print_line = [&](std::int64_t line_idx,
+                              std::string_view prefix,
+                              std::string_view match,
+                              std::string_view suffix) {
             std::print(
                 std::cerr,
-                "\n{}{:>4} |{} {}",
+                "{:{}}{}{:>{}} |{}",
+                "",
+                indent,
                 ColourEscape::DIM,
-                line_number++,
-                ColourEscape::RESET,
-                line
+                line_idx,
+                line_num_width,
+                ColourEscape::RESET
             );
-        }
 
-        std::string_view last_line_relevant =
-            std::string_view(content.data() + last_line_start, location.end - last_line_start);
-        std::string_view last_line_unrelevant =
-            std::string_view(content.data() + location.end, last_line_end - location.end);
-        std::print(
-            std::cerr,
-            "\n{}{:>4} |{} {} {}\n",
-            ColourEscape::DIM,
-            line_number,
-            ColourEscape::RESET,
-            last_line_relevant,
-            last_line_unrelevant
-        );
+            if (!prefix.empty())
+                std::print(std::cerr, " {}", prefix);
+            else
+                std::print(std::cerr, " ");
+
+            if (!match.empty()) {
+                std::print(std::cerr, "{}{}{}", ColourEscape::MAGENTA, match, ColourEscape::RESET);
+            }
+
+            if (!suffix.empty()) std::print(std::cerr, "{}", suffix);
+
+            std::print(std::cerr, "\n");
+        };
+
+        std::string_view full_context =
+            std::string_view(content).substr(context_start, context_end - context_start);
+
+        std::size_t current_pos_in_file = context_start;
+        std::int64_t current_line_num = start_line_num;
+
+        for (const auto& line_range : std::views::split(full_context, '\n')) {
+            std::string_view line(
+                &*line_range.begin(), static_cast<std::size_t>(std::ranges::distance(line_range))
+            );
+            std::size_t line_start = current_pos_in_file;
+            std::size_t line_end = line_start + line.size();
+            std::size_t hl_start = std::clamp<std::size_t>(location.begin, line_start, line_end);
+            std::size_t hl_end = std::clamp<std::size_t>(location.end, line_start, line_end);
+
+            std::string_view prefix = line.substr(0, hl_start - line_start);
+            std::string_view match = line.substr(hl_start - line_start, hl_end - hl_start);
+            std::string_view suffix = line.substr(hl_end - line_start);
+
+            print_line(current_line_num++, prefix, match, suffix);
+
+            current_pos_in_file += line.size() + 1;
+        }
     }
 
     static std::int64_t get_line_number(const std::string& content, std::size_t where) {
@@ -315,8 +320,8 @@ private:
         return line_number;
     }
 
-private:
-    std::vector<Problem> problems_;
+public:
+    Diagnostic() = delete;
 };
 
 class UnlocatedProblem : std::runtime_error {

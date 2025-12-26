@@ -110,6 +110,14 @@ void ASTRecursiveNode::check_types(TypeChecker& checker) {
     }
 }
 
+ASTRoot::ASTRoot(const Location& loc, std::vector<std::unique_ptr<ASTNode>> children) noexcept
+    : ASTRecursiveNode(loc), children_(std::move(children)) {}
+std::generator<ASTNode*> ASTRoot::get_children() const noexcept {
+    for (const auto& child : children_) {
+        co_yield child.get();
+    }
+}
+
 ASTCodeBlock::ASTCodeBlock(
     const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements
 ) noexcept

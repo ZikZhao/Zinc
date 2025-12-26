@@ -1,4 +1,5 @@
 ﻿#include "pch.hpp"
+#include <future>
 #include <string_view>
 
 #include "StainlessBaseVisitor.h"
@@ -10,11 +11,14 @@
 #include "operations.hpp"
 #include "source.hpp"
 
+using ImportResult = std::unique_ptr<ASTRoot>;
+using ImportFuture = std::shared_future<ImportResult>;
+
 class ASTBuilder final : private StainlessBaseVisitor {
 private:
-    const SourceManager& source_manager_;
+    const SourceManager::File& file_;
+    const std::function<ImportFuture(std::string_view)> import_callback_;
     std::unique_ptr<ASTNode> last_visited_;
-    std::uint32_t current_file_id_ = std::numeric_limits<std::uint32_t>::max();
 
 private:
     std::unique_ptr<ASTNode> transform(antlr4::tree::ParseTree* ctx) noexcept {
@@ -34,42 +38,36 @@ private:
         return std::vector(rng.begin(), rng.end());
     }
     Location loc(const antlr4::ParserRuleContext* ctx) noexcept {
-        assert(ctx != nullptr && current_file_id_ != std::numeric_limits<std::uint32_t>::max());
+        assert(ctx != nullptr);
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
         Location location{
-            .id = current_file_id_,
+            .id = file_.id,
             .begin = static_cast<std::uint32_t>(start->getStartIndex()),
             .end = static_cast<std::uint32_t>(stop->getStopIndex() + 1)
         };
         return location;
     }
     std::string_view text(const antlr4::ParserRuleContext* ctx) noexcept {
-        assert(ctx != nullptr && current_file_id_ != std::numeric_limits<std::uint32_t>::max());
+        assert(ctx != nullptr);
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
-        const auto& [_, content] = source_manager_[current_file_id_];
         std::size_t begin_offset = start->getStartIndex();
         std::size_t end_offset = stop->getStopIndex() + 1;
-        return std::string_view(content.data() + begin_offset, end_offset - begin_offset);
+        return std::string_view(file_.content.data() + begin_offset, end_offset - begin_offset);
     }
     std::string_view text(const antlr4::Token* token) noexcept {
         assert(token != nullptr);
-        const auto& [_, content] = source_manager_[current_file_id_];
         std::size_t begin_offset = token->getStartIndex();
         std::size_t end_offset = token->getStopIndex() + 1;
-        return std::string_view(content.data() + begin_offset, end_offset - begin_offset);
+        return std::string_view(file_.content.data() + begin_offset, end_offset - begin_offset);
     }
 
 public:
-    ASTBuilder(const SourceManager& source_manager) noexcept : source_manager_(source_manager) {}
-    std::unique_ptr<ASTCodeBlock> operator()(
-        std::uint32_t file_id, antlr4::tree::ParseTree* root
-    ) noexcept {
-        current_file_id_ = file_id;
-        auto tree = static_unique_cast<ASTCodeBlock>(transform(root));
-        current_file_id_ = std::numeric_limits<std::uint32_t>::max();
-        return tree;
+    ASTBuilder(const SourceManager::File& file, decltype(import_callback_) import_callback) noexcept
+        : file_(file), import_callback_(std::move(import_callback)) {}
+    std::unique_ptr<ASTRoot> operator()(antlr4::tree::ParseTree* root) noexcept {
+        return static_unique_cast<ASTRoot>(transform(root));
     }
 
 private:
@@ -77,7 +75,7 @@ private:
         auto rng = ctx->statements_ |
                    std::views::transform([this](auto child) { return transform(child); });
         std::vector<std::unique_ptr<ASTNode>> nodes(rng.begin(), rng.end());
-        last_visited_ = std::make_unique<ASTCodeBlock>(loc(ctx), std::move(nodes));
+        last_visited_ = std::make_unique<ASTRoot>(loc(ctx), std::move(nodes));
         return {};
     }
     antlrcpp::Any visitStatement(StainlessParser::StatementContext* ctx) noexcept final {
@@ -502,28 +500,61 @@ private:
 // // }
 // }  // namespace Builtins
 
-int main(int argc, char* argv[]) {
-    SourceManager sources;
+class ImportManager {
+private:
+    SourceManager& sources_;
+    std::mutex import_mutex_;
+    FlatMap<std::string_view, std::shared_future<ImportResult>> import_map_;
 
-    std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
-    auto file_id = sources.load(input_path);
+private:
+    ImportResult import_worker(SourceManager& sources, std::string_view path) {
+        auto file_id = sources.load(path);
+        if (!file_id) {
+            return nullptr;
+        }
 
-    if (!file_id) {
-        std::cerr << "Error: Cannot open source file: " << input_path << std::endl;
-        return 1;
+        const auto& file = sources[*file_id];
+        antlr4::ANTLRInputStream stream(file.content);
+        StainlessLexer lexer(&stream);
+        antlr4::CommonTokenStream tokens(&lexer);
+        StainlessParser parser(&tokens);
+
+        StainlessParser::ProgramContext* tree = parser.program();
+        ASTBuilder builder(file, [this](std::string_view import_path) {
+            return this->import(import_path);
+        });
+        return builder(tree);
     }
 
-    const auto& file = sources[*file_id];
-    antlr4::ANTLRInputStream stream(file.content);
-    StainlessLexer lexer(&stream);
-    antlr4::CommonTokenStream tokens(&lexer);
-    StainlessParser parser(&tokens);
+public:
+    ImportManager(SourceManager& sources) noexcept : sources_(sources) {}
 
-    StainlessParser::ProgramContext* tree = parser.program();
-    std::cout << tree->toStringTree(&parser, true) << std::endl;
+    ImportFuture import(std::string_view path) {
+        std::lock_guard lock(import_mutex_);
+        if (auto it = import_map_.find(path); it != import_map_.end()) {
+            return it->second;
+        } else {
+            auto import_future = std::async(
+                                     std::launch::async,
+                                     &ImportManager::import_worker,
+                                     this,
+                                     std::ref(sources_),
+                                     path
+            )
+                                     .share();
+            import_map_.insert(path, import_future);
+            return import_map_.at(path);
+        }
+    }
+};
 
-    ASTBuilder builder(sources);
-    std::unique_ptr<ASTCodeBlock> root = builder(*file_id, tree);
+int main(int argc, char* argv[]) {
+    SourceManager sources;
+    ImportManager importer(sources);
+
+    std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
+    ImportFuture import_future = importer.import(input_path);
+    const std::unique_ptr<ASTRoot>& root = std::move(import_future).get();
 
     // Context ctx = Builtins::GetBuiltinsScope();
     Scope ctx;
