@@ -1,9 +1,6 @@
 #pragma once
 #include "pch.hpp"
-#include <functional>
-#include <memory>
-#include <mutex>
-#include <stdexcept>
+#include <string_view>
 
 #include "source.hpp"
 
@@ -166,7 +163,7 @@ public:
 
 class Diagnostic {
 private:
-    static inline std::mutex output_mutex_;
+    static inline std::mutex print_mutex_;
 
 private:
     static Diagnostic& current_diagnostic_() {
@@ -179,19 +176,143 @@ public:
         current_diagnostic_().problems_.push_back(std::move(problem));
     }
 
-    static void output() {
-        std::lock_guard lock(output_mutex_);
+    static void print(SourceManager& sources) {
+        std::lock_guard lock(print_mutex_);
         for (const Problem& problem : current_diagnostic_().problems_) {
-            std::print(
-                std::cerr,
-                "Error at {}:{}-{}: {}\n",
-                problem.location_.id,
-                problem.location_.begin,
-                problem.location_.end,
-                problem.message_
-            );
+            output_problem(sources, problem);
         }
         std::cerr.flush();
+    }
+
+private:
+    static void output_problem(
+        SourceManager& sources, const Problem& problem, std::size_t indent = 0
+    ) {
+        std::string_view prefix;
+        const char* colour;
+        switch (problem.severity_) {
+        case Problem::Severity::Info:
+            prefix = "INFO";
+            colour = ColourEscape::CYAN;
+            break;
+        case Problem::Severity::Warning:
+            prefix = "WARNING";
+            colour = ColourEscape::YELLOW;
+            break;
+        case Problem::Severity::Error:
+            prefix = "ERROR";
+            colour = ColourEscape::RED;
+            break;
+        }
+        std::print(
+            std::cerr, "{}[{}]{} {}\n", colour, prefix, ColourEscape::RESET, problem.message_
+        );
+        print_code(sources, problem.location_, indent);
+        for (const Problem& sub_problem : problem.sub_problems()) {
+            output_problem(sources, sub_problem, indent + 2);
+        }
+    }
+
+    static void print_code(
+        SourceManager& sources, const Location& location, std::size_t indent = 0
+    ) {
+        const auto& [_, content] = sources[location.id];
+
+        std::size_t first_line_start = content.rfind('\n', location.begin);
+        first_line_start = (first_line_start == std::string::npos) ? 0 : first_line_start + 1;
+        std::size_t first_line_end = content.find('\n', location.begin);
+        first_line_end = (first_line_end == std::string::npos) ? content.size() : first_line_end;
+
+        std::size_t last_line_start = content.rfind('\n', location.end - 1);
+        last_line_start = (last_line_start == std::string::npos) ? 0 : last_line_start + 1;
+        std::size_t last_line_end = content.find('\n', location.end);
+        last_line_end = (last_line_end == std::string::npos) ? content.size() : last_line_end;
+
+        std::int64_t line_number = get_line_number(content, first_line_start);
+        const std::size_t start_col = location.begin - first_line_start + 1;
+
+        std::print(
+            std::cerr,
+            "{:>{}} --> {}:{}:{}\n",
+            " ",
+            indent,
+            sources[location.id].path,
+            line_number,
+            start_col
+        );
+
+        std::string_view first_line_unrelevant =
+            std::string_view(content.data() + first_line_start, location.begin - first_line_start);
+        std::string_view first_line_relevant =
+            std::string_view(content.data() + location.begin, first_line_end - location.begin);
+        std::print(
+            std::cerr,
+            "{}{:>4} |{} {} {}{}",
+            ColourEscape::DIM,
+            line_number++,
+            ColourEscape::RESET,
+            first_line_unrelevant,
+            ColourEscape::MAGENTA,
+            first_line_relevant
+        );
+
+        if (first_line_start == last_line_start) {
+            // Single line case
+            std::string_view last_line_unrelevant =
+                std::string_view(content.data() + first_line_end, last_line_end - first_line_end);
+            std::print(std::cerr, "{}{}\n", ColourEscape::RESET, last_line_unrelevant);
+            return;
+        }
+
+        std::string_view main_lines = std::string_view(
+            content.data() + first_line_end + 1, last_line_start - first_line_end - 1
+        );
+        for (const auto& subrange : main_lines | std::views::split('\n')) {
+            std::string_view line(
+                &*subrange.begin(), static_cast<std::size_t>(std::ranges::distance(subrange))
+            );
+            std::print(
+                std::cerr,
+                "\n{}{:>4} |{} {}",
+                ColourEscape::DIM,
+                line_number++,
+                ColourEscape::RESET,
+                line
+            );
+        }
+
+        std::string_view last_line_relevant =
+            std::string_view(content.data() + last_line_start, location.end - last_line_start);
+        std::string_view last_line_unrelevant =
+            std::string_view(content.data() + location.end, last_line_end - location.end);
+        std::print(
+            std::cerr,
+            "\n{}{:>4} |{} {} {}\n",
+            ColourEscape::DIM,
+            line_number,
+            ColourEscape::RESET,
+            last_line_relevant,
+            last_line_unrelevant
+        );
+    }
+
+    static std::int64_t get_line_number(const std::string& content, std::size_t where) {
+        static FlatMap<void*, std::vector<std::size_t>> line_cache;
+        auto it = line_cache.find((void*)content.data());
+        if (it == line_cache.end()) {
+            std::vector<std::size_t> line_starts = {0};
+            for (std::size_t pos = 0; pos < content.size(); ++pos) {
+                if (content[pos] == '\n') {
+                    line_starts.push_back(pos + 1);
+                }
+            }
+            line_cache[(void*)content.data()] = std::move(line_starts);
+            it = line_cache.find((void*)content.data());
+        }
+        const std::vector<std::size_t>& line_starts = it->second;
+        auto line_it = std::upper_bound(line_starts.begin(), line_starts.end(), where);
+        std::int64_t line_number = std::distance(line_starts.begin(), line_it);
+        return line_number;
     }
 
 private:

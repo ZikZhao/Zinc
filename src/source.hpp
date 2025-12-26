@@ -15,39 +15,32 @@ struct Location {
 
 class SourceManager {
 public:
+    struct File {
+        std::string path;
+        std::string content;
+    };
+
 public:
-    FlatMap<std::string, std::string> files_;
-    std::vector<std::string> file_order_;
+    FlatMap<std::string, std::uint32_t> file_id_map_;
+    std::vector<File> files;
 
 public:
     SourceManager() = default;
-    auto load(std::string_view filename) noexcept {
-        struct SourceFile {
-            std::string path;
-            const std::string* content;
-        };
-        std::string absolute_path = std::filesystem::canonical(filename).string();
-        std::ifstream file_stream(filename.data());
+    std::optional<std::uint32_t> load(std::string_view input_path) noexcept {
+        std::string path = std::filesystem::canonical(input_path).string();
+        std::ifstream file_stream(input_path.data());
         if (file_stream.fail()) {
-            return SourceFile{.path = "", .content = nullptr};
+            return std::nullopt;
         }
         std::string content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
         );
-        const std::string& file_content = (files_[absolute_path] = std::move(content));
-        file_order_.push_back(absolute_path);
-        return SourceFile{.path = absolute_path, .content = &file_content};
+        files.push_back(File{.path = path, .content = std::move(content)});
+        file_id_map_.insert(path, static_cast<std::uint32_t>(files.size()) - 1);
+        return static_cast<std::uint32_t>(files.size()) - 1;
     }
-    const std::string& operator[](std::size_t id) const noexcept {
-        assert(id < file_order_.size());
-        return files_.at(file_order_.at(id));
-    }
-    std::uint32_t get_file_id(std::string filename) const noexcept {
-        for (std::uint32_t i = 0; i < file_order_.size(); ++i) {
-            if (file_order_[i] == filename) {
-                return i;
-            }
-        }
-        assert(false && "File not found in SourceManager");
+    const File& operator[](std::size_t id) const noexcept {
+        assert(id < file_id_map_.size());
+        return files[id];
     }
 };

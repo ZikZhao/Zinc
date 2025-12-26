@@ -14,6 +14,7 @@ class ASTBuilder final : private StainlessBaseVisitor {
 private:
     const SourceManager& source_manager_;
     std::unique_ptr<ASTNode> last_visited_;
+    std::uint32_t current_file_id_ = std::numeric_limits<std::uint32_t>::max();
 
 private:
     std::unique_ptr<ASTNode> transform(antlr4::tree::ParseTree* ctx) noexcept {
@@ -33,40 +34,45 @@ private:
         return std::vector(rng.begin(), rng.end());
     }
     Location loc(const antlr4::ParserRuleContext* ctx) noexcept {
-        assert(ctx != nullptr);
+        assert(ctx != nullptr && current_file_id_ != std::numeric_limits<std::uint32_t>::max());
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
         Location location{
-            .id = source_manager_.get_file_id(start->getTokenSource()->getSourceName()),
+            .id = current_file_id_,
             .begin = static_cast<std::uint32_t>(start->getStartIndex()),
             .end = static_cast<std::uint32_t>(stop->getStopIndex() + 1)
         };
         return location;
     }
     std::string_view text(const antlr4::ParserRuleContext* ctx) noexcept {
-        assert(ctx != nullptr);
+        assert(ctx != nullptr && current_file_id_ != std::numeric_limits<std::uint32_t>::max());
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
-        const std::string& source =
-            source_manager_[source_manager_.get_file_id(start->getTokenSource()->getSourceName())];
+        const auto& [_, content] = source_manager_[current_file_id_];
         std::size_t begin_offset = start->getStartIndex();
         std::size_t end_offset = stop->getStopIndex() + 1;
-        return std::string_view(source.data() + begin_offset, end_offset - begin_offset);
+        return std::string_view(content.data() + begin_offset, end_offset - begin_offset);
     }
     std::string_view text(const antlr4::Token* token) noexcept {
         assert(token != nullptr);
-        const std::string& source =
-            source_manager_[source_manager_.get_file_id(token->getTokenSource()->getSourceName())];
+        const auto& [_, content] = source_manager_[current_file_id_];
         std::size_t begin_offset = token->getStartIndex();
         std::size_t end_offset = token->getStopIndex() + 1;
-        return std::string_view(source.data() + begin_offset, end_offset - begin_offset);
+        return std::string_view(content.data() + begin_offset, end_offset - begin_offset);
     }
 
 public:
     ASTBuilder(const SourceManager& source_manager) noexcept : source_manager_(source_manager) {}
-    std::unique_ptr<ASTCodeBlock> operator()(antlr4::tree::ParseTree* root) noexcept {
-        return static_unique_cast<ASTCodeBlock>(transform(root));
+    std::unique_ptr<ASTCodeBlock> operator()(
+        std::uint32_t file_id, antlr4::tree::ParseTree* root
+    ) noexcept {
+        current_file_id_ = file_id;
+        auto tree = static_unique_cast<ASTCodeBlock>(transform(root));
+        current_file_id_ = std::numeric_limits<std::uint32_t>::max();
+        return tree;
     }
+
+private:
     antlrcpp::Any visitProgram(StainlessParser::ProgramContext* ctx) noexcept final {
         auto rng = ctx->statements_ |
                    std::views::transform([this](auto child) { return transform(child); });
@@ -497,18 +503,18 @@ public:
 // }  // namespace Builtins
 
 int main(int argc, char* argv[]) {
-    SourceManager source_manager;
+    SourceManager sources;
 
     std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
-    auto file = source_manager.load(input_path);
+    auto file_id = sources.load(input_path);
 
-    if (file.content == nullptr) {
+    if (!file_id) {
         std::cerr << "Error: Cannot open source file: " << input_path << std::endl;
         return 1;
     }
 
-    antlr4::ANTLRInputStream stream(*file.content);
-    stream.name = file.path;
+    const auto& file = sources[*file_id];
+    antlr4::ANTLRInputStream stream(file.content);
     StainlessLexer lexer(&stream);
     antlr4::CommonTokenStream tokens(&lexer);
     StainlessParser parser(&tokens);
@@ -516,8 +522,8 @@ int main(int argc, char* argv[]) {
     StainlessParser::ProgramContext* tree = parser.program();
     std::cout << tree->toStringTree(&parser, true) << std::endl;
 
-    ASTBuilder builder(source_manager);
-    std::unique_ptr<ASTCodeBlock> root = builder(tree);
+    ASTBuilder builder(sources);
+    std::unique_ptr<ASTCodeBlock> root = builder(*file_id, tree);
 
     // Context ctx = Builtins::GetBuiltinsScope();
     Scope ctx;
@@ -526,5 +532,5 @@ int main(int argc, char* argv[]) {
     root->collect_types(ctx, ops);
     TypeChecker checker(ctx, ops, types);
     root->check_types(checker);
-    Diagnostic::output();
+    Diagnostic::print(sources);
 }
