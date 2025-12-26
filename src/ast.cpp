@@ -175,16 +175,17 @@ ObjectRef ASTFunctionType::eval(TypeChecker& checker) const {
         return std::get<TypeRef>(representation_);
     }
     const auto& comps = std::get<Components>(representation_);
-    if (Type* return_type = std::get<0>(comps)->eval(checker).as_type()) {
+    if (TypeRef return_type = std::get<0>(comps)->eval(checker).as_type()) {
         auto param_rng =
-            std::get<1>(comps) | std::views::transform([&](const auto& param_expr) {
-                if (Type* param_type = param_expr->eval(checker).as_type()) {
+            std::get<1>(comps) | std::views::transform([&](const auto& param_expr) -> Type* {
+                if (TypeRef param_type = param_expr->eval(checker).as_type()) {
                     return param_type;
                 }
                 Diagnostic::report(SymbolCategoryMismatchError(param_expr->location_, true));
+                return checker.types_.get_unknown();
             });
-        ComparableSpan<Type*> param_types = GlobalMemory::collect_range<Type*>(param_rng);
-        TypeRef variadic_type;  // TODO: check if TypeRef compiles
+        ComparableSpan param_types = GlobalMemory::collect_range<Type*>(param_rng);
+        TypeRef variadic_type;
         if (const auto& opt_variadic = std::get<2>(comps)) {
             if (variadic_type = opt_variadic->eval(checker).as_type(); variadic_type) {
                 throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
@@ -193,10 +194,12 @@ ObjectRef ASTFunctionType::eval(TypeChecker& checker) const {
         return checker.types_.get<FunctionType>(return_type, param_types, variadic_type);
     }
     Diagnostic::report(SymbolCategoryMismatchError(std::get<0>(comps)->location_, true));
+    return checker.types_.get_unknown();
 }
 
 ExprResult ASTFunctionType::get_result_type(TypeChecker& checker) const {
     Diagnostic::report(SymbolCategoryMismatchError(location_, false));
+    return {checker.types_.get_unknown(), false, true};
 }
 
 ASTRecordType::ASTRecordType(
@@ -215,6 +218,7 @@ ObjectRef ASTRecordType::eval(TypeChecker& checker) const {
 }
 ExprResult ASTRecordType::get_result_type(TypeChecker& checker) const {
     Diagnostic::report(SymbolCategoryMismatchError(location_, false));
+    return {checker.types_.get_unknown(), false, true};
 }
 
 ASTDeclaration::ASTDeclaration(

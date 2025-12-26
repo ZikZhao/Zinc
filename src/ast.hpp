@@ -219,6 +219,7 @@ public:
     ~ASTBinaryOp() noexcept final = default;
     ObjectRef eval(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
+        return checker.types_.get_unknown();
     }
     ExprResult get_result_type(TypeChecker& checker) const final {
         ExprResult left_type = left_->get_result_type(checker);

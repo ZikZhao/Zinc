@@ -233,7 +233,7 @@ class IntrinsicOpTable {
 private:
     /// Placeholder for right operand absence
     struct NoOperand : public Value {
-        static constexpr Kind kind = Kind::Nothing;
+        static constexpr Kind kind = Kind::NothingOrUnknown;
         NoOperand() = delete;
         NoOperand(const NoOperand&) = delete;
         NoOperand& operator=(const NoOperand&) = delete;
@@ -295,7 +295,7 @@ private:
                 },
             };
         } else {
-            return TableValue{Kind::Nothing, nullptr};
+            return TableValue{Kind::NothingOrUnknown, nullptr};
         }
     }
 
@@ -336,6 +336,11 @@ public:
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left_type->kind_)]
                                                    [static_cast<std::size_t>(right_type->kind_)];
+        if (value.first == Kind::NothingOrUnknown) {
+            throw UnlocatedProblem::make<OperationNotDefinedError>(
+                "", left_type->repr(), right_type->repr()
+            );
+        }
         return types_.get_kind(value.first);
     }
 
@@ -344,6 +349,9 @@ private:
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left->kind_)]
                                                    [static_cast<std::size_t>(right->kind_)];
+        if (value.second == nullptr) {
+            throw UnlocatedProblem::make<OperationNotDefinedError>("", left->repr(), right->repr());
+        }
         return value.second(left, right);
     }
 
@@ -354,8 +362,7 @@ private:
         case OperatorCode::OPERATOR_BITWISE_OR:
             return types_.get<UnionType>(left, right);
         default:
-            assert(false && "Unsupported operation on types");
-            std::unreachable();
+            throw UnlocatedProblem::make<OperationNotDefinedError>("", left->repr(), right->repr());
         }
     }
 

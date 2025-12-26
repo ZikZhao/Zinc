@@ -172,32 +172,32 @@ public:
 
     static void print(SourceManager& sources) {
         std::lock_guard lock(print_mutex_);
+        std::size_t error_count = 0;
+        std::size_t warning_count = 0;
         for (const Problem& problem : problems_) {
             print_problem(sources, problem);
-        }
-        std::cerr.flush();
-    }
-
-    static auto problem_count() noexcept {
-        struct {
-            std::size_t info = 0;
-            std::size_t warning = 0;
-            std::size_t error = 0;
-        } counts;
-        for (const Problem& problem : problems_) {
             switch (problem.severity_) {
-            case Problem::Severity::Info:
-                ++counts.info;
+            case Problem::Severity::Error:
+                ++error_count;
                 break;
             case Problem::Severity::Warning:
-                ++counts.warning;
+                ++warning_count;
                 break;
-            case Problem::Severity::Error:
-                ++counts.error;
+            case Problem::Severity::Info:
                 break;
             }
         }
-        return counts;
+        std::print(
+            std::cerr,
+            "\n{}{} error(s){}, {}{} warning(s){} generated.\n",
+            ColourEscape::RED,
+            error_count,
+            ColourEscape::RESET,
+            ColourEscape::YELLOW,
+            warning_count,
+            ColourEscape::RESET
+        );
+        std::cerr.flush();
     }
 
 private:
@@ -245,7 +245,18 @@ private:
         std::size_t line_num_width = std::formatted_size("{}", end_line_num);
 
         std::size_t col_num = location.begin - context_start + 1;
-        std::print(std::cerr, "{:{}}--> {}:{}:{}\n", "", indent, path, start_line_num, col_num);
+        std::print(
+            std::cerr,
+            "{:{}}{}{}{}:{}:{}{}\n",
+            "",
+            indent,
+            ColourEscape::DIM,
+            ColourEscape::UNDERLINE,
+            path,
+            start_line_num,
+            col_num,
+            ColourEscape::RESET
+        );
 
         auto print_line = [&](std::int64_t line_idx,
                               std::string_view prefix,
@@ -268,7 +279,9 @@ private:
                 std::print(std::cerr, " ");
 
             if (!match.empty()) {
-                std::print(std::cerr, "{}{}{}", ColourEscape::MAGENTA, match, ColourEscape::RESET);
+                std::print(
+                    std::cerr, "{}{}{}", ColourEscape::HI_MAGENTA, match, ColourEscape::RESET
+                );
             }
 
             if (!suffix.empty()) std::print(std::cerr, "{}", suffix);

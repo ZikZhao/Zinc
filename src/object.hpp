@@ -8,7 +8,8 @@
 class Scope;
 
 enum class Kind : std::uint16_t {
-    Nothing,
+    NothingOrUnknown,  // for operation table it means no right operand, for types it means unknown
+                       // type
     Any,
     Null,
     Integer,
@@ -28,21 +29,8 @@ enum class Kind : std::uint16_t {
 
 class Object;
 
-class Value;
-class NullValue;
-class IntegerValue;
-class FloatValue;
-class StringValue;
-class BooleanValue;
-class FunctionValue;
-class InterfaceValue;
-class ClassValue;
-class InstanceValue;
-class ListValue;
-class DictValue;
-class SetValue;
-
 class Type;
+class UnknownType;
 template <Kind Kind>
 class PrimitiveType;
 using AnyType = PrimitiveType<Kind::Any>;
@@ -56,6 +44,20 @@ class StructType;
 class ClassType;
 class IntersectionType;
 class UnionType;
+
+class Value;
+class NullValue;
+class IntegerValue;
+class FloatValue;
+class StringValue;
+class BooleanValue;
+class FunctionValue;
+class InterfaceValue;
+class ClassValue;
+class InstanceValue;
+class ListValue;
+class DictValue;
+class SetValue;
 
 template <typename T>
 concept TypeClass = std::derived_from<T, Type>;
@@ -100,11 +102,19 @@ private:
 class Type : public Object {
 public:
     Type(Kind kind) noexcept;
-    ~Type() override = default;
     bool assignable_from(const Type& source) const;
 
 protected:
     virtual bool assignable_from_impl(const Type& source) const = 0;
+};
+
+class UnknownType final : public Type {
+public:
+    UnknownType() noexcept : Type(Kind::NothingOrUnknown) {}
+    std::string repr() const final { return "unknown"; }
+
+protected:
+    bool assignable_from_impl(const Type& source) const final { return true; }
 };
 
 template <Kind K>
@@ -499,6 +509,7 @@ class TypeRegistry {
 private:
     using Primitives =
         std::tuple<AnyType, NullType, IntegerType, FloatType, StringType, BooleanType>;
+    UnknownType unknown_type_instance_;
     AnyType any_type_instance_;
     IntegerType integer_type_instance_;
     FloatType float_type_instance_;
@@ -528,6 +539,8 @@ public:
             return TypeRef(static_cast<FunctionValue&>(*value).type_);
         case Kind::Instance:
             return TypeRef(static_cast<InstanceValue&>(*value).cls_);
+        default:
+            assert(false && "Unknown value kind for TypeRegistry::of");
             // TODO: handle other kinds
         }
     }
@@ -574,6 +587,8 @@ public:
             std::unreachable();
         }
     }
+
+    TypeRef get_unknown() { return TypeRef(&unknown_type_instance_); }
 
 private:
     template <typename T>
