@@ -70,9 +70,7 @@ add_custom_command(
 set(PCH_HEADER ${SOURCE_DIR}/pch.hpp)
 
 # Source files
-# set(SOURCES ${SOURCE_DIR}/*.cpp)
-file(GLOB SOURCES CONFIGURE_DEPENDS "${SOURCE_DIR}/*.cpp")
-message(STATUS "Source files: ${SOURCES}")
+set(SOURCES ${SOURCE_DIR}/main.cpp)
 
 # Create a library for ANTLR generated code to suppress warnings
 add_library(antlr4_generated_lib STATIC ${ANTLR4_GENERATED_SRC})

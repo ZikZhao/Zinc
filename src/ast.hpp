@@ -239,7 +239,12 @@ public:
     ObjectRef eval(TypeChecker& checker) const final {
         ObjectRef left_result = left_->eval(checker);
         ObjectRef right_result = right_->eval(checker);
-        return checker.ops_.eval_op(Op::opcode, left_result, right_result);
+        try {
+            return checker.ops_.eval_op(Op::opcode, left_result, right_result);
+        } catch (const UnlocatedProblem& e) {
+            Diagnostic::report(SymbolCategoryMismatchError(location_, false));
+            return checker.types_.get_unknown();
+        }
     }
     ExprResult get_result_type(TypeChecker& checker) const final {
         ExprResult left_type = left_->get_result_type(checker);
@@ -474,7 +479,7 @@ public:
             checker.add_variable(identifier_->name_, declared_type);
         } else {
             ObjectRef value = expr_->eval(checker);
-            if (value.is_type()) {
+            if (!value.as_value()) {
                 Diagnostic::report(SymbolCategoryMismatchError(expr_->location_, false));
             }
             std::ignore = get_declared_type(checker, checker.types_.of(value.as_value()));
@@ -697,9 +702,7 @@ inline void TypeChecker::enter(const ASTCodeBlock* child) noexcept {
     current_scope_ = child->local_scope_.get();
 }
 
-inline void TypeChecker::exit() noexcept {
-    current_scope_ = current_scope_->parent_;
-}
+inline void TypeChecker::exit() noexcept { current_scope_ = current_scope_->parent_; }
 
 inline ObjectRef TypeChecker::resolve(std::string_view identifier) {
     return resolve_in(identifier, *current_scope_);
@@ -725,7 +728,7 @@ inline ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& sco
         return record.result;
     }
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
-        if (it_var->second.is_type()) {
+        if (it_var->second.as_type()) {
             throw UnlocatedProblem::make<NotConstantExpressionError>();
         } else {
             // constant (it_var->second is the value stored)
@@ -742,9 +745,11 @@ inline ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& sco
 
 inline ExprResult TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
-        TypeRef type_ref = it_var->second.is_type() ? it_var->second.as_type()
-                                                    : types_.of(it_var->second.as_value());
-        return ExprResult{type_ref, it_var->second.is_type()};
+        TypeRef type_ref = it_var->second.as_type();
+        if (!type_ref) {
+            type_ref = types_.of(it_var->second.as_value());
+        }
+        return ExprResult{type_ref, it_var->second.as_type()};
     }
     if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);

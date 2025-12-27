@@ -323,9 +323,9 @@ public:
     constexpr IntrinsicOpTable(TypeRegistry& types) : types_(types) {}
 
     constexpr ObjectRef eval_op(OperatorCode opcode, ObjectRef left, ObjectRef right = {}) const {
-        if (left.is_type() && right.is_type()) {
+        if (left.as_type() && right.as_type()) {
             return eval_type_op(opcode, left.as_type(), right.as_type());
-        } else if (left.is_value() && right.is_value()) {
+        } else if (left.as_value() && right.as_value()) {
             return eval_value_op(opcode, left.as_value(), right.as_value());
         } else {
             return eval_type_value_op(opcode, left, right);
@@ -392,8 +392,8 @@ public:
     }
 
     ObjectRef eval_op(OperatorCode opcode, ObjectRef left, ObjectRef right = {}) const {
-        bool both_types = left.is_type() && right.is_type();
-        bool both_primitive_values = left.is_value() && right.is_value() &&
+        bool both_types = left.as_type() && right.as_type();
+        bool both_primitive_values = left.as_value() && right.as_value() &&
                                      left.as_value()->kind_ < Kind::NonCompositeSize &&
                                      right.as_value()->kind_ < Kind::NonCompositeSize;
         if (both_types || both_primitive_values) {

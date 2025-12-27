@@ -1,8 +1,9 @@
 #pragma once
 #include "pch.hpp"
+#include <compare>
+#include <limits>
 
 #include "diagnosis.hpp"
-
 
 class Scope;
 
@@ -20,16 +21,15 @@ enum class Kind : std::uint16_t {
     List,
     Record,
     Interface,
-    Class,
     Instance,
     Intersection,
     Union,
 };
 
 class Object;
+class Type;   // interface
+class Value;  // interface
 
-class Type;
-class UnknownType;
 template <Kind Kind>
 class PrimitiveType;
 using AnyType = PrimitiveType<Kind::Any>;
@@ -44,7 +44,6 @@ class ClassType;
 class IntersectionType;
 class UnionType;
 
-class Value;
 class NullValue;
 class IntegerValue;
 class FloatValue;
@@ -58,10 +57,12 @@ class ListValue;
 class DictValue;
 class SetValue;
 
+class UnknownType;
+
 template <typename T>
 concept TypeClass = std::derived_from<T, Type>;
 template <typename V>
-concept ValueClass = std::derived_from<V, Value>;
+concept ValueClass = std::derived_from<V, Value> && !std::derived_from<V, Type>;
 
 // using Arguments = std::vector<ValueRef>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
@@ -81,28 +82,37 @@ private:
 
 public:
     Kind kind_;
+
+public:
     Object(Kind kind, bool is_value) noexcept
         : ref_count_(is_value ? 0 : std::numeric_limits<decltype(ref_count_)>::min()),
           kind_(kind) {}
+
     virtual ~Object() = default;
+
     virtual std::string repr() const = 0;
+
     constexpr std::strong_ordering operator<=>(const Object& other) const noexcept {
-        if (kind_ != other.kind_) {
-            return kind_ <=> other.kind_;
-        }
-        return is_type() <=> other.is_type();
-    }
-    constexpr bool operator==(const Object& other) const noexcept {
-        return kind_ == other.kind_ && is_type() == other.is_type();
+        return this <=> &other;
     }
 
+    constexpr bool operator==(const Object& other) const noexcept { return this == &other; }
+
 private:
-    constexpr bool is_type() const noexcept { return ref_count_ <= 0; }
+    bool is_type() const noexcept { return ref_count_ < 0; }
+    bool is_value() const noexcept { return ref_count_ >= 0; }
 };
 
 class Type : public Object {
 public:
     Type(Kind kind) noexcept : Object(kind, false) {}
+
+    constexpr std::strong_ordering operator<=>(const Type& other) const noexcept {
+        return this <=> &other;
+    }
+
+    constexpr bool operator==(const Type& other) const noexcept { return this == &other; }
+
     bool assignable_from(const Type& source) const {
         assert(
             this == &source ? assignable_from_impl(source) : true
@@ -114,15 +124,6 @@ protected:
     virtual bool assignable_from_impl(const Type& source) const = 0;
 };
 
-class UnknownType final : public Type {
-public:
-    UnknownType() noexcept : Type(Kind::NothingOrUnknown) {}
-    std::string repr() const final { return "unknown"; }
-
-protected:
-    bool assignable_from_impl(const Type& source) const final { return true; }
-};
-
 template <Kind K>
 class PrimitiveType final : public Type {
 public:
@@ -130,6 +131,7 @@ public:
 
 public:
     PrimitiveType() noexcept : Type(kind) {}
+
     std::string repr() const final {
         if constexpr (K == Kind::Any) {
             return "any";
@@ -149,6 +151,7 @@ public:
             static_assert(false);
         }
     }
+
     bool assignable_from_impl(const Type& source) const final {
         if constexpr (K == Kind::Any) {
             return true;
@@ -166,8 +169,11 @@ public:
     Type* return_type_;
     ComparableSpan<Type*> parameters_;
     Type* spread_;
+
+public:
     FunctionType(Type* return_type, ComparableSpan<Type*> parameters, Type* spread) noexcept
         : Type(kind), return_type_(return_type), parameters_(parameters), spread_(spread) {}
+
     std::string repr() const final {
         std::string result = "function("s;
         for (std::size_t i = 0; i < parameters_.size(); ++i) {
@@ -185,6 +191,7 @@ public:
         result += ") => "s + return_type_->repr();
         return result;
     }
+
     bool assignable_from_impl(const Type& source) const final {
         // (Base) => Derived is assignable to (Derived) => Base
         // i.e., parameters are contravariant, return type is covariant
@@ -214,11 +221,18 @@ public:
 
 class ListType final : public Type {
 public:
+    static constexpr Kind kind = Kind::List;
+
+public:
     Type* element_type_;
-    ListType(Type* element_type) noexcept : Type(Kind::List), element_type_(element_type) {}
+
+public:
+    ListType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
+
     std::string repr() const final { return "List<"s + element_type_->repr() + ">"s; }
+
     bool assignable_from_impl(const Type& source) const final {
-        if (source.kind_ != this->kind_) {
+        if (source.kind_ != kind) {
             return false;
         }
         const ListType& other_list = static_cast<const ListType&>(source);
@@ -228,17 +242,24 @@ public:
 
 class RecordType : public Type {
 public:
+    static constexpr Kind kind = Kind::Record;
+
+private:
     FlatMap<std::string_view, Type*> fields_;
+
+public:
     RecordType(FlatMap<std::string_view, Type*> fields) noexcept
-        : Type(Kind::Record), fields_(std::move(fields)) {}
+        : Type(kind), fields_(std::move(fields)) {}
+
     std::string repr() const final {
         // TODO
         return {};
     }
+
     bool assignable_from_impl(const Type& source) const final {
         // (a,b,c) is assignable to (a,b)
         // i.e., source must have at least all fields of this
-        if (source.kind_ != this->kind_) {
+        if (source.kind_ != kind) {
             return false;
         }
         const RecordType& other_record = static_cast<const RecordType&>(source);
@@ -255,22 +276,29 @@ public:
 
 class ClassType : public Type {
 public:
+    static constexpr Kind kind = Kind::Instance;
+
+private:
     std::string_view name_;
     ComparableSpan<InterfaceType*> interfaces_;
     const ClassType* extends_;
     FlatMap<std::string_view, Type*> properties_;
+
+public:
     ClassType(
         std::string_view name,
         ComparableSpan<InterfaceType*> interfaces,
         const ClassType* extends,
         FlatMap<std::string_view, Type*> properties
     ) noexcept
-        : Type(Kind::Class),
+        : Type(kind),
           name_(name),
           interfaces_(interfaces),
           extends_(extends),
           properties_(std::move(properties)) {}
+
     std::string repr() const override { return "class "s + std::string(name_); }
+
     bool assignable_from_impl(const Type& other) const override { return false; }
 };
 
@@ -319,14 +347,17 @@ private:
         return buffer;
     }
 
-public:
+private:
     ComparableSpan<Type*> types_;
-    IntersectionType(Type* left, Type* right) noexcept
-        : Type(Kind::Intersection), types_{combine(left, right)} {}
+
+public:
+    IntersectionType(Type* left, Type* right) noexcept : Type(kind), types_{combine(left, right)} {}
+
     std::string repr() const final {
         // TODO
         return {};
     }
+
     bool assignable_from_impl(const Type& source) const final {
         // (a & b & c) is assignable to (a & b)
         // i.e., source supports at least all the function overloads of this
@@ -350,6 +381,7 @@ public:
             return false;
         }
     }
+
     std::strong_ordering operator<=>(const IntersectionType& other) const noexcept = default;
 };
 
@@ -394,13 +426,17 @@ private:
         return buffer;
     }
 
-public:
+private:
     ComparableSpan<Type*> types_;
-    UnionType(Type* left, Type* right) noexcept : Type(Kind::Union), types_(combine(left, right)) {}
+
+public:
+    UnionType(Type* left, Type* right) noexcept : Type(kind), types_(combine(left, right)) {}
+
     std::string repr() const final {
         // TODO
         return {};
     }
+
     bool assignable_from_impl(const Type& source) const final {
         // (a | b) is assignable to (a | b | c)
         // i.e., source must be assignable to at least one of the types in this
@@ -429,7 +465,16 @@ public:
             return false;
         }
     }
+
     std::strong_ordering operator<=>(const UnionType& other) const noexcept = default;
+};
+
+class UnknownType final : public Type {
+public:
+    static constexpr Kind kind = Kind::NothingOrUnknown;
+    UnknownType() noexcept : Type(kind) {}
+    std::string repr() const final { return "unknown"; }
+    bool assignable_from_impl(const Type& source) const final { return true; }
 };
 
 class Value : public Object {
@@ -473,7 +518,6 @@ private:
 
 public:
     Value(Kind kind) noexcept : Object(kind, true) {}
-    ~Value() override = default;
 };
 
 class NullValue final : public Value {
@@ -482,7 +526,8 @@ public:
     using Type = NullType;
 
 public:
-    NullValue() noexcept : Value(Kind::Null) {}
+    NullValue() noexcept : Value(kind) {}
+
     std::string repr() const final { return "null"; }
 };
 
@@ -493,7 +538,9 @@ public:
 
 public:
     std::int64_t value_;
-    IntegerValue(std::int64_t value) noexcept : Value(Kind::Integer), value_(value) {}
+
+public:
+    IntegerValue(std::int64_t value) noexcept : Value(kind), value_(value) {}
     std::string repr() const final { return std::to_string(value_); }
     IntegerValue operator+(const IntegerValue& other) const;
     IntegerValue operator-(const IntegerValue& other) const;
@@ -522,8 +569,11 @@ public:
 
 public:
     double value_;
-    FloatValue(double value) noexcept : Value(Kind::Float), value_(value) {}
+
+public:
+    FloatValue(double value) noexcept : Value(kind), value_(value) {}
     std::string repr() const final { return std::to_string(value_); }
+
     FloatValue operator+(const FloatValue& other) const;
     FloatValue operator-(const FloatValue& other) const;
     FloatValue operator-() const;
@@ -545,8 +595,11 @@ public:
 
 public:
     std::string value_;
-    StringValue(std::string value) noexcept : Value(Kind::String), value_(std::move(value)) {}
+
+public:
+    StringValue(std::string value) noexcept : Value(kind), value_(std::move(value)) {}
     std::string repr() const final { return "\"" + this->value_ + "\""; }
+
     StringValue operator+(const StringValue& other) const;
     StringValue operator*(const IntegerValue& other) const;
     BooleanValue operator==(const StringValue& other) const;
@@ -560,8 +613,11 @@ public:
 
 public:
     bool value_;
-    BooleanValue(bool value) noexcept : Value(Kind::Boolean), value_(value) {}
+
+public:
+    BooleanValue(bool value) noexcept : Value(kind), value_(value) {}
     std::string repr() const final { return this->value_ ? "true" : "false"; }
+
     BooleanValue operator==(const BooleanValue& other) const;
     BooleanValue operator!=(const BooleanValue& other) const;
     BooleanValue operator&&(const BooleanValue& other) const;
@@ -577,10 +633,13 @@ public:
 public:
     const std::function<Value*(const std::vector<Value*>&)> callback_;
     Type* type_;
+
+public:
     FunctionValue(auto&& callback, Type* function_type) noexcept
-        : Value(Kind::Function),
+        : Value(kind),
           callback_(std::forward<decltype(callback)>(callback)),
           type_(function_type) {}
+
     std::string repr() const final {
         return std::format("<function at {:p}>", static_cast<const void*>(this));
     }
@@ -594,7 +653,10 @@ public:
 public:
     ClassType* cls_;
     std::vector<Value*> attributes_;
-    InstanceValue(ClassType* cls) noexcept : Value(Kind::Instance), cls_(cls) {}
+
+public:
+    InstanceValue(ClassType* cls) noexcept : Value(kind), cls_(cls) {}
+
     Value* get(const std::string_view property) const noexcept {
         // TODO: implement
         return nullptr;
@@ -612,7 +674,9 @@ public:
     std::vector<Value*> values_;
     ListValue() noexcept : InstanceValue(nullptr) {}
     ListValue(std::vector<Value*>&& values) noexcept
-        : InstanceValue(nullptr), values_(std::move(values)) {}
+        : InstanceValue(nullptr), values_(std::move(values)) {
+        kind_ = kind;
+    }
     std::string repr() const final {
         // TODO: implement
         return {};
@@ -620,6 +684,13 @@ public:
     ListValue* operator+(const ListValue& other) const;
     ListValue* operator*(const IntegerValue& other) const;
     Value* operator[](const Slice& indices) const;
+};
+
+class UnknownValue final : public Value {
+public:
+    static constexpr Kind kind = Kind::NothingOrUnknown;
+    UnknownValue() noexcept : Value(kind) {}
+    std::string repr() const final { return "unknown"; }
 };
 
 template <typename T>
@@ -670,26 +741,22 @@ public:
     T& operator*() const noexcept { return *ptr_; }
     T* operator->() const noexcept { return ptr_; }
 
-    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Object>>>
-    bool is_type() const noexcept {
-        assert(ptr_);
-        return static_cast<Object*>(ptr_)->is_type();
-    }
-
-    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Object>>>
-    bool is_value() const noexcept {
-        assert(ptr_);
-        return !static_cast<Object*>(ptr_)->is_type();
-    }
-
-    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Object>>>
     Reference<Type> as_type() const noexcept {
-        return Reference<Type>(static_cast<Type*>((ptr_ && ptr_->is_type()) ? ptr_ : nullptr));
+        static_assert(std::is_same_v<T, Object>, "as_type can only be called on Reference<Object>");
+        return Reference<Type>((ptr_ && ptr_->is_type()) ? static_cast<Type*>(ptr_) : nullptr);
     }
 
-    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Object>>>
     Reference<Value> as_value() const noexcept {
-        return Reference<Value>(static_cast<Value*>((ptr_ && !ptr_->is_type()) ? ptr_ : nullptr));
+        static_assert(
+            std::is_same_v<T, Object>, "as_value can only be called on Reference<Object>"
+        );
+        if (ptr_ && ptr_->is_value()) {
+            return Reference<Value>(static_cast<Value*>(ptr_));
+        } else if (ptr_ && ptr_->kind_ == Kind::NothingOrUnknown) {
+            return Reference<Value>(new UnknownValue());
+        } else {
+            return Reference<Value>(nullptr);
+        }
     }
 
     template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Type>>>
@@ -704,11 +771,13 @@ public:
 
 private:
     explicit Reference(T* ptr) noexcept : ptr_(ptr) { retain(); }
+
     void retain() noexcept {
         if (ptr_) {
             ptr_->ref_count_++;
         }
     }
+
     void release() noexcept {
         if (ptr_) {
             ptr_->ref_count_--;
@@ -739,6 +808,8 @@ public:
     TypeRef of(ValueRef value) {
         assert(value);
         switch (value->kind_) {
+        case Kind::NothingOrUnknown:
+            return TypeRef(&unknown_type_instance_);
         case Kind::Null:
             return TypeRef(&any_type_instance_);
         case Kind::Integer:
@@ -813,11 +884,8 @@ private:
     }
 };
 
-// TODO: implement unique cast static caching
-
-// ===================== Inline implementations of Value operators =====================
-
 // IntegerValue operators
+
 inline IntegerValue IntegerValue::operator+(const IntegerValue& other) const {
     return IntegerValue(this->value_ + other.value_);
 }
