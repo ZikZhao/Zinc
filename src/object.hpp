@@ -1,9 +1,8 @@
 #pragma once
 #include "pch.hpp"
-#include <compare>
-#include <string_view>
-#include <type_traits>
-#include <utility>
+
+#include "diagnosis.hpp"
+
 
 class Scope;
 
@@ -82,7 +81,9 @@ private:
 
 public:
     Kind kind_;
-    Object(Kind kind, bool is_value) noexcept;
+    Object(Kind kind, bool is_value) noexcept
+        : ref_count_(is_value ? 0 : std::numeric_limits<decltype(ref_count_)>::min()),
+          kind_(kind) {}
     virtual ~Object() = default;
     virtual std::string repr() const = 0;
     constexpr std::strong_ordering operator<=>(const Object& other) const noexcept {
@@ -101,8 +102,13 @@ private:
 
 class Type : public Object {
 public:
-    Type(Kind kind) noexcept;
-    bool assignable_from(const Type& source) const;
+    Type(Kind kind) noexcept : Object(kind, false) {}
+    bool assignable_from(const Type& source) const {
+        assert(
+            this == &source ? assignable_from_impl(source) : true
+        );  // assignable_from_impl(source) must be true for identical types
+        return this == &source || assignable_from_impl(source);
+    }
 
 protected:
     virtual bool assignable_from_impl(const Type& source) const = 0;
@@ -162,25 +168,88 @@ public:
     Type* spread_;
     FunctionType(Type* return_type, ComparableSpan<Type*> parameters, Type* spread) noexcept
         : Type(kind), return_type_(return_type), parameters_(parameters), spread_(spread) {}
-    std::string repr() const final;
-    bool assignable_from_impl(const Type& source) const final;
+    std::string repr() const final {
+        std::string result = "function("s;
+        for (std::size_t i = 0; i < parameters_.size(); ++i) {
+            result += parameters_[i]->repr();
+            if (i + 1 < parameters_.size()) {
+                result += ", "s;
+            }
+        }
+        if (spread_) {
+            if (!parameters_.empty()) {
+                result += ", "s;
+            }
+            result += "..."s + spread_->repr();
+        }
+        result += ") => "s + return_type_->repr();
+        return result;
+    }
+    bool assignable_from_impl(const Type& source) const final {
+        // (Base) => Derived is assignable to (Derived) => Base
+        // i.e., parameters are contravariant, return type is covariant
+        if (source.kind_ != Kind::Function) {
+            return false;
+        }
+        const FunctionType& func_other = static_cast<const FunctionType&>(source);
+        if (parameters_.size() != func_other.parameters_.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < parameters_.size(); ++i) {
+            if (!func_other.parameters_[i]->assignable_from(*parameters_[i])) {
+                return false;
+            }
+        }
+        if ((spread_ == nullptr) != (func_other.spread_ == nullptr)) {
+            return false;
+        } else if (spread_ && func_other.spread_) {
+            if (!func_other.spread_->assignable_from(*spread_)) {
+                return false;
+            }
+        }
+        return return_type_->assignable_from(*func_other.return_type_);
+    }
     std::strong_ordering operator<=>(const FunctionType& other) const noexcept = default;
 };
 
 class ListType final : public Type {
 public:
     Type* element_type_;
-    ListType(Type* element_type) noexcept;
-    std::string repr() const final;
-    bool assignable_from_impl(const Type& source) const final;
+    ListType(Type* element_type) noexcept : Type(Kind::List), element_type_(element_type) {}
+    std::string repr() const final { return "List<"s + element_type_->repr() + ">"s; }
+    bool assignable_from_impl(const Type& source) const final {
+        if (source.kind_ != this->kind_) {
+            return false;
+        }
+        const ListType& other_list = static_cast<const ListType&>(source);
+        return element_type_->assignable_from(*other_list.element_type_);
+    }
 };
 
 class RecordType : public Type {
 public:
     FlatMap<std::string_view, Type*> fields_;
-    RecordType(FlatMap<std::string_view, Type*> fields) noexcept;
-    std::string repr() const final;
-    bool assignable_from_impl(const Type& source) const final;
+    RecordType(FlatMap<std::string_view, Type*> fields) noexcept
+        : Type(Kind::Record), fields_(std::move(fields)) {}
+    std::string repr() const final {
+        // TODO
+        return {};
+    }
+    bool assignable_from_impl(const Type& source) const final {
+        // (a,b,c) is assignable to (a,b)
+        // i.e., source must have at least all fields of this
+        if (source.kind_ != this->kind_) {
+            return false;
+        }
+        const RecordType& other_record = static_cast<const RecordType&>(source);
+        for (const auto& [name, type] : fields_) {
+            auto it = other_record.fields_.find(name);
+            if (it == other_record.fields_.end() || !(*it).second->assignable_from(*type)) {
+                return false;
+            }
+        }
+        return true;
+    }
     std::strong_ordering operator<=>(const RecordType& other) const noexcept = default;
 };
 
@@ -195,9 +264,14 @@ public:
         ComparableSpan<InterfaceType*> interfaces,
         const ClassType* extends,
         FlatMap<std::string_view, Type*> properties
-    ) noexcept;
-    std::string repr() const override;
-    bool assignable_from_impl(const Type& source) const override;
+    ) noexcept
+        : Type(Kind::Class),
+          name_(name),
+          interfaces_(interfaces),
+          extends_(extends),
+          properties_(std::move(properties)) {}
+    std::string repr() const override { return "class "s + std::string(name_); }
+    bool assignable_from_impl(const Type& other) const override { return false; }
 };
 
 class IntersectionType final : public Type {
@@ -205,13 +279,77 @@ public:
     static constexpr Kind kind = Kind::Intersection;
 
 private:
-    static ComparableSpan<Type*> combine(Type* left, Type* right);
+    static ComparableSpan<Type*> combine(Type* left, Type* right) {
+        std::size_t size = 0;
+        if (right < left) std::swap(left, right);
+        if (left->kind_ == Kind::Intersection) {
+            const IntersectionType& left_intersection = static_cast<const IntersectionType&>(*left);
+            size += left_intersection.types_.size();
+        } else {
+            assert(left->kind_ == Kind::Function);
+            size++;
+        }
+        if (right->kind_ == Kind::Intersection) {
+            const IntersectionType& right_intersection =
+                static_cast<const IntersectionType&>(*right);
+            size += right_intersection.types_.size();
+        } else {
+            assert(right->kind_ == Kind::Function);
+            size++;
+        }
+        ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
+        std::size_t index = 0;
+        if (left->kind_ == Kind::Intersection) {
+            const IntersectionType& left_intersection = static_cast<const IntersectionType&>(*left);
+            for (const auto& type : left_intersection.types_) {
+                buffer[index++] = type;
+            }
+        } else {
+            buffer[index++] = left;
+        }
+        if (right->kind_ == Kind::Intersection) {
+            const IntersectionType& right_intersection =
+                static_cast<const IntersectionType&>(*right);
+            for (const auto& type : right_intersection.types_) {
+                buffer[index++] = type;
+            }
+        } else {
+            buffer[index++] = right;
+        }
+        return buffer;
+    }
 
 public:
     ComparableSpan<Type*> types_;
-    IntersectionType(Type* left, Type* right) noexcept;
-    std::string repr() const final;
-    bool assignable_from_impl(const Type& source) const final;
+    IntersectionType(Type* left, Type* right) noexcept
+        : Type(Kind::Intersection), types_{combine(left, right)} {}
+    std::string repr() const final {
+        // TODO
+        return {};
+    }
+    bool assignable_from_impl(const Type& source) const final {
+        // (a & b & c) is assignable to (a & b)
+        // i.e., source supports at least all the function overloads of this
+        if (source.kind_ == Kind::Intersection) {
+            const IntersectionType& other_intersection =
+                static_cast<const IntersectionType&>(source);
+            for (const auto& type : types_) {
+                bool found = false;
+                for (const auto& other_type : other_intersection.types_) {
+                    if (type->assignable_from(*other_type)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    return false;
+                }
+            }
+            return true;
+        } else {
+            return false;
+        }
+    }
     std::strong_ordering operator<=>(const IntersectionType& other) const noexcept = default;
 };
 
@@ -220,13 +358,77 @@ public:
     static constexpr Kind kind = Kind::Union;
 
 private:
-    static ComparableSpan<Type*> combine(Type* left, Type* right);
+    static ComparableSpan<Type*> combine(Type* left, Type* right) {
+        std::size_t size = 0;
+        if (right < left) std::swap(left, right);
+        if (left->kind_ == Kind::Union) {
+            const UnionType& left_union = static_cast<const UnionType&>(*left);
+            size += left_union.types_.size();
+        } else {
+            size++;
+        }
+        if (right->kind_ == Kind::Union) {
+            const UnionType& right_union = static_cast<const UnionType&>(*right);
+            size += right_union.types_.size();
+        } else {
+            size++;
+        }
+        ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
+        std::size_t index = 0;
+        if (left->kind_ == Kind::Union) {
+            const UnionType& left_union = static_cast<const UnionType&>(*left);
+            for (const auto& type : left_union.types_) {
+                buffer[index++] = type;
+            }
+        } else {
+            buffer[index++] = left;
+        }
+        if (right->kind_ == Kind::Union) {
+            const UnionType& right_union = static_cast<const UnionType&>(*right);
+            for (const auto& type : right_union.types_) {
+                buffer[index++] = type;
+            }
+        } else {
+            buffer[index++] = right;
+        }
+        return buffer;
+    }
 
 public:
     ComparableSpan<Type*> types_;
-    UnionType(Type* left, Type* right) noexcept;
-    std::string repr() const final;
-    bool assignable_from_impl(const Type& source) const final;
+    UnionType(Type* left, Type* right) noexcept : Type(Kind::Union), types_(combine(left, right)) {}
+    std::string repr() const final {
+        // TODO
+        return {};
+    }
+    bool assignable_from_impl(const Type& source) const final {
+        // (a | b) is assignable to (a | b | c)
+        // i.e., source must be assignable to at least one of the types in this
+        if (source.kind_ == Kind::Union) {
+            const UnionType& other_union = static_cast<const UnionType&>(source);
+            for (const auto& type : other_union.types_) {
+                bool found = false;
+                for (const auto& other_type : types_) {
+                    if (other_type->assignable_from(*type)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    return false;
+                }
+            }
+            return true;
+        } else {
+            assert(source.kind_ == Kind::Function);
+            for (const auto& type : types_) {
+                if (type->assignable_from(source)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
     std::strong_ordering operator<=>(const UnionType& other) const noexcept = default;
 };
 
@@ -270,7 +472,7 @@ private:
     };
 
 public:
-    Value(Kind kind) noexcept;
+    Value(Kind kind) noexcept : Object(kind, true) {}
     ~Value() override = default;
 };
 
@@ -280,8 +482,8 @@ public:
     using Type = NullType;
 
 public:
-    NullValue() noexcept;
-    std::string repr() const final;
+    NullValue() noexcept : Value(Kind::Null) {}
+    std::string repr() const final { return "null"; }
 };
 
 class IntegerValue final : public Value {
@@ -291,8 +493,8 @@ public:
 
 public:
     std::int64_t value_;
-    IntegerValue(std::int64_t value) noexcept;
-    std::string repr() const final;
+    IntegerValue(std::int64_t value) noexcept : Value(Kind::Integer), value_(value) {}
+    std::string repr() const final { return std::to_string(value_); }
     IntegerValue operator+(const IntegerValue& other) const;
     IntegerValue operator-(const IntegerValue& other) const;
     IntegerValue operator-() const;
@@ -320,8 +522,8 @@ public:
 
 public:
     double value_;
-    FloatValue(double value) noexcept;
-    std::string repr() const final;
+    FloatValue(double value) noexcept : Value(Kind::Float), value_(value) {}
+    std::string repr() const final { return std::to_string(value_); }
     FloatValue operator+(const FloatValue& other) const;
     FloatValue operator-(const FloatValue& other) const;
     FloatValue operator-() const;
@@ -343,8 +545,8 @@ public:
 
 public:
     std::string value_;
-    StringValue(std::string value) noexcept;
-    std::string repr() const final;
+    StringValue(std::string value) noexcept : Value(Kind::String), value_(std::move(value)) {}
+    std::string repr() const final { return "\"" + this->value_ + "\""; }
     StringValue operator+(const StringValue& other) const;
     StringValue operator*(const IntegerValue& other) const;
     BooleanValue operator==(const StringValue& other) const;
@@ -358,8 +560,8 @@ public:
 
 public:
     bool value_;
-    BooleanValue(bool value) noexcept;
-    std::string repr() const final;
+    BooleanValue(bool value) noexcept : Value(Kind::Boolean), value_(value) {}
+    std::string repr() const final { return this->value_ ? "true" : "false"; }
     BooleanValue operator==(const BooleanValue& other) const;
     BooleanValue operator!=(const BooleanValue& other) const;
     BooleanValue operator&&(const BooleanValue& other) const;
@@ -379,7 +581,9 @@ public:
         : Value(Kind::Function),
           callback_(std::forward<decltype(callback)>(callback)),
           type_(function_type) {}
-    std::string repr() const final;
+    std::string repr() const final {
+        return std::format("<function at {:p}>", static_cast<const void*>(this));
+    }
     Value* operator()(const std::vector<Value*>& args) const;
 };
 
@@ -390,19 +594,29 @@ public:
 public:
     ClassType* cls_;
     std::vector<Value*> attributes_;
-    InstanceValue(ClassType* cls) noexcept;
-    Value* get(const std::string_view property) const noexcept;
+    InstanceValue(ClassType* cls) noexcept : Value(Kind::Instance), cls_(cls) {}
+    Value* get(const std::string_view property) const noexcept {
+        // TODO: implement
+        return nullptr;
+    }
 };
 
 class ListValue : public InstanceValue {
 private:
-    static ListValue* Append(const std::vector<Value*>& args) noexcept;
+    static ListValue* Append(const std::vector<Value*>& args) noexcept {
+        // TODO: implement
+        return nullptr;
+    }
 
 public:
     std::vector<Value*> values_;
-    ListValue() noexcept;
-    ListValue(std::vector<Value*>&& values) noexcept;
-    std::string repr() const final;
+    ListValue() noexcept : InstanceValue(nullptr) {}
+    ListValue(std::vector<Value*>&& values) noexcept
+        : InstanceValue(nullptr), values_(std::move(values)) {}
+    std::string repr() const final {
+        // TODO: implement
+        return {};
+    }
     ListValue* operator+(const ListValue& other) const;
     ListValue* operator*(const IntegerValue& other) const;
     Value* operator[](const Slice& indices) const;
@@ -600,3 +814,190 @@ private:
 };
 
 // TODO: implement unique cast static caching
+
+// ===================== Inline implementations of Value operators =====================
+
+// IntegerValue operators
+inline IntegerValue IntegerValue::operator+(const IntegerValue& other) const {
+    return IntegerValue(this->value_ + other.value_);
+}
+
+inline IntegerValue IntegerValue::operator-(const IntegerValue& other) const {
+    return IntegerValue(this->value_ - other.value_);
+}
+
+inline IntegerValue IntegerValue::operator-() const { return IntegerValue(-this->value_); }
+
+inline IntegerValue IntegerValue::operator*(const IntegerValue& other) const {
+    return IntegerValue(this->value_ * other.value_);
+}
+
+inline IntegerValue IntegerValue::operator/(const IntegerValue& other) const {
+    if (other.value_ == 0) throw UnlocatedProblem::make<DivisionByZeroError>();
+    return IntegerValue(this->value_ / other.value_);
+}
+
+inline IntegerValue IntegerValue::operator%(const IntegerValue& other) const {
+    if (other.value_ == 0) throw UnlocatedProblem::make<DivisionByZeroError>();
+    return IntegerValue(this->value_ % other.value_);
+}
+
+inline BooleanValue IntegerValue::operator==(const IntegerValue& other) const {
+    return BooleanValue(this->value_ == other.value_);
+}
+
+inline BooleanValue IntegerValue::operator!=(const IntegerValue& other) const {
+    return BooleanValue(this->value_ != other.value_);
+}
+
+inline BooleanValue IntegerValue::operator<(const IntegerValue& other) const {
+    return BooleanValue(this->value_ < other.value_);
+}
+
+inline BooleanValue IntegerValue::operator<=(const IntegerValue& other) const {
+    return BooleanValue(this->value_ <= other.value_);
+}
+
+inline BooleanValue IntegerValue::operator>(const IntegerValue& other) const {
+    return BooleanValue(this->value_ > other.value_);
+}
+
+inline BooleanValue IntegerValue::operator>=(const IntegerValue& other) const {
+    return BooleanValue(this->value_ >= other.value_);
+}
+
+inline IntegerValue IntegerValue::operator&(const IntegerValue& other) const {
+    return IntegerValue(this->value_ & other.value_);
+}
+
+inline IntegerValue IntegerValue::operator|(const IntegerValue& other) const {
+    return IntegerValue(this->value_ | other.value_);
+}
+
+inline IntegerValue IntegerValue::operator^(const IntegerValue& other) const {
+    return IntegerValue(this->value_ ^ other.value_);
+}
+
+inline IntegerValue IntegerValue::operator~() const { return IntegerValue(~this->value_); }
+
+inline IntegerValue IntegerValue::operator<<(const IntegerValue& other) const {
+    if (other.value_ < 0) throw UnlocatedProblem::make<ShiftByNegativeError>();
+    return IntegerValue(this->value_ << other.value_);
+}
+
+inline IntegerValue IntegerValue::operator>>(const IntegerValue& other) const {
+    if (other.value_ < 0) throw UnlocatedProblem::make<ShiftByNegativeError>();
+    return IntegerValue(this->value_ >> other.value_);
+}
+
+// FloatValue operators
+inline FloatValue FloatValue::operator+(const FloatValue& other) const {
+    return FloatValue(this->value_ + other.value_);
+}
+
+inline FloatValue FloatValue::operator-(const FloatValue& other) const {
+    return FloatValue(this->value_ - other.value_);
+}
+
+inline FloatValue FloatValue::operator-() const { return FloatValue(-this->value_); }
+
+inline FloatValue FloatValue::operator*(const FloatValue& other) const {
+    return FloatValue(this->value_ * other.value_);
+}
+
+inline FloatValue FloatValue::operator/(const FloatValue& other) const {
+    if (other.value_ == 0.0) throw UnlocatedProblem::make<DivisionByZeroError>();
+    return FloatValue(this->value_ / other.value_);
+}
+
+inline FloatValue FloatValue::operator%(const FloatValue& other) const {
+    if (other.value_ == 0.0) throw UnlocatedProblem::make<DivisionByZeroError>();
+    return FloatValue(std::fmod(this->value_, other.value_));
+}
+
+inline BooleanValue FloatValue::operator==(const FloatValue& other) const {
+    return BooleanValue(this->value_ == other.value_);
+}
+
+inline BooleanValue FloatValue::operator!=(const FloatValue& other) const {
+    return BooleanValue(this->value_ != other.value_);
+}
+
+inline BooleanValue FloatValue::operator<(const FloatValue& other) const {
+    return BooleanValue(this->value_ < other.value_);
+}
+
+inline BooleanValue FloatValue::operator<=(const FloatValue& other) const {
+    return BooleanValue(this->value_ <= other.value_);
+}
+
+inline BooleanValue FloatValue::operator>(const FloatValue& other) const {
+    return BooleanValue(this->value_ > other.value_);
+}
+
+inline BooleanValue FloatValue::operator>=(const FloatValue& other) const {
+    return BooleanValue(this->value_ >= other.value_);
+}
+
+// StringValue operators
+inline StringValue StringValue::operator+(const StringValue& other) const {
+    return StringValue(this->value_ + other.value_);
+}
+
+inline StringValue StringValue::operator*(const IntegerValue& other) const {
+    if (other.value_ <= 0) throw std::runtime_error("Can only multiply string by positive integer");
+    std::string result;
+    result.reserve(this->value_.size() * static_cast<std::uint64_t>(other.value_));
+    for (uint64_t i = 0; i < static_cast<std::uint64_t>(other.value_); i++) {
+        result += this->value_;
+    }
+    return StringValue(std::move(result));
+}
+
+inline BooleanValue StringValue::operator==(const StringValue& other) const {
+    return BooleanValue(this->value_ == other.value_);
+}
+
+inline BooleanValue StringValue::operator!=(const StringValue& other) const {
+    return BooleanValue(this->value_ != other.value_);
+}
+
+// BooleanValue operators
+inline BooleanValue BooleanValue::operator==(const BooleanValue& other) const {
+    return BooleanValue(this->value_ == other.value_);
+}
+
+inline BooleanValue BooleanValue::operator!=(const BooleanValue& other) const {
+    return BooleanValue(this->value_ != other.value_);
+}
+
+inline BooleanValue BooleanValue::operator&&(const BooleanValue& other) const {
+    return BooleanValue(this->value_ && other.value_);
+}
+
+inline BooleanValue BooleanValue::operator||(const BooleanValue& other) const {
+    return BooleanValue(this->value_ || other.value_);
+}
+
+inline BooleanValue BooleanValue::operator!() const { return BooleanValue(!this->value_); }
+
+// FunctionValue operators
+inline Value* FunctionValue::operator()(const std::vector<Value*>& args) const {
+    return callback_(args);
+}
+
+// ListValue operators
+inline ListValue* ListValue::operator+(const ListValue& other) const {
+    // TODO: implement
+    return nullptr;
+}
+
+inline ListValue* ListValue::operator*(const IntegerValue& other) const {
+    // TODO: implement
+    return nullptr;
+}
+
+inline Value* ListValue::operator[](const Slice& indices) const {
+    // TODO: implement
+    return nullptr;
+}
