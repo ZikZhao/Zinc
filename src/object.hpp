@@ -1,11 +1,8 @@
 #pragma once
 #include "pch.hpp"
-#include <compare>
-#include <limits>
+#include <ranges>
 
 #include "diagnosis.hpp"
-
-class Scope;
 
 enum class Kind : std::uint16_t {
     NothingOrUnknown,  // for operation table it means no right operand, for types it means unknown
@@ -27,8 +24,12 @@ enum class Kind : std::uint16_t {
 };
 
 class Object;
-class Type;   // interface
-class Value;  // interface
+class Type;
+class Value;
+
+using ObjectPtr = const Object*;
+using TypePtr = const Type*;
+using ValuePtr = const Value*;
 
 template <Kind Kind>
 class PrimitiveType;
@@ -64,33 +65,25 @@ concept TypeClass = std::derived_from<T, Type>;
 template <typename V>
 concept ValueClass = std::derived_from<V, Value> && !std::derived_from<V, Type>;
 
-// using Arguments = std::vector<ValueRef>;
+// using Arguments = std::vector<Value*>;
 using Slice = std::tuple<const IntegerValue*, const IntegerValue*, const IntegerValue*>;
 
-template <typename U>
-class Reference;
-using ObjectRef = Reference<Object>;
-using TypeRef = Reference<Type>;
-using ValueRef = Reference<Value>;
-
-class Object {
+class Object : public MemoryManaged {
     template <typename>
     friend class Reference;
-
-private:
-    mutable std::int32_t ref_count_;
 
 public:
     Kind kind_;
 
+private:
+    bool is_type_;
+
 public:
-    Object(Kind kind, bool is_value) noexcept
-        : ref_count_(is_value ? 0 : std::numeric_limits<decltype(ref_count_)>::min()),
-          kind_(kind) {}
+    Object(Kind kind, bool is_type) noexcept : kind_(kind), is_type_(is_type) {}
 
     virtual ~Object() = default;
 
-    virtual std::string repr() const = 0;
+    virtual GlobalMemory::String repr() const = 0;
 
     constexpr std::strong_ordering operator<=>(const Object& other) const noexcept {
         return this <=> &other;
@@ -98,15 +91,18 @@ public:
 
     constexpr bool operator==(const Object& other) const noexcept { return this == &other; }
 
-private:
-    bool is_type() const noexcept { return ref_count_ < 0; }
-    bool is_value() const noexcept { return ref_count_ >= 0; }
+    /// IMPORTANT: an object may be both a type and a value (i.e. UnknownType and UnknownValue)
+    /// this is because we cannot have diamond inheritance with multiple derived classes from Object
+    /// but by semantics a unknown object is both a type and a value
+    TypePtr as_type() const;
+    ValuePtr as_value() const;
 };
 
 class Type : public Object {
-public:
-    Type(Kind kind) noexcept : Object(kind, false) {}
+protected:
+    Type(Kind kind) noexcept : Object(kind, true) {}
 
+public:
     constexpr std::strong_ordering operator<=>(const Type& other) const noexcept {
         return this <=> &other;
     }
@@ -124,15 +120,32 @@ protected:
     virtual bool assignable_from_impl(const Type& source) const = 0;
 };
 
+class UnknownType final : public Type {
+    friend class Object;
+    friend class TypeRegistry;
+
+public:
+    static constexpr Kind kind = Kind::NothingOrUnknown;
+    static const UnknownType instance;
+
+private:
+    UnknownType() noexcept : Type(kind) {}
+
+public:
+    GlobalMemory::String repr() const final { return "unknown"; }
+    bool assignable_from_impl(const Type& source) const final { return true; }
+};
+
 template <Kind K>
 class PrimitiveType final : public Type {
 public:
     static constexpr Kind kind = K;
+    static const PrimitiveType instance;
 
 public:
     PrimitiveType() noexcept : Type(kind) {}
 
-    std::string repr() const final {
+    GlobalMemory::String repr() const final {
         if constexpr (K == Kind::Any) {
             return "any";
         } else if constexpr (K == Kind::Null) {
@@ -166,30 +179,24 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
-    Type* return_type_;
-    ComparableSpan<Type*> parameters_;
-    Type* spread_;
+    TypePtr return_type_;
+    ComparableSpan<TypePtr> parameters_;
+    TypePtr spread_;
 
 public:
-    FunctionType(Type* return_type, ComparableSpan<Type*> parameters, Type* spread) noexcept
+    FunctionType(TypePtr return_type, ComparableSpan<TypePtr> parameters, TypePtr spread) noexcept
         : Type(kind), return_type_(return_type), parameters_(parameters), spread_(spread) {}
 
-    std::string repr() const final {
-        std::string result = "function("s;
-        for (std::size_t i = 0; i < parameters_.size(); ++i) {
-            result += parameters_[i]->repr();
-            if (i + 1 < parameters_.size()) {
-                result += ", "s;
-            }
-        }
-        if (spread_) {
-            if (!parameters_.empty()) {
-                result += ", "s;
-            }
-            result += "..."s + spread_->repr();
-        }
-        result += ") => "s + return_type_->repr();
-        return result;
+    GlobalMemory::String repr() const final {
+        GlobalMemory::String params_repr =
+            parameters_ | std::views::transform([](TypePtr type) { return type->repr(); }) |
+            std::views::join_with(", "sv) | GlobalMemory::collect<GlobalMemory::String>();
+        return GlobalMemory::format(
+            "({}{}) -> {}",
+            params_repr,
+            spread_ ? GlobalMemory::format(", ...{}", spread_->repr()) : ""sv,
+            return_type_->repr()
+        );
     }
 
     bool assignable_from_impl(const Type& source) const final {
@@ -229,7 +236,9 @@ public:
 public:
     ListType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
 
-    std::string repr() const final { return "List<"s + element_type_->repr() + ">"s; }
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("List<{}>", element_type_->repr());
+    }
 
     bool assignable_from_impl(const Type& source) const final {
         if (source.kind_ != kind) {
@@ -245,13 +254,13 @@ public:
     static constexpr Kind kind = Kind::Record;
 
 private:
-    FlatMap<std::string_view, Type*> fields_;
+    FlatMap<std::string_view, TypePtr> fields_;
 
 public:
-    RecordType(FlatMap<std::string_view, Type*> fields) noexcept
+    RecordType(FlatMap<std::string_view, TypePtr> fields) noexcept
         : Type(kind), fields_(std::move(fields)) {}
 
-    std::string repr() const final {
+    GlobalMemory::String repr() const final {
         // TODO
         return {};
     }
@@ -297,7 +306,9 @@ public:
           extends_(extends),
           properties_(std::move(properties)) {}
 
-    std::string repr() const override { return "class "s + std::string(name_); }
+    GlobalMemory::String repr() const override {
+        return GlobalMemory::String("class ") + GlobalMemory::String(name_);
+    }
 
     bool assignable_from_impl(const Type& other) const override { return false; }
 };
@@ -307,7 +318,7 @@ public:
     static constexpr Kind kind = Kind::Intersection;
 
 private:
-    static ComparableSpan<Type*> combine(Type* left, Type* right) {
+    static ComparableSpan<TypePtr> combine(TypePtr left, TypePtr right) {
         std::size_t size = 0;
         if (right < left) std::swap(left, right);
         if (left->kind_ == Kind::Intersection) {
@@ -325,7 +336,7 @@ private:
             assert(right->kind_ == Kind::Function);
             size++;
         }
-        ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
+        ComparableSpan<TypePtr> buffer = GlobalMemory::alloc_array<TypePtr>(size);
         std::size_t index = 0;
         if (left->kind_ == Kind::Intersection) {
             const IntersectionType& left_intersection = static_cast<const IntersectionType&>(*left);
@@ -348,12 +359,13 @@ private:
     }
 
 private:
-    ComparableSpan<Type*> types_;
+    ComparableSpan<TypePtr> types_;
 
 public:
-    IntersectionType(Type* left, Type* right) noexcept : Type(kind), types_{combine(left, right)} {}
+    IntersectionType(TypePtr left, TypePtr right) noexcept
+        : Type(kind), types_{combine(left, right)} {}
 
-    std::string repr() const final {
+    GlobalMemory::String repr() const final {
         // TODO
         return {};
     }
@@ -390,7 +402,7 @@ public:
     static constexpr Kind kind = Kind::Union;
 
 private:
-    static ComparableSpan<Type*> combine(Type* left, Type* right) {
+    static ComparableSpan<TypePtr> combine(TypePtr left, TypePtr right) {
         std::size_t size = 0;
         if (right < left) std::swap(left, right);
         if (left->kind_ == Kind::Union) {
@@ -405,7 +417,7 @@ private:
         } else {
             size++;
         }
-        ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
+        ComparableSpan<TypePtr> buffer = GlobalMemory::alloc_array<TypePtr>(size);
         std::size_t index = 0;
         if (left->kind_ == Kind::Union) {
             const UnionType& left_union = static_cast<const UnionType&>(*left);
@@ -427,12 +439,12 @@ private:
     }
 
 private:
-    ComparableSpan<Type*> types_;
+    ComparableSpan<TypePtr> types_;
 
 public:
-    UnionType(Type* left, Type* right) noexcept : Type(kind), types_(combine(left, right)) {}
+    UnionType(TypePtr left, TypePtr right) noexcept : Type(kind), types_(combine(left, right)) {}
 
-    std::string repr() const final {
+    GlobalMemory::String repr() const final {
         // TODO
         return {};
     }
@@ -469,18 +481,8 @@ public:
     std::strong_ordering operator<=>(const UnionType& other) const noexcept = default;
 };
 
-class UnknownType final : public Type {
-public:
-    static constexpr Kind kind = Kind::NothingOrUnknown;
-    UnknownType() noexcept : Type(kind) {}
-    std::string repr() const final { return "unknown"; }
-    bool assignable_from_impl(const Type& source) const final { return true; }
-};
-
 class Value : public Object {
-    friend ValueRef;
-
-private:
+public:
     template <ValueClass V>
     static Value* from_literal(std::string_view literal) {
         if constexpr (std::is_same_v<V, NullValue>) {
@@ -491,7 +493,7 @@ private:
             auto [ptr, ec] =
                 std::from_chars(literal.data(), literal.data() + literal.size(), value);
             if (ec != std::errc()) {
-                throw std::runtime_error("Invalid integer literal: "s + literal.data());
+                throw UnlocatedProblem::make<InvalidLiteralError>(literal, "integer");
             }
             return new V(value);
         } else if constexpr (std::is_same_v<V, FloatValue>) {
@@ -499,11 +501,11 @@ private:
             auto [ptr, ec] =
                 std::from_chars(literal.data(), literal.data() + literal.size(), value);
             if (ec != std::errc()) {
-                throw std::runtime_error("Invalid float literal: "s + literal.data());
+                throw UnlocatedProblem::make<InvalidLiteralError>(literal, "float");
             }
             return new V(value);
         } else if constexpr (std::is_same_v<V, StringValue>) {
-            return new V(std::string(literal));
+            return new V(GlobalMemory::String(literal.substr(1, literal.size() - 2)));
         } else if constexpr (std::is_same_v<V, BooleanValue>) {
             assert(literal == "true" || literal == "false");
             if (literal == "true") {
@@ -516,8 +518,23 @@ private:
         }
     };
 
+protected:
+    Value(Kind kind) noexcept : Object(kind, false) {}
+
 public:
-    Value(Kind kind) noexcept : Object(kind, true) {}
+    virtual TypePtr get_type() const = 0;
+};
+
+class UnknownValue final : public Value {
+    friend class Object;
+
+public:
+    static constexpr Kind kind = Kind::NothingOrUnknown;
+
+private:
+    UnknownValue() noexcept : Value(kind) {}
+    GlobalMemory::String repr() const final { return "unknown"; }
+    TypePtr get_type() const final { return &UnknownType::instance; }
 };
 
 class NullValue final : public Value {
@@ -528,7 +545,8 @@ public:
 public:
     NullValue() noexcept : Value(kind) {}
 
-    std::string repr() const final { return "null"; }
+    GlobalMemory::String repr() const final { return "null"; }
+    TypePtr get_type() const final { return &Type::instance; }
 };
 
 class IntegerValue final : public Value {
@@ -541,7 +559,8 @@ public:
 
 public:
     IntegerValue(std::int64_t value) noexcept : Value(kind), value_(value) {}
-    std::string repr() const final { return std::to_string(value_); }
+    GlobalMemory::String repr() const final { return GlobalMemory::format("{}", value_); }
+    TypePtr get_type() const final { return &Type::instance; }
     IntegerValue operator+(const IntegerValue& other) const;
     IntegerValue operator-(const IntegerValue& other) const;
     IntegerValue operator-() const;
@@ -572,8 +591,8 @@ public:
 
 public:
     FloatValue(double value) noexcept : Value(kind), value_(value) {}
-    std::string repr() const final { return std::to_string(value_); }
-
+    GlobalMemory::String repr() const final { return GlobalMemory::format("{}", value_); }
+    TypePtr get_type() const final { return &Type::instance; }
     FloatValue operator+(const FloatValue& other) const;
     FloatValue operator-(const FloatValue& other) const;
     FloatValue operator-() const;
@@ -594,12 +613,12 @@ public:
     using Type = StringType;
 
 public:
-    std::string value_;
+    GlobalMemory::String value_;
 
 public:
-    StringValue(std::string value) noexcept : Value(kind), value_(std::move(value)) {}
-    std::string repr() const final { return "\"" + this->value_ + "\""; }
-
+    StringValue(GlobalMemory::String value) noexcept : Value(kind), value_(std::move(value)) {}
+    GlobalMemory::String repr() const final { return "\"" + this->value_ + "\""; }
+    TypePtr get_type() const final { return &Type::instance; }
     StringValue operator+(const StringValue& other) const;
     StringValue operator*(const IntegerValue& other) const;
     BooleanValue operator==(const StringValue& other) const;
@@ -616,8 +635,8 @@ public:
 
 public:
     BooleanValue(bool value) noexcept : Value(kind), value_(value) {}
-    std::string repr() const final { return this->value_ ? "true" : "false"; }
-
+    GlobalMemory::String repr() const final { return this->value_ ? "true" : "false"; }
+    TypePtr get_type() const final { return &Type::instance; }
     BooleanValue operator==(const BooleanValue& other) const;
     BooleanValue operator!=(const BooleanValue& other) const;
     BooleanValue operator&&(const BooleanValue& other) const;
@@ -632,18 +651,18 @@ public:
 
 public:
     const std::function<Value*(const std::vector<Value*>&)> callback_;
-    Type* type_;
+    TypePtr type_;
 
 public:
-    FunctionValue(auto&& callback, Type* function_type) noexcept
+    FunctionValue(auto&& callback, TypePtr function_type) noexcept
         : Value(kind),
           callback_(std::forward<decltype(callback)>(callback)),
           type_(function_type) {}
 
-    std::string repr() const final {
-        return std::format("<function at {:p}>", static_cast<const void*>(this));
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("<function at {:p}>", static_cast<const void*>(this));
     }
-    Value* operator()(const std::vector<Value*>& args) const;
+    TypePtr get_type() const final { return type_; }
 };
 
 class InstanceValue : public Value {
@@ -677,7 +696,7 @@ public:
         : InstanceValue(nullptr), values_(std::move(values)) {
         kind_ = kind;
     }
-    std::string repr() const final {
+    GlobalMemory::String repr() const final {
         // TODO: implement
         return {};
     }
@@ -686,203 +705,72 @@ public:
     Value* operator[](const Slice& indices) const;
 };
 
-class UnknownValue final : public Value {
-public:
-    static constexpr Kind kind = Kind::NothingOrUnknown;
-    UnknownValue() noexcept : Value(kind) {}
-    std::string repr() const final { return "unknown"; }
-};
-
-template <typename T>
-class Reference {
-    template <typename>
-    friend class Reference;
-    friend class IntrinsicOpTable;
-    friend class TypeRegistry;
-
-public:
-    template <typename V, typename = std::enable_if_t<std::is_base_of_v<Value, V>>>
-    static Reference make_literal(std::string_view literal) {
-        return Reference(Value::from_literal<V>(literal));
-    }
-
-private:
-    template <
-        TypeClass U,
-        typename... Args,
-        typename = std::enable_if_t<std::is_base_of_v<Type, U>>>
-    static Reference make(Args&&... args) {
-        return Reference(GlobalMemory::alloc<U>(std::forward<decltype(args)>(args)...));
-    }
-
-private:
-    T* ptr_;
-
-public:
-    Reference() noexcept = default;
-    Reference(const Reference& other) noexcept : ptr_(other.ptr_) { retain(); }
-    template <typename U>
-        requires std::is_base_of_v<T, U>
-    Reference(const Reference<U>& other) noexcept : ptr_(other.ptr_) {
-        retain();
-    }
-    Reference(Reference&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
-    template <typename U>
-        requires std::is_base_of_v<T, U>
-    Reference(Reference<U>&& other) noexcept : ptr_(other.ptr_) {
-        other.ptr_ = nullptr;
-    }
-    ~Reference() noexcept { release(); }
-    Reference& operator=(Reference other) noexcept {
-        std::swap(ptr_, other.ptr_);
-        return *this;
-    }
-    operator bool() const noexcept { return ptr_ != nullptr; }
-    T& operator*() const noexcept { return *ptr_; }
-    T* operator->() const noexcept { return ptr_; }
-
-    Reference<Type> as_type() const noexcept {
-        static_assert(std::is_same_v<T, Object>, "as_type can only be called on Reference<Object>");
-        return Reference<Type>((ptr_ && ptr_->is_type()) ? static_cast<Type*>(ptr_) : nullptr);
-    }
-
-    Reference<Value> as_value() const noexcept {
-        static_assert(
-            std::is_same_v<T, Object>, "as_value can only be called on Reference<Object>"
-        );
-        if (ptr_ && ptr_->is_value()) {
-            return Reference<Value>(static_cast<Value*>(ptr_));
-        } else if (ptr_ && ptr_->kind_ == Kind::NothingOrUnknown) {
-            return Reference<Value>(new UnknownValue());
-        } else {
-            return Reference<Value>(nullptr);
-        }
-    }
-
-    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Type>>>
-    operator Type*() const noexcept {
-        return ptr_;
-    }
-
-    template <typename U = T, typename = std::enable_if_t<std::is_same_v<U, Value>>>
-    operator Value*() const noexcept {
-        return ptr_;
-    }
-
-private:
-    explicit Reference(T* ptr) noexcept : ptr_(ptr) { retain(); }
-
-    void retain() noexcept {
-        if (ptr_) {
-            ptr_->ref_count_++;
-        }
-    }
-
-    void release() noexcept {
-        if (ptr_) {
-            ptr_->ref_count_--;
-            if (ptr_->ref_count_ == 0) {
-                delete ptr_;
-            }
-        }
-    }
-};
-
 class TypeRegistry {
 private:
     using Primitives =
         std::tuple<AnyType, NullType, IntegerType, FloatType, StringType, BooleanType>;
-    UnknownType unknown_type_instance_;
-    AnyType any_type_instance_;
-    IntegerType integer_type_instance_;
-    FloatType float_type_instance_;
-    StringType string_type_instance_;
-    BooleanType boolean_type_instance_;
-    FlatSet<FunctionType> function_types_;
-    FlatSet<ListType> list_types_;
-    FlatSet<RecordType> record_types_;
-    FlatSet<IntersectionType> intersection_types_;
-    FlatSet<UnionType> union_types_;
 
 public:
-    TypeRef of(ValueRef value) {
-        assert(value);
-        switch (value->kind_) {
-        case Kind::NothingOrUnknown:
-            return TypeRef(&unknown_type_instance_);
-        case Kind::Null:
-            return TypeRef(&any_type_instance_);
-        case Kind::Integer:
-            return TypeRef(&integer_type_instance_);
-        case Kind::Float:
-            return TypeRef(&float_type_instance_);
-        case Kind::String:
-            return TypeRef(&string_type_instance_);
-        case Kind::Boolean:
-            return TypeRef(&boolean_type_instance_);
-        case Kind::Function:
-            return TypeRef(static_cast<FunctionValue&>(*value).type_);
-        case Kind::Instance:
-            return TypeRef(static_cast<InstanceValue&>(*value).cls_);
-        default:
-            assert(false && "Unknown value kind for TypeRegistry::of");
-            // TODO: handle other kinds
-        }
-    }
-
     template <TypeClass T>
-    TypeRef get(auto&&... args) {
+    TypePtr get(auto&&... args) {
         if constexpr (TypeInTupleV<T, Primitives>) {
-            return get_kind(T::kind);
-        } else if constexpr (std::is_same_v<T, FunctionType>) {
-            return get_cached<FunctionType>(function_types_, std::forward<decltype(args)>(args)...);
-        } else if constexpr (std::is_same_v<T, ListType>) {
-            return get_cached<ListType>(list_types_, std::forward<decltype(args)>(args)...);
-        } else if constexpr (std::is_same_v<T, RecordType>) {
-            return get_cached<RecordType>(record_types_, std::forward<decltype(args)>(args)...);
-        } else if constexpr (std::is_same_v<T, IntersectionType>) {
-            return get_cached<IntersectionType>(
-                intersection_types_, std::forward<decltype(args)>(args)...
-            );
-        } else if constexpr (std::is_same_v<T, UnionType>) {
-            return get_cached<UnionType>(union_types_, std::forward<decltype(args)>(args)...);
+            return &T::instance;
         } else if constexpr (std::is_same_v<T, ClassType>) {
             // classes with same definition are distinct types
-            return TypeRef::make<T>(std::forward<decltype(args)>(args)...);
+            return new T(std::forward<decltype(args)>(args)...);
         } else {
-            static_assert(false, "Unknown type for TypeRegistry::get");
-            // TODO: handle other types
+            return get_cached<T>(std::forward<decltype(args)>(args)...);
         }
     }
 
-    TypeRef get_kind(Kind kind) {
+    TypePtr get_kind(Kind kind) {
         switch (kind) {
         case Kind::Any:
-            return TypeRef(&any_type_instance_);
+            return &AnyType::instance;
         case Kind::Integer:
-            return TypeRef(&integer_type_instance_);
+            return &IntegerType::instance;
         case Kind::Float:
-            return TypeRef(&float_type_instance_);
+            return &FloatType::instance;
         case Kind::String:
-            return TypeRef(&string_type_instance_);
+            return &StringType::instance;
         case Kind::Boolean:
-            return TypeRef(&boolean_type_instance_);
+            return &BooleanType::instance;
         default:
             assert(false && "Unknown primitive kind");
             std::unreachable();
         }
     }
 
-    TypeRef get_unknown() { return TypeRef(&unknown_type_instance_); }
+    ObjectPtr get_unknown() { return &UnknownType::instance; }
 
 private:
     template <typename T>
-    TypeRef get_cached(FlatSet<T>& instances, auto&&... args) {
+    TypePtr get_cached(auto&&... args) {
+        constexpr auto comparator = [](const T* a, const T* b) { return *a < *b; };
+        static FlatSet<const T*, decltype(comparator)> instances;
         T type(std::forward<decltype(args)>(args)...);
-        T& result = instances.try_emplace(type);
-        return TypeRef(&result);
+        const T*& result = instances.try_emplace(&type);
+        if (result == &type) {
+            result = new T(std::move(type));
+        }
+        return result;
     }
 };
+
+inline TypePtr Object::as_type() const {
+    if (!is_type_ && kind_ == Kind::NothingOrUnknown) return &UnknownType::instance;
+    return is_type_ ? static_cast<TypePtr>(this) : nullptr;
+}
+
+inline ValuePtr Object::as_value() const {
+    if (is_type_ && kind_ == Kind::NothingOrUnknown) return new UnknownValue();
+    return !is_type_ ? static_cast<ValuePtr>(this) : nullptr;
+}
+
+inline const UnknownType UnknownType::instance;
+
+template <Kind K>
+inline const PrimitiveType<K> PrimitiveType<K>::instance;
 
 // IntegerValue operators
 
@@ -1014,7 +902,7 @@ inline StringValue StringValue::operator+(const StringValue& other) const {
 
 inline StringValue StringValue::operator*(const IntegerValue& other) const {
     if (other.value_ <= 0) throw std::runtime_error("Can only multiply string by positive integer");
-    std::string result;
+    GlobalMemory::String result;
     result.reserve(this->value_.size() * static_cast<std::uint64_t>(other.value_));
     for (uint64_t i = 0; i < static_cast<std::uint64_t>(other.value_); i++) {
         result += this->value_;
@@ -1048,11 +936,6 @@ inline BooleanValue BooleanValue::operator||(const BooleanValue& other) const {
 }
 
 inline BooleanValue BooleanValue::operator!() const { return BooleanValue(!this->value_); }
-
-// FunctionValue operators
-inline Value* FunctionValue::operator()(const std::vector<Value*>& args) const {
-    return callback_(args);
-}
 
 // ListValue operators
 inline ListValue* ListValue::operator+(const ListValue& other) const {

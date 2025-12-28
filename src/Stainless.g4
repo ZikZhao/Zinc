@@ -184,8 +184,25 @@ OP_RBRACKET: ']';
 OP_LBRACE: '{';
 OP_RBRACE: '}';
 
-T_INT: [0-9]+;
-T_FLOAT: [0-9]+ '.' [0-9]+;
+T_FLOAT: T_HEX_FLOAT | T_DEC_FLOAT;
+
+fragment T_HEX_FLOAT:
+	'0' [xX] [0-9a-fA-F]* '.' [0-9a-fA-F]+ [pP] [+-]? [0-9]+
+	| '0' [xX] [0-9a-fA-F]+ [pP] [+-]? [0-9]+;
+
+fragment T_DEC_FLOAT:
+	[0-9]+ '.' [0-9]* EXP?
+	| '.' [0-9]+ EXP?
+	| [0-9]+ EXP;
+
+fragment EXP: [eE] [+-]? [0-9]+;
+
+T_INT:
+	'0' [xX] [0-9a-fA-F]+
+	| '0' [bB] [0-1]+
+	| '0' [0-7]+
+	| [0-9]+;
+
 T_STRING: '"' (~["\r\n] | '\\' .)* '"';
 T_BOOL: 'true' | 'false';
 T_IDENTIFIER: [a-zA-Z_][a-zA-Z0-9_]*;

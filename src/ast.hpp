@@ -36,8 +36,8 @@ class ASTFunctionParameter;
 class ASTFunctionSignature;
 class ASTFunctionDefinition;
 
-struct ExprResult {
-    TypeRef type_ref;
+struct ExprInfo {
+    TypePtr type;
     bool is_mutable = false;
     bool is_rvalue = false;
 };
@@ -48,7 +48,7 @@ class Scope {
 private:
     Scope* const parent_ = nullptr;
     const std::string_view name_;
-    FlatMap<std::string_view, ObjectRef> variables_;
+    FlatMap<std::string_view, ObjectPtr> variables_;
     FlatMap<std::string_view, const ASTTypeExpression*> types_;
     std::vector<const Scope*> anonymous_children_;
     FlatMap<std::string_view, const Scope*> children_;
@@ -67,7 +67,7 @@ public:
     }
 
 private:
-    void add_variable(std::string_view identifier, ObjectRef expr) {
+    void add_variable(std::string_view identifier, ObjectPtr expr) {
         if (types_.contains(identifier)) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
@@ -79,7 +79,7 @@ class TypeChecker {
 private:
     struct CacheRecord {
         bool is_resolving = false;
-        ObjectRef result;
+        ObjectPtr result;
     };
 
 private:
@@ -92,15 +92,15 @@ public:
 
 public:
     TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& types) noexcept;
-    void add_variable(std::string_view identifier, ObjectRef expr);
+    void add_variable(std::string_view identifier, ObjectPtr expr);
     void enter(const ASTCodeBlock* child) noexcept;
     void exit() noexcept;
-    ObjectRef resolve(std::string_view identifier);
-    ExprResult type_of(std::string_view identifier);
+    ObjectPtr resolve(std::string_view identifier);
+    ExprInfo type_of(std::string_view identifier);
 
 private:
-    ObjectRef resolve_in(std::string_view identifier, Scope& scope);
-    ExprResult type_of_in(std::string_view identifier, Scope& scope);
+    ObjectPtr resolve_in(std::string_view identifier, Scope& scope);
+    ExprInfo type_of_in(std::string_view identifier, Scope& scope);
 };
 
 class ASTNode {
@@ -181,19 +181,19 @@ public:
 class ASTExpression : public ASTNode {
 public:
     ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
-    virtual ObjectRef eval(TypeChecker& checker) const = 0;
-    virtual ExprResult get_result_type(TypeChecker& checker) const = 0;
-    void check_types(TypeChecker& checker) final { std::ignore = get_result_type(checker); }
+    virtual ObjectPtr eval(TypeChecker& checker) const = 0;
+    virtual ExprInfo get_expr_info(TypeChecker& checker) const = 0;
+    void check_types(TypeChecker& checker) final { std::ignore = get_expr_info(checker); }
 };
 
 template <ValueClass V>
 class ASTConstant final : public ASTExpression {
 public:
-    ValueRef value_;
+    Value* value_;
     ASTConstant(const Location& loc, std::string_view str)
-        : ASTExpression(loc), value_(ValueRef::make_literal<V>(str)) {}
-    ObjectRef eval(TypeChecker& checker) const final { return value_; }
-    ExprResult get_result_type(TypeChecker& checker) const final {
+        : ASTExpression(loc), value_(Value::from_literal<V>(str)) {}
+    ObjectPtr eval(TypeChecker& checker) const final { return value_; }
+    ExprInfo get_expr_info(TypeChecker& checker) const final {
         return {checker.types_.get_kind(value_->kind_), false};
     }
 };
@@ -203,8 +203,8 @@ public:
     const std::string_view name_;
     ASTIdentifier(const Location& loc, std::string_view name) noexcept
         : ASTExpression(loc), name_(name) {}
-    ObjectRef eval(TypeChecker& checker) const final { return checker.resolve(name_); }
-    ExprResult get_result_type(TypeChecker& checker) const final { return checker.type_of(name_); }
+    ObjectPtr eval(TypeChecker& checker) const final { return checker.resolve(name_); }
+    ExprInfo get_expr_info(TypeChecker& checker) const final { return checker.type_of(name_); }
 };
 
 template <typename Op>
@@ -214,13 +214,13 @@ public:
     ASTUnaryOp(const Location& loc, std::unique_ptr<ASTExpression> expr) noexcept
         : ASTExpression(loc), expr_(std::move(expr)) {}
     ~ASTUnaryOp() noexcept final = default;
-    ObjectRef eval(TypeChecker& checker) const final {
-        ObjectRef expr_result = expr_->eval(checker);
+    ObjectPtr eval(TypeChecker& checker) const final {
+        ObjectPtr expr_result = expr_->eval(checker);
         return checker.ops_.eval_op(Op::opcode, expr_result);
     }
-    ExprResult get_result_type(TypeChecker& checker) const final {
-        ExprResult expr_type = expr_->get_result_type(checker);
-        return {checker.ops_.get_result_type(Op::opcode, expr_type.type_ref), false};
+    ExprInfo get_expr_info(TypeChecker& checker) const final {
+        ExprInfo expr_info = expr_->get_expr_info(checker);
+        return {checker.ops_.get_result_type(Op::opcode, expr_info.type), false};
     }
 };
 
@@ -236,23 +236,27 @@ public:
     ) noexcept
         : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
-    ObjectRef eval(TypeChecker& checker) const final {
-        ObjectRef left_result = left_->eval(checker);
-        ObjectRef right_result = right_->eval(checker);
+    ObjectPtr eval(TypeChecker& checker) const final {
+        ObjectPtr left_result = left_->eval(checker);
+        ObjectPtr right_result = right_->eval(checker);
         try {
             return checker.ops_.eval_op(Op::opcode, left_result, right_result);
         } catch (const UnlocatedProblem& e) {
-            Diagnostic::report(SymbolCategoryMismatchError(location_, false));
+            TypePtr left_type = left_result->as_type() ? left_result->as_type()
+                                                       : left_result->as_value()->get_type();
+            TypePtr right_type = right_result->as_type() ? right_result->as_type()
+                                                         : right_result->as_value()->get_type();
+            Diagnostic::report(OperationNotDefinedError(
+                location_, OperatorCodeToString(Op::opcode), left_type->repr(), right_type->repr()
+            ));
             return checker.types_.get_unknown();
         }
     }
-    ExprResult get_result_type(TypeChecker& checker) const final {
-        ExprResult left_type = left_->get_result_type(checker);
-        ExprResult right_type = right_->get_result_type(checker);
+    ExprInfo get_expr_info(TypeChecker& checker) const final {
+        ExprInfo left_info = left_->get_expr_info(checker);
+        ExprInfo right_info = right_->get_expr_info(checker);
         return {
-            checker.ops_.get_result_type(Op::opcode, left_type.type_ref, right_type.type_ref),
-            false,
-            true
+            checker.ops_.get_result_type(Op::opcode, left_info.type, right_info.type), false, true
         };
     }
 };
@@ -272,25 +276,25 @@ public:
     ) noexcept
         : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
-    ObjectRef eval(TypeChecker& checker) const final {
+    ObjectPtr eval(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
         return checker.types_.get_unknown();
     }
-    ExprResult get_result_type(TypeChecker& checker) const final {
-        ExprResult left_type = left_->get_result_type(checker);
-        ExprResult right_type = right_->get_result_type(checker);
-        if (!left_type.is_mutable) {
+    ExprInfo get_expr_info(TypeChecker& checker) const final {
+        ExprInfo left_info = left_->get_expr_info(checker);
+        ExprInfo right_info = right_->get_expr_info(checker);
+        if (!left_info.is_mutable) {
             Diagnostic::report(ImmutableMutationError(location_));
         }
-        if (left_type.is_rvalue) {
+        if (left_info.is_rvalue) {
             Diagnostic::report(InvalidAssignmentTargetError(location_));
         }
-        if (!left_type.type_ref->assignable_from(*right_type.type_ref)) {
-            Diagnostic::report(TypeMismatchError(
-                location_, left_type.type_ref->repr(), right_type.type_ref->repr()
-            ));
+        if (!left_info.type->assignable_from(*right_info.type)) {
+            Diagnostic::report(
+                TypeMismatchError(location_, left_info.type->repr(), right_info.type->repr())
+            );
         }
-        return {left_type.type_ref, true, false};
+        return {left_info.type, true, false};
     }
 };
 
@@ -305,11 +309,11 @@ public:
     ) noexcept
         : ASTExpression(loc), function_(std::move(function)), arguments_(std::move(arguments)) {}
     ~ASTFunctionCall() noexcept final = default;
-    ObjectRef eval(TypeChecker& checker) const final {
+    Object* eval(TypeChecker& checker) const final {
         // TODO
         return {};
     }
-    ExprResult get_result_type(TypeChecker& checker) const final {
+    ExprInfo get_expr_info(TypeChecker& checker) const final {
         // TODO
         return {};
     }
@@ -360,8 +364,8 @@ template <TypeClass T>
 class ASTPrimitiveType final : public ASTTypeExpression {
 public:
     ASTPrimitiveType(const Location& loc) noexcept : ASTTypeExpression(loc) {}
-    ObjectRef eval(TypeChecker& checker) const final { return checker.types_.get<T>(); }
-    ExprResult get_result_type(TypeChecker& checker) const final {
+    ObjectPtr eval(TypeChecker& checker) const final { return checker.types_.get<T>(); }
+    ExprInfo get_expr_info(TypeChecker& checker) const final {
         throw std::logic_error("Type expressions do not have result types");
     }
 };
@@ -374,7 +378,7 @@ private:
         std::unique_ptr<ASTTypeExpression>>;
 
 public:
-    const std::variant<Components, TypeRef> representation_;
+    const std::variant<Components, Type*> representation_;
     ASTFunctionType(
         const Location& loc,
         std::unique_ptr<ASTTypeExpression> return_type,
@@ -385,25 +389,25 @@ public:
           representation_(Components(
               std::move(return_type), std::move(parameter_types), std::move(variadic_type)
           )) {}
-    ASTFunctionType(TypeRef func) noexcept : ASTTypeExpression({}), representation_(func) {}
-    ObjectRef eval(TypeChecker& checker) const final {
-        if (std::holds_alternative<TypeRef>(representation_)) {
-            return std::get<TypeRef>(representation_);
+    ASTFunctionType(Type* func) noexcept : ASTTypeExpression({}), representation_(func) {}
+    ObjectPtr eval(TypeChecker& checker) const final {
+        if (std::holds_alternative<Type*>(representation_)) {
+            return std::get<Type*>(representation_);
         }
         const auto& comps = std::get<Components>(representation_);
-        if (TypeRef return_type = std::get<0>(comps)->eval(checker).as_type()) {
-            auto param_rng =
-                std::get<1>(comps) | std::views::transform([&](const auto& param_expr) -> Type* {
-                    if (TypeRef param_type = param_expr->eval(checker).as_type()) {
+        if (TypePtr return_type = std::get<0>(comps)->eval(checker)->as_type()) {
+            ComparableSpan<TypePtr> param_types =
+                std::get<1>(comps) | std::views::transform([&](const auto& param_expr) -> TypePtr {
+                    if (TypePtr param_type = param_expr->eval(checker)->as_type()) {
                         return param_type;
                     }
                     Diagnostic::report(SymbolCategoryMismatchError(param_expr->location_, true));
-                    return checker.types_.get_unknown();
-                });
-            ComparableSpan param_types = GlobalMemory::collect_range<Type*>(param_rng);
-            TypeRef variadic_type;
+                    return checker.types_.get_unknown()->as_type();
+                }) |
+                GlobalMemory::collect<ComparableSpan<TypePtr>>();
+            TypePtr variadic_type;
             if (const auto& opt_variadic = std::get<2>(comps)) {
-                if (variadic_type = opt_variadic->eval(checker).as_type(); variadic_type) {
+                if (variadic_type = opt_variadic->eval(checker)->as_type(); variadic_type) {
                     throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
                 }
             }
@@ -412,9 +416,9 @@ public:
         Diagnostic::report(SymbolCategoryMismatchError(std::get<0>(comps)->location_, true));
         return checker.types_.get_unknown();
     }
-    ExprResult get_result_type(TypeChecker& checker) const final {
+    ExprInfo get_expr_info(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {checker.types_.get_unknown(), false, true};
+        return {checker.types_.get_unknown()->as_type(), false, true};
     }
 };
 
@@ -437,19 +441,19 @@ public:
     ) noexcept
         : ASTTypeExpression(loc), fields_(std::move(fields)) {}
     ~ASTRecordType() noexcept final = default;
-    ObjectRef eval(TypeChecker& checker) const final {
+    ObjectPtr eval(TypeChecker& checker) const final {
         auto rng = fields_ | std::views::transform([&](const auto& decl) {
-                       if (TypeRef type = checker.resolve(decl->identifier_).as_type()) {
+                       if (TypePtr type = checker.resolve(decl->identifier_)->as_type()) {
                            return std::pair(decl->identifier_, type);
                        }
                        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
                    });
-        FlatMap<std::string_view, Type*> field_types(std::from_range, std::move(rng));
+        FlatMap<std::string_view, TypePtr> field_types(std::from_range, std::move(rng));
         return checker.types_.get<RecordType>(field_types);
     }
-    ExprResult get_result_type(TypeChecker& checker) const final {
+    ExprInfo get_expr_info(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {checker.types_.get_unknown(), false, true};
+        return {checker.types_.get_unknown()->as_type(), false, true};
     }
 };
 
@@ -474,21 +478,21 @@ public:
     ~ASTDeclaration() noexcept final = default;
     void check_types(TypeChecker& checker) final {
         if (is_mutable_) {
-            ExprResult inferred_type = expr_->get_result_type(checker);
-            TypeRef declared_type = get_declared_type(checker, inferred_type.type_ref);
+            TypePtr inferred_type = expr_->get_expr_info(checker).type;
+            TypePtr declared_type = get_declared_type(checker, inferred_type);
             checker.add_variable(identifier_->name_, declared_type);
         } else {
-            ObjectRef value = expr_->eval(checker);
-            if (!value.as_value()) {
+            ObjectPtr value = expr_->eval(checker);
+            if (!value->as_value()) {
                 Diagnostic::report(SymbolCategoryMismatchError(expr_->location_, false));
             }
-            std::ignore = get_declared_type(checker, checker.types_.of(value.as_value()));
+            std::ignore = get_declared_type(checker, value->as_value()->get_type());
             checker.add_variable(identifier_->name_, value);
         }
     }
-    TypeRef get_declared_type(TypeChecker& checker, TypeRef inferred_type) const {
+    TypePtr get_declared_type(TypeChecker& checker, TypePtr inferred_type) const {
         if (type_) {
-            TypeRef declared_type = type_->eval(checker).as_type();
+            TypePtr declared_type = type_->eval(checker)->as_type();
             if (!declared_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(type_->location_, true));
             }
@@ -666,7 +670,7 @@ public:
 
 class ASTFunctionDefinition final : public ASTNode {
 public:
-    const std::string name_;
+    const GlobalMemory::String name_;
     const std::unique_ptr<const ASTFunctionSignature> signature_;
     const std::unique_ptr<const ASTCodeBlock> body_;
 
@@ -689,7 +693,7 @@ public:
 inline TypeChecker::TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& types) noexcept
     : current_scope_(&root), ops_(ops), types_(types) {}
 
-inline void TypeChecker::add_variable(std::string_view identifier, ObjectRef expr) {
+inline void TypeChecker::add_variable(std::string_view identifier, ObjectPtr expr) {
     current_scope_->add_variable(identifier, expr);
 }
 
@@ -704,22 +708,22 @@ inline void TypeChecker::enter(const ASTCodeBlock* child) noexcept {
 
 inline void TypeChecker::exit() noexcept { current_scope_ = current_scope_->parent_; }
 
-inline ObjectRef TypeChecker::resolve(std::string_view identifier) {
+inline ObjectPtr TypeChecker::resolve(std::string_view identifier) {
     return resolve_in(identifier, *current_scope_);
 }
 
-inline ExprResult TypeChecker::type_of(std::string_view identifier) {
+inline ExprInfo TypeChecker::type_of(std::string_view identifier) {
     return type_of_in(identifier, *current_scope_);
 }
 
-inline ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
+inline ObjectPtr TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
     // Check cache
     auto& record = cache_[std::pair(&scope, identifier)];
     if (record.is_resolving) {
         if (record.result) {
             return record.result;
         }
-        throw UnlocatedProblem::make<CircularTypeDependencyError>(identifier);
+        throw UnlocatedProblem::make<CircularTypeDependencyError>();
     }
     // Cache miss; resolve
     record.is_resolving = true;
@@ -728,11 +732,11 @@ inline ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& sco
         return record.result;
     }
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
-        if (it_var->second.as_type()) {
+        if (it_var->second->as_type()) {
             throw UnlocatedProblem::make<NotConstantExpressionError>();
         } else {
             // constant (it_var->second is the value stored)
-            record.result = types_.of(it_var->second.as_value());
+            record.result = it_var->second->as_value()->get_type();
             return record.result;
         }
     }
@@ -743,13 +747,13 @@ inline ObjectRef TypeChecker::resolve_in(std::string_view identifier, Scope& sco
     throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
 }
 
-inline ExprResult TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
+inline ExprInfo TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
-        TypeRef type_ref = it_var->second.as_type();
-        if (!type_ref) {
-            type_ref = types_.of(it_var->second.as_value());
+        TypePtr type = it_var->second->as_type();
+        if (!type) {
+            type = it_var->second->as_value()->get_type();
         }
-        return ExprResult{type_ref, it_var->second.as_type()};
+        return ExprInfo{type, it_var->second->as_type() != nullptr};
     }
     if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);

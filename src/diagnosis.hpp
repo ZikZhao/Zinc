@@ -18,31 +18,31 @@ public:
 private:
     Severity severity_;
     Location location_;
-    std::string message_;
+    GlobalMemory::String message_;
 
 protected:
     Problem() = delete;
-    Problem(Severity severity, Location location, std::string message)
+    Problem(Severity severity, Location location, GlobalMemory::String message)
         : severity_(severity), location_(location), message_(std::move(message)) {}
     std::generator<Problem> sub_problems() const noexcept { co_return; }
 };
 
 class NameError : public Problem {
 protected:
-    NameError(const Location& location, std::string message)
+    NameError(const Location& location, GlobalMemory::String message)
         : Problem(Severity::Error, location, std::move(message)) {}
 };
 
 class UndeclaredIdentifierError final : public NameError {
 public:
     UndeclaredIdentifierError(const Location& location, std::string_view identifier)
-        : NameError(location, std::format("Undeclared identifier: '{}'", identifier)) {}
+        : NameError(location, GlobalMemory::format("Undeclared identifier: '{}'", identifier)) {}
 };
 
 class RedeclaredIdentifierError final : public NameError {
 public:
     RedeclaredIdentifierError(const Location& location, std::string_view identifier)
-        : NameError(location, std::format("Redeclared identifier: '{}'", identifier)) {}
+        : NameError(location, GlobalMemory::format("Redeclared identifier: '{}'", identifier)) {}
 };
 
 class SymbolCategoryMismatchError final : public NameError {
@@ -50,7 +50,7 @@ public:
     SymbolCategoryMismatchError(const Location& location, bool expected_is_type)
         : NameError(
               location,
-              std::format(
+              GlobalMemory::format(
                   "Symbol kind mismatch: expected {}, got {}",
                   expected_is_type ? "type" : "value",
                   !expected_is_type ? "type" : "value"
@@ -60,7 +60,7 @@ public:
 
 class TypeError : public Problem {
 protected:
-    TypeError(const Location& location, std::string message)
+    TypeError(const Location& location, GlobalMemory::String message)
         : Problem(Severity::Error, location, std::move(message)) {}
 };
 
@@ -68,7 +68,8 @@ class TypeMismatchError final : public TypeError {
 public:
     TypeMismatchError(const Location& location, std::string_view expected, std::string_view actual)
         : TypeError(
-              location, std::format("Type mismatch: expected '{}', got '{}'", expected, actual)
+              location,
+              GlobalMemory::format("Type mismatch: expected '{}', got '{}'", expected, actual)
           ) {}
 };
 
@@ -77,18 +78,20 @@ public:
     OperationNotDefinedError(
         const Location& location,
         std::string_view operator_repr,
-        std::string_view left_repr,
-        std::string_view right_repr = ""
+        std::string_view left_type_repr,
+        std::string_view right_type_repr = ""
     )
         : TypeError(
               location,
-              right_repr.size()
-                  ? std::format("Undefined operator '{}' for type '{}'", operator_repr, left_repr)
-                  : std::format(
+              right_type_repr.size()
+                  ? GlobalMemory::format(
                         "Undefined operator '{}' for types '{}' and '{}'",
                         operator_repr,
-                        left_repr,
-                        right_repr
+                        left_type_repr,
+                        right_type_repr
+                    )
+                  : GlobalMemory::format(
+                        "Undefined operator '{}' for type '{}'", operator_repr, left_type_repr
                     )
           ) {}
 };
@@ -96,7 +99,7 @@ public:
 class NotCallableError final : public TypeError {
 public:
     NotCallableError(const Location& location, std::string_view type_repr)
-        : TypeError(location, std::format("Type '{}' is not callable", type_repr)) {}
+        : TypeError(location, GlobalMemory::format("Type '{}' is not callable", type_repr)) {}
 };
 
 class ArgumentMismatchError final : public TypeError {
@@ -106,7 +109,7 @@ public:
     )
         : TypeError(
               location,
-              std::format(
+              GlobalMemory::format(
                   "Argument count mismatch: expected {}, got {}", expected_count, actual_count
               )
           ) {}
@@ -114,16 +117,14 @@ public:
 
 class CircularTypeDependencyError final : public TypeError {
 public:
-    CircularTypeDependencyError(const Location& location, std::string_view type_name)
-        : TypeError(
-              location, std::format("Circular type definition detected for type '{}'", type_name)
-          ) {}
+    CircularTypeDependencyError(const Location& location)
+        : TypeError(location, GlobalMemory::format("Circular type definition detected")) {}
 };
 
 class ImmutableMutationError final : public TypeError {
 public:
     ImmutableMutationError(const Location& location)
-        : TypeError(location, std::format("Attempted mutation of immutable value")) {}
+        : TypeError(location, GlobalMemory::format("Attempted mutation of immutable value")) {}
 };
 
 class InvalidAssignmentTargetError final : public TypeError {
@@ -152,8 +153,16 @@ public:
 
 class CompileTimeEvaluationError : public Problem {
 public:
-    CompileTimeEvaluationError(const Location& location, std::string_view message)
-        : Problem(Severity::Error, location, std::string(message)) {}
+    CompileTimeEvaluationError(const Location& location, GlobalMemory::String message)
+        : Problem(Severity::Error, location, message) {}
+};
+
+class InvalidLiteralError final : public CompileTimeEvaluationError {
+public:
+    InvalidLiteralError(const Location& location, std::string_view literal, std::string_view type)
+        : CompileTimeEvaluationError(
+              location, GlobalMemory::format("Invalid literal '{}' for type '{}'", literal, type)
+          ) {}
 };
 
 class NotConstantExpressionError final : public CompileTimeEvaluationError {
@@ -235,10 +244,10 @@ private:
         const auto& [_, path, content] = sources[location.id];
 
         std::size_t context_start = content.rfind('\n', location.begin);
-        context_start = (context_start == std::string::npos) ? 0 : context_start + 1;
+        context_start = (context_start == GlobalMemory::String::npos) ? 0 : context_start + 1;
 
         std::size_t context_end = content.find('\n', location.end);
-        context_end = (context_end == std::string::npos) ? content.size() : context_end;
+        context_end = (context_end == GlobalMemory::String::npos) ? content.size() : context_end;
 
         std::int64_t start_line_num = get_line_number(content, context_start);
         std::int64_t end_line_num = get_line_number(content, context_end);
@@ -314,7 +323,7 @@ private:
         }
     }
 
-    static std::int64_t get_line_number(const std::string& content, std::size_t where) {
+    static std::int64_t get_line_number(const GlobalMemory::String& content, std::size_t where) {
         static FlatMap<void*, std::vector<std::size_t>> line_cache;
         auto it = line_cache.find((void*)content.data());
         if (it == line_cache.end()) {

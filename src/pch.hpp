@@ -29,7 +29,13 @@
 #include "antlr4-runtime.h"
 // IWYU pragma: end_exports
 
-using namespace std::literals::string_literals;
+#define NEW_DELETE_OVERRIDES                                                              \
+public:                                                                                   \
+    static void* operator new(std::size_t size) { return GlobalMemory::alloc_raw(size); } \
+    static void operator delete(void* ptr, std::size_t size) {                            \
+        GlobalMemory::dealloc_raw(ptr, size);                                             \
+    }
+
 using namespace std::literals::string_view_literals;
 
 template <typename T, typename Tuple>
@@ -70,51 +76,171 @@ public:
     }
 };
 
-namespace GlobalMemory {
-inline std::pmr::memory_resource* memory_resource() {
-    constexpr std::size_t buffer_size = 1024 * 1024;  // 1 MB
-    alignas(std::max_align_t) static std::array<std::byte, buffer_size> buffer;
-    static std::pmr::monotonic_buffer_resource resource(
-        buffer.data(), buffer.size(), std::pmr::new_delete_resource()
-    );
-    return &resource;
+class GlobalMemory {
+private:
+    class HeapGateway : public std::pmr::memory_resource {
+    private:
+        std::pmr::memory_resource* upstream_;
+        std::mutex mutex_;
+
+    public:
+        explicit HeapGateway(std::pmr::memory_resource* upstream) : upstream_(upstream) {}
+
+    protected:
+        void* do_allocate(std::size_t bytes, std::size_t align) override {
+            std::lock_guard lock(mutex_);
+            return upstream_->allocate(bytes, align);
+        }
+
+        void do_deallocate(void* p, std::size_t bytes, std::size_t align) override {
+            std::lock_guard lock(mutex_);
+            upstream_->deallocate(p, bytes, align);
+        }
+
+        bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+            return this == &other;
+        }
+    };
+
+public:
+private:
+    static std::pmr::memory_resource* global_heap() noexcept {
+        static std::pmr::monotonic_buffer_resource resource(std::pmr::new_delete_resource());
+        return &resource;
+    }
+
+    static std::pmr::memory_resource* heap_gateway() noexcept {
+        static HeapGateway resource(global_heap());
+        return &resource;
+    }
+
+public:
+    static std::pmr::memory_resource* monotonic() noexcept {
+        static thread_local std::byte buffer[1024 * 1024];  // 1 MB per thread
+        static thread_local std::pmr::monotonic_buffer_resource resource(
+            buffer, sizeof(buffer), heap_gateway()
+        );
+        return &resource;
+    }
+
+    static std::pmr::memory_resource* pool() noexcept {
+        static thread_local std::pmr::unsynchronized_pool_resource resource(heap_gateway());
+        return &resource;
+    }
+
+    template <typename T>
+    class Allocator : public std::pmr::polymorphic_allocator<T> {
+    public:
+        using std::pmr::polymorphic_allocator<T>::polymorphic_allocator;
+        Allocator(std::pmr::memory_resource* r = GlobalMemory::pool())
+            : std::pmr::polymorphic_allocator<T>(r) {}
+        Allocator(const std::pmr::polymorphic_allocator<T>& other) noexcept
+            : std::pmr::polymorphic_allocator<T>(other) {}
+
+        template <typename U>
+        void destroy(U* p) {
+            std::destroy_at(p);
+        }
+    };
+
+    template <typename T>
+    using Vector = std::vector<T, Allocator<T>>;
+
+    using String = std::basic_string<char, std::char_traits<char>, Allocator<char>>;
+
+    template <typename K, typename V, typename C = std::less<K>>
+    using Map = std::map<K, V, C, Allocator<std::pair<const K, V>>>;
+
+    static void* alloc_raw(std::size_t size, std::size_t align = alignof(std::max_align_t)) {
+        return monotonic()->allocate(size, align);
+    }
+
+    static void dealloc_raw(
+        void* ptr, std::size_t size, std::size_t align = alignof(std::max_align_t)
+    ) {
+        monotonic()->deallocate(ptr, size, align);
+    }
+
+    template <typename T, typename... Args>
+    static constexpr T* alloc(Args&&... args) {
+        void* ptr = monotonic()->allocate(sizeof(T), alignof(T));
+        return new (ptr) T(std::forward<Args>(args)...);
+    }
+
+    template <typename T>
+    static constexpr ComparableSpan<T> alloc_array(std::size_t n) {
+        void* ptr = monotonic()->allocate(n * sizeof(T), alignof(T));
+        if constexpr (std::is_trivially_default_constructible_v<T>) {
+            return ComparableSpan<T>(static_cast<T*>(ptr), n);
+        } else {
+            T* typed_ptr = static_cast<T*>(ptr);
+            std::uninitialized_default_construct(typed_ptr, typed_ptr + n);
+            return ComparableSpan<T>(typed_ptr, n);
+        }
+    }
+
+private:
+    template <typename T>
+    class RangeCollector;
+
+    template <typename E>
+    class RangeCollector<ComparableSpan<E>> {
+        template <std::ranges::input_range R>
+        friend ComparableSpan<E> operator|(R&& range, RangeCollector) {
+            if constexpr (std::ranges::sized_range<R>) {
+                ComparableSpan<E> span = alloc_array<E>(std::ranges::size(range));
+                std::uninitialized_copy(
+                    std::ranges::begin(range), std::ranges::end(range), span.data()
+                );
+                return span;
+            } else {
+                std::vector<E> temp;
+                for (auto&& item : range) {
+                    temp.push_back(std::forward<decltype(item)>(item));
+                }
+                ComparableSpan<E> span = alloc_array<E>(temp.size());
+                std::uninitialized_copy(temp.begin(), temp.end(), span.data());
+                return span;
+            }
+        }
+    };
+
+public:
+    template <typename T>
+    static constexpr auto collect() {
+        return RangeCollector<T>{};
+    }
+
+    template <typename... Args>
+    static String format(std::format_string<Args...> fmt, Args&&... args) {
+        std::size_t size = std::formatted_size(fmt, std::forward<Args>(args)...);
+        String result;
+        result.reserve(size);
+        std::format_to(std::back_inserter(result), fmt, std::forward<Args>(args)...);
+        return result;
+    }
+
+public:
+    GlobalMemory() = delete;
 };
 
-template <typename T, typename... Args>
-constexpr T* alloc(Args&&... args) {
-    void* ptr = memory_resource()->allocate(sizeof(T), alignof(T));
-    return new (ptr) T(std::forward<Args>(args)...);
-}
-
-template <typename T>
-constexpr ComparableSpan<T> alloc_array(std::size_t n) {
-    void* ptr = memory_resource()->allocate(n * sizeof(T), alignof(T));
-    if constexpr (std::is_trivially_default_constructible_v<T>) {
-        return ComparableSpan<T>(static_cast<T*>(ptr), n);
-    } else {
-        T* typed_ptr = static_cast<T*>(ptr);
-        std::uninitialized_default_construct(typed_ptr, typed_ptr + n);
-        return ComparableSpan<T>(typed_ptr, n);
+template <>
+class GlobalMemory::RangeCollector<GlobalMemory::String> {
+    template <std::ranges::input_range R>
+    friend GlobalMemory::String operator|(R&& range, RangeCollector) {
+        String result;
+        std::ranges::copy(std::forward<R>(range), std::back_inserter(result));
+        return result;
     }
-}
+};
 
-template <typename T, std::ranges::input_range R>
-constexpr ComparableSpan<T> collect_range(R&& range) {
-    if constexpr (std::ranges::sized_range<R>) {
-        ComparableSpan<T> span = alloc_array<T>(std::ranges::size(range));
-        std::uninitialized_copy(std::ranges::begin(range), std::ranges::end(range), span.data());
-        return span;
-    } else {
-        std::vector<T> temp;
-        for (auto&& item : range) {
-            temp.push_back(std::forward<decltype(item)>(item));
-        }
-        ComparableSpan<T> span = alloc_array<T>(temp.size());
-        std::uninitialized_copy(temp.begin(), temp.end(), span.data());
-        return span;
+class MemoryManaged {
+public:
+    static void* operator new(std ::size_t size) { return GlobalMemory::alloc_raw(size); }
+    static void operator delete(void* ptr, std ::size_t size) {
+        GlobalMemory::dealloc_raw(ptr, size);
     }
-}
-}  // namespace GlobalMemory
+};
 
 template <typename Key, typename Value, typename Comp = std::less<Key>>
 class FlatMap {
@@ -172,16 +298,16 @@ public:
     using const_iterator = IteratorImpl<true>;
 
 private:
-    std::vector<Key> keys_;
-    std::vector<Value> values_;
+    GlobalMemory::Vector<Key> keys_;
+    GlobalMemory::Vector<Value> values_;
 
 public:
     FlatMap() noexcept = default;
 
     template <std::ranges::input_range R>
     FlatMap(std::from_range_t, R&& range) {
-        std::vector<Key> unsorted_keys;
-        std::vector<Value> unsorted_values;
+        GlobalMemory::Vector<Key> unsorted_keys;
+        GlobalMemory::Vector<Value> unsorted_values;
         if constexpr (std::ranges::sized_range<R>) {
             unsorted_keys.reserve(std::ranges::size(range));
             unsorted_values.reserve(std::ranges::size(range));
@@ -190,7 +316,7 @@ public:
             unsorted_keys.push_back(std::forward<decltype(pair.first)>(pair.first));
             unsorted_values.push_back(std::forward<decltype(pair.second)>(pair.second));
         }
-        std::vector<std::size_t> indices(unsorted_keys.size());
+        GlobalMemory::Vector<std::size_t> indices(unsorted_keys.size());
         std::ranges::iota(indices.begin(), indices.end(), 0);
         std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
             return Comp{}(unsorted_keys[a], unsorted_keys[b]);
@@ -293,10 +419,10 @@ public:
 template <typename Key, typename Comp = std::less<Key>>
 class FlatSet {
 private:
-    std::vector<Key> keys_;
+    GlobalMemory::Vector<Key> keys_;
 
 public:
-    Key& try_emplace(Key key) {
+    Key& try_emplace(Key&& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || *it != key) {
             return *keys_.emplace(it, std::move(key));
@@ -304,8 +430,10 @@ public:
         return *it;
     }
     std::size_t size() const noexcept { return keys_.size(); }
-    typename std::vector<Key>::const_iterator begin() const noexcept { return keys_.begin(); }
-    typename std::vector<Key>::const_iterator end() const noexcept { return keys_.end(); }
+    typename GlobalMemory::Vector<Key>::const_iterator begin() const noexcept {
+        return keys_.begin();
+    }
+    typename GlobalMemory::Vector<Key>::const_iterator end() const noexcept { return keys_.end(); }
     std::strong_ordering operator<=>(const FlatSet<Key, Comp>& other) const noexcept {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()

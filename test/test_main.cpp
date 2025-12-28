@@ -4,7 +4,7 @@
 
 class FlatMapTest : public ::testing::Test {
 protected:
-    FlatMap<std::string, int> map;
+    FlatMap<GlobalMemory::String, int> map;
 };
 
 TEST_F(FlatMapTest, InsertMaintainsOrder) {

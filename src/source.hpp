@@ -17,23 +17,25 @@ class SourceManager {
 public:
     struct File {
         std::uint32_t id;
-        std::string path;
-        std::string content;
+        GlobalMemory::String path;
+        GlobalMemory::String content;
     };
 
 public:
-    FlatMap<std::string, std::uint32_t> file_id_map_;
+    FlatMap<GlobalMemory::String, std::uint32_t> file_id_map_;
     std::vector<File> files;
 
 public:
     SourceManager() = default;
     std::optional<std::uint32_t> load(std::string_view input_path) noexcept {
-        std::string path = std::filesystem::canonical(input_path).string();
+        GlobalMemory::String path =
+            std::filesystem::canonical(input_path)
+                .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
         std::ifstream file_stream(input_path.data());
         if (file_stream.fail()) {
             return std::nullopt;
         }
-        std::string content(
+        GlobalMemory::String content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
         );
         files.push_back(

@@ -125,6 +125,86 @@ constexpr OperatorCode MapOperatorEnum(int enum_value) {
     }
 }
 
+constexpr std::string_view OperatorCodeToString(OperatorCode opcode) {
+    switch (opcode) {
+    case OperatorCode::OPERATOR_ADD:
+        return "+";
+    case OperatorCode::OPERATOR_SUBTRACT:
+        return "-";
+    case OperatorCode::OPERATOR_NEGATE:
+        return "-";
+    case OperatorCode::OPERATOR_MULTIPLY:
+        return "*";
+    case OperatorCode::OPERATOR_DIVIDE:
+        return "/";
+    case OperatorCode::OPERATOR_REMAINDER:
+        return "%";
+    case OperatorCode::OPERATOR_INCREMENT:
+        return "++";
+    case OperatorCode::OPERATOR_DECREMENT:
+        return "--";
+    case OperatorCode::OPERATOR_EQUAL:
+        return "==";
+    case OperatorCode::OPERATOR_NOT_EQUAL:
+        return "!=";
+    case OperatorCode::OPERATOR_LESS_THAN:
+        return "<";
+    case OperatorCode::OPERATOR_LESS_EQUAL:
+        return "<=";
+    case OperatorCode::OPERATOR_GREATER_THAN:
+        return ">";
+    case OperatorCode::OPERATOR_GREATER_EQUAL:
+        return ">=";
+    case OperatorCode::OPERATOR_LOGICAL_AND:
+        return "&&";
+    case OperatorCode::OPERATOR_LOGICAL_OR:
+        return "||";
+    case OperatorCode::OPERATOR_LOGICAL_NOT:
+        return "!";
+    case OperatorCode::OPERATOR_BITWISE_AND:
+        return "&";
+    case OperatorCode::OPERATOR_BITWISE_OR:
+        return "|";
+    case OperatorCode::OPERATOR_BITWISE_XOR:
+        return "^";
+    case OperatorCode::OPERATOR_BITWISE_NOT:
+        return "~";
+    case OperatorCode::OPERATOR_LEFT_SHIFT:
+        return "<<";
+    case OperatorCode::OPERATOR_RIGHT_SHIFT:
+        return ">>";
+    case OperatorCode::OPERATOR_ASSIGN:
+        return "=";
+    case OperatorCode::OPERATOR_ADD_ASSIGN:
+        return "+=";
+    case OperatorCode::OPERATOR_SUBTRACT_ASSIGN:
+        return "-=";
+    case OperatorCode::OPERATOR_MULTIPLY_ASSIGN:
+        return "*=";
+    case OperatorCode::OPERATOR_DIVIDE_ASSIGN:
+        return "/=";
+    case OperatorCode::OPERATOR_REMAINDER_ASSIGN:
+        return "%=";
+    case OperatorCode::OPERATOR_LOGICAL_AND_ASSIGN:
+        return "&&=";
+    case OperatorCode::OPERATOR_LOGICAL_OR_ASSIGN:
+        return "||=";
+    case OperatorCode::OPERATOR_BITWISE_AND_ASSIGN:
+        return "&=";
+    case OperatorCode::OPERATOR_BITWISE_OR_ASSIGN:
+        return "|=";
+    case OperatorCode::OPERATOR_BITWISE_XOR_ASSIGN:
+        return "^=";
+    case OperatorCode::OPERATOR_LEFT_SHIFT_ASSIGN:
+        return "<<=";
+    case OperatorCode::OPERATOR_RIGHT_SHIFT_ASSIGN:
+        return ">>=";
+    default:
+        assert(false && "Unknown operator code");
+        std::unreachable();
+    }
+}
+
 namespace OperatorFunctors {
 
 struct Increment {
@@ -277,21 +357,21 @@ private:
         tuple<NoOperand, AnyValue, NullValue, IntegerValue, FloatValue, StringValue, BooleanValue>;
 
 public:
-    using OperatorFn = ValueRef (*)(ValueRef, ValueRef);
+    using OperatorFn = ValuePtr (*)(ValuePtr, ValuePtr);
     using TableValue = std::pair<Kind, OperatorFn>;
 
 private:
     template <typename Op, typename Left, typename Right>
     static consteval TableValue make_single_op() {
         constexpr bool valid =
-            requires { Op{}(std::declval<Left&>(), std::declval<Right&>()).kind; };
+            requires { Op{}(std::declval<const Left&>(), std::declval<const Right&>()).kind; };
         if constexpr (valid) {
             return TableValue{
-                decltype(Op{}(std::declval<Left&>(), std::declval<Right&>()))::kind,
-                [](ValueRef left, ValueRef right) -> ValueRef {
-                    auto result = Op{}(static_cast<Left&>(*left), static_cast<Right&>(*right));
-                    auto boxed = GlobalMemory::alloc<decltype(result)>(std::move(result));
-                    return ValueRef(boxed);
+                decltype(Op{}(std::declval<const Left&>(), std::declval<const Right&>()))::kind,
+                [](ValuePtr left, ValuePtr right) -> ValuePtr {
+                    auto result =
+                        Op{}(static_cast<const Left&>(*left), static_cast<const Right&>(*right));
+                    return new decltype(result)(std::move(result));
                 },
             };
         } else {
@@ -322,17 +402,17 @@ protected:
 public:
     constexpr IntrinsicOpTable(TypeRegistry& types) : types_(types) {}
 
-    constexpr ObjectRef eval_op(OperatorCode opcode, ObjectRef left, ObjectRef right = {}) const {
-        if (left.as_type() && right.as_type()) {
-            return eval_type_op(opcode, left.as_type(), right.as_type());
-        } else if (left.as_value() && right.as_value()) {
-            return eval_value_op(opcode, left.as_value(), right.as_value());
+    constexpr ObjectPtr eval_op(OperatorCode opcode, ObjectPtr left, ObjectPtr right = {}) const {
+        if (left->as_type() && right->as_type()) {
+            return eval_type_op(opcode, left->as_type(), right->as_type());
+        } else if (left->as_value() && right->as_value()) {
+            return eval_value_op(opcode, left->as_value(), right->as_value());
         } else {
             return eval_type_value_op(opcode, left, right);
         }
     }
 
-    TypeRef get_result_type(OperatorCode opcode, TypeRef left_type, TypeRef right_type) const {
+    TypePtr get_result_type(OperatorCode opcode, TypePtr left_type, TypePtr right_type) const {
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left_type->kind_)]
                                                    [static_cast<std::size_t>(right_type->kind_)];
@@ -345,7 +425,7 @@ public:
     }
 
 private:
-    ValueRef eval_value_op(OperatorCode opcode, ValueRef left, ValueRef right) const {
+    ValuePtr eval_value_op(OperatorCode opcode, ValuePtr left, ValuePtr right) const {
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left->kind_)]
                                                    [static_cast<std::size_t>(right->kind_)];
@@ -355,7 +435,7 @@ private:
         return value.second(left, right);
     }
 
-    TypeRef eval_type_op(OperatorCode opcode, TypeRef left, TypeRef right) const {
+    TypePtr eval_type_op(OperatorCode opcode, TypePtr left, TypePtr right) const {
         switch (opcode) {
         case OperatorCode::OPERATOR_BITWISE_AND:
             return types_.get<IntersectionType>(left, right);
@@ -366,7 +446,7 @@ private:
         }
     }
 
-    TypeRef eval_type_value_op(OperatorCode opcode, ObjectRef left, ObjectRef right) const {
+    Type* eval_type_value_op(OperatorCode opcode, ObjectPtr left, ObjectPtr right) const {
         // TODO (array index, integer + 1, etc.)
         return {};
     }
@@ -374,8 +454,8 @@ private:
 
 class OpDispatcher final : private IntrinsicOpTable {
 private:
-    using CustomTableKey = std::tuple<OperatorCode, Type*, Type*>;
-    using CustomTableValue = std::pair<TypeRef, OperatorFn>;
+    using CustomTableKey = std::tuple<OperatorCode, TypePtr, TypePtr>;
+    using CustomTableValue = std::pair<TypePtr, OperatorFn>;
     FlatMap<CustomTableKey, CustomTableValue> custom_table_;
 
 public:
@@ -383,26 +463,26 @@ public:
 
     void register_custom_op(
         OperatorCode opcode,
-        TypeRef left_type,
-        TypeRef right_type,
-        TypeRef result_type,
+        TypePtr left_type,
+        TypePtr right_type,
+        TypePtr result_type,
         OperatorFn func
     ) {
         custom_table_[{opcode, left_type, right_type}] = {result_type, func};
     }
 
-    ObjectRef eval_op(OperatorCode opcode, ObjectRef left, ObjectRef right = {}) const {
-        bool both_types = left.as_type() && right.as_type();
-        bool both_primitive_values = left.as_value() && right.as_value() &&
-                                     left.as_value()->kind_ < Kind::NonCompositeSize &&
-                                     right.as_value()->kind_ < Kind::NonCompositeSize;
+    ObjectPtr eval_op(OperatorCode opcode, ObjectPtr left, ObjectPtr right = {}) const {
+        bool both_types = left->as_type() && right->as_type();
+        bool both_primitive_values = left->as_value() && right->as_value() &&
+                                     left->as_value()->kind_ < Kind::NonCompositeSize &&
+                                     right->as_value()->kind_ < Kind::NonCompositeSize;
         if (both_types || both_primitive_values) {
             return IntrinsicOpTable::eval_op(opcode, left, right);
         }
         // operation on values only
-        ValueRef left_value = left.as_value();
-        ValueRef right_value = right.as_value();
-        auto it = custom_table_.find({opcode, types_.of(left_value), types_.of(right_value)});
+        ValuePtr left_value = left->as_value();
+        ValuePtr right_value = right->as_value();
+        auto it = custom_table_.find({opcode, left_value->get_type(), right_value->get_type()});
         if (it != custom_table_.end()) {
             return it->second.second(left_value, right_value);
         } else {
@@ -412,7 +492,7 @@ public:
         }
     }
 
-    TypeRef get_result_type(OperatorCode opcode, TypeRef left_type, TypeRef right_type = {}) const {
+    TypePtr get_result_type(OperatorCode opcode, TypePtr left_type, TypePtr right_type = {}) const {
         if (left_type->kind_ < Kind::NonCompositeSize &&
             (right_type ? right_type->kind_ < Kind::NonCompositeSize : true)) {
             return IntrinsicOpTable::get_result_type(opcode, left_type, right_type);
@@ -422,7 +502,7 @@ public:
             return (*it).second.first;
         } else {
             throw UnlocatedProblem::make<OperationNotDefinedError>(
-                "", left_type->repr(), right_type->repr()
+                "", left_type->repr(), right_type ? right_type->repr() : ""
             );
         }
     }

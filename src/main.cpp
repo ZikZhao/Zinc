@@ -472,13 +472,13 @@ private:
 // namespace Builtins {
 // struct BuiltinFunction {
 //     const std::string_view name;
-//     const TypeRef type;
-//     const std::function<ValueRef(const std::vector<ValueRef>&)> func;
+//     const Type* type;
+//     const std::function<Value*(const std::vector<Value*>&)> func;
 // };
 // BuiltinFunction Print = {
 //     "print",
-//     new FunctionType({}, TypeRef(new AnyType()), TypeRef(new NullType())),
-//     [](const std::vector<ValueRef>& args) -> ValueRef {
+//     new FunctionType({}, Type*(new AnyType()), Type*(new NullType())),
+//     [](const std::vector<Value*>& args) -> Value* {
 //         try {
 //             std::cout << args.at(0)->repr() << std::endl;
 //             return new NullValue();
@@ -495,7 +495,7 @@ private:
 // //         AllBuiltins | std::views::transform([](BuiltinFunction* builtin) {
 // //             return std::pair(std::string_view(builtin->name), builtin->type);
 // //         }) |
-// //         std::ranges::to<std::vector<std::pair<std::string_view, TypeRef>>>()
+// //         std::ranges::to<std::vector<std::pair<std::string_view, Type*>>>()
 // //     );
 // // }
 // }  // namespace Builtins
