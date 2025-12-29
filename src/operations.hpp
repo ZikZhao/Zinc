@@ -47,84 +47,6 @@ enum class OperatorCode : std::uint16_t {
     OPERATOR_RIGHT_SHIFT_ASSIGN,
 };
 
-constexpr OperatorCode MapOperatorEnum(int enum_value) {
-    switch (enum_value) {
-    case StainlessParser::OP_ADD:
-        return OperatorCode::OPERATOR_ADD;
-    case StainlessParser::OP_SUB:
-        return OperatorCode::OPERATOR_SUBTRACT;
-    case StainlessParser::OP_MUL:
-        return OperatorCode::OPERATOR_MULTIPLY;
-    case StainlessParser::OP_DIV:
-        return OperatorCode::OPERATOR_DIVIDE;
-    case StainlessParser::OP_REM:
-        return OperatorCode::OPERATOR_REMAINDER;
-    case StainlessParser::OP_INC:
-        return OperatorCode::OPERATOR_INCREMENT;
-    case StainlessParser::OP_DEC:
-        return OperatorCode::OPERATOR_DECREMENT;
-    case StainlessParser::OP_EQ:
-        return OperatorCode::OPERATOR_EQUAL;
-    case StainlessParser::OP_NEQ:
-        return OperatorCode::OPERATOR_NOT_EQUAL;
-    case StainlessParser::OP_LT:
-        return OperatorCode::OPERATOR_LESS_THAN;
-    case StainlessParser::OP_LTE:
-        return OperatorCode::OPERATOR_LESS_EQUAL;
-    case StainlessParser::OP_GT:
-        return OperatorCode::OPERATOR_GREATER_THAN;
-    case StainlessParser::OP_GTE:
-        return OperatorCode::OPERATOR_GREATER_EQUAL;
-    case StainlessParser::OP_AND:
-        return OperatorCode::OPERATOR_LOGICAL_AND;
-    case StainlessParser::OP_OR:
-        return OperatorCode::OPERATOR_LOGICAL_OR;
-    case StainlessParser::OP_NOT:
-        return OperatorCode::OPERATOR_LOGICAL_NOT;
-    case StainlessParser::OP_BITAND:
-        return OperatorCode::OPERATOR_BITWISE_AND;
-    case StainlessParser::OP_BITOR:
-        return OperatorCode::OPERATOR_BITWISE_OR;
-    case StainlessParser::OP_BITXOR:
-        return OperatorCode::OPERATOR_BITWISE_XOR;
-    case StainlessParser::OP_BITNOT:
-        return OperatorCode::OPERATOR_BITWISE_NOT;
-    case StainlessParser::OP_LSHIFT:
-        return OperatorCode::OPERATOR_LEFT_SHIFT;
-    case StainlessParser::OP_RSHIFT:
-        return OperatorCode::OPERATOR_RIGHT_SHIFT;
-    case StainlessParser::OP_ASSIGN:
-        return OperatorCode::OPERATOR_ASSIGN;
-    case StainlessParser::OP_ADD_ASSIGN:
-        return OperatorCode::OPERATOR_ADD_ASSIGN;
-    case StainlessParser::OP_SUB_ASSIGN:
-        return OperatorCode::OPERATOR_SUBTRACT_ASSIGN;
-    case StainlessParser::OP_MUL_ASSIGN:
-        return OperatorCode::OPERATOR_MULTIPLY_ASSIGN;
-    case StainlessParser::OP_DIV_ASSIGN:
-        return OperatorCode::OPERATOR_DIVIDE_ASSIGN;
-    case StainlessParser::OP_REM_ASSIGN:
-        return OperatorCode::OPERATOR_REMAINDER_ASSIGN;
-    case StainlessParser::OP_AND_ASSIGN:
-        return OperatorCode::OPERATOR_LOGICAL_AND_ASSIGN;
-    case StainlessParser::OP_OR_ASSIGN:
-        return OperatorCode::OPERATOR_LOGICAL_OR_ASSIGN;
-    case StainlessParser::OP_BITAND_ASSIGN:
-        return OperatorCode::OPERATOR_BITWISE_AND_ASSIGN;
-    case StainlessParser::OP_BITOR_ASSIGN:
-        return OperatorCode::OPERATOR_BITWISE_OR_ASSIGN;
-    case StainlessParser::OP_BITXOR_ASSIGN:
-        return OperatorCode::OPERATOR_BITWISE_XOR_ASSIGN;
-    case StainlessParser::OP_LSHIFT_ASSIGN:
-        return OperatorCode::OPERATOR_LEFT_SHIFT_ASSIGN;
-    case StainlessParser::OP_RSHIFT_ASSIGN:
-        return OperatorCode::OPERATOR_RIGHT_SHIFT_ASSIGN;
-    default:
-        assert(false && "Unknown operator enum value");
-        std::unreachable();
-    }
-}
-
 constexpr std::string_view OperatorCodeToString(OperatorCode opcode) {
     switch (opcode) {
     case OperatorCode::OPERATOR_ADD:
@@ -402,7 +324,9 @@ protected:
 public:
     constexpr IntrinsicOpTable(TypeRegistry& types) : types_(types) {}
 
-    constexpr ObjectPtr eval_op(OperatorCode opcode, ObjectPtr left, ObjectPtr right = {}) const {
+    constexpr ObjectPtr eval_op(
+        OperatorCode opcode, ObjectPtr left, ObjectPtr right = &UnknownType::instance
+    ) const {
         if (left->as_type() && right->as_type()) {
             return eval_type_op(opcode, left->as_type(), right->as_type());
         } else if (left->as_value() && right->as_value()) {
@@ -412,16 +336,39 @@ public:
         }
     }
 
-    TypePtr get_result_type(OperatorCode opcode, TypePtr left_type, TypePtr right_type) const {
+    TypePtr get_result_type(
+        OperatorCode opcode, TypePtr left_type, TypePtr right_type = &UnknownType::instance
+    ) const {
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left_type->kind_)]
                                                    [static_cast<std::size_t>(right_type->kind_)];
         if (value.first == Kind::NothingOrUnknown) {
             throw UnlocatedProblem::make<OperationNotDefinedError>(
-                "", left_type->repr(), right_type->repr()
+                "", left_type->repr(), right_type ? right_type->repr() : ""
             );
         }
-        return types_.get_kind(value.first);
+        switch (value.first) {
+        case Kind::Integer: {
+            bool is_signed =
+                static_cast<const IntegerType*>(left_type)->is_signed_ ||
+                (right_type && static_cast<const IntegerType*>(right_type)->is_signed_);
+            std::uint8_t bytes = static_cast<const IntegerType*>(left_type)->bits_ >
+                                 static_cast<const IntegerType*>(right_type)->bits_;
+            return types_.get<PrimitiveType<Kind::Integer>>(is_signed, bytes);
+        }
+        case Kind::Float: {
+            std::uint8_t bytes = static_cast<const FloatType*>(left_type)->bits_ >
+                                 static_cast<const FloatType*>(right_type)->bits_;
+            return types_.get<PrimitiveType<Kind::Float>>(bytes);
+        }
+        case Kind::String:
+            return types_.get<PrimitiveType<Kind::String>>();
+        case Kind::Boolean:
+            return types_.get<PrimitiveType<Kind::Boolean>>();
+        default:
+            assert(false && "Unsupported result type kind");
+            std::unreachable();
+        }
     }
 
 private:

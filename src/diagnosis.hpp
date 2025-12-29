@@ -165,6 +165,15 @@ public:
           ) {}
 };
 
+class OverflowError final : public CompileTimeEvaluationError {
+public:
+    OverflowError(const Location& location, std::string_view literal, std::string_view type)
+        : CompileTimeEvaluationError(
+              location,
+              GlobalMemory::format("Literal '{}' overflows the range of type '{}'", literal, type)
+          ) {}
+};
+
 class NotConstantExpressionError final : public CompileTimeEvaluationError {
 public:
     NotConstantExpressionError(const Location& location)
@@ -179,7 +188,7 @@ private:
 public:
     static void report(Problem&& problem) { problems_.push_back(std::move(problem)); }
 
-    static void print(SourceManager& sources) {
+    static bool print(SourceManager& sources) {
         std::lock_guard lock(print_mutex_);
         std::size_t error_count = 0;
         std::size_t warning_count = 0;
@@ -196,6 +205,8 @@ public:
                 break;
             }
         }
+
+        if (error_count == 0 && warning_count == 0) return false;
         std::print(
             std::cerr,
             "\n{}{} error(s){}, {}{} warning(s){} generated.\n",
@@ -207,6 +218,8 @@ public:
             ColourEscape::RESET
         );
         std::cerr.flush();
+
+        return true;
     }
 
 private:

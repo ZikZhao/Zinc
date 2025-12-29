@@ -99,8 +99,16 @@ constant:
 type:
 	primitive_ = (
 		KW_NULL
-		| KW_INT
-		| KW_FLOAT
+		| KW_INT8
+		| KW_INT16
+		| KW_INT32
+		| KW_INT64
+		| KW_UINT8
+		| KW_UINT16
+		| KW_UINT32
+		| KW_UINT64
+		| KW_FLOAT32
+		| KW_FLOAT64
 		| KW_STRING
 		| KW_BOOL
 	)												# PrimitiveType
@@ -114,8 +122,16 @@ record_field:
 KW_LET: 'let';
 KW_MUT: 'mut';
 KW_NULL: 'null';
-KW_INT: 'int';
-KW_FLOAT: 'float';
+KW_INT8: 'i8';
+KW_INT16: 'i16';
+KW_INT32: 'i32';
+KW_INT64: 'i64';
+KW_UINT8: 'u8';
+KW_UINT16: 'u16';
+KW_UINT32: 'u32';
+KW_UINT64: 'u64';
+KW_FLOAT32: 'f32';
+KW_FLOAT64: 'f64';
 KW_STRING: 'string';
 KW_BOOL: 'bool';
 KW_IF: 'if';

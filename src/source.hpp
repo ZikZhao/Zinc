@@ -1,12 +1,6 @@
 #pragma once
 #include "pch.hpp"
 
-class FileNotFoundError final : public std::runtime_error {
-public:
-    FileNotFoundError(std::string_view filename)
-        : std::runtime_error(std::format("File not found: {}", filename)) {}
-};
-
 struct Location {
     std::uint32_t id = 0;
     std::uint32_t begin = 0;
@@ -26,7 +20,6 @@ public:
     std::vector<File> files;
 
 public:
-    SourceManager() = default;
     std::optional<std::uint32_t> load(std::string_view input_path) noexcept {
         GlobalMemory::String path =
             std::filesystem::canonical(input_path)
@@ -48,6 +41,7 @@ public:
         file_id_map_.insert(path, static_cast<std::uint32_t>(files.size()) - 1);
         return files.back().id;
     }
+
     const File& operator[](std::size_t id) const noexcept {
         assert(id < file_id_map_.size());
         return files[id];

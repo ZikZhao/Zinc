@@ -8,6 +8,7 @@
 #include <format>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <generator>
 #include <iostream>
 #include <map>
@@ -27,14 +28,8 @@
 #include <vector>
 
 #include "antlr4-runtime.h"
-// IWYU pragma: end_exports
 
-#define NEW_DELETE_OVERRIDES                                                              \
-public:                                                                                   \
-    static void* operator new(std::size_t size) { return GlobalMemory::alloc_raw(size); } \
-    static void operator delete(void* ptr, std::size_t size) {                            \
-        GlobalMemory::dealloc_raw(ptr, size);                                             \
-    }
+// IWYU pragma: end_exports
 
 using namespace std::literals::string_view_literals;
 
@@ -66,11 +61,13 @@ template <typename T>
 class ComparableSpan : public std::span<T> {
 public:
     using std::span<T>::span;
+
     std::strong_ordering operator<=>(const ComparableSpan<T>& other) const noexcept {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
     }
+
     bool operator==(const ComparableSpan<T>& other) const noexcept {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
@@ -102,7 +99,6 @@ private:
         }
     };
 
-public:
 private:
     static std::pmr::memory_resource* global_heap() noexcept {
         static std::pmr::monotonic_buffer_resource resource(std::pmr::new_delete_resource());
