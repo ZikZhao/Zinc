@@ -85,6 +85,7 @@ add_executable(interpreter ${SOURCES})
 
 # Link ANTLR4 generated library and runtime
 target_link_libraries(interpreter PRIVATE antlr4_generated_lib)
+target_include_directories(interpreter PRIVATE ${ANTLR4_OUTPUT_DIR})
 
 # Set precompiled header
 target_precompile_headers(interpreter PRIVATE ${PCH_HEADER})

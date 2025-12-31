@@ -299,6 +299,16 @@ private:
 
 public:
     FlatMap() noexcept = default;
+    FlatMap(FlatMap&& other) noexcept = default;
+    FlatMap& operator=(FlatMap&& other) noexcept = default;
+    FlatMap(const FlatMap& other) noexcept
+        requires std::is_nothrow_copy_constructible_v<Key> &&
+                     std::is_nothrow_copy_constructible_v<Value>
+    = default;
+    FlatMap& operator=(const FlatMap& other) noexcept
+        requires std::is_nothrow_copy_constructible_v<Key> &&
+                     std::is_nothrow_copy_constructible_v<Value>
+    = default;
 
     template <std::ranges::input_range R>
     FlatMap(std::from_range_t, R&& range) {
@@ -418,12 +428,22 @@ private:
     GlobalMemory::Vector<Key> keys_;
 
 public:
-    Key& try_emplace(Key&& key) {
+    FlatSet() noexcept = default;
+    FlatSet(FlatSet&& other) noexcept = default;
+    FlatSet& operator=(FlatSet&& other) noexcept = default;
+    FlatSet(const FlatSet& other) noexcept
+        requires std::is_nothrow_copy_constructible_v<Key>
+    = default;
+    FlatSet& operator=(const FlatSet& other) noexcept
+        requires std::is_nothrow_copy_constructible_v<Key>
+    = default;
+
+    Key& emplace(Key&& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || *it != key) {
-            return *keys_.emplace(it, std::move(key));
+        if (it != keys_.end() && *it == key) {
+            throw std::invalid_argument("Key already exists in FlatSet");
         }
-        return *it;
+        return *keys_.emplace(it, std::move(key));
     }
     std::size_t size() const noexcept { return keys_.size(); }
     typename GlobalMemory::Vector<Key>::const_iterator begin() const noexcept {

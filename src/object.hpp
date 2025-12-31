@@ -29,10 +29,6 @@ class Object;
 class Type;
 class Value;
 
-using ObjectPtr = const Object*;
-using TypePtr = const Type*;
-using ValuePtr = const Value*;
-
 template <Kind Kind>
 class PrimitiveType;
 using AnyType = PrimitiveType<Kind::Any>;
@@ -65,12 +61,9 @@ class UnknownType;
 template <typename T>
 concept TypeClass = std::derived_from<T, Type>;
 template <typename V>
-concept ValueClass = std::derived_from<V, Value> && !std::derived_from<V, Type>;
+concept ValueClass = std::derived_from<V, Value>;
 
 class Object : public MemoryManaged {
-    template <typename>
-    friend class Reference;
-
 public:
     Kind kind_;
 
@@ -85,8 +78,8 @@ public:
         return this <=> &other;
     }
     constexpr bool operator==(const Object& other) const noexcept { return this == &other; }
-    TypePtr as_type() const;
-    ValuePtr as_value() const;
+    Type* as_type();
+    Value* as_value();
 };
 
 class Type : public Object {
@@ -115,7 +108,7 @@ class UnknownType final : public Type {
 
 public:
     static constexpr Kind kind = Kind::NothingOrUnknown;
-    static const UnknownType instance;
+    static UnknownType instance;
 
 private:
     UnknownType() noexcept : Type(kind) {}
@@ -129,7 +122,7 @@ template <Kind K>
 class PrimitiveType final : public Type {
 public:
     static constexpr Kind kind = K;
-    static const PrimitiveType instance;
+    static PrimitiveType instance;
 
 public:
     PrimitiveType() noexcept : Type(kind) {}
@@ -163,19 +156,19 @@ template <>
 class PrimitiveType<Kind::Integer> final : public Type {
 public:
     static constexpr Kind kind = Kind::Integer;
-    static const PrimitiveType untyped_instance;
-    static const PrimitiveType i8_instance;
-    static const PrimitiveType i16_instance;
-    static const PrimitiveType i32_instance;
-    static const PrimitiveType i64_instance;
-    static const PrimitiveType u8_instance;
-    static const PrimitiveType u16_instance;
-    static const PrimitiveType u32_instance;
-    static const PrimitiveType u64_instance;
+    static PrimitiveType untyped_instance;
+    static PrimitiveType i8_instance;
+    static PrimitiveType i16_instance;
+    static PrimitiveType i32_instance;
+    static PrimitiveType i64_instance;
+    static PrimitiveType u8_instance;
+    static PrimitiveType u16_instance;
+    static PrimitiveType u32_instance;
+    static PrimitiveType u64_instance;
 
 public:
-    bool is_signed_;
-    std::uint8_t bits_;  // 8,16,32,64 bits (or 0 for untyped integer)
+    const bool is_signed_;
+    const std::uint8_t bits_;  // 8,16,32,64 bits (or 0 for untyped integer)
 
 public:
     PrimitiveType(bool is_signed, std::uint8_t bits) noexcept
@@ -200,12 +193,12 @@ template <>
 class PrimitiveType<Kind::Float> final : public Type {
 public:
     static constexpr Kind kind = Kind::Float;
-    static const PrimitiveType untyped_instance;
-    static const PrimitiveType f32_instance;
-    static const PrimitiveType f64_instance;
+    static PrimitiveType untyped_instance;
+    static PrimitiveType f32_instance;
+    static PrimitiveType f64_instance;
 
 public:
-    std::uint8_t bits_;  // 32,64 bits (or 0 for untyped float)
+    const std::uint8_t bits_;  // 32,64 bits (or 0 for untyped float)
 
 public:
     PrimitiveType(std::uint8_t bits) noexcept : Type(kind), bits_(bits) {
@@ -227,24 +220,18 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
-    ComparableSpan<TypePtr> parameters_;
-    TypePtr spread_;
-    TypePtr return_type_;
+    const ComparableSpan<Type*> parameters_;
+    Type* const return_type_;
 
 public:
-    FunctionType(ComparableSpan<TypePtr> parameters, TypePtr spread, TypePtr return_type) noexcept
-        : Type(kind), parameters_(parameters), spread_(spread), return_type_(return_type) {}
+    FunctionType(ComparableSpan<Type*> parameters, Type* return_type) noexcept
+        : Type(kind), parameters_(parameters), return_type_(return_type) {}
 
     GlobalMemory::String repr() const final {
         GlobalMemory::String params_repr =
-            parameters_ | std::views::transform([](TypePtr type) { return type->repr(); }) |
+            parameters_ | std::views::transform([](Type* type) { return type->repr(); }) |
             std::views::join_with(", "sv) | GlobalMemory::collect<GlobalMemory::String>();
-        return GlobalMemory::format(
-            "({}{}) => {}",
-            params_repr,
-            spread_ ? GlobalMemory::format(", ...{}", spread_->repr()) : ""sv,
-            return_type_->repr()
-        );
+        return GlobalMemory::format("({}) => {}", params_repr, return_type_->repr());
     }
 
     bool assignable_from_impl(const Type& source) const final {
@@ -262,13 +249,6 @@ public:
                 return false;
             }
         }
-        if ((spread_ == nullptr) != (func_other.spread_ == nullptr)) {
-            return false;
-        } else if (spread_ && func_other.spread_) {
-            if (!func_other.spread_->assignable_from(*spread_)) {
-                return false;
-            }
-        }
         return return_type_->assignable_from(*func_other.return_type_);
     }
     std::strong_ordering operator<=>(const FunctionType& other) const noexcept = default;
@@ -279,7 +259,7 @@ public:
     static constexpr Kind kind = Kind::List;
 
 public:
-    Type* element_type_;
+    Type* const element_type_;
 
 public:
     ListType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
@@ -302,10 +282,10 @@ public:
     static constexpr Kind kind = Kind::Record;
 
 private:
-    FlatMap<std::string_view, TypePtr> fields_;
+    FlatMap<std::string_view, Type*> fields_;
 
 public:
-    RecordType(FlatMap<std::string_view, TypePtr> fields) noexcept
+    RecordType(FlatMap<std::string_view, Type*> fields) noexcept
         : Type(kind), fields_(std::move(fields)) {}
 
     GlobalMemory::String repr() const final {
@@ -336,16 +316,16 @@ public:
     static constexpr Kind kind = Kind::Instance;
 
 private:
-    std::string_view name_;
-    ComparableSpan<InterfaceType*> interfaces_;
-    const ClassType* extends_;
-    FlatMap<std::string_view, Type*> properties_;
+    const std::string_view name_;
+    const ComparableSpan<InterfaceType*> interfaces_;
+    ClassType* const extends_;
+    const FlatMap<std::string_view, Type*> properties_;
 
 public:
     ClassType(
         std::string_view name,
         ComparableSpan<InterfaceType*> interfaces,
-        const ClassType* extends,
+        ClassType* extends,
         FlatMap<std::string_view, Type*> properties
     ) noexcept
         : Type(kind),
@@ -366,7 +346,7 @@ public:
     static constexpr Kind kind = Kind::Intersection;
 
 private:
-    static ComparableSpan<TypePtr> combine(TypePtr left, TypePtr right) {
+    static ComparableSpan<Type*> combine(Type* left, Type* right) {
         std::size_t size = 0;
         if (right < left) std::swap(left, right);
         if (left->kind_ == Kind::Intersection) {
@@ -384,7 +364,7 @@ private:
             assert(right->kind_ == Kind::Function);
             size++;
         }
-        ComparableSpan<TypePtr> buffer = GlobalMemory::alloc_array<TypePtr>(size);
+        ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
         std::size_t index = 0;
         if (left->kind_ == Kind::Intersection) {
             const IntersectionType& left_intersection = static_cast<const IntersectionType&>(*left);
@@ -407,11 +387,10 @@ private:
     }
 
 private:
-    ComparableSpan<TypePtr> types_;
+    const ComparableSpan<Type*> types_;
 
 public:
-    IntersectionType(TypePtr left, TypePtr right) noexcept
-        : Type(kind), types_{combine(left, right)} {}
+    IntersectionType(Type* left, Type* right) noexcept : Type(kind), types_{combine(left, right)} {}
 
     GlobalMemory::String repr() const final {
         // TODO
@@ -450,7 +429,7 @@ public:
     static constexpr Kind kind = Kind::Union;
 
 private:
-    static ComparableSpan<TypePtr> combine(TypePtr left, TypePtr right) {
+    static ComparableSpan<Type*> combine(Type* left, Type* right) {
         std::size_t size = 0;
         if (right < left) std::swap(left, right);
         if (left->kind_ == Kind::Union) {
@@ -465,7 +444,7 @@ private:
         } else {
             size++;
         }
-        ComparableSpan<TypePtr> buffer = GlobalMemory::alloc_array<TypePtr>(size);
+        ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
         std::size_t index = 0;
         if (left->kind_ == Kind::Union) {
             const UnionType& left_union = static_cast<const UnionType&>(*left);
@@ -487,10 +466,10 @@ private:
     }
 
 private:
-    ComparableSpan<TypePtr> types_;
+    const ComparableSpan<Type*> types_;
 
 public:
-    UnionType(TypePtr left, TypePtr right) noexcept : Type(kind), types_(combine(left, right)) {}
+    UnionType(Type* left, Type* right) noexcept : Type(kind), types_(combine(left, right)) {}
 
     GlobalMemory::String repr() const final {
         // TODO
@@ -532,7 +511,7 @@ public:
 class Value : public Object {
 public:
     template <ValueClass V>
-    static ValuePtr from_literal(std::string_view literal) {
+    static Value* from_literal(std::string_view literal) {
         if constexpr (std::is_same_v<V, NullValue>) {
             assert(literal == "null");
             return new V();
@@ -577,8 +556,8 @@ protected:
     Value(Kind kind) noexcept : Object(kind, false) {}
 
 public:
-    virtual TypePtr get_type() const = 0;
-    virtual ValuePtr resolve_to(TypePtr target) const { return this; };
+    virtual Type* get_type() const = 0;
+    virtual Value* resolve_to(Type* target) { return this; };
 };
 
 class UnknownValue final : public Value {
@@ -590,28 +569,28 @@ public:
 private:
     UnknownValue() noexcept : Value(kind) {}
     GlobalMemory::String repr() const final { return "unknown"; }
-    TypePtr get_type() const final { return &UnknownType::instance; }
+    Type* get_type() const final { return &UnknownType::instance; }
 };
 
 class NullValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Null;
-    using Type = NullType;
+    using StaticType = NullType;
 
 public:
     NullValue() noexcept : Value(kind) {}
 
     GlobalMemory::String repr() const final { return "null"; }
-    TypePtr get_type() const final { return &Type::instance; }
+    Type* get_type() const final { return &StaticType::instance; }
 };
 
 class IntegerValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Integer;
-    using Type = IntegerType;
+    using StaticType = IntegerType;
 
 public:
-    const IntegerType* type_;  // nullptr for integer literals without a specific type
+    IntegerType* const type_;  // nullptr for integer literals without a specific type
     union {
         std::int64_t ivalue_;
         std::uint64_t uvalue_;
@@ -619,25 +598,25 @@ public:
     };
 
 public:
-    IntegerValue(const IntegerType* type, std::int64_t value) noexcept
+    IntegerValue(IntegerType* type, std::int64_t value) noexcept
         : Value(kind), type_(type), ivalue_(value) {
         assert(type != nullptr && type->is_signed_);
     }
-    IntegerValue(const IntegerType* type, std::uint64_t value) noexcept
+    IntegerValue(IntegerType* type, std::uint64_t value) noexcept
         : Value(kind), type_(type), uvalue_(value) {
         assert(type != nullptr && !type->is_signed_);
     }
     explicit IntegerValue(std::string_view value) noexcept
         : Value(kind), type_(&IntegerType::untyped_instance), raw_(value) {}
     GlobalMemory::String repr() const final { return GlobalMemory::format("{}", ivalue_); }
-    TypePtr get_type() const final { return type_; }
-    const IntegerValue* resolve_to(TypePtr target) const final {
+    Type* get_type() const final { return type_; }
+    IntegerValue* resolve_to(Type* target) final {
         assert(target && target->kind_ == Kind::Integer && type_ == &IntegerType::untyped_instance);
-        const IntegerType* int_target = static_cast<const IntegerType*>(target);
+        IntegerType* int_target = static_cast<IntegerType*>(target);
         if (int_target == &IntegerType::untyped_instance) {
             // most suitable type inference
             if (raw_[0] == '-') {
-                int64_t value;
+                std::int64_t value;
                 auto [ptr, ec] = std::from_chars(raw_.data(), raw_.data() + raw_.size(), value);
                 if (ec != std::errc()) {
                     std::unreachable();
@@ -648,7 +627,7 @@ public:
                     return new IntegerValue(&IntegerType::i64_instance, value);
                 }
             } else {
-                uint64_t uvalue;
+                std::uint64_t uvalue;
                 auto [ptr, ec] = std::from_chars(raw_.data(), raw_.data() + raw_.size(), uvalue);
                 if (ec != std::errc()) {
                     std::unreachable();
@@ -710,22 +689,21 @@ public:
 class FloatValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Float;
-    using Type = FloatType;
+    using StaticType = FloatType;
 
 public:
-    const FloatType* type_;
+    FloatType* const type_;
     double value_;
 
 public:
-    FloatValue(const FloatType* type, double value) noexcept
-        : Value(kind), type_(type), value_(value) {
+    FloatValue(FloatType* type, double value) noexcept : Value(kind), type_(type), value_(value) {
         assert(type != nullptr);
     }
     GlobalMemory::String repr() const final { return GlobalMemory::format("{}", value_); }
-    TypePtr get_type() const final { return type_; }
-    const FloatValue* resolve_to(TypePtr target) const final {
+    Type* get_type() const final { return type_; }
+    FloatValue* resolve_to(Type* target) final {
         assert(target && target->kind_ == Kind::Float && type_ == &FloatType::untyped_instance);
-        const FloatType* float_target = static_cast<const FloatType*>(target);
+        FloatType* float_target = static_cast<FloatType*>(target);
         if (float_target == &FloatType::untyped_instance) {
             // default to double
             return new FloatValue(&FloatType::f64_instance, value_);
@@ -752,7 +730,7 @@ public:
 class StringValue final : public Value {
 public:
     static constexpr Kind kind = Kind::String;
-    using Type = StringType;
+    using StaticType = StringType;
 
 public:
     GlobalMemory::String value_;
@@ -760,7 +738,7 @@ public:
 public:
     StringValue(GlobalMemory::String value) noexcept : Value(kind), value_(std::move(value)) {}
     GlobalMemory::String repr() const final { return "\"" + this->value_ + "\""; }
-    TypePtr get_type() const final { return &Type::instance; }
+    Type* get_type() const final { return &StaticType::instance; }
     StringValue operator+(const StringValue& other) const;
     StringValue operator*(const IntegerValue& other) const;
     BooleanValue operator==(const StringValue& other) const;
@@ -770,7 +748,7 @@ public:
 class BooleanValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Boolean;
-    using Type = BooleanType;
+    using StaticType = BooleanType;
 
 public:
     bool value_;
@@ -778,7 +756,7 @@ public:
 public:
     BooleanValue(bool value) noexcept : Value(kind), value_(value) {}
     GlobalMemory::String repr() const final { return this->value_ ? "true" : "false"; }
-    TypePtr get_type() const final { return &Type::instance; }
+    Type* get_type() const final { return &StaticType::instance; }
     BooleanValue operator==(const BooleanValue& other) const;
     BooleanValue operator!=(const BooleanValue& other) const;
     BooleanValue operator&&(const BooleanValue& other) const;
@@ -789,27 +767,33 @@ public:
 class FunctionValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Function;
-    using Type = FunctionType;
+    using StaticType = FunctionType;
 
 public:
-    const std::function<Value*(const std::vector<Value*>&)> callback_;
-    TypePtr type_;
+    Type* type_;
+    const void* source_;
+    std::function<Value*(ComparableSpan<Value*>)> invoke_;
 
 public:
-    FunctionValue(auto&& callback, TypePtr function_type) noexcept
-        : Value(kind),
-          callback_(std::forward<decltype(callback)>(callback)),
-          type_(function_type) {}
+    FunctionValue(const void* source, decltype(invoke_) invoke) noexcept
+        : Value(kind), type_(nullptr), source_(source), invoke_(std::move(invoke)) {}
+    FunctionValue(Type* type, const void* source, decltype(invoke_) invoke) noexcept
+        : Value(kind), type_(type), source_(source), invoke_(std::move(invoke)) {}
 
     GlobalMemory::String repr() const final {
         return GlobalMemory::format("<function at {:p}>", static_cast<const void*>(this));
     }
-    TypePtr get_type() const final { return type_; }
+    Type* get_type() const final { return type_; }
+
+    FunctionValue* resolve_to(Type* target) final {
+        return new FunctionValue(target, source_, invoke_);
+    }
 };
 
 class InstanceValue : public Value {
 public:
     static constexpr Kind kind = Kind::Instance;
+    using StaticType = ClassType;
 
 public:
     ClassType* cls_;
@@ -846,10 +830,39 @@ public:
     ListValue* operator*(const IntegerValue& other) const;
 };
 
+class OverloadedFunctionValue final : public Value {
+public:
+    static constexpr Kind kind = Kind::Intersection;
+    using StaticType = IntersectionType;
+
+public:
+    GlobalMemory::Vector<const FunctionValue*> overloads_;
+
+public:
+    OverloadedFunctionValue(const FunctionValue* first) noexcept : Value(kind), overloads_{first} {}
+    GlobalMemory::String repr() const final {
+        // TODO
+        return {};
+    }
+    Type* get_type() const final {
+        // TODO
+        return nullptr;
+    }
+    void add_overload(const FunctionValue* func) noexcept { overloads_.push_back(func); }
+};
+
 class TypeRegistry {
+private:
+    std::tuple<
+        FlatSet<FunctionType*>,
+        FlatSet<RecordType*>,
+        FlatSet<IntersectionType*>,
+        FlatSet<UnionType*>>
+        cache_;
+
 public:
     template <TypeClass T>
-    TypePtr get(auto&&... args) {
+    Type* get(auto&&... args) {
         if constexpr (TypeInTupleV<T, std::tuple<AnyType, NullType, StringType, BooleanType>>) {
             return &T::instance;
         } else if constexpr (std::is_same_v<T, IntegerType>) {
@@ -905,50 +918,49 @@ public:
         }
     }
 
-    ObjectPtr get_unknown() { return &UnknownType::instance; }
+    Object* get_unknown() { return &UnknownType::instance; }
 
 private:
     template <typename T>
-    TypePtr get_cached(auto&&... args) {
-        constexpr auto comparator = [](const T* a, const T* b) { return *a < *b; };
-        static FlatSet<const T*, decltype(comparator)> instances;
-        T type(std::forward<decltype(args)>(args)...);
-        const T*& result = instances.try_emplace(&type);
-        if (result == &type) {
-            result = new T(std::move(type));
+    Type* get_cached(auto&&... args) {
+        T new_type(std::forward<decltype(args)>(args)...);
+        for (auto* existing : std::get<FlatSet<T*>>(cache_)) {
+            if (*existing == new_type) {
+                return existing;
+            }
         }
-        return result;
+        return std::get<FlatSet<T*>>(cache_).emplace(new T(std::move(new_type)));
     }
 };
 
-inline TypePtr Object::as_type() const {
+inline Type* Object::as_type() {
     if (!is_type_ && kind_ == Kind::NothingOrUnknown) return &UnknownType::instance;
-    return is_type_ ? static_cast<TypePtr>(this) : nullptr;
+    return is_type_ ? static_cast<Type*>(this) : nullptr;
 }
 
-inline ValuePtr Object::as_value() const {
+inline Value* Object::as_value() {
     if (is_type_ && kind_ == Kind::NothingOrUnknown) return new UnknownValue();
-    return !is_type_ ? static_cast<ValuePtr>(this) : nullptr;
+    return !is_type_ ? static_cast<Value*>(this) : nullptr;
 }
 
-inline const UnknownType UnknownType::instance;
+inline UnknownType UnknownType::instance;
 
 template <Kind K>
-inline const PrimitiveType<K> PrimitiveType<K>::instance;
+inline PrimitiveType<K> PrimitiveType<K>::instance;
 
-inline const IntegerType PrimitiveType<Kind::Integer>::untyped_instance = IntegerType(false, 0);
-inline const IntegerType PrimitiveType<Kind::Integer>::i8_instance = IntegerType(true, 8);
-inline const IntegerType PrimitiveType<Kind::Integer>::i16_instance = IntegerType(true, 16);
-inline const IntegerType PrimitiveType<Kind::Integer>::i32_instance = IntegerType(true, 32);
-inline const IntegerType PrimitiveType<Kind::Integer>::i64_instance = IntegerType(true, 64);
-inline const IntegerType PrimitiveType<Kind::Integer>::u8_instance = IntegerType(false, 8);
-inline const IntegerType PrimitiveType<Kind::Integer>::u16_instance = IntegerType(false, 16);
-inline const IntegerType PrimitiveType<Kind::Integer>::u32_instance = IntegerType(false, 32);
-inline const IntegerType PrimitiveType<Kind::Integer>::u64_instance = IntegerType(false, 64);
+inline IntegerType PrimitiveType<Kind::Integer>::untyped_instance = IntegerType(false, 0);
+inline IntegerType PrimitiveType<Kind::Integer>::i8_instance = IntegerType(true, 8);
+inline IntegerType PrimitiveType<Kind::Integer>::i16_instance = IntegerType(true, 16);
+inline IntegerType PrimitiveType<Kind::Integer>::i32_instance = IntegerType(true, 32);
+inline IntegerType PrimitiveType<Kind::Integer>::i64_instance = IntegerType(true, 64);
+inline IntegerType PrimitiveType<Kind::Integer>::u8_instance = IntegerType(false, 8);
+inline IntegerType PrimitiveType<Kind::Integer>::u16_instance = IntegerType(false, 16);
+inline IntegerType PrimitiveType<Kind::Integer>::u32_instance = IntegerType(false, 32);
+inline IntegerType PrimitiveType<Kind::Integer>::u64_instance = IntegerType(false, 64);
 
-inline const FloatType PrimitiveType<Kind::Float>::untyped_instance = FloatType(0);
-inline const FloatType PrimitiveType<Kind::Float>::f32_instance = FloatType(32);
-inline const FloatType PrimitiveType<Kind::Float>::f64_instance = FloatType(64);
+inline FloatType PrimitiveType<Kind::Float>::untyped_instance = FloatType(0);
+inline FloatType PrimitiveType<Kind::Float>::f32_instance = FloatType(32);
+inline FloatType PrimitiveType<Kind::Float>::f64_instance = FloatType(64);
 
 // IntegerValue operators
 

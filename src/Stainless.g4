@@ -15,7 +15,8 @@ statement:
 	| break_statement
 	| continue_statement
 	| return_statement
-	| type_alias_declaration;
+	| type_alias_declaration
+	| function_declaration;
 
 code_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 
@@ -46,6 +47,15 @@ return_statement: KW_RETURN expr_ = expr? OP_SEMICOLON;
 
 type_alias_declaration:
 	KW_TYPE identifier_ = identifier OP_ASSIGN type_ = type OP_SEMICOLON;
+
+function_declaration:
+	KW_FUNC name_ = identifier OP_LPAREN (
+		parameters_ += parameter (
+			OP_COMMA parameters_ += parameter
+		)*
+	)? OP_RPAREN (OP_ARROW return_type_ = type)? body_ = code_block;
+
+parameter: identifier_ = identifier OP_COLON type_ = type;
 
 expr:
 	<assoc = right> left_ = expr op_ = (
@@ -114,7 +124,10 @@ type:
 	)												# PrimitiveType
 	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType
 	| identifier_ = identifier						# IdentifierType
-	| OP_LBRACE fields_ += record_field* OP_RBRACE	# RecordType;
+	| OP_LBRACE fields_ += record_field* OP_RBRACE	# RecordType
+	| OP_LPAREN (
+		parameters_ += type (OP_COMMA parameters_ += type)*
+	)? OP_RPAREN OP_ARROW return_type_ = type # FunctionType;
 
 record_field:
 	identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_SEMICOLON;
@@ -140,7 +153,7 @@ KW_SWITCH: 'switch';
 KW_CASE: 'case';
 KW_DEFAULT: 'default';
 KW_FOR: 'for';
-KW_FUNC: 'func';
+KW_FUNC: 'fn';
 KW_BREAK: 'break';
 KW_CONTINUE: 'continue';
 KW_RETURN: 'return';
@@ -186,12 +199,13 @@ OP_BITXOR_ASSIGN: '^=';
 OP_LSHIFT_ASSIGN: '<<=';
 OP_RSHIFT_ASSIGN: '>>=';
 
-OP_SCOPE_RESOLUTION: '::';
 OP_DOT: '.';
 OP_QUESTION: '?';
 OP_COLON: ':';
 OP_SEMICOLON: ';';
 OP_COMMA: ',';
+OP_ARROW: '->';
+OP_LAMBDA: '=>';
 
 OP_LPAREN: '(';
 OP_RPAREN: ')';

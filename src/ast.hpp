@@ -13,7 +13,7 @@ class ASTNode;
 class ASTExpression;
 using ASTValueExpression = ASTExpression;
 using ASTTypeExpression = ASTExpression;
-class ASTCodeBlock;
+class ASTBlock;
 class ASTConstant;
 class ASTIdentifier;
 template <typename Op>
@@ -36,7 +36,7 @@ class ASTFunctionSignature;
 class ASTFunctionDefinition;
 
 struct ExprInfo {
-    TypePtr type;
+    Type* type;
     bool is_mutable = false;
     bool is_rvalue = false;
 };
@@ -44,33 +44,51 @@ struct ExprInfo {
 class Scope {
     friend class TypeChecker;
 
+public:
+    static Scope& create(const auto* owner, Scope& parent, std::string_view name = "") {
+        std::unique_ptr scope = std::unique_ptr<Scope>(new Scope(parent, name));
+        Scope& ref = *scope;
+        parent.children_.insert(owner, std::move(scope));
+        return ref;
+    }
+
 private:
-    Scope* const parent_ = nullptr;
-    const std::string_view name_;
-    FlatMap<std::string_view, ObjectPtr> variables_;
+    Scope* parent_ = nullptr;
+    std::string_view name_;
+    FlatMap<std::string_view, Object*> variables_;
     FlatMap<std::string_view, const ASTTypeExpression*> types_;
-    std::vector<const Scope*> anonymous_children_;
-    FlatMap<std::string_view, const Scope*> children_;
+    FlatMap<const void*, std::unique_ptr<Scope>> children_;
+
+private:
+    Scope(Scope& parent, std::string_view name) noexcept : parent_(&parent), name_(name) {}
 
 public:
     Scope() noexcept = default;
-    Scope(std::string_view name, Scope& parent) noexcept : parent_(&parent), name_(name) {
-        if (name.empty()) {
-            parent_->anonymous_children_.push_back(this);
-        } else {
-            parent_->children_.insert(name, this);
-        }
-    }
+    Scope(const Scope&) = delete;
+    Scope& operator=(const Scope&) = delete;
     void add_type(std::string_view identifier, const ASTTypeExpression* expr) {
         types_.insert(identifier, expr);
     }
 
-private:
-    void add_variable(std::string_view identifier, ObjectPtr expr) {
+    void set_variable(std::string_view identifier, Object* expr) {
         if (types_.contains(identifier)) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
         variables_.insert(identifier, expr);
+    }
+
+    void add_overload(std::string_view identifier, const FunctionValue* func) {
+        auto it = variables_.find(identifier);
+        if (it == variables_.end()) {
+            variables_.insert(identifier, new OverloadedFunctionValue(func));
+        } else {
+            Value* existing = it->second->as_value();
+            if (existing == nullptr || existing->kind_ != Kind::Intersection) {
+                throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+            }
+            OverloadedFunctionValue* overloads = static_cast<OverloadedFunctionValue*>(existing);
+            overloads->add_overload(func);
+        }
     }
 };
 
@@ -78,7 +96,7 @@ class TypeChecker {
 private:
     struct CacheRecord {
         bool is_resolving = false;
-        ObjectPtr result;
+        Object* result;
     };
 
 private:
@@ -91,14 +109,14 @@ public:
 
 public:
     TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& types) noexcept;
-    void add_variable(std::string_view identifier, ObjectPtr expr);
-    void enter(const ASTCodeBlock* child) noexcept;
+    void add_variable(std::string_view identifier, Object* expr);
+    void enter(const ASTBlock* child) noexcept;
     void exit() noexcept;
-    ObjectPtr resolve(std::string_view identifier);
+    Object* resolve(std::string_view identifier);
     ExprInfo type_of(std::string_view identifier);
 
 private:
-    ObjectPtr resolve_in(std::string_view identifier, Scope& scope);
+    Object* resolve_in(std::string_view identifier, Scope& scope);
     ExprInfo type_of_in(std::string_view identifier, Scope& scope);
 };
 
@@ -107,65 +125,41 @@ public:
     Location location_;
     ASTNode(const Location& loc) noexcept : location_(loc) {}
     virtual ~ASTNode() noexcept = default;
-    virtual void collect_types(Scope& scope, OpDispatcher& ops) {}
+    virtual void collect_symbols(Scope& scope, OpDispatcher& ops) {}
     virtual void check_types(TypeChecker& checker) {}
 };
 
-class ASTRecursiveNode : public ASTNode {
-public:
-    ASTRecursiveNode(const Location& loc) noexcept : ASTNode(loc) {}
-    ~ASTRecursiveNode() noexcept override = default;
-    virtual std::generator<ASTNode*> get_children() const noexcept = 0;
-    void collect_types(Scope& scope, OpDispatcher& ops) override {
-        for (const auto& child : get_children()) {
-            if (child == nullptr) {
-                continue;
-            }
-            child->collect_types(scope, ops);
-        }
-    }
-    void check_types(TypeChecker& checker) override {
-        for (const auto& child : get_children()) {
-            if (child == nullptr) {
-                continue;
-            }
-            child->check_types(checker);
-        }
-    }
-};
-
-class ASTRoot final : public ASTRecursiveNode {
+class ASTRoot final : public ASTNode {
 public:
     std::vector<std::unique_ptr<ASTNode>> children_;
     ASTRoot(const Location& loc, std::vector<std::unique_ptr<ASTNode>> children) noexcept
-        : ASTRecursiveNode(loc), children_(std::move(children)) {}
-    std::generator<ASTNode*> get_children() const noexcept final {
-        for (const auto& child : children_) {
-            co_yield child.get();
+        : ASTNode(loc), children_(std::move(children)) {}
+};
+
+class ASTBlock : public ASTNode {
+public:
+    std::vector<std::unique_ptr<ASTNode>> statements_;
+    ASTBlock(const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements) noexcept
+        : ASTNode(loc), statements_(std::move(statements)) {}
+    void collect_symbols(Scope& scope, OpDispatcher& ops) override {
+        for (auto& stmt : statements_) {
+            stmt->collect_symbols(scope, ops);
+        }
+    }
+    void check_types(TypeChecker& checker) override {
+        for (auto& stmt : statements_) {
+            stmt->check_types(checker);
         }
     }
 };
 
-class ASTCodeBlock final : public ASTRecursiveNode {
+class ASTLocalBlock final : public ASTBlock {
 public:
-    std::vector<std::unique_ptr<ASTNode>> statements_;
-    std::unique_ptr<Scope> local_scope_;
-    std::string_view name_;
-    ASTCodeBlock(const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements) noexcept
-        : ASTRecursiveNode(loc), statements_(std::move(statements)) {}
-    ASTCodeBlock(
-        const Location& loc, std::string_view name, std::vector<std::unique_ptr<ASTNode>> statements
-    ) noexcept
-        : ASTRecursiveNode(loc), statements_(std::move(statements)), name_(name) {}
-    std::generator<ASTNode*> get_children() const noexcept final {
-        for (const auto& stmt : statements_) {
-            co_yield stmt.get();
-        }
-    }
-    void collect_types(Scope& scope, OpDispatcher& ops) final {
-        local_scope_ = std::make_unique<Scope>(name_, scope);
+    using ASTBlock::ASTBlock;
+    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+        Scope& local_scope = Scope::create(this, scope);
         for (auto& stmt : statements_) {
-            stmt->collect_types(*local_scope_, ops);
+            stmt->collect_symbols(local_scope, ops);
         }
     }
     void check_types(TypeChecker& checker) final {
@@ -180,29 +174,29 @@ public:
 class ASTExpression : public ASTNode {
 public:
     ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
-    virtual ObjectPtr eval(TypeChecker& checker) const = 0;
+    virtual Object* eval(TypeChecker& checker) const = 0;
     virtual ExprInfo get_expr_info(TypeChecker& checker) const = 0;
     void check_types(TypeChecker& checker) final { std::ignore = get_expr_info(checker); }
 };
 
 class ASTConstant final : public ASTExpression {
 public:
-    ValuePtr value_;
+    Value* value_;
     template <ValueClass V>
     ASTConstant(const Location& loc, std::string_view str, std::type_identity<V>)
         : ASTExpression(loc), value_(Value::from_literal<V>(str)) {}
-    ObjectPtr eval(TypeChecker& checker) const final { return value_; }
+    Object* eval(TypeChecker& checker) const final { return value_; }
     ExprInfo get_expr_info(TypeChecker& checker) const final { return {value_->get_type(), false}; }
-    void resolve_type(TypePtr target_type) { value_ = value_->resolve_to(target_type); }
+    void resolve_type(Type* target_type) { value_ = value_->resolve_to(target_type); }
 };
 
 class ASTIdentifier final : public ASTExpression {
 public:
-    const std::string_view name_;
+    const std::string_view str_;
     ASTIdentifier(const Location& loc, std::string_view name) noexcept
-        : ASTExpression(loc), name_(name) {}
-    ObjectPtr eval(TypeChecker& checker) const final { return checker.resolve(name_); }
-    ExprInfo get_expr_info(TypeChecker& checker) const final { return checker.type_of(name_); }
+        : ASTExpression(loc), str_(name) {}
+    Object* eval(TypeChecker& checker) const final { return checker.resolve(str_); }
+    ExprInfo get_expr_info(TypeChecker& checker) const final { return checker.type_of(str_); }
 };
 
 template <typename Op>
@@ -212,8 +206,8 @@ public:
     ASTUnaryOp(const Location& loc, std::unique_ptr<ASTExpression> expr) noexcept
         : ASTExpression(loc), expr_(std::move(expr)) {}
     ~ASTUnaryOp() noexcept final = default;
-    ObjectPtr eval(TypeChecker& checker) const final {
-        ObjectPtr expr_result = expr_->eval(checker);
+    Object* eval(TypeChecker& checker) const final {
+        Object* expr_result = expr_->eval(checker);
         return checker.ops_.eval_op(Op::opcode, expr_result);
     }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
@@ -234,16 +228,16 @@ public:
     ) noexcept
         : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
-    ObjectPtr eval(TypeChecker& checker) const final {
-        ObjectPtr left_result = left_->eval(checker);
-        ObjectPtr right_result = right_->eval(checker);
+    Object* eval(TypeChecker& checker) const final {
+        Object* left_result = left_->eval(checker);
+        Object* right_result = right_->eval(checker);
         try {
             return checker.ops_.eval_op(Op::opcode, left_result, right_result);
         } catch (const UnlocatedProblem& e) {
-            TypePtr left_type = left_result->as_type() ? left_result->as_type()
-                                                       : left_result->as_value()->get_type();
-            TypePtr right_type = right_result->as_type() ? right_result->as_type()
-                                                         : right_result->as_value()->get_type();
+            Type* left_type = left_result->as_type() ? left_result->as_type()
+                                                     : left_result->as_value()->get_type();
+            Type* right_type = right_result->as_type() ? right_result->as_type()
+                                                       : right_result->as_value()->get_type();
             Diagnostic::report(OperationNotDefinedError(
                 location_, OperatorCodeToString(Op::opcode), left_type->repr(), right_type->repr()
             ));
@@ -274,7 +268,7 @@ public:
     ) noexcept
         : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
-    ObjectPtr eval(TypeChecker& checker) const final {
+    Object* eval(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
         return checker.types_.get_unknown();
     }
@@ -299,11 +293,11 @@ public:
 class ASTFunctionCall final : public ASTExpression {
 public:
     const std::unique_ptr<ASTValueExpression> function_;
-    const std::vector<std::unique_ptr<ASTValueExpression>> arguments_;
+    const ComparableSpan<std::unique_ptr<ASTValueExpression>> arguments_;
     ASTFunctionCall(
         const Location& loc,
         std::unique_ptr<ASTValueExpression> function,
-        std::vector<std::unique_ptr<ASTValueExpression>> arguments
+        ComparableSpan<std::unique_ptr<ASTValueExpression>> arguments
     ) noexcept
         : ASTExpression(loc), function_(std::move(function)), arguments_(std::move(arguments)) {}
     ~ASTFunctionCall() noexcept final = default;
@@ -360,10 +354,10 @@ using ASTRightShiftAssignOp = ASTBinaryOp<OperatorFunctors::RightShiftAssign>;
 
 class ASTPrimitiveType final : public ASTTypeExpression {
 public:
-    TypePtr type_;
-    ASTPrimitiveType(const Location& loc, TypePtr type) noexcept
+    Type* type_;
+    ASTPrimitiveType(const Location& loc, Type* type) noexcept
         : ASTTypeExpression(loc), type_(type) {}
-    ObjectPtr eval(TypeChecker& checker) const final { return type_; }
+    Object* eval(TypeChecker& checker) const final { return type_; }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         throw std::logic_error("Type expressions do not have result types");
     }
@@ -372,48 +366,44 @@ public:
 class ASTFunctionType final : public ASTTypeExpression {
 private:
     using Components = std::tuple<
-        std::unique_ptr<ASTTypeExpression>,
         ComparableSpan<std::unique_ptr<ASTTypeExpression>>,
         std::unique_ptr<ASTTypeExpression>>;
 
 public:
-    const std::variant<Components, Type*> representation_;
+    const std::variant<Components, FunctionType*> representation_;
     ASTFunctionType(
         const Location& loc,
-        std::unique_ptr<ASTTypeExpression> return_type,
         ComparableSpan<std::unique_ptr<ASTTypeExpression>> parameter_types,
-        std::unique_ptr<ASTTypeExpression> variadic_type
+        std::unique_ptr<ASTTypeExpression> return_type
     ) noexcept
         : ASTTypeExpression(loc),
-          representation_(Components(
-              std::move(return_type), std::move(parameter_types), std::move(variadic_type)
-          )) {}
-    ASTFunctionType(Type* func) noexcept : ASTTypeExpression({}), representation_(func) {}
-    ObjectPtr eval(TypeChecker& checker) const final {
-        if (std::holds_alternative<Type*>(representation_)) {
-            return std::get<Type*>(representation_);
+          representation_(Components(std::move(parameter_types), std::move(return_type))) {}
+    ASTFunctionType(FunctionType* func) noexcept : ASTTypeExpression({}), representation_(func) {}
+    Object* eval(TypeChecker& checker) const final {
+        if (std::holds_alternative<FunctionType*>(representation_)) {
+            return std::get<FunctionType*>(representation_);
         }
         const auto& comps = std::get<Components>(representation_);
-        if (TypePtr return_type = std::get<0>(comps)->eval(checker)->as_type()) {
-            ComparableSpan<TypePtr> param_types =
-                std::get<1>(comps) | std::views::transform([&](const auto& param_expr) -> TypePtr {
-                    if (TypePtr param_type = param_expr->eval(checker)->as_type()) {
-                        return param_type;
-                    }
-                    Diagnostic::report(SymbolCategoryMismatchError(param_expr->location_, true));
-                    return checker.types_.get_unknown()->as_type();
-                }) |
-                GlobalMemory::collect<ComparableSpan<TypePtr>>();
-            TypePtr variadic_type;
-            if (const auto& opt_variadic = std::get<2>(comps)) {
-                if (variadic_type = opt_variadic->eval(checker)->as_type(); variadic_type) {
-                    throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
+        bool any_error = false;
+        ComparableSpan<Type*> param_types =
+            std::get<0>(comps) | std::views::transform([&](const auto& param_expr) -> Type* {
+                if (Type* param_type = param_expr->eval(checker)->as_type()) {
+                    return param_type;
                 }
-            }
-            return checker.types_.get<FunctionType>(param_types, variadic_type, return_type);
+                Diagnostic::report(SymbolCategoryMismatchError(param_expr->location_, true));
+                any_error = true;
+                return checker.types_.get_unknown()->as_type();
+            }) |
+            GlobalMemory::collect<ComparableSpan<Type*>>();
+        if (any_error) {
+            return checker.types_.get_unknown();
         }
-        Diagnostic::report(SymbolCategoryMismatchError(std::get<0>(comps)->location_, true));
-        return checker.types_.get_unknown();
+        Type* return_type = std::get<1>(comps)->eval(checker)->as_type();
+        if (!return_type) {
+            Diagnostic::report(SymbolCategoryMismatchError(std::get<1>(comps)->location_, true));
+            return checker.types_.get_unknown();
+        }
+        return checker.types_.get<FunctionType>(param_types, return_type);
     }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
@@ -434,20 +424,20 @@ public:
 
 class ASTRecordType final : public ASTTypeExpression {
 public:
-    const std::vector<std::unique_ptr<ASTFieldDeclaration>> fields_;
+    const ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields_;
     ASTRecordType(
-        const Location& loc, std::vector<std::unique_ptr<ASTFieldDeclaration>> fields
+        const Location& loc, ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields
     ) noexcept
         : ASTTypeExpression(loc), fields_(std::move(fields)) {}
     ~ASTRecordType() noexcept final = default;
-    ObjectPtr eval(TypeChecker& checker) const final {
+    Object* eval(TypeChecker& checker) const final {
         auto rng = fields_ | std::views::transform([&](const auto& decl) {
-                       if (TypePtr type = checker.resolve(decl->identifier_)->as_type()) {
+                       if (Type* type = checker.resolve(decl->identifier_)->as_type()) {
                            return std::pair(decl->identifier_, type);
                        }
                        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
                    });
-        FlatMap<std::string_view, TypePtr> field_types(std::from_range, std::move(rng));
+        FlatMap<std::string_view, Type*> field_types(std::from_range, std::move(rng));
         return checker.types_.get<RecordType>(field_types);
     }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
@@ -482,15 +472,15 @@ public:
     ~ASTDeclaration() noexcept final = default;
     void check_types(TypeChecker& checker) final {
         if (is_constant_) {
-            ObjectPtr value = expr_->eval(checker);
+            Object* value = expr_->eval(checker);
             if (!value->as_value()) {
                 Diagnostic::report(SymbolCategoryMismatchError(expr_->location_, false));
             }
             std::ignore = get_declared_type(checker, value->as_value()->get_type());
-            checker.add_variable(identifier_->name_, value);
+            checker.add_variable(identifier_->str_, value);
         } else {
-            TypePtr inferred_type = expr_->get_expr_info(checker).type;
-            TypePtr declared_type = get_declared_type(checker, inferred_type);
+            Type* inferred_type = expr_->get_expr_info(checker).type;
+            Type* declared_type = get_declared_type(checker, inferred_type);
             if (auto ast_constant = dynamic_cast<ASTConstant*>(expr_.get())) {
                 try {
                     ast_constant->resolve_type(declared_type);
@@ -498,12 +488,12 @@ public:
                     e.report_at(expr_->location_);
                 }
             }
-            checker.add_variable(identifier_->name_, declared_type);
+            checker.add_variable(identifier_->str_, declared_type);
         }
     }
-    TypePtr get_declared_type(TypeChecker& checker, TypePtr inferred_type) const {
+    Type* get_declared_type(TypeChecker& checker, Type* inferred_type) const {
         if (type_) {
-            TypePtr declared_type = type_->eval(checker)->as_type();
+            Type* declared_type = type_->eval(checker)->as_type();
             if (!declared_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(type_->location_, true));
             }
@@ -528,50 +518,67 @@ public:
     ) noexcept
         : ASTNode(loc), identifier_(std::move(identifier)), type_(std::move(type)) {}
     ~ASTTypeAlias() noexcept final = default;
-    void collect_types(Scope& scope, OpDispatcher& ops) final {
+    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
         scope.add_type(identifier_, type_.get());
     }
 };
 
-class ASTIfStatement final : public ASTRecursiveNode {
+class ASTIfStatement final : public ASTNode {
 public:
     const std::unique_ptr<ASTExpression> condition_;
-    const std::unique_ptr<ASTCodeBlock> if_block_;
-    const std::unique_ptr<ASTCodeBlock> else_block_;
+    const std::unique_ptr<ASTBlock> if_block_;
+    const std::unique_ptr<ASTBlock> else_block_;
     ASTIfStatement(
         const Location& loc,
         std::unique_ptr<ASTExpression> condition,
-        std::unique_ptr<ASTCodeBlock> if_block,
-        std::unique_ptr<ASTCodeBlock> else_block = nullptr
+        std::unique_ptr<ASTBlock> if_block,
+        std::unique_ptr<ASTBlock> else_block = nullptr
     ) noexcept
-        : ASTRecursiveNode(loc),
+        : ASTNode(loc),
           condition_(std::move(condition)),
           if_block_(std::move(if_block)),
           else_block_(std::move(else_block)) {}
     ~ASTIfStatement() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final {
-        co_yield condition_.get();
-        co_yield if_block_.get();
+    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+        Scope& if_scope = Scope::create(if_block_.get(), scope);
+        if_block_->collect_symbols(if_scope, ops);
         if (else_block_) {
-            co_yield else_block_.get();
+            Scope& else_scope = Scope::create(else_block_.get(), scope);
+            else_block_->collect_symbols(else_scope, ops);
+        }
+    }
+    void check_types(TypeChecker& checker) final {
+        checker.enter(if_block_.get());
+        ExprInfo cond_info = condition_->get_expr_info(checker);
+        if (cond_info.type->kind_ != Kind::Boolean) {
+            Diagnostic::report(
+                TypeMismatchError(condition_->location_, "bool", cond_info.type->repr())
+            );
+        }
+        if_block_->check_types(checker);
+        checker.exit();
+        if (else_block_) {
+            checker.enter(else_block_.get());
+            else_block_->check_types(checker);
+            checker.exit();
         }
     }
 };
 
-class ASTForStatement final : public ASTRecursiveNode {
+class ASTForStatement final : public ASTNode {
 public:
     const std::unique_ptr<ASTNode> initializer_;  // Can be either a declaration or an expression
     const std::unique_ptr<ASTExpression> condition_;
     const std::unique_ptr<ASTExpression> increment_;
-    const std::unique_ptr<ASTCodeBlock> body_;
+    const std::unique_ptr<ASTBlock> body_;
     ASTForStatement(
         const Location& loc,
         std::unique_ptr<ASTDeclaration> initializer,
         std::unique_ptr<ASTExpression> condition,
         std::unique_ptr<ASTExpression> increment,
-        std::unique_ptr<ASTCodeBlock> body
+        std::unique_ptr<ASTBlock> body
     ) noexcept
-        : ASTRecursiveNode(loc),
+        : ASTNode(loc),
           initializer_(std::move(initializer)),
           condition_(std::move(condition)),
           increment_(std::move(increment)),
@@ -581,27 +588,41 @@ public:
         std::unique_ptr<ASTValueExpression> initializer,
         std::unique_ptr<ASTExpression> condition,
         std::unique_ptr<ASTExpression> increment,
-        std::unique_ptr<ASTCodeBlock> body
+        std::unique_ptr<ASTBlock> body
     ) noexcept
-        : ASTRecursiveNode(loc),
+        : ASTNode(loc),
           initializer_(std::move(initializer)),
           condition_(std::move(condition)),
           increment_(std::move(increment)),
           body_(std::move(body)) {}
-    ASTForStatement(const Location& loc, std::unique_ptr<ASTCodeBlock> body) noexcept
-        : ASTRecursiveNode(loc), body_(std::move(body)) {}
+    ASTForStatement(const Location& loc, std::unique_ptr<ASTBlock> body) noexcept
+        : ASTNode(loc), body_(std::move(body)) {}
     ~ASTForStatement() noexcept final = default;
-    std::generator<ASTNode*> get_children() const noexcept final {
+    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+        Scope& local_scope = Scope::create(body_.get(), scope);
         if (initializer_) {
-            co_yield initializer_.get();
+            initializer_->collect_symbols(local_scope, ops);
+        }
+        body_->collect_symbols(local_scope, ops);
+    }
+    void check_types(TypeChecker& checker) final {
+        checker.enter(body_.get());
+        if (initializer_) {
+            initializer_->check_types(checker);
         }
         if (condition_) {
-            co_yield condition_.get();
+            ExprInfo cond_info = condition_->get_expr_info(checker);
+            if (cond_info.type->kind_ != Kind::Boolean) {
+                Diagnostic::report(
+                    TypeMismatchError(condition_->location_, "bool", cond_info.type->repr())
+                );
+            }
         }
         if (increment_) {
-            co_yield increment_.get();
+            increment_->get_expr_info(checker);
         }
-        co_yield body_.get();
+        body_->check_types(checker);
+        checker.exit();
     }
 };
 
@@ -627,76 +648,72 @@ public:
 
 class ASTFunctionParameter final : public ASTNode {
 public:
-    const std::unique_ptr<const ASTIdentifier> identifier_;
-    const std::unique_ptr<const ASTExpression> type_;
+    const std::unique_ptr<ASTIdentifier> identifier_;
+    const std::unique_ptr<ASTExpression> type_;
     ASTFunctionParameter(
         const Location& loc,
-        std::unique_ptr<const ASTIdentifier> identifier,
-        std::unique_ptr<const ASTExpression> type
+        std::unique_ptr<ASTIdentifier> identifier,
+        std::unique_ptr<ASTExpression> type
     ) noexcept
         : ASTNode(loc), identifier_(std::move(identifier)), type_(std::move(type)) {}
     ~ASTFunctionParameter() noexcept final = default;
 };
 
-class ASTFunctionSignature final : public ASTNode {
-public:
-    std::vector<std::unique_ptr<ASTFunctionParameter>> parameters_;
-    std::unique_ptr<ASTFunctionParameter> spread_;
-    std::unique_ptr<ASTExpression> return_type_;
-    ASTFunctionSignature(
-        const Location& loc,
-        std::unique_ptr<ASTExpression> first_type,
-        std::unique_ptr<ASTIdentifier> first_name
-    ) noexcept
-        : ASTNode(loc) {
-        parameters_.push_back(
-            std::make_unique<ASTFunctionParameter>(
-                loc, std::move(first_name), std::move(first_type)
-            )
-        );
-    }
-    ~ASTFunctionSignature() noexcept final = default;
-    ASTFunctionSignature& push(
-        const Location& new_location, std::unique_ptr<ASTFunctionParameter> next_param
-    ) noexcept {
-        parameters_.push_back(std::move(next_param));
-        location_ = new_location;
-        return *this;
-    }
-    ASTFunctionSignature& push_spread(
-        const Location& new_location, std::unique_ptr<ASTFunctionParameter> next_param
-    ) noexcept {
-        spread_ = std::move(next_param);
-        location_ = new_location;
-        return *this;
-    }
-    ASTFunctionSignature& set_return_type(
-        const Location& new_location, std::unique_ptr<ASTExpression> return_type
-    ) noexcept {
-        return_type_ = std::move(return_type);
-        location_ = new_location;
-        return *this;
-    }
-};
-
 class ASTFunctionDefinition final : public ASTNode {
 public:
-    const GlobalMemory::String name_;
-    const std::unique_ptr<const ASTFunctionSignature> signature_;
-    const std::unique_ptr<const ASTCodeBlock> body_;
+    const std::unique_ptr<ASTIdentifier> identifier_;
+    const ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters_;
+    const std::unique_ptr<ASTTypeExpression> return_type_;
+    const std::unique_ptr<ASTBlock> body_;
+    const bool is_const_;
 
 public:
     ASTFunctionDefinition(
         const Location& loc,
-        std::unique_ptr<const ASTIdentifier> name,
-        std::unique_ptr<const ASTFunctionSignature> signature,
-        std::unique_ptr<const ASTCodeBlock> body
+        std::unique_ptr<ASTIdentifier> name,
+        ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters,
+        std::unique_ptr<ASTTypeExpression> return_type,
+        std::unique_ptr<ASTBlock> body,
+        bool is_const
     ) noexcept
         : ASTNode(loc),
-          name_(name->name_),
-          signature_(std::move(signature)),
-          body_(std::move(body)) {}
-    ~ASTFunctionDefinition() noexcept final = default;
+          identifier_(std::move(name)),
+          parameters_(std::move(parameters)),
+          return_type_(std::move(return_type)),
+          body_(std::move(body)),
+          is_const_(is_const) {}
+    std::generator<ASTNode*> get_children() const noexcept {
+        for (const auto& param : parameters_) {
+            co_yield param.get();
+        }
+        co_yield return_type_.get();
+        co_yield body_.get();
+    }
+    void add_overload(Scope& scope) const {
+        try {
+            const FunctionValue* func =
+                new FunctionValue(this, [](auto&& args) { return nullptr; });
+            scope.add_overload(identifier_->str_, func);
+        } catch (UnlocatedProblem& e) {
+            e.report_at(location_);
+        }
+    }
+    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+        add_overload(scope);
+        Scope& local_scope = Scope::create(body_.get(), scope);
+        body_->collect_symbols(local_scope, ops);
+    }
+    void check_types(TypeChecker& checker) final {
+        checker.enter(body_.get());
+        for (const auto& param : parameters_) {
+            Type* param_type = checker.resolve(param->identifier_->str_)->as_type();
+            if (!param_type) {
+                Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
+            }
+        }
+        body_->check_types(checker);
+        checker.exit();
+    }
 };
 
 // ===================== Inline implementations of TypeChecker =====================
@@ -704,22 +721,17 @@ public:
 inline TypeChecker::TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& types) noexcept
     : current_scope_(&root), ops_(ops), types_(types) {}
 
-inline void TypeChecker::add_variable(std::string_view identifier, ObjectPtr expr) {
-    current_scope_->add_variable(identifier, expr);
+inline void TypeChecker::add_variable(std::string_view identifier, Object* expr) {
+    current_scope_->set_variable(identifier, expr);
 }
 
-inline void TypeChecker::enter(const ASTCodeBlock* child) noexcept {
-    assert(
-        child->name_.empty()
-            ? std::ranges::contains(current_scope_->anonymous_children_, child->local_scope_.get())
-            : current_scope_->children_.at(child->name_) == child->local_scope_.get()
-    );
-    current_scope_ = child->local_scope_.get();
+inline void TypeChecker::enter(const ASTBlock* child) noexcept {
+    current_scope_ = current_scope_->children_.at(child).get();
 }
 
 inline void TypeChecker::exit() noexcept { current_scope_ = current_scope_->parent_; }
 
-inline ObjectPtr TypeChecker::resolve(std::string_view identifier) {
+inline Object* TypeChecker::resolve(std::string_view identifier) {
     return resolve_in(identifier, *current_scope_);
 }
 
@@ -727,7 +739,7 @@ inline ExprInfo TypeChecker::type_of(std::string_view identifier) {
     return type_of_in(identifier, *current_scope_);
 }
 
-inline ObjectPtr TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
+inline Object* TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
     // Check cache
     auto& record = cache_[std::pair(&scope, identifier)];
     if (record.is_resolving) {
@@ -760,7 +772,7 @@ inline ObjectPtr TypeChecker::resolve_in(std::string_view identifier, Scope& sco
 
 inline ExprInfo TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
-        TypePtr type = it_var->second->as_type();
+        Type* type = it_var->second->as_type();
         if (!type) {
             type = it_var->second->as_value()->get_type();
         }

@@ -28,11 +28,11 @@ private:
     }
     template <typename Target = ASTNode>
         requires(std::is_base_of_v<ASTNode, Target>)
-    std::vector<std::unique_ptr<Target>> transform_list(const auto& contexts) noexcept {
-        auto rng = contexts | std::views::transform([this](auto ctx) {
-                       return static_unique_cast<Target>(transform(ctx));
-                   });
-        return std::vector(rng.begin(), rng.end());
+    ComparableSpan<std::unique_ptr<Target>> transform_list(const auto& contexts) noexcept {
+        return contexts | std::views::transform([this](auto ctx) {
+                   return static_unique_cast<Target>(transform(ctx));
+               }) |
+               GlobalMemory::collect<ComparableSpan<std::unique_ptr<Target>>>();
     }
     Location loc(const antlr4::ParserRuleContext* ctx) noexcept {
         assert(ctx != nullptr);
@@ -83,7 +83,7 @@ private:
         auto rng = ctx->statements_ |
                    std::views::transform([this](auto child) { return transform(child); });
         std::vector<std::unique_ptr<ASTNode>> nodes(rng.begin(), rng.end());
-        last_visited_ = std::make_unique<ASTCodeBlock>(loc(ctx), std::move(nodes));
+        last_visited_ = std::make_unique<ASTLocalBlock>(loc(ctx), std::move(nodes));
         return {};
     }
     antlrcpp::Any visitExpr_statement(StainlessParser::Expr_statementContext* ctx) noexcept final {
@@ -107,8 +107,8 @@ private:
         last_visited_ = std::make_unique<ASTIfStatement>(
             loc(ctx),
             static_unique_cast<ASTExpression>(transform(ctx->condition_)),
-            static_unique_cast<ASTCodeBlock>(transform(ctx->then_)),
-            static_unique_cast<ASTCodeBlock>(transform(ctx->else_))
+            static_unique_cast<ASTLocalBlock>(transform(ctx->then_)),
+            static_unique_cast<ASTLocalBlock>(transform(ctx->else_))
         );
         return {};
     }
@@ -119,7 +119,7 @@ private:
                 static_unique_cast<ASTDeclaration>(transform(ctx->init_decl_)),
                 static_unique_cast<ASTExpression>(transform(ctx->condition_)),
                 static_unique_cast<ASTExpression>(transform(ctx->update_)),
-                static_unique_cast<ASTCodeBlock>(transform(ctx->body_))
+                static_unique_cast<ASTLocalBlock>(transform(ctx->body_))
             );
         } else if (ctx->init_expr_) {
             last_visited_ = std::make_unique<ASTForStatement>(
@@ -127,7 +127,7 @@ private:
                 static_unique_cast<ASTValueExpression>(transform(ctx->init_expr_)),
                 static_unique_cast<ASTExpression>(transform(ctx->condition_)),
                 static_unique_cast<ASTExpression>(transform(ctx->update_)),
-                static_unique_cast<ASTCodeBlock>(transform(ctx->body_))
+                static_unique_cast<ASTLocalBlock>(transform(ctx->body_))
             );
         } else {
             assert(false);
@@ -161,6 +161,33 @@ private:
         last_visited_ = std::make_unique<ASTTypeAlias>(
             loc(ctx),
             text(ctx->identifier_),
+            static_unique_cast<ASTTypeExpression>(transform(ctx->type_))
+        );
+        return {};
+    }
+    antlrcpp::Any visitFunction_declaration(
+        StainlessParser::Function_declarationContext* ctx
+    ) noexcept final {
+        ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters =
+            transform_list<ASTFunctionParameter>(ctx->parameters_);
+        std::unique_ptr name = static_unique_cast<ASTIdentifier>(transform(ctx->name_));
+        std::unique_ptr return_type =
+            static_unique_cast<ASTTypeExpression>(transform(ctx->return_type_));
+        std::unique_ptr body = static_unique_cast<ASTLocalBlock>(transform(ctx->body_));
+        last_visited_ = std::make_unique<ASTFunctionDefinition>(
+            loc(ctx),
+            std::move(name),
+            std::move(parameters),
+            std::move(return_type),
+            std::move(body),
+            false
+        );
+        return {};
+    }
+    antlrcpp::Any visitParameter(StainlessParser::ParameterContext* ctx) noexcept final {
+        last_visited_ = std::make_unique<ASTFunctionParameter>(
+            loc(ctx),
+            static_unique_cast<ASTIdentifier>(transform(ctx->identifier_)),
             static_unique_cast<ASTTypeExpression>(transform(ctx->type_))
         );
         return {};
@@ -492,6 +519,14 @@ private:
     antlrcpp::Any visitRecordType(StainlessParser::RecordTypeContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTRecordType>(
             loc(ctx), transform_list<ASTFieldDeclaration>(ctx->fields_)
+        );
+        return {};
+    }
+    antlrcpp::Any visitFunctionType(StainlessParser::FunctionTypeContext* ctx) noexcept final {
+        last_visited_ = std::make_unique<ASTFunctionType>(
+            loc(ctx),
+            transform_list<ASTTypeExpression>(ctx->parameters_),
+            static_unique_cast<ASTTypeExpression>(transform(ctx->return_type_))
         );
         return {};
     }

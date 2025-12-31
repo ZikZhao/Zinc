@@ -279,7 +279,7 @@ private:
         tuple<NoOperand, AnyValue, NullValue, IntegerValue, FloatValue, StringValue, BooleanValue>;
 
 public:
-    using OperatorFn = ValuePtr (*)(ValuePtr, ValuePtr);
+    using OperatorFn = Value* (*)(Value*, Value*);
     using TableValue = std::pair<Kind, OperatorFn>;
 
 private:
@@ -290,7 +290,7 @@ private:
         if constexpr (valid) {
             return TableValue{
                 decltype(Op{}(std::declval<const Left&>(), std::declval<const Right&>()))::kind,
-                [](ValuePtr left, ValuePtr right) -> ValuePtr {
+                [](Value* left, Value* right) -> Value* {
                     auto result =
                         Op{}(static_cast<const Left&>(*left), static_cast<const Right&>(*right));
                     return new decltype(result)(std::move(result));
@@ -324,8 +324,8 @@ protected:
 public:
     constexpr IntrinsicOpTable(TypeRegistry& types) : types_(types) {}
 
-    constexpr ObjectPtr eval_op(
-        OperatorCode opcode, ObjectPtr left, ObjectPtr right = &UnknownType::instance
+    constexpr Object* eval_op(
+        OperatorCode opcode, Object* left, Object* right = &UnknownType::instance
     ) const {
         if (left->as_type() && right->as_type()) {
             return eval_type_op(opcode, left->as_type(), right->as_type());
@@ -336,8 +336,8 @@ public:
         }
     }
 
-    TypePtr get_result_type(
-        OperatorCode opcode, TypePtr left_type, TypePtr right_type = &UnknownType::instance
+    Type* get_result_type(
+        OperatorCode opcode, Type* left_type, Type* right_type = &UnknownType::instance
     ) const {
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left_type->kind_)]
@@ -372,7 +372,7 @@ public:
     }
 
 private:
-    ValuePtr eval_value_op(OperatorCode opcode, ValuePtr left, ValuePtr right) const {
+    Value* eval_value_op(OperatorCode opcode, Value* left, Value* right) const {
         const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
                                                    [static_cast<std::size_t>(left->kind_)]
                                                    [static_cast<std::size_t>(right->kind_)];
@@ -382,7 +382,7 @@ private:
         return value.second(left, right);
     }
 
-    TypePtr eval_type_op(OperatorCode opcode, TypePtr left, TypePtr right) const {
+    Type* eval_type_op(OperatorCode opcode, Type* left, Type* right) const {
         switch (opcode) {
         case OperatorCode::OPERATOR_BITWISE_AND:
             return types_.get<IntersectionType>(left, right);
@@ -393,7 +393,7 @@ private:
         }
     }
 
-    Type* eval_type_value_op(OperatorCode opcode, ObjectPtr left, ObjectPtr right) const {
+    Type* eval_type_value_op(OperatorCode opcode, Object* left, Object* right) const {
         // TODO (array index, integer + 1, etc.)
         return {};
     }
@@ -401,24 +401,20 @@ private:
 
 class OpDispatcher final : private IntrinsicOpTable {
 private:
-    using CustomTableKey = std::tuple<OperatorCode, TypePtr, TypePtr>;
-    using CustomTableValue = std::pair<TypePtr, OperatorFn>;
+    using CustomTableKey = std::tuple<OperatorCode, Type*, Type*>;
+    using CustomTableValue = std::pair<Type*, OperatorFn>;
     FlatMap<CustomTableKey, CustomTableValue> custom_table_;
 
 public:
     OpDispatcher(TypeRegistry& types) : IntrinsicOpTable(types), custom_table_() {}
 
     void register_custom_op(
-        OperatorCode opcode,
-        TypePtr left_type,
-        TypePtr right_type,
-        TypePtr result_type,
-        OperatorFn func
+        OperatorCode opcode, Type* left_type, Type* right_type, Type* result_type, OperatorFn func
     ) {
         custom_table_[{opcode, left_type, right_type}] = {result_type, func};
     }
 
-    ObjectPtr eval_op(OperatorCode opcode, ObjectPtr left, ObjectPtr right = {}) const {
+    Object* eval_op(OperatorCode opcode, Object* left, Object* right = {}) const {
         bool both_types = left->as_type() && right->as_type();
         bool both_primitive_values = left->as_value() && right->as_value() &&
                                      left->as_value()->kind_ < Kind::NonCompositeSize &&
@@ -427,8 +423,8 @@ public:
             return IntrinsicOpTable::eval_op(opcode, left, right);
         }
         // operation on values only
-        ValuePtr left_value = left->as_value();
-        ValuePtr right_value = right->as_value();
+        Value* left_value = left->as_value();
+        Value* right_value = right->as_value();
         auto it = custom_table_.find({opcode, left_value->get_type(), right_value->get_type()});
         if (it != custom_table_.end()) {
             return it->second.second(left_value, right_value);
@@ -439,7 +435,7 @@ public:
         }
     }
 
-    TypePtr get_result_type(OperatorCode opcode, TypePtr left_type, TypePtr right_type = {}) const {
+    Type* get_result_type(OperatorCode opcode, Type* left_type, Type* right_type = {}) const {
         if (left_type->kind_ < Kind::NonCompositeSize &&
             (right_type ? right_type->kind_ < Kind::NonCompositeSize : true)) {
             return IntrinsicOpTable::get_result_type(opcode, left_type, right_type);
