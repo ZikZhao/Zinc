@@ -244,30 +244,32 @@ private:
     template <bool IsConst>
     class IteratorImpl {
     private:
-    private:
         using KeyType = const Key;
-        using ValueType = std::conditional_t<IsConst, const Value, Value>;
+        using MappedType = std::conditional_t<IsConst, const Value, Value>;
 
         class Proxy {
         private:
-            const std::pair<KeyType&, ValueType&> pair_;
+            const std::pair<KeyType&, MappedType&> pair_;
 
         public:
-            Proxy(KeyType& key, ValueType& value) : pair_(key, value) {}
-            const std::pair<KeyType&, ValueType&>* operator->() { return &pair_; }
+            Proxy(KeyType& key, MappedType& value) : pair_(key, value) {}
+            const std::pair<KeyType&, MappedType&>* operator->() { return &pair_; }
         };
-
-    private:
-        KeyType* key_ptr_;
-        ValueType* value_ptr_;
 
     public:
         using iterator_category = std::forward_iterator_tag;
         using difference_type = std::ptrdiff_t;
-        using value_type = std::pair<KeyType, ValueType>;
+        using value_type = std::pair<KeyType, MappedType>;
         using pointer = value_type*;
         using reference = value_type&;
-        IteratorImpl(KeyType* key_ptr, ValueType* value_ptr)
+
+    private:
+        KeyType* key_ptr_;
+        MappedType* value_ptr_;
+
+    public:
+        IteratorImpl() = default;
+        IteratorImpl(KeyType* key_ptr, MappedType* value_ptr)
             : key_ptr_(key_ptr), value_ptr_(value_ptr) {}
         IteratorImpl& operator++() {
             ++key_ptr_;
@@ -284,12 +286,14 @@ private:
         }
         bool operator!=(const IteratorImpl& other) const noexcept { return !(*this == other); }
         value_type operator*() const {
-            return std::pair<KeyType, ValueType>{*key_ptr_, *value_ptr_};
+            return std::pair<KeyType, MappedType>{*key_ptr_, *value_ptr_};
         }
         Proxy operator->() { return Proxy(*key_ptr_, *value_ptr_); }
     };
 
 public:
+    using key_type = Key;
+    using mapped_type = Value;
     using iterator = IteratorImpl<false>;
     using const_iterator = IteratorImpl<true>;
 
@@ -338,11 +342,21 @@ public:
         }
     }
     constexpr std::size_t size() const noexcept { return keys_.size(); }
-    void insert(Key key, Value value) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
+    std::pair<iterator, bool> insert(std::pair<Key, Value> pair) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), pair.first, Comp{});
+        if (it != keys_.end() && *it == pair.first) {
+            return {
+                iterator(
+                    &keys_[std::distance(keys_.begin(), it)],
+                    &values_[std::distance(keys_.begin(), it)]
+                ),
+                false
+            };
+        }
         std::size_t index = std::distance(keys_.begin(), it);
-        keys_.insert(it, std::move(key));
-        values_.insert(values_.begin() + index, std::move(value));
+        keys_.insert(it, std::move(pair.first));
+        values_.insert(values_.begin() + index, std::move(pair.second));
+        return {iterator(&keys_[index], &values_[index]), true};
     }
     Value remove(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
@@ -425,6 +439,9 @@ public:
 template <typename Key, typename Comp = std::less<Key>>
 class FlatSet {
 private:
+    using Iterator = typename GlobalMemory::Vector<Key>::iterator;
+
+private:
     GlobalMemory::Vector<Key> keys_;
 
 public:
@@ -438,12 +455,12 @@ public:
         requires std::is_nothrow_copy_constructible_v<Key>
     = default;
 
-    Key& emplace(Key&& key) {
+    std::pair<Iterator, bool> emplace(Key&& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it != keys_.end() && *it == key) {
-            throw std::invalid_argument("Key already exists in FlatSet");
+            return {it, false};
         }
-        return *keys_.emplace(it, std::move(key));
+        return {keys_.emplace(it, std::move(key)), true};
     }
     std::size_t size() const noexcept { return keys_.size(); }
     typename GlobalMemory::Vector<Key>::const_iterator begin() const noexcept {

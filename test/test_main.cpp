@@ -1,68 +1,32 @@
-#include "pch.hpp"
-#include <benchmark/benchmark.h>
-#include <gtest/gtest.h>
+#include "test_map.hpp"
 
-class FlatMapTest : public ::testing::Test {
-protected:
-    FlatMap<GlobalMemory::String, int> map;
-};
+using TestTypes = ::testing::Types<
+    FlatMap<int, int>,
+    FlatMap<std::string, std::string>,
+    FlatMap<int, ComparableUniquePtr<int>>,
+    FlatMap<std::string, int>>;
 
-TEST_F(FlatMapTest, InsertMaintainsOrder) {
-    map.insert("b", 20);
-    map.insert("a", 10);
-    map.insert("c", 30);
+TYPED_TEST_SUITE(FlatMapTest, TestTypes);
 
-    EXPECT_EQ(map.size(), 3);
+TYPED_TEST(FlatMapTest, FuzzyTest) { this->fuzz_test(10000); }
 
-    auto it = map.begin();
-    EXPECT_EQ(it->first, "a");
-    EXPECT_EQ(it->second, 10);
+TYPED_TEST(FlatMapTest, InsertBasic) { this->test_insert_basic(); }
+TYPED_TEST(FlatMapTest, InsertOrAssign) { this->test_insert_or_assign(); }
+TYPED_TEST(FlatMapTest, TryEmplace) { this->test_try_emplace(); }
+TYPED_TEST(FlatMapTest, AccessOperator) { this->test_access_operator(); }
+TYPED_TEST(FlatMapTest, AtMethod) { this->test_at_method(); }
+TYPED_TEST(FlatMapTest, EraseByKey) { this->test_erase_by_key(); }
+TYPED_TEST(FlatMapTest, EraseByIterator) { this->test_erase_by_iterator(); }
+TYPED_TEST(FlatMapTest, Clear) { this->test_clear(); }
+TYPED_TEST(FlatMapTest, Contains) { this->test_contains(); }
+TYPED_TEST(FlatMapTest, Find) { this->test_find(); }
+TYPED_TEST(FlatMapTest, LowerBound) { this->test_lower_bound(); }
+TYPED_TEST(FlatMapTest, UpperBound) { this->test_upper_bound(); }
+TYPED_TEST(FlatMapTest, SizeAndEmpty) { this->test_size_and_empty(); }
+TYPED_TEST(FlatMapTest, IteratorTraversal) { this->test_iterator_traversal(); }
+TYPED_TEST(FlatMapTest, EdgeCases) { this->test_edge_cases(); }
 
-    it++;
-    EXPECT_EQ(it->first, "b");
-
-    it++;
-    EXPECT_EQ(it->first, "c");
-}
-
-TEST_F(FlatMapTest, InsertDuplicateKey) {
-    map.insert("key", 100);
-    map.insert("key", 200);
-
-    EXPECT_EQ(map.at("key"), 200);
-}
-
-TEST_F(FlatMapTest, FindExistingAndNonExisting) {
-    map.insert("exist", 1);
-
-    auto it = map.find("exist");
-    EXPECT_NE(it, map.end());
-    EXPECT_EQ(it->second, 1);
-
-    auto it_none = map.find("404");
-    EXPECT_EQ(it_none, map.end());
-}
-
-TEST(FlatMapComparison, MatchesStdMapBehavior) {
-    FlatMap<int, int> my_map;
-    std::map<int, int> std_map;
-
-    std::vector<int> random_inputs = {5, 1, 9, 3, 7, 1, 5};  // 包含乱序和重复
-
-    for (int x : random_inputs) {
-        if (!my_map.contains(x)) my_map.insert(x, x * 10);
-        if (std_map.find(x) == std_map.end()) std_map.insert({x, x * 10});
-    }
-
-    EXPECT_EQ(my_map.size(), std_map.size());
-
-    auto my_it = my_map.begin();
-    auto std_it = std_map.begin();
-
-    while (my_it != my_map.end()) {
-        EXPECT_EQ(my_it->first, std_it->first);
-        EXPECT_EQ(my_it->second, std_it->second);
-        ++my_it;
-        ++std_it;
-    }
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

@@ -853,11 +853,19 @@ public:
 
 class TypeRegistry {
 private:
+    struct TypeComparator {
+        template <TypeClass T>
+        constexpr bool operator()(T* a, T* b) const noexcept {
+            return *a < *b;
+        }
+    };
+
+private:
     std::tuple<
-        FlatSet<FunctionType*>,
-        FlatSet<RecordType*>,
-        FlatSet<IntersectionType*>,
-        FlatSet<UnionType*>>
+        FlatSet<FunctionType*, TypeComparator>,
+        FlatSet<RecordType*, TypeComparator>,
+        FlatSet<IntersectionType*, TypeComparator>,
+        FlatSet<UnionType*, TypeComparator>>
         cache_;
 
 public:
@@ -924,12 +932,9 @@ private:
     template <typename T>
     Type* get_cached(auto&&... args) {
         T new_type(std::forward<decltype(args)>(args)...);
-        for (auto* existing : std::get<FlatSet<T*>>(cache_)) {
-            if (*existing == new_type) {
-                return existing;
-            }
-        }
-        return std::get<FlatSet<T*>>(cache_).emplace(new T(std::move(new_type)));
+        auto [it, _] =
+            std::get<FlatSet<T*, TypeComparator>>(cache_).emplace(new T(std::move(new_type)));
+        return *it;
     }
 };
 
@@ -948,19 +953,19 @@ inline UnknownType UnknownType::instance;
 template <Kind K>
 inline PrimitiveType<K> PrimitiveType<K>::instance;
 
-inline IntegerType PrimitiveType<Kind::Integer>::untyped_instance = IntegerType(false, 0);
-inline IntegerType PrimitiveType<Kind::Integer>::i8_instance = IntegerType(true, 8);
-inline IntegerType PrimitiveType<Kind::Integer>::i16_instance = IntegerType(true, 16);
-inline IntegerType PrimitiveType<Kind::Integer>::i32_instance = IntegerType(true, 32);
-inline IntegerType PrimitiveType<Kind::Integer>::i64_instance = IntegerType(true, 64);
-inline IntegerType PrimitiveType<Kind::Integer>::u8_instance = IntegerType(false, 8);
-inline IntegerType PrimitiveType<Kind::Integer>::u16_instance = IntegerType(false, 16);
-inline IntegerType PrimitiveType<Kind::Integer>::u32_instance = IntegerType(false, 32);
-inline IntegerType PrimitiveType<Kind::Integer>::u64_instance = IntegerType(false, 64);
+inline IntegerType IntegerType::untyped_instance = IntegerType(false, 0);
+inline IntegerType IntegerType::i8_instance = IntegerType(true, 8);
+inline IntegerType IntegerType::i16_instance = IntegerType(true, 16);
+inline IntegerType IntegerType::i32_instance = IntegerType(true, 32);
+inline IntegerType IntegerType::i64_instance = IntegerType(true, 64);
+inline IntegerType IntegerType::u8_instance = IntegerType(false, 8);
+inline IntegerType IntegerType::u16_instance = IntegerType(false, 16);
+inline IntegerType IntegerType::u32_instance = IntegerType(false, 32);
+inline IntegerType IntegerType::u64_instance = IntegerType(false, 64);
 
-inline FloatType PrimitiveType<Kind::Float>::untyped_instance = FloatType(0);
-inline FloatType PrimitiveType<Kind::Float>::f32_instance = FloatType(32);
-inline FloatType PrimitiveType<Kind::Float>::f64_instance = FloatType(64);
+inline FloatType FloatType::untyped_instance = FloatType(0);
+inline FloatType FloatType::f32_instance = FloatType(32);
+inline FloatType FloatType::f64_instance = FloatType(64);
 
 // IntegerValue operators
 

@@ -70,7 +70,8 @@ add_custom_command(
 set(PCH_HEADER ${SOURCE_DIR}/pch.hpp)
 
 # Source files
-set(SOURCES ${SOURCE_DIR}/main.cpp)
+set(SRC_MAIN ${SOURCE_DIR}/main.cpp)
+file(GLOB SRC_HEADERS ${SOURCE_DIR}/*.hpp)
 
 # Create a library for ANTLR generated code to suppress warnings
 add_library(antlr4_generated_lib STATIC ${ANTLR4_GENERATED_SRC})
@@ -81,7 +82,7 @@ target_include_directories(antlr4_generated_lib SYSTEM PUBLIC ${ANTLR4_OUTPUT_DI
 target_compile_options(antlr4_generated_lib PRIVATE -w)
 
 # Create executable
-add_executable(interpreter ${SOURCES})
+add_executable(interpreter ${SRC_MAIN})
 
 # Link ANTLR4 generated library and runtime
 target_link_libraries(interpreter PRIVATE antlr4_generated_lib)
@@ -127,11 +128,11 @@ find_package(benchmark CONFIG REQUIRED)
 
 add_executable(unit_tests
     ${TEST_DIR}/test_main.cpp
-    ${SOURCES}
+    ${SRC_HEADERS}
 )
 add_executable(benchmarks
     ${TEST_DIR}/bench_main.cpp
-    ${SOURCES}
+    ${SRC_HEADERS}
 )
 
 target_link_libraries(unit_tests PRIVATE GTest::gtest_main antlr4_generated_lib antlr4_static)
