@@ -7,17 +7,20 @@
 #include "StainlessParser.h"
 #include "ast.hpp"
 #include "object.hpp"
-
-using ImportResult = std::unique_ptr<ASTRoot>;
-using ImportFuture = std::shared_future<ImportResult>;
+#include "source.hpp"
 
 class ASTBuilder final : private StainlessBaseVisitor {
 private:
     const SourceManager::File& file_;
-    const std::function<ImportFuture(std::string_view)> import_callback_;
+    ImportManager<ASTRoot>& importer_;
     std::unique_ptr<ASTNode> last_visited_;
 
 private:
+    std::shared_future<ASTRoot> import_module(std::string_view path) {
+        return importer_.import(path, [this](const SourceManager::File& file) {
+            return std::move(*ASTBuilder(file, importer_)());
+        });
+    }
     std::unique_ptr<ASTNode> transform(antlr4::tree::ParseTree* ctx) noexcept {
         if (ctx) {
             StainlessBaseVisitor::visit(ctx);
@@ -61,10 +64,15 @@ private:
     }
 
 public:
-    ASTBuilder(const SourceManager::File& file, decltype(import_callback_) import_callback) noexcept
-        : file_(file), import_callback_(std::move(import_callback)) {}
-    std::unique_ptr<ASTRoot> operator()(antlr4::tree::ParseTree* root) noexcept {
-        return static_unique_cast<ASTRoot>(transform(root));
+    ASTBuilder(const SourceManager::File& file, ImportManager<ASTRoot>& importer) noexcept
+        : file_(file), importer_(importer) {}
+    std::unique_ptr<ASTRoot> operator()() noexcept {
+        antlr4::ANTLRInputStream input(file_.content.data(), file_.content.size());
+        StainlessLexer lexer(&input);
+        antlr4::CommonTokenStream tokens(&lexer);
+        StainlessParser parser(&tokens);
+        antlr4::tree::ParseTree* tree = parser.program();
+        return static_unique_cast<ASTRoot>(transform(tree));
     }
 
 private:
@@ -537,53 +545,5 @@ private:
             static_unique_cast<ASTTypeExpression>(transform(ctx->type_))
         );
         return {};
-    }
-};
-
-class ImportManager {
-private:
-    SourceManager& sources_;
-    std::mutex import_mutex_;
-    FlatMap<std::string_view, std::shared_future<ImportResult>> import_map_;
-
-private:
-    ImportResult import_worker(SourceManager& sources, std::string_view path) {
-        auto file_id = sources.load(path);
-        if (!file_id) {
-            return nullptr;
-        }
-
-        const auto& file = sources[*file_id];
-        antlr4::ANTLRInputStream stream(file.content);
-        StainlessLexer lexer(&stream);
-        antlr4::CommonTokenStream tokens(&lexer);
-        StainlessParser parser(&tokens);
-
-        StainlessParser::ProgramContext* tree = parser.program();
-        ASTBuilder builder(file, [this](std::string_view import_path) {
-            return this->import(import_path);
-        });
-        return builder(tree);
-    }
-
-public:
-    ImportManager(SourceManager& sources) noexcept : sources_(sources) {}
-
-    ImportFuture import(std::string_view path) {
-        std::lock_guard lock(import_mutex_);
-        if (auto it = import_map_.find(path); it != import_map_.end()) {
-            return it->second;
-        } else {
-            auto import_future = std::async(
-                                     std::launch::async,
-                                     &ImportManager::import_worker,
-                                     this,
-                                     std::ref(sources_),
-                                     path
-            )
-                                     .share();
-            import_map_.insert(path, import_future);
-            return import_map_.at(path);
-        }
     }
 };

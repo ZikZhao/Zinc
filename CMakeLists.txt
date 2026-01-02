@@ -82,18 +82,18 @@ target_include_directories(antlr4_generated_lib SYSTEM PUBLIC ${ANTLR4_OUTPUT_DI
 target_compile_options(antlr4_generated_lib PRIVATE -w)
 
 # Create executable
-add_executable(interpreter ${SRC_MAIN})
+add_executable(transpiler ${SRC_MAIN})
 
 # Link ANTLR4 generated library and runtime
-target_link_libraries(interpreter PRIVATE antlr4_generated_lib)
-target_include_directories(interpreter PRIVATE ${ANTLR4_OUTPUT_DIR})
+target_link_libraries(transpiler PRIVATE antlr4_generated_lib)
+target_include_directories(transpiler PRIVATE ${ANTLR4_OUTPUT_DIR})
 
 # Set precompiled header
-target_precompile_headers(interpreter PRIVATE ${PCH_HEADER})
+target_precompile_headers(transpiler PRIVATE ${PCH_HEADER})
 
 # Set target properties
-set_target_properties(interpreter PROPERTIES
-    OUTPUT_NAME interpreter
+set_target_properties(transpiler PROPERTIES
+    OUTPUT_NAME transpiler
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out
 )
 

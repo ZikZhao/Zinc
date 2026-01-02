@@ -48,7 +48,7 @@ public:
     static Scope& create(const auto* owner, Scope& parent, std::string_view name = "") {
         std::unique_ptr scope = std::unique_ptr<Scope>(new Scope(parent, name));
         Scope& ref = *scope;
-        parent.children_.insert(owner, std::move(scope));
+        parent.children_.insert({owner, std::move(scope)});
         return ref;
     }
 
@@ -67,20 +67,20 @@ public:
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
     void add_type(std::string_view identifier, const ASTTypeExpression* expr) {
-        types_.insert(identifier, expr);
+        types_.insert({identifier, expr});
     }
 
     void set_variable(std::string_view identifier, Object* expr) {
         if (types_.contains(identifier)) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
-        variables_.insert(identifier, expr);
+        variables_.insert({identifier, expr});
     }
 
     void add_overload(std::string_view identifier, const FunctionValue* func) {
         auto it = variables_.find(identifier);
         if (it == variables_.end()) {
-            variables_.insert(identifier, new OverloadedFunctionValue(func));
+            variables_.insert({identifier, new OverloadedFunctionValue(func)});
         } else {
             Value* existing = it->second->as_value();
             if (existing == nullptr || existing->kind_ != Kind::Intersection) {

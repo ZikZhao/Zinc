@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.hpp"
+#include <future>
 
 struct Location {
     std::uint32_t id = 0;
@@ -20,13 +21,13 @@ public:
     std::vector<File> files;
 
 public:
-    std::optional<std::uint32_t> load(std::string_view input_path) noexcept {
+    File* load(std::string_view input_path) noexcept {
         GlobalMemory::String path =
             std::filesystem::canonical(input_path)
                 .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
         std::ifstream file_stream(input_path.data());
         if (file_stream.fail()) {
-            return std::nullopt;
+            return nullptr;
         }
         GlobalMemory::String content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
@@ -38,12 +39,38 @@ public:
                 .content = std::move(content)
             }
         );
-        file_id_map_.insert(path, static_cast<std::uint32_t>(files.size()) - 1);
-        return files.back().id;
+        file_id_map_.insert({path, static_cast<std::uint32_t>(files.size()) - 1});
+        return &files.back();
     }
 
     const File& operator[](std::size_t id) const noexcept {
         assert(id < file_id_map_.size());
         return files[id];
+    }
+};
+
+template <typename ResultType>
+class ImportManager {
+public:
+    using CallbackType = std::function<ResultType(const SourceManager::File&)>;
+
+private:
+    SourceManager& sources_;
+    std::mutex mutex_;
+    FlatMap<std::string_view, std::shared_future<ResultType>> map_;
+
+public:
+    ImportManager(SourceManager& sources) noexcept : sources_(sources) {}
+
+    std::shared_future<ResultType> import(std::string_view path, CallbackType callback) {
+        std::lock_guard lock(mutex_);
+        if (auto it = map_.find(path); it != map_.end()) {
+            return it->second;
+        } else {
+            auto* file = sources_.load(path);
+            auto import_future = std::async(std::launch::async, callback, std::ref(*file)).share();
+            map_.insert({path, import_future});
+            return map_.at(path);
+        }
     }
 };

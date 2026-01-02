@@ -1,5 +1,4 @@
 #pragma once
-#include <compare>
 #include <map>
 #include <random>
 #include <type_traits>
@@ -21,26 +20,6 @@ enum class MapOperation {
     _Size,
 };
 
-template <typename T>
-class ComparableUniquePtr {
-private:
-    std::unique_ptr<T> ptr_;
-
-public:
-    ComparableUniquePtr() = default;
-    ComparableUniquePtr(T* ptr) : ptr_(ptr) {}
-    ComparableUniquePtr(const ComparableUniquePtr& other) = delete;
-    ComparableUniquePtr& operator=(const ComparableUniquePtr& other) = delete;
-    ComparableUniquePtr(ComparableUniquePtr&& other) noexcept = default;
-    ComparableUniquePtr& operator=(ComparableUniquePtr&& other) noexcept = default;
-    T& operator*() { return *ptr_; }
-    const T& operator*() const { return *ptr_; }
-    std::strong_ordering operator<=>(const ComparableUniquePtr& other) const {
-        return *ptr_ <=> *other.ptr_;
-    }
-    bool operator==(const ComparableUniquePtr& other) const { return *ptr_ == *other.ptr_; }
-};
-
 template <typename Impl>
 class FlatMapTest : public ::testing::Test {
 protected:
@@ -57,25 +36,25 @@ protected:
     StdMapType s_map;
 
 protected:
-    Key key(int value) {
+    Key key(int seed) {
         if constexpr (std::is_same_v<Key, int>) {
-            return value;
+            return seed;
         } else if constexpr (std::is_same_v<Key, std::string>) {
-            return "key_" + std::to_string(value);
-        } else if constexpr (std::is_same_v<Key, ComparableUniquePtr<int>>) {
-            return ComparableUniquePtr<int>(new int(value));
+            return "key_" + std::to_string(seed);
+        } else if constexpr (requires { Key(std::declval<int*>()); }) {
+            return Key(new int(seed));
         } else {
             static_assert(false);
         }
     }
 
-    Value value(int value) {
+    Value value(int seed) {
         if constexpr (std::is_same_v<Value, int>) {
-            return value * 10;
+            return seed * 10;
         } else if constexpr (std::is_same_v<Value, std::string>) {
-            return "value_" + std::to_string(value);
-        } else if constexpr (std::is_same_v<Value, ComparableUniquePtr<int>>) {
-            return ComparableUniquePtr<int>(new int(value * 10));
+            return "value_" + std::to_string(seed);
+        } else if constexpr (requires { Value(std::declval<int*>()); }) {
+            return Value(new int(seed * 10));
         } else {
             static_assert(false);
         }
@@ -101,137 +80,6 @@ protected:
         }
         ASSERT_TRUE(it_c == end_c && it_o == end_o)
             << "Iterator reached end mismatch (Length differs)";
-    }
-
-    void fuzz_test(int iterations) {
-        std::mt19937 gen(42);
-
-        for (int i = 0; i < iterations; ++i) {
-            MapOperation op = static_cast<MapOperation>(
-                std::uniform_int_distribution<int>(0, static_cast<int>(MapOperation::_Size) - 1)(
-                    gen
-                )
-            );
-            Key k = key(i);
-            Value v = value(i);
-
-            switch (op) {
-            case MapOperation::Insert:
-                if constexpr (requires { f_map.insert({k, v}); }) {
-                    if (!s_map.count(k)) {
-                        f_map.insert({k, v});
-                        s_map.insert({k, v});
-                    }
-                }
-                break;
-
-            case MapOperation::InsertOrAssign:
-                if constexpr (requires { f_map.insert_or_assign(k, v); }) {
-                    f_map.insert_or_assign(k, v);
-                    s_map.insert_or_assign(k, v);
-                }
-                break;
-
-            case MapOperation::TryEmplace:
-                if constexpr (requires { f_map.try_emplace(k, v); }) {
-                    if (!s_map.count(k)) {
-                        f_map.try_emplace(k, v);
-                        s_map.try_emplace(k, v);
-                    }
-                }
-                break;
-
-            case MapOperation::AccessOperator:
-                if constexpr (requires { f_map[k]; }) {
-                    if constexpr (std::is_default_constructible_v<Value> &&
-                                  std::is_copy_assignable_v<Value>) {
-                        f_map[k] = v;
-                        s_map[k] = v;
-                    }
-                }
-                break;
-
-            case MapOperation::At:
-                if constexpr (requires { f_map.at(k) = v; }) {
-                    if (s_map.count(k)) {
-                        f_map.at(k) = v;
-                        s_map.at(k) = v;
-                    }
-                }
-                break;
-
-            case MapOperation::EraseByKey:
-                if constexpr (requires { f_map.erase(k); }) {
-                    if (s_map.count(k)) {
-                        f_map.erase(k);
-                        s_map.erase(k);
-                    }
-                }
-                break;
-
-            case MapOperation::EraseByIterator:
-                if constexpr (requires { f_map.erase(f_map.begin()); }) {
-                    if (s_map.contains(k)) {
-                        auto it_f = f_map.find(k);
-                        auto it_s = s_map.find(k);
-                        ASSERT_NE(it_f, f_map.end());
-                        ASSERT_NE(it_s, s_map.end());
-
-                        f_map.erase(it_f);
-                        s_map.erase(it_s);
-                    }
-                }
-                break;
-
-            case MapOperation::Clear:
-                if constexpr (requires { f_map.clear(); }) {
-                    if (std::uniform_int_distribution<int>(0, 50)(gen) == 0) {
-                        f_map.clear();
-                        s_map.clear();
-                    }
-                }
-                break;
-
-            case MapOperation::Contains:
-                if constexpr (requires { f_map.contains(k); }) {
-                    ASSERT_EQ(f_map.contains(k), s_map.contains(k));
-                }
-                break;
-
-            case MapOperation::Find:
-                if constexpr (requires { f_map.find(k); }) {
-                    auto it_f = f_map.find(k);
-                    auto it_s = s_map.find(k);
-                    bool found_f = (it_f != f_map.end());
-                    bool found_s = (it_s != s_map.end());
-                    ASSERT_EQ(found_f, found_s);
-                    if (found_f) {
-                        ASSERT_EQ(it_f->second, it_s->second);
-                    }
-                }
-                break;
-
-            case MapOperation::LowerBound:
-                if constexpr (requires { f_map.lower_bound(k); }) {
-                    auto it_f = f_map.lower_bound(k);
-                    auto it_s = s_map.lower_bound(k);
-
-                    bool end_f = (it_f == f_map.end());
-                    bool end_s = (it_s == s_map.end());
-                    ASSERT_EQ(end_f, end_s);
-                    if (!end_f) {
-                        ASSERT_EQ(it_f->first, it_s->first);
-                    }
-                }
-                break;
-
-            case MapOperation::_Size:
-                assert(false);
-                break;
-            }
-
-            check_consistency(f_map, s_map);
-        }
     }
 
     // insert(const value_type& value) -> pair<iterator, bool>
@@ -795,6 +643,137 @@ protected:
                 s_map.insert({key(5), value(500)});
                 check_consistency(f_map, s_map);
             }
+        }
+    }
+
+    void fuzz_test(int iterations) {
+        std::mt19937 gen(42);
+
+        for (int i = 0; i < iterations; ++i) {
+            MapOperation op = static_cast<MapOperation>(
+                std::uniform_int_distribution<int>(0, static_cast<int>(MapOperation::_Size) - 1)(
+                    gen
+                )
+            );
+            Key k = key(i);
+            Value v = value(i);
+
+            switch (op) {
+            case MapOperation::Insert:
+                if constexpr (requires { f_map.insert({k, v}); }) {
+                    if (!s_map.count(k)) {
+                        f_map.insert({k, v});
+                        s_map.insert({k, v});
+                    }
+                }
+                break;
+
+            case MapOperation::InsertOrAssign:
+                if constexpr (requires { f_map.insert_or_assign(k, v); }) {
+                    f_map.insert_or_assign(k, v);
+                    s_map.insert_or_assign(k, v);
+                }
+                break;
+
+            case MapOperation::TryEmplace:
+                if constexpr (requires { f_map.try_emplace(k, v); }) {
+                    if (!s_map.count(k)) {
+                        f_map.try_emplace(k, v);
+                        s_map.try_emplace(k, v);
+                    }
+                }
+                break;
+
+            case MapOperation::AccessOperator:
+                if constexpr (requires { f_map[k]; }) {
+                    if constexpr (std::is_default_constructible_v<Value> &&
+                                  std::is_copy_assignable_v<Value>) {
+                        f_map[k] = v;
+                        s_map[k] = v;
+                    }
+                }
+                break;
+
+            case MapOperation::At:
+                if constexpr (requires { f_map.at(k) = v; }) {
+                    if (s_map.count(k)) {
+                        f_map.at(k) = v;
+                        s_map.at(k) = v;
+                    }
+                }
+                break;
+
+            case MapOperation::EraseByKey:
+                if constexpr (requires { f_map.erase(k); }) {
+                    if (s_map.count(k)) {
+                        f_map.erase(k);
+                        s_map.erase(k);
+                    }
+                }
+                break;
+
+            case MapOperation::EraseByIterator:
+                if constexpr (requires { f_map.erase(f_map.begin()); }) {
+                    if (s_map.contains(k)) {
+                        auto it_f = f_map.find(k);
+                        auto it_s = s_map.find(k);
+                        ASSERT_NE(it_f, f_map.end());
+                        ASSERT_NE(it_s, s_map.end());
+
+                        f_map.erase(it_f);
+                        s_map.erase(it_s);
+                    }
+                }
+                break;
+
+            case MapOperation::Clear:
+                if constexpr (requires { f_map.clear(); }) {
+                    if (std::uniform_int_distribution<int>(0, 50)(gen) == 0) {
+                        f_map.clear();
+                        s_map.clear();
+                    }
+                }
+                break;
+
+            case MapOperation::Contains:
+                if constexpr (requires { f_map.contains(k); }) {
+                    ASSERT_EQ(f_map.contains(k), s_map.contains(k));
+                }
+                break;
+
+            case MapOperation::Find:
+                if constexpr (requires { f_map.find(k); }) {
+                    auto it_f = f_map.find(k);
+                    auto it_s = s_map.find(k);
+                    bool found_f = (it_f != f_map.end());
+                    bool found_s = (it_s != s_map.end());
+                    ASSERT_EQ(found_f, found_s);
+                    if (found_f) {
+                        ASSERT_EQ(it_f->second, it_s->second);
+                    }
+                }
+                break;
+
+            case MapOperation::LowerBound:
+                if constexpr (requires { f_map.lower_bound(k); }) {
+                    auto it_f = f_map.lower_bound(k);
+                    auto it_s = s_map.lower_bound(k);
+
+                    bool end_f = (it_f == f_map.end());
+                    bool end_s = (it_s == s_map.end());
+                    ASSERT_EQ(end_f, end_s);
+                    if (!end_f) {
+                        ASSERT_EQ(it_f->first, it_s->first);
+                    }
+                }
+                break;
+
+            case MapOperation::_Size:
+                assert(false);
+                break;
+            }
+
+            check_consistency(f_map, s_map);
         }
     }
 };

@@ -9,11 +9,11 @@
 
 int main(int argc, char* argv[]) {
     SourceManager sources;
-    ImportManager importer(sources);
+    ImportManager<ASTRoot> importer(sources);
 
     std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
-    ImportFuture import_future = importer.import(input_path);
-    const std::unique_ptr<ASTRoot>& root = std::move(import_future).get();
+    ASTBuilder builder(*sources.load(input_path), importer);
+    std::unique_ptr<ASTRoot> root = builder();
 
     Scope ctx;
     TypeRegistry types;

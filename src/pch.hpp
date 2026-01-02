@@ -438,8 +438,11 @@ public:
 
 template <typename Key, typename Comp = std::less<Key>>
 class FlatSet {
-private:
-    using Iterator = typename GlobalMemory::Vector<Key>::iterator;
+public:
+    using key_type = Key;
+    using value_type = Key;
+    using iterator = typename GlobalMemory::Vector<Key>::iterator;
+    using const_iterator = typename GlobalMemory::Vector<Key>::const_iterator;
 
 private:
     GlobalMemory::Vector<Key> keys_;
@@ -455,7 +458,7 @@ public:
         requires std::is_nothrow_copy_constructible_v<Key>
     = default;
 
-    std::pair<Iterator, bool> emplace(Key&& key) {
+    std::pair<iterator, bool> emplace(Key&& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it != keys_.end() && *it == key) {
             return {it, false};
