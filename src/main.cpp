@@ -1,4 +1,5 @@
 ﻿#include "pch.hpp"
+#include <fstream>
 
 #include "ast.hpp"
 #include "builder.hpp"
@@ -6,6 +7,7 @@
 #include "object.hpp"
 #include "operations.hpp"
 #include "source.hpp"
+#include "transpiler.hpp"
 
 int main(int argc, char* argv[]) {
     SourceManager sources;
@@ -23,6 +25,11 @@ int main(int argc, char* argv[]) {
     root->check_types(checker);
 
     bool has_error = Diagnostic::print(sources);
+    if (!has_error) {
+        std::fstream output_file = std::fstream("out.cpp", std::ios::out);
+        CppWriter writer(output_file, sources[0]);
+        root->transpile(writer);
+    }
 
     return has_error ? EXIT_FAILURE : EXIT_SUCCESS;
 }

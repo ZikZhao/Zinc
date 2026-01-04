@@ -23,7 +23,7 @@ code_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 expr_statement: expr_ = expr OP_SEMICOLON;
 
 declaration_statement:
-	KW_LET identifier_ = identifier KW_MUT? (
+	KW_LET identifier_ = T_IDENTIFIER KW_MUT? (
 		OP_COLON type_ = type
 	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON;
 
@@ -46,16 +46,16 @@ continue_statement: KW_CONTINUE OP_SEMICOLON;
 return_statement: KW_RETURN expr_ = expr? OP_SEMICOLON;
 
 type_alias_declaration:
-	KW_TYPE identifier_ = identifier OP_ASSIGN type_ = type OP_SEMICOLON;
+	KW_TYPE identifier_ = T_IDENTIFIER OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_declaration:
-	KW_FUNC name_ = identifier OP_LPAREN (
+	KW_FUNC identifier_ = T_IDENTIFIER OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
 	)? OP_RPAREN (OP_ARROW return_type_ = type)? body_ = code_block;
 
-parameter: identifier_ = identifier OP_COLON type_ = type;
+parameter: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 
 expr:
 	<assoc = right> left_ = expr op_ = (

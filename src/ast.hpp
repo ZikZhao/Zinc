@@ -9,6 +9,8 @@
 #include "operations.hpp"
 #include "source.hpp"
 
+class CppWriter;
+
 class ASTNode;
 class ASTExpression;
 using ASTValueExpression = ASTExpression;
@@ -127,6 +129,7 @@ public:
     virtual ~ASTNode() noexcept = default;
     virtual void collect_symbols(Scope& scope, OpDispatcher& ops) {}
     virtual void check_types(TypeChecker& checker) {}
+    virtual void transpile(CppWriter& writer) const = 0;
 };
 
 class ASTRoot final : public ASTNode {
@@ -134,6 +137,7 @@ public:
     std::vector<std::unique_ptr<ASTNode>> children_;
     ASTRoot(const Location& loc, std::vector<std::unique_ptr<ASTNode>> children) noexcept
         : ASTNode(loc), children_(std::move(children)) {}
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTBlock : public ASTNode {
@@ -151,6 +155,7 @@ public:
             stmt->check_types(checker);
         }
     }
+    void transpile(CppWriter& writer) const noexcept override;
 };
 
 class ASTLocalBlock final : public ASTBlock {
@@ -169,6 +174,7 @@ public:
         }
         checker.exit();
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTExpression : public ASTNode {
@@ -188,6 +194,7 @@ public:
     Object* eval(TypeChecker& checker) const final { return value_; }
     ExprInfo get_expr_info(TypeChecker& checker) const final { return {value_->get_type(), false}; }
     void resolve_type(Type* target_type) { value_ = value_->resolve_to(target_type); }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTIdentifier final : public ASTExpression {
@@ -197,6 +204,7 @@ public:
         : ASTExpression(loc), str_(name) {}
     Object* eval(TypeChecker& checker) const final { return checker.resolve(str_); }
     ExprInfo get_expr_info(TypeChecker& checker) const final { return checker.type_of(str_); }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 template <typename Op>
@@ -214,6 +222,7 @@ public:
         ExprInfo expr_info = expr_->get_expr_info(checker);
         return {checker.ops_.get_result_type(Op::opcode, expr_info.type), false};
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 template <typename Op>
@@ -251,6 +260,7 @@ public:
             checker.ops_.get_result_type(Op::opcode, left_info.type, right_info.type), false, true
         };
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 template <typename InnerOp>
@@ -288,6 +298,7 @@ public:
         }
         return {left_info.type, true, false};
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTFunctionCall final : public ASTExpression {
@@ -309,6 +320,7 @@ public:
         // TODO
         return {};
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 using ASTAddOp = ASTBinaryOp<OperatorFunctors::Add>;
@@ -361,6 +373,7 @@ public:
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         throw std::logic_error("Type expressions do not have result types");
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTFunctionType final : public ASTTypeExpression {
@@ -409,6 +422,7 @@ public:
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
         return {checker.types_.get_unknown()->as_type(), false, true};
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTFieldDeclaration final : public ASTNode {
@@ -420,6 +434,7 @@ public:
     ) noexcept
         : ASTNode(loc), identifier_(std::move(identifier)), type_(std::move(type)) {}
     ~ASTFieldDeclaration() noexcept final = default;
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTRecordType final : public ASTTypeExpression {
@@ -444,25 +459,36 @@ public:
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
         return {checker.types_.get_unknown()->as_type(), false, true};
     }
+    void transpile(CppWriter& writer) const noexcept final;
+};
+
+class ASTExpressionStatement final : public ASTNode {
+public:
+    const std::unique_ptr<ASTExpression> expr_;
+    ASTExpressionStatement(const Location& loc, std::unique_ptr<ASTExpression> expr) noexcept
+        : ASTNode(loc), expr_(std::move(expr)) {}
+    ~ASTExpressionStatement() noexcept final = default;
+    void check_types(TypeChecker& checker) final { expr_->check_types(checker); }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTDeclaration final : public ASTNode {
 public:
-    const std::unique_ptr<ASTIdentifier> identifier_;
-    const std::unique_ptr<ASTTypeExpression> type_;
-    const std::unique_ptr<ASTValueExpression> expr_;
-    const bool is_mutable_;
-    const bool is_constant_ = false;
+    std::string_view identifier_;
+    std::unique_ptr<ASTTypeExpression> type_;
+    std::unique_ptr<ASTValueExpression> expr_;
+    bool is_mutable_;
+    bool is_constant_ = false;
     ASTDeclaration(
         const Location& loc,
-        std::unique_ptr<ASTIdentifier> identifier,
+        std::string_view identifier,
         std::unique_ptr<ASTTypeExpression> type,
         std::unique_ptr<ASTValueExpression> expr,
         bool is_mutable,
         bool is_constant
     ) noexcept
         : ASTNode(loc),
-          identifier_(std::move(identifier)),
+          identifier_(identifier),
           type_(std::move(type)),
           expr_(std::move(expr)),
           is_mutable_(is_mutable),
@@ -477,7 +503,7 @@ public:
                 Diagnostic::report(SymbolCategoryMismatchError(expr_->location_, false));
             }
             std::ignore = get_declared_type(checker, value->as_value()->get_type());
-            checker.add_variable(identifier_->str_, value);
+            checker.add_variable(identifier_, value);
         } else {
             Type* inferred_type = expr_->get_expr_info(checker).type;
             Type* declared_type = get_declared_type(checker, inferred_type);
@@ -488,7 +514,7 @@ public:
                     e.report_at(expr_->location_);
                 }
             }
-            checker.add_variable(identifier_->str_, declared_type);
+            checker.add_variable(identifier_, declared_type);
         }
     }
     Type* get_declared_type(TypeChecker& checker, Type* inferred_type) const {
@@ -507,6 +533,7 @@ public:
             return inferred_type;
         }
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTTypeAlias final : public ASTNode {
@@ -521,6 +548,7 @@ public:
     void collect_symbols(Scope& scope, OpDispatcher& ops) final {
         scope.add_type(identifier_, type_.get());
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTIfStatement final : public ASTNode {
@@ -563,6 +591,7 @@ public:
             checker.exit();
         }
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTForStatement final : public ASTNode {
@@ -624,18 +653,21 @@ public:
         body_->check_types(checker);
         checker.exit();
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTContinueStatement final : public ASTNode {
 public:
     ASTContinueStatement(const Location& loc) noexcept : ASTNode(loc) {}
     ~ASTContinueStatement() noexcept final = default;
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTBreakStatement final : public ASTNode {
 public:
     ASTBreakStatement(const Location& loc) noexcept : ASTNode(loc) {}
     ~ASTBreakStatement() noexcept final = default;
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTReturnStatement final : public ASTNode {
@@ -644,40 +676,40 @@ public:
     ASTReturnStatement(const Location& loc, std::unique_ptr<ASTExpression> expr = nullptr) noexcept
         : ASTNode(loc), expr_(std::move(expr)) {}
     ~ASTReturnStatement() noexcept final = default;
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTFunctionParameter final : public ASTNode {
 public:
-    const std::unique_ptr<ASTIdentifier> identifier_;
-    const std::unique_ptr<ASTExpression> type_;
+    std::string_view identifier_;
+    std::unique_ptr<ASTExpression> type_;
     ASTFunctionParameter(
-        const Location& loc,
-        std::unique_ptr<ASTIdentifier> identifier,
-        std::unique_ptr<ASTExpression> type
+        const Location& loc, std::string_view identifier, std::unique_ptr<ASTExpression> type
     ) noexcept
-        : ASTNode(loc), identifier_(std::move(identifier)), type_(std::move(type)) {}
+        : ASTNode(loc), identifier_(identifier), type_(std::move(type)) {}
     ~ASTFunctionParameter() noexcept final = default;
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 class ASTFunctionDefinition final : public ASTNode {
 public:
-    const std::unique_ptr<ASTIdentifier> identifier_;
-    const ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters_;
-    const std::unique_ptr<ASTTypeExpression> return_type_;
-    const std::unique_ptr<ASTBlock> body_;
-    const bool is_const_;
+    std::string_view identifier_;
+    ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters_;
+    std::unique_ptr<ASTTypeExpression> return_type_;
+    std::unique_ptr<ASTBlock> body_;
+    bool is_const_;
 
 public:
     ASTFunctionDefinition(
         const Location& loc,
-        std::unique_ptr<ASTIdentifier> name,
+        std::string_view identifier,
         ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters,
         std::unique_ptr<ASTTypeExpression> return_type,
         std::unique_ptr<ASTBlock> body,
         bool is_const
     ) noexcept
         : ASTNode(loc),
-          identifier_(std::move(name)),
+          identifier_(identifier),
           parameters_(std::move(parameters)),
           return_type_(std::move(return_type)),
           body_(std::move(body)),
@@ -693,7 +725,7 @@ public:
         try {
             const FunctionValue* func =
                 new FunctionValue(this, [](auto&& args) { return nullptr; });
-            scope.add_overload(identifier_->str_, func);
+            scope.add_overload(identifier_, func);
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
         }
@@ -706,7 +738,7 @@ public:
     void check_types(TypeChecker& checker) final {
         checker.enter(body_.get());
         for (const auto& param : parameters_) {
-            Type* param_type = checker.resolve(param->identifier_->str_)->as_type();
+            Type* param_type = checker.resolve(param->identifier_)->as_type();
             if (!param_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
             }
@@ -714,6 +746,7 @@ public:
         body_->check_types(checker);
         checker.exit();
     }
+    void transpile(CppWriter& writer) const noexcept final;
 };
 
 // ===================== Inline implementations of TypeChecker =====================

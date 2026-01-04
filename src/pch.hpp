@@ -28,7 +28,6 @@
 #include <vector>
 
 #include "antlr4-runtime.h"
-
 // IWYU pragma: end_exports
 
 using namespace std::literals::string_view_literals;

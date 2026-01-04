@@ -14,6 +14,7 @@ public:
         std::uint32_t id;
         GlobalMemory::String path;
         GlobalMemory::String content;
+        std::vector<std::size_t> line_offsets;
     };
 
 public:
@@ -32,11 +33,13 @@ public:
         GlobalMemory::String content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
         );
+        std::vector<std::size_t> line_offsets = compute_line_offsets(content);
         files.push_back(
             File{
                 .id = static_cast<std::uint32_t>(files.size()),
                 .path = path,
-                .content = std::move(content)
+                .content = std::move(content),
+                .line_offsets = std::move(line_offsets)
             }
         );
         file_id_map_.insert({path, static_cast<std::uint32_t>(files.size()) - 1});
@@ -46,6 +49,18 @@ public:
     const File& operator[](std::size_t id) const noexcept {
         assert(id < file_id_map_.size());
         return files[id];
+    }
+
+private:
+    std::vector<std::size_t> compute_line_offsets(std::string_view content) noexcept {
+        std::vector<std::size_t> offsets;
+        offsets.push_back(0);
+        for (std::size_t i = 0; i < content.size(); ++i) {
+            if (content[i] == '\n') {
+                offsets.push_back(i + 1);
+            }
+        }
+        return offsets;
     }
 };
 

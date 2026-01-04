@@ -1,0 +1,347 @@
+#include "pch.hpp"
+#include <algorithm>
+#include <iomanip>
+#include <ios>
+#include <variant>
+
+#include "ast.hpp"
+#include "object.hpp"
+#include "operations.hpp"
+#include "runtime-str.hpp"
+#include "source.hpp"
+
+class CppWriter {
+public:
+    static CppWriter& indent(CppWriter& writer) {
+        writer.indent_level_++;
+        return writer;
+    }
+    static CppWriter& dedent(CppWriter& writer) {
+        if (writer.indent_level_ > 0) {
+            writer.indent_level_--;
+        }
+        return writer;
+    }
+    static CppWriter& newline(CppWriter& writer) {
+        writer.stream_ << "\n";
+        writer.at_line_start_ = true;
+        return writer;
+    }
+
+private:
+    std::ostream& stream_;
+    const SourceManager::File& file_;
+    std::size_t indent_level_ = 0;
+    bool at_line_start_ = true;
+    std::size_t current_line_ = 0;
+
+public:
+    explicit CppWriter(std::ostream& out, const SourceManager::File& file)
+        : stream_(out), file_(file) {}
+    CppWriter& operator<<(const ASTNode* node) {
+        std::size_t line_number = static_cast<std::size_t>(std::distance(
+            file_.line_offsets.begin(),
+            std::upper_bound(
+                file_.line_offsets.begin(), file_.line_offsets.end(), node->location_.begin
+            )
+        ));
+        if (line_number != current_line_) {
+            stream_ << "\n#line " << line_number << " \"" << file_.path << "\"\n";
+            at_line_start_ = true;
+            current_line_ = line_number;
+        }
+        return *this;
+    }
+    CppWriter& operator<<(std::string_view token) {
+        check_indent();
+        stream_ << token;
+        return *this;
+    }
+    CppWriter& operator<<(const Type* type) {
+        check_indent();
+        switch (type->kind_) {
+        case Kind::Integer: {
+            const IntegerType* int_type = static_cast<const IntegerType*>(type);
+            stream_ << "std::";
+            if (int_type->is_signed_) {
+                stream_ << "int";
+            } else {
+                stream_ << "uint";
+            }
+            switch (int_type->bits_) {
+            case 8:
+                stream_ << "8_t";
+                break;
+            case 16:
+                stream_ << "16_t";
+                break;
+            case 32:
+                stream_ << "32_t";
+                break;
+            case 64:
+                stream_ << "64_t";
+                break;
+            default:
+                assert(false);
+                std::unreachable();
+            }
+            break;
+        }
+        case Kind::Float: {
+            const FloatType* float_type = static_cast<const FloatType*>(type);
+            switch (float_type->bits_) {
+            case 32:
+                stream_ << "float";
+                break;
+            case 64:
+                stream_ << "double";
+                break;
+            }
+            return *this;
+        }
+        case Kind::String:
+            stream_ << "std::string";
+            break;
+        case Kind::Boolean:
+            stream_ << "bool";
+            break;
+        default:
+            stream_ << "/* UnsupportedType */";
+            break;
+        }
+        return *this;
+    }
+    CppWriter& operator<<(const Value* value) {
+        check_indent();
+        switch (value->kind_) {
+        case Kind::Integer: {
+            const IntegerValue* int_value = static_cast<const IntegerValue*>(value);
+            const IntegerType* int_type = static_cast<const IntegerType*>(value->get_type());
+            if (int_type->is_signed_) {
+                stream_ << int_value->ivalue_;
+            } else {
+                stream_ << int_value->uvalue_;
+            }
+            break;
+        }
+        case Kind::Float: {
+            const FloatValue* float_value = static_cast<const FloatValue*>(value);
+            stream_ << std::hexfloat << float_value->value_;
+            break;
+        }
+        case Kind::String: {
+            const StringValue* string_value = static_cast<const StringValue*>(value);
+            stream_ << std::quoted(string_value->value_);
+            break;
+        }
+        case Kind::Boolean: {
+            const BooleanValue* bool_value = static_cast<const BooleanValue*>(value);
+            stream_ << (bool_value->value_ ? "true" : "false");
+            break;
+        }
+        default:
+            stream_ << "/* UnsupportedValue */";
+            break;
+        }
+        return *this;
+    }
+    CppWriter& operator<<(CppWriter& (*manip)(CppWriter&)) { return manip(*this); }
+
+private:
+    void check_indent() {
+        if (at_line_start_) {
+            for (std::size_t i = 0; i < indent_level_; i++) {
+                stream_ << "    ";
+            }
+            at_line_start_ = false;
+        }
+    }
+};
+
+/// ===================== Inline implementations of AST nodes =====================
+
+inline void ASTRoot::transpile(CppWriter& writer) const noexcept {
+    writer << runtime_hpp_str();
+    for (const auto& child : children_) {
+        child->transpile(writer);
+        writer << CppWriter::newline;
+    }
+}
+
+inline void ASTBlock::transpile(CppWriter& writer) const noexcept {
+    writer << "{" << CppWriter::indent << CppWriter::newline;
+    for (const auto& stmt : statements_) {
+        stmt->transpile(writer);
+        writer << CppWriter::newline;
+    }
+    writer << CppWriter::dedent << "}";
+}
+
+inline void ASTLocalBlock::transpile(CppWriter& writer) const noexcept {
+    writer << CppWriter::newline;
+    ASTBlock::transpile(writer);
+}
+
+inline void ASTConstant::transpile(CppWriter& writer) const noexcept { writer << this << value_; }
+
+inline void ASTIdentifier::transpile(CppWriter& writer) const noexcept { writer << this << str_; }
+
+template <typename Op>
+inline void ASTBinaryOp<Op>::transpile(CppWriter& writer) const noexcept {
+    writer << this << "(";
+    left_->transpile(writer);
+    writer << OperatorCodeToString(Op::opcode);
+    right_->transpile(writer);
+    writer << ")";
+}
+
+template <typename Op>
+inline void ASTBinaryOp<OperatorFunctors::OperateAndAssign<Op>>::transpile(
+    CppWriter& writer
+) const noexcept {
+    writer << this << "(";
+    left_->transpile(writer);
+    writer << OperatorCodeToString(Op::opcode) << "=";
+    right_->transpile(writer);
+    writer << ")";
+}
+
+template <typename Op>
+inline void ASTUnaryOp<Op>::transpile(CppWriter& writer) const noexcept {
+    /// TODO: handle prefix/postfix
+    writer << this << OperatorCodeToString(Op::opcode);
+    expr_->transpile(writer);
+}
+
+inline void ASTFunctionCall::transpile(CppWriter& writer) const noexcept {
+    function_->transpile(writer);
+    writer << "(";
+    for (const auto& arg : arguments_) {
+        arg->transpile(writer);
+        writer << ",";
+    }
+    writer << ")";
+}
+
+inline void ASTPrimitiveType::transpile(CppWriter& writer) const noexcept {
+    writer << this << type_;
+}
+
+inline void ASTFunctionType::transpile(CppWriter& writer) const noexcept {
+    writer << this;
+    if (std::holds_alternative<Components>(representation_)) {
+        writer << "std::function<";
+        const auto& comps = std::get<Components>(representation_);
+        std::get<1>(comps)->transpile(writer);
+        writer << "(";
+        const char* sep = "";
+        for (const auto& param_expr : std::get<0>(comps)) {
+            writer << sep;
+            param_expr->transpile(writer);
+            sep = ", ";
+        }
+        writer << ")";
+    } else {
+        writer << std::get<FunctionType*>(representation_);
+    }
+}
+
+inline void ASTFieldDeclaration::transpile(CppWriter& writer) const noexcept {
+    writer << this;
+    type_->transpile(writer);
+    writer << identifier_ << ";";
+}
+
+inline void ASTRecordType::transpile(CppWriter& writer) const noexcept {
+    writer << "struct {" << CppWriter::indent << CppWriter::newline;
+    for (const auto& field : fields_) {
+        field->transpile(writer);
+        writer << CppWriter::newline;
+    }
+    writer << CppWriter::dedent << "};" << CppWriter::newline;
+}
+
+inline void ASTExpressionStatement::transpile(CppWriter& writer) const noexcept {
+    writer << this;
+    expr_->transpile(writer);
+    writer << ";";
+}
+
+inline void ASTDeclaration::transpile(CppWriter& writer) const noexcept {
+    writer << this;
+    if (is_mutable_) {
+        writer << "auto& ";
+    } else {
+        writer << "const auto& ";
+    }
+    writer << identifier_ << " = ";
+    expr_->transpile(writer);
+    writer << ";";
+}
+
+inline void ASTTypeAlias::transpile(CppWriter& writer) const noexcept {
+    writer << this;
+    writer << "using " << identifier_ << " = ";
+    type_->transpile(writer);
+    writer << ";";
+}
+
+inline void ASTIfStatement::transpile(CppWriter& writer) const noexcept {
+    writer << this;
+    writer << "if (";
+    condition_->transpile(writer);
+    writer << ") ";
+    if_block_->transpile(writer);
+    if (else_block_) {
+        writer << "else ";
+        else_block_->transpile(writer);
+    }
+}
+
+inline void ASTForStatement::transpile(CppWriter& writer) const noexcept {
+    writer << this;
+    writer << "for (";
+    initializer_->transpile(writer);
+    condition_->transpile(writer);
+    writer << "; ";
+    increment_->transpile(writer);
+    writer << ") ";
+    body_->transpile(writer);
+}
+
+inline void ASTBreakStatement::transpile(CppWriter& writer) const noexcept {
+    writer << this << "break;";
+}
+
+inline void ASTContinueStatement::transpile(CppWriter& writer) const noexcept {
+    writer << this << "continue;";
+}
+
+inline void ASTReturnStatement::transpile(CppWriter& writer) const noexcept {
+    writer << this << "return";
+    if (expr_) {
+        writer << " ";
+        expr_->transpile(writer);
+    }
+    writer << ";";
+}
+
+inline void ASTFunctionParameter::transpile(CppWriter& writer) const noexcept {
+    writer << this;
+    type_->transpile(writer);
+    writer << " " << identifier_;
+}
+
+inline void ASTFunctionDefinition::transpile(CppWriter& writer) const noexcept {
+    writer << this;
+    return_type_->transpile(writer);
+    writer << " " << identifier_ << "(";
+    const char* sep = "";
+    for (const auto& param : parameters_) {
+        writer << sep;
+        param->transpile(writer);
+        sep = ", ";
+    }
+    writer << ") ";
+    body_->transpile(writer);
+}

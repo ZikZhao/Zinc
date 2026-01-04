@@ -10,7 +10,7 @@ static void BM_FlatMap_Insert(benchmark::State& state) {
         state.ResumeTiming();
 
         for (int i = 0; i < state.range(0); ++i) {
-            fm.insert(i, i);
+            fm.insert({i, i});
         }
     }
     state.SetComplexityN(state.range(0));
@@ -33,7 +33,7 @@ static void BM_FlatMap_Lookup(benchmark::State& state) {
     FlatMap<int, int> fm;
     const std::int64_t size = state.range(0);
     for (int i = 0; i < size; ++i) {
-        fm.insert(i, i);
+        fm.insert({i, i});
     }
 
     std::vector<int> lookups(static_cast<std::size_t>(size));

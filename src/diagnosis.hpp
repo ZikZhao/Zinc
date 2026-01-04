@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.hpp"
+#include <algorithm>
 #include <format>
 #include <string_view>
 
@@ -254,7 +255,7 @@ private:
     static void print_code(
         SourceManager& sources, const Location& location, std::size_t indent = 0
     ) {
-        const auto& [_, path, content] = sources[location.id];
+        const auto& [_, path, content, line_offsets] = sources[location.id];
 
         std::size_t context_start = content.rfind('\n', location.begin);
         context_start = (context_start == GlobalMemory::String::npos) ? 0 : context_start + 1;
@@ -262,8 +263,14 @@ private:
         std::size_t context_end = content.find('\n', location.end);
         context_end = (context_end == GlobalMemory::String::npos) ? content.size() : context_end;
 
-        std::int64_t start_line_num = get_line_number(content, context_start);
-        std::int64_t end_line_num = get_line_number(content, context_end);
+        auto get_line_number = [&](std::size_t where) -> std::int64_t {
+            return static_cast<std::int64_t>(std::distance(
+                line_offsets.begin(),
+                std::upper_bound(line_offsets.begin(), line_offsets.end(), where)
+            ));
+        };
+        std::int64_t start_line_num = get_line_number(context_start);
+        std::int64_t end_line_num = get_line_number(context_end);
         std::size_t line_num_width = std::formatted_size("{}", end_line_num);
 
         std::size_t col_num = location.begin - context_start + 1;
@@ -334,25 +341,6 @@ private:
 
             current_pos_in_file += line.size() + 1;
         }
-    }
-
-    static std::int64_t get_line_number(const GlobalMemory::String& content, std::size_t where) {
-        static FlatMap<void*, std::vector<std::size_t>> line_cache;
-        auto it = line_cache.find((void*)content.data());
-        if (it == line_cache.end()) {
-            std::vector<std::size_t> line_starts = {0};
-            for (std::size_t pos = 0; pos < content.size(); ++pos) {
-                if (content[pos] == '\n') {
-                    line_starts.push_back(pos + 1);
-                }
-            }
-            line_cache[(void*)content.data()] = std::move(line_starts);
-            it = line_cache.find((void*)content.data());
-        }
-        const std::vector<std::size_t>& line_starts = it->second;
-        auto line_it = std::upper_bound(line_starts.begin(), line_starts.end(), where);
-        std::int64_t line_number = std::distance(line_starts.begin(), line_it);
-        return line_number;
     }
 
 public:

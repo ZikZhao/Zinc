@@ -95,7 +95,9 @@ private:
         return {};
     }
     antlrcpp::Any visitExpr_statement(StainlessParser::Expr_statementContext* ctx) noexcept final {
-        last_visited_ = transform(ctx->expr());
+        last_visited_ = std::make_unique<ASTExpressionStatement>(
+            loc(ctx), static_unique_cast<ASTExpression>(transform(ctx->expr()))
+        );
         return {};
     }
     antlrcpp::Any visitDeclaration_statement(
@@ -103,7 +105,7 @@ private:
     ) noexcept final {
         last_visited_ = std::make_unique<ASTDeclaration>(
             loc(ctx),
-            static_unique_cast<ASTIdentifier>(transform(ctx->identifier_)),
+            text(ctx->identifier_),
             static_unique_cast<ASTTypeExpression>(transform(ctx->type_)),
             static_unique_cast<ASTValueExpression>(transform(ctx->value_)),
             ctx->KW_MUT() != nullptr,
@@ -178,16 +180,16 @@ private:
     ) noexcept final {
         ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters =
             transform_list<ASTFunctionParameter>(ctx->parameters_);
-        std::unique_ptr name = static_unique_cast<ASTIdentifier>(transform(ctx->name_));
+        std::string_view identifier = text(ctx->identifier_);
         std::unique_ptr return_type =
             static_unique_cast<ASTTypeExpression>(transform(ctx->return_type_));
         std::unique_ptr body = static_unique_cast<ASTLocalBlock>(transform(ctx->body_));
         last_visited_ = std::make_unique<ASTFunctionDefinition>(
             loc(ctx),
-            std::move(name),
+            identifier,
             std::move(parameters),
             std::move(return_type),
-            std::move(body),
+            std::make_unique<ASTBlock>(std::move(*body)),
             false
         );
         return {};
@@ -195,7 +197,7 @@ private:
     antlrcpp::Any visitParameter(StainlessParser::ParameterContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTFunctionParameter>(
             loc(ctx),
-            static_unique_cast<ASTIdentifier>(transform(ctx->identifier_)),
+            text(ctx->identifier_),
             static_unique_cast<ASTTypeExpression>(transform(ctx->type_))
         );
         return {};

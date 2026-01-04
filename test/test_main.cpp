@@ -1,3 +1,5 @@
+#include <ostream>
+
 #include "gtest/gtest.h"
 #include "test_map.hpp"
 #include "test_set.hpp"
@@ -20,15 +22,19 @@ public:
         return *ptr_ <=> *other.ptr_;
     }
     bool operator==(const ComparableUniquePtr& other) const { return *ptr_ == *other.ptr_; }
+    friend std::ostream& operator<<(std::ostream& os, const ComparableUniquePtr& cup) {
+        os << *cup.ptr_;
+        return os;
+    }
 };
 
-using TestTypes = ::testing::Types<
+using MapTestTypes = ::testing::Types<
     FlatMap<int, int>,
     FlatMap<std::string, std::string>,
     FlatMap<int, ComparableUniquePtr<int>>,
     FlatMap<std::string, int>>;
 
-TYPED_TEST_SUITE(FlatMapTest, TestTypes);
+TYPED_TEST_SUITE(FlatMapTest, MapTestTypes);
 
 TYPED_TEST(FlatMapTest, InsertBasic) { this->test_insert_basic(); }
 TYPED_TEST(FlatMapTest, InsertOrAssign) { this->test_insert_or_assign(); }
