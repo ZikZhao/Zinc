@@ -56,6 +56,9 @@
 template <typename... Sigs>
 class PolyFunction {
 private:
+    constexpr static inline std::size_t SBO_LIMIT = 3 * sizeof(void*);
+
+private:
     template <typename T>
     struct Callable;
 
@@ -65,9 +68,12 @@ private:
         virtual R call(Args... args) const = 0;
     };
 
+    template <typename R, typename... Args>
+    struct Callable<std::function<R(Args...)>> : Callable<R(Args...)> {};
+
     struct InterfaceBase : virtual Callable<Sigs>... {
         using Callable<Sigs>::call...;
-        virtual std::unique_ptr<InterfaceBase> clone() const = 0;
+        virtual void clone_to(PolyFunction& target) const = 0;
     };
 
     template <typename Derived, typename Signature>
@@ -80,6 +86,9 @@ private:
         }
     };
 
+    template <typename Derived, typename R, typename... Args>
+    struct ImplMixin<Derived, std::function<R(Args...)>> : ImplMixin<Derived, R(Args...)> {};
+
     template <typename Lambda>
     struct InterfaceImpl : InterfaceBase, ImplMixin<InterfaceImpl<Lambda>, Sigs>... {
         mutable Lambda lambda_;
@@ -87,33 +96,62 @@ private:
         decltype(auto) invoke(auto&&... args) const {
             return lambda_(std::forward<decltype(args)>(args)...);
         }
-        std::unique_ptr<InterfaceBase> clone() const override {
-            return std::make_unique<InterfaceImpl<Lambda>>(lambda_);
+        void clone_to(PolyFunction& target) const override {
+            if (sizeof(Lambda) > SBO_LIMIT) {
+                target.interface_ = new InterfaceImpl<Lambda>(lambda_);
+            } else {
+                target.interface_ = new (target.sbo_buffer_) InterfaceImpl<Lambda>(lambda_);
+            }
         }
     };
 
 private:
-    std::unique_ptr<InterfaceBase> interface_;
+    InterfaceBase* interface_;
+    std::byte sbo_buffer_[SBO_LIMIT]{};
 
 public:
     template <typename Lambda>
+        requires(sizeof(Lambda) <= SBO_LIMIT)
     PolyFunction(Lambda lambda)
-        : interface_(std::make_unique<InterfaceImpl<Lambda>>(std::move(lambda))) {}
-    PolyFunction(const PolyFunction& other) : interface_(other.interface_->clone()) {}
-
+        : interface_(new (sbo_buffer_) InterfaceImpl<Lambda>(std::move(lambda))) {}
+    PolyFunction(const PolyFunction& other) { other.interface_->clone_to(*this); }
+    PolyFunction(PolyFunction&& other) noexcept {
+        if (other.is_sbo()) {
+            other.interface_->clone_to(*this);
+            other.interface_->~InterfaceBase();
+            other.interface_ = nullptr;
+        } else {
+            interface_ = other.interface_;
+            other.interface_ = nullptr;
+        }
+    }
+    PolyFunction& operator=(PolyFunction other) {
+        destory();
+        if (other.is_sbo()) {
+            other.interface_->clone_to(*this);
+        } else {
+            interface_ = other.interface_;
+            other.interface_ = nullptr;
+        }
+    }
+    ~PolyFunction() { destory(); }
+    constexpr bool is_sbo() const noexcept {
+        return static_cast<const void*>(interface_) == static_cast<const void*>(sbo_buffer_);
+    }
+    constexpr void destory() noexcept {
+        if (interface_) {
+            if (is_sbo()) {
+                interface_->~InterfaceBase();
+            } else {
+                delete interface_;
+            }
+            interface_ = nullptr;
+        }
+    }
     decltype(auto) operator()(auto&&... args) const {
-        assert(interface_ != nullptr);
+        if (!interface_) {
+            throw std::bad_function_call();
+        }
         return interface_->call(std::forward<decltype(args)>(args)...);
     }
 };
-
-int f(int x, int y) { return x + y; }
-
-float f(float x, float y) { return x * y; }
-
-auto lambda = [](auto&&... args) { return f(std::forward<decltype(args)>(args)...); };
-
-PolyFunction<int(int, int), float(float, float)> poly_func{lambda};
-
-static_assert(requires { poly_func(2, 3); });
-static_assert(requires { poly_func(2.0f, 3.0f); });

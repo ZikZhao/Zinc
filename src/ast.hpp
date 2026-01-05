@@ -131,8 +131,10 @@ public:
         OverloadedFunctionValue* overloads = static_cast<OverloadedFunctionValue*>(obj);
         FunctionValue*& this_overload = overloads->get_overload(source);
         this_overload = new FunctionValue(type, this_overload->source_, this_overload->invoke_);
-        Type* new_type = type;
-        if (IntersectionType* old_type = static_cast<IntersectionType*>(overloads->get_type())) {
+        Type* new_type = type;  // when old type is nullptr
+        Type* old_type = overloads->get_type();
+        if (old_type) {
+            assert(old_type->kind_ == Kind::Function || old_type->kind_ == Kind::Intersection);
             new_type = types_.get<IntersectionType>(old_type, type);
         }
         obj = new OverloadedFunctionValue(new_type, *overloads);

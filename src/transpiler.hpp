@@ -105,6 +105,32 @@ public:
         case Kind::Boolean:
             stream_ << "bool";
             break;
+        case Kind::Function: {
+            const FunctionType* func_type = static_cast<const FunctionType*>(type);
+            stream_ << "std::function<";
+            *this << func_type->return_type_;
+            stream_ << "(";
+            const char* sep = "";
+            for (Type* param_type : func_type->parameters_) {
+                stream_ << sep;
+                *this << param_type;
+                sep = ", ";
+            }
+            stream_ << ")>";
+            break;
+        }
+        case Kind::Intersection: {
+            const IntersectionType* intersection = static_cast<const IntersectionType*>(type);
+            stream_ << "PolyFunction<";
+            const char* sep = "";
+            for (Type* sub_type : intersection->types_) {
+                stream_ << sep;
+                *this << sub_type;
+                sep = ", ";
+            }
+            stream_ << ">";
+            break;
+        }
         default:
             stream_ << "/* UnsupportedType */";
             break;
@@ -235,9 +261,11 @@ inline void ASTUnaryOp<Op>::transpile(CppWriter& writer, TypeChecker& checker) c
 inline void ASTFunctionCall::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     function_->transpile(writer, checker);
     writer << "(";
+    const char* sep = "";
     for (const auto& arg : arguments_) {
+        writer << sep;
         arg->transpile(writer, checker);
-        writer << ",";
+        sep = ", ";
     }
     writer << ")";
 }
@@ -247,22 +275,7 @@ inline void ASTPrimitiveType::transpile(CppWriter& writer, TypeChecker& checker)
 }
 
 inline void ASTFunctionType::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
-    writer << this;
-    if (std::holds_alternative<Components>(representation_)) {
-        writer << "std::function<";
-        const auto& comps = std::get<Components>(representation_);
-        std::get<1>(comps)->transpile(writer, checker);
-        writer << "(";
-        const char* sep = "";
-        for (const auto& param_expr : std::get<0>(comps)) {
-            writer << sep;
-            param_expr->transpile(writer, checker);
-            sep = ", ";
-        }
-        writer << ")";
-    } else {
-        writer << std::get<FunctionType*>(representation_);
-    }
+    writer << this << eval(checker)->as_type();
 }
 
 inline void ASTFieldDeclaration::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
