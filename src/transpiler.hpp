@@ -158,86 +158,105 @@ private:
     }
 };
 
+inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker) {
+    std::filesystem::create_directory("out");
+    std::fstream pch_file = std::fstream("out/pch.hpp", std::ios::out);
+    pch_file << runtime_hpp_str();
+    pch_file.close();
+    std::fstream output_file = std::fstream("out/out.cpp", std::ios::out);
+    CppWriter writer(output_file, sources[0]);
+    root->transpile(writer, checker);
+    output_file.close();
+    std::system("g++ -std=c++20 -xc++-header -Iout out/pch.hpp -o out/pch.hpp.gch");
+    std::system("g++ -std=c++20 -Iout out/out.cpp -o out/out");
+}
+
 /// ===================== Inline implementations of AST nodes =====================
 
-inline void ASTRoot::transpile(CppWriter& writer) const noexcept {
-    writer << runtime_hpp_str();
+inline void ASTRoot::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
+    writer << "#include \"pch.hpp\"" << CppWriter::newline;
     for (const auto& child : children_) {
-        child->transpile(writer);
+        child->transpile(writer, checker);
         writer << CppWriter::newline;
     }
 }
 
-inline void ASTBlock::transpile(CppWriter& writer) const noexcept {
+inline void ASTBlock::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << "{" << CppWriter::indent << CppWriter::newline;
     for (const auto& stmt : statements_) {
-        stmt->transpile(writer);
+        stmt->transpile(writer, checker);
         writer << CppWriter::newline;
     }
     writer << CppWriter::dedent << "}";
 }
 
-inline void ASTLocalBlock::transpile(CppWriter& writer) const noexcept {
+inline void ASTLocalBlock::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << CppWriter::newline;
-    ASTBlock::transpile(writer);
+    checker.enter(this);
+    ASTBlock::transpile(writer, checker);
+    checker.exit();
 }
 
-inline void ASTConstant::transpile(CppWriter& writer) const noexcept { writer << this << value_; }
+inline void ASTConstant::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
+    writer << this << value_;
+}
 
-inline void ASTIdentifier::transpile(CppWriter& writer) const noexcept { writer << this << str_; }
+inline void ASTIdentifier::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
+    writer << this << str_;
+}
 
 template <typename Op>
-inline void ASTBinaryOp<Op>::transpile(CppWriter& writer) const noexcept {
+inline void ASTBinaryOp<Op>::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this << "(";
-    left_->transpile(writer);
+    left_->transpile(writer, checker);
     writer << OperatorCodeToString(Op::opcode);
-    right_->transpile(writer);
+    right_->transpile(writer, checker);
     writer << ")";
 }
 
 template <typename Op>
 inline void ASTBinaryOp<OperatorFunctors::OperateAndAssign<Op>>::transpile(
-    CppWriter& writer
+    CppWriter& writer, TypeChecker& checker
 ) const noexcept {
     writer << this << "(";
-    left_->transpile(writer);
+    left_->transpile(writer, checker);
     writer << OperatorCodeToString(Op::opcode) << "=";
-    right_->transpile(writer);
+    right_->transpile(writer, checker);
     writer << ")";
 }
 
 template <typename Op>
-inline void ASTUnaryOp<Op>::transpile(CppWriter& writer) const noexcept {
+inline void ASTUnaryOp<Op>::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     /// TODO: handle prefix/postfix
     writer << this << OperatorCodeToString(Op::opcode);
-    expr_->transpile(writer);
+    expr_->transpile(writer, checker);
 }
 
-inline void ASTFunctionCall::transpile(CppWriter& writer) const noexcept {
-    function_->transpile(writer);
+inline void ASTFunctionCall::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
+    function_->transpile(writer, checker);
     writer << "(";
     for (const auto& arg : arguments_) {
-        arg->transpile(writer);
+        arg->transpile(writer, checker);
         writer << ",";
     }
     writer << ")";
 }
 
-inline void ASTPrimitiveType::transpile(CppWriter& writer) const noexcept {
+inline void ASTPrimitiveType::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this << type_;
 }
 
-inline void ASTFunctionType::transpile(CppWriter& writer) const noexcept {
+inline void ASTFunctionType::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this;
     if (std::holds_alternative<Components>(representation_)) {
         writer << "std::function<";
         const auto& comps = std::get<Components>(representation_);
-        std::get<1>(comps)->transpile(writer);
+        std::get<1>(comps)->transpile(writer, checker);
         writer << "(";
         const char* sep = "";
         for (const auto& param_expr : std::get<0>(comps)) {
             writer << sep;
-            param_expr->transpile(writer);
+            param_expr->transpile(writer, checker);
             sep = ", ";
         }
         writer << ")";
@@ -246,102 +265,113 @@ inline void ASTFunctionType::transpile(CppWriter& writer) const noexcept {
     }
 }
 
-inline void ASTFieldDeclaration::transpile(CppWriter& writer) const noexcept {
+inline void ASTFieldDeclaration::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this;
-    type_->transpile(writer);
+    type_->transpile(writer, checker);
     writer << identifier_ << ";";
 }
 
-inline void ASTRecordType::transpile(CppWriter& writer) const noexcept {
+inline void ASTRecordType::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << "struct {" << CppWriter::indent << CppWriter::newline;
     for (const auto& field : fields_) {
-        field->transpile(writer);
+        field->transpile(writer, checker);
         writer << CppWriter::newline;
     }
     writer << CppWriter::dedent << "};" << CppWriter::newline;
 }
 
-inline void ASTExpressionStatement::transpile(CppWriter& writer) const noexcept {
+inline void ASTExpressionStatement::transpile(
+    CppWriter& writer, TypeChecker& checker
+) const noexcept {
     writer << this;
-    expr_->transpile(writer);
+    expr_->transpile(writer, checker);
     writer << ";";
 }
 
-inline void ASTDeclaration::transpile(CppWriter& writer) const noexcept {
+inline void ASTDeclaration::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this;
-    if (is_mutable_) {
-        writer << "auto& ";
-    } else {
-        writer << "const auto& ";
+    if (is_constant_) {
+        writer << "constexpr ";
+    } else if (!is_mutable_) {
+        writer << "const ";
     }
+    writer << get_declared_type(checker, expr_->get_expr_info(checker).type) << " ";
     writer << identifier_ << " = ";
-    expr_->transpile(writer);
+    expr_->transpile(writer, checker);
     writer << ";";
 }
 
-inline void ASTTypeAlias::transpile(CppWriter& writer) const noexcept {
+inline void ASTTypeAlias::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this;
     writer << "using " << identifier_ << " = ";
-    type_->transpile(writer);
+    type_->transpile(writer, checker);
     writer << ";";
 }
 
-inline void ASTIfStatement::transpile(CppWriter& writer) const noexcept {
+inline void ASTIfStatement::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this;
     writer << "if (";
-    condition_->transpile(writer);
+    condition_->transpile(writer, checker);
     writer << ") ";
-    if_block_->transpile(writer);
+    if_block_->transpile(writer, checker);
     if (else_block_) {
         writer << "else ";
-        else_block_->transpile(writer);
+        else_block_->transpile(writer, checker);
     }
 }
 
-inline void ASTForStatement::transpile(CppWriter& writer) const noexcept {
+inline void ASTForStatement::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this;
     writer << "for (";
-    initializer_->transpile(writer);
-    condition_->transpile(writer);
+    initializer_->transpile(writer, checker);
+    condition_->transpile(writer, checker);
     writer << "; ";
-    increment_->transpile(writer);
+    increment_->transpile(writer, checker);
     writer << ") ";
-    body_->transpile(writer);
+    body_->transpile(writer, checker);
 }
 
-inline void ASTBreakStatement::transpile(CppWriter& writer) const noexcept {
+inline void ASTBreakStatement::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this << "break;";
 }
 
-inline void ASTContinueStatement::transpile(CppWriter& writer) const noexcept {
+inline void ASTContinueStatement::transpile(
+    CppWriter& writer, TypeChecker& checker
+) const noexcept {
     writer << this << "continue;";
 }
 
-inline void ASTReturnStatement::transpile(CppWriter& writer) const noexcept {
+inline void ASTReturnStatement::transpile(CppWriter& writer, TypeChecker& checker) const noexcept {
     writer << this << "return";
     if (expr_) {
         writer << " ";
-        expr_->transpile(writer);
+        expr_->transpile(writer, checker);
     }
     writer << ";";
 }
 
-inline void ASTFunctionParameter::transpile(CppWriter& writer) const noexcept {
+inline void ASTFunctionParameter::transpile(
+    CppWriter& writer, TypeChecker& checker
+) const noexcept {
     writer << this;
-    type_->transpile(writer);
+    type_->transpile(writer, checker);
     writer << " " << identifier_;
 }
 
-inline void ASTFunctionDefinition::transpile(CppWriter& writer) const noexcept {
+inline void ASTFunctionDefinition::transpile(
+    CppWriter& writer, TypeChecker& checker
+) const noexcept {
     writer << this;
-    return_type_->transpile(writer);
+    return_type_->transpile(writer, checker);
     writer << " " << identifier_ << "(";
     const char* sep = "";
     for (const auto& param : parameters_) {
         writer << sep;
-        param->transpile(writer);
+        param->transpile(writer, checker);
         sep = ", ";
     }
     writer << ") ";
-    body_->transpile(writer);
+    checker.enter(body_.get());
+    body_->transpile(writer, checker);
+    checker.exit();
 }

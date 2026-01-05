@@ -17,18 +17,16 @@ int main(int argc, char* argv[]) {
     ASTBuilder builder(*sources.load(input_path), importer);
     std::unique_ptr<ASTRoot> root = builder();
 
-    Scope ctx;
+    Scope scope;
     TypeRegistry types;
     OpDispatcher ops(types);
-    root->collect_symbols(ctx, ops);
-    TypeChecker checker(ctx, ops, types);
+    root->collect_symbols(scope, ops);
+    TypeChecker checker(scope, ops, types);
     root->check_types(checker);
 
     bool has_error = Diagnostic::print(sources);
     if (!has_error) {
-        std::fstream output_file = std::fstream("out.cpp", std::ios::out);
-        CppWriter writer(output_file, sources[0]);
-        root->transpile(writer);
+        transpile(root.get(), sources, checker);
     }
 
     return has_error ? EXIT_FAILURE : EXIT_SUCCESS;

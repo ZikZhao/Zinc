@@ -403,7 +403,7 @@ class OpDispatcher final : private IntrinsicOpTable {
 private:
     using CustomTableKey = std::tuple<OperatorCode, Type*, Type*>;
     using CustomTableValue = std::pair<Type*, OperatorFn>;
-    FlatMap<CustomTableKey, CustomTableValue> custom_table_;
+    GlobalMemory::Map<CustomTableKey, CustomTableValue> custom_table_;
 
 public:
     OpDispatcher(TypeRegistry& types) : IntrinsicOpTable(types), custom_table_() {}

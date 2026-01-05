@@ -220,6 +220,9 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
+    static GlobalMemory::Set<FunctionType*> list_all(Type* type);
+
+public:
     const ComparableSpan<Type*> parameters_;
     Type* const return_type_;
 
@@ -282,10 +285,10 @@ public:
     static constexpr Kind kind = Kind::Record;
 
 private:
-    FlatMap<std::string_view, Type*> fields_;
+    GlobalMemory::Map<std::string_view, Type*> fields_;
 
 public:
-    RecordType(FlatMap<std::string_view, Type*> fields) noexcept
+    RecordType(GlobalMemory::Map<std::string_view, Type*> fields) noexcept
         : Type(kind), fields_(std::move(fields)) {}
 
     GlobalMemory::String repr() const final {
@@ -319,14 +322,14 @@ private:
     const std::string_view name_;
     const ComparableSpan<InterfaceType*> interfaces_;
     ClassType* const extends_;
-    const FlatMap<std::string_view, Type*> properties_;
+    const GlobalMemory::Map<std::string_view, Type*> properties_;
 
 public:
     ClassType(
         std::string_view name,
         ComparableSpan<InterfaceType*> interfaces,
         ClassType* extends,
-        FlatMap<std::string_view, Type*> properties
+        GlobalMemory::Map<std::string_view, Type*> properties
     ) noexcept
         : Type(kind),
           name_(name),
@@ -386,7 +389,7 @@ private:
         return buffer;
     }
 
-private:
+public:
     const ComparableSpan<Type*> types_;
 
 public:
@@ -465,7 +468,7 @@ private:
         return buffer;
     }
 
-private:
+public:
     const ComparableSpan<Type*> types_;
 
 public:
@@ -557,7 +560,7 @@ protected:
 
 public:
     virtual Type* get_type() const = 0;
-    virtual Value* resolve_to(Type* target) { return this; };
+    virtual Value* resolve_to(Type* target) const = 0;
 };
 
 class UnknownValue final : public Value {
@@ -569,7 +572,8 @@ public:
 private:
     UnknownValue() noexcept : Value(kind) {}
     GlobalMemory::String repr() const final { return "unknown"; }
-    Type* get_type() const final { return &UnknownType::instance; }
+    UnknownType* get_type() const final { return &UnknownType::instance; }
+    UnknownValue* resolve_to(Type* target) const final { return new UnknownValue(); }
 };
 
 class NullValue final : public Value {
@@ -579,9 +583,15 @@ public:
 
 public:
     NullValue() noexcept : Value(kind) {}
-
     GlobalMemory::String repr() const final { return "null"; }
-    Type* get_type() const final { return &StaticType::instance; }
+    NullType* get_type() const final { return &StaticType::instance; }
+    NullValue* resolve_to(Type* target) const final {
+        assert(target);
+        if (target->kind_ != Kind::Null) {
+            throw UnlocatedProblem::make<TypeMismatchError>("null", target->repr());
+        }
+        return new NullValue();
+    }
 };
 
 class IntegerValue final : public Value {
@@ -609,12 +619,18 @@ public:
     explicit IntegerValue(std::string_view value) noexcept
         : Value(kind), type_(&IntegerType::untyped_instance), raw_(value) {}
     GlobalMemory::String repr() const final { return GlobalMemory::format("{}", ivalue_); }
-    Type* get_type() const final { return type_; }
-    IntegerValue* resolve_to(Type* target) final {
-        assert(target && target->kind_ == Kind::Integer && type_ == &IntegerType::untyped_instance);
+    IntegerType* get_type() const final { return type_; }
+    IntegerValue* resolve_to(Type* target) const final {
+        assert(target);
+        if (target->kind_ != Kind::Integer) {
+            throw UnlocatedProblem::make<TypeMismatchError>("integer", target->repr());
+        }
         IntegerType* int_target = static_cast<IntegerType*>(target);
         if (int_target == &IntegerType::untyped_instance) {
             // most suitable type inference
+            if (type_) {
+                return new IntegerValue(*this);
+            }
             if (raw_[0] == '-') {
                 std::int64_t value;
                 auto [ptr, ec] = std::from_chars(raw_.data(), raw_.data() + raw_.size(), value);
@@ -642,6 +658,11 @@ public:
             }
         } else {
             // convert to the specified target type
+            if (type_ == int_target) {
+                return new IntegerValue(*this);
+            } else if (type_) {
+                throw UnlocatedProblem::make<TypeMismatchError>(type_->repr(), target->repr());
+            }
             if (int_target->is_signed_) {
                 int64_t value;
                 auto [ptr, ec] = std::from_chars(raw_.data(), raw_.data() + raw_.size(), value);
@@ -700,14 +721,25 @@ public:
         assert(type != nullptr);
     }
     GlobalMemory::String repr() const final { return GlobalMemory::format("{}", value_); }
-    Type* get_type() const final { return type_; }
-    FloatValue* resolve_to(Type* target) final {
-        assert(target && target->kind_ == Kind::Float && type_ == &FloatType::untyped_instance);
+    FloatType* get_type() const final { return type_; }
+    FloatValue* resolve_to(Type* target) const final {
+        assert(target);
+        if (target->kind_ != Kind::Float) {
+            throw UnlocatedProblem::make<TypeMismatchError>("float", target->repr());
+        }
         FloatType* float_target = static_cast<FloatType*>(target);
         if (float_target == &FloatType::untyped_instance) {
             // default to double
+            if (type_) {
+                return new FloatValue(*this);
+            }
             return new FloatValue(&FloatType::f64_instance, value_);
         } else {
+            if (type_ == float_target) {
+                return new FloatValue(*this);
+            } else if (type_) {
+                throw UnlocatedProblem::make<TypeMismatchError>(type_->repr(), target->repr());
+            }
             return new FloatValue(float_target, value_);
         }
     }
@@ -738,7 +770,14 @@ public:
 public:
     StringValue(GlobalMemory::String value) noexcept : Value(kind), value_(std::move(value)) {}
     GlobalMemory::String repr() const final { return "\"" + this->value_ + "\""; }
-    Type* get_type() const final { return &StaticType::instance; }
+    StringType* get_type() const final { return &StaticType::instance; }
+    StringValue* resolve_to(Type* target) const final {
+        assert(target);
+        if (target->kind_ != Kind::String) {
+            throw UnlocatedProblem::make<TypeMismatchError>("string", target->repr());
+        }
+        return new StringValue(*this);
+    }
     StringValue operator+(const StringValue& other) const;
     StringValue operator*(const IntegerValue& other) const;
     BooleanValue operator==(const StringValue& other) const;
@@ -756,7 +795,14 @@ public:
 public:
     BooleanValue(bool value) noexcept : Value(kind), value_(value) {}
     GlobalMemory::String repr() const final { return this->value_ ? "true" : "false"; }
-    Type* get_type() const final { return &StaticType::instance; }
+    BooleanType* get_type() const final { return &StaticType::instance; }
+    BooleanValue* resolve_to(Type* target) const final {
+        assert(target);
+        if (target->kind_ != Kind::Boolean) {
+            throw UnlocatedProblem::make<TypeMismatchError>("boolean", target->repr());
+        }
+        return new BooleanValue(*this);
+    }
     BooleanValue operator==(const BooleanValue& other) const;
     BooleanValue operator!=(const BooleanValue& other) const;
     BooleanValue operator&&(const BooleanValue& other) const;
@@ -770,23 +816,26 @@ public:
     using StaticType = FunctionType;
 
 public:
-    Type* type_;
+    FunctionType* type_;
     const void* source_;
     std::function<Value*(ComparableSpan<Value*>)> invoke_;
 
 public:
     FunctionValue(const void* source, decltype(invoke_) invoke) noexcept
         : Value(kind), type_(nullptr), source_(source), invoke_(std::move(invoke)) {}
-    FunctionValue(Type* type, const void* source, decltype(invoke_) invoke) noexcept
+    FunctionValue(FunctionType* type, const void* source, decltype(invoke_) invoke) noexcept
         : Value(kind), type_(type), source_(source), invoke_(std::move(invoke)) {}
 
     GlobalMemory::String repr() const final {
         return GlobalMemory::format("<function at {:p}>", static_cast<const void*>(this));
     }
-    Type* get_type() const final { return type_; }
-
-    FunctionValue* resolve_to(Type* target) final {
-        return new FunctionValue(target, source_, invoke_);
+    FunctionType* get_type() const final { return type_; }
+    FunctionValue* resolve_to(Type* target) const final {
+        /// Type of function value is managed by OverloadedFunctionValue
+        /// @code let func: (a) -> b = ... @endcode
+        /// Here, right-hand side is of type OverloadedFunctionValue, which holds overloads so the
+        /// resolve_to of FunctionValue will never be called.
+        std::unreachable();
     }
 };
 
@@ -835,20 +884,52 @@ public:
     static constexpr Kind kind = Kind::Intersection;
     using StaticType = IntersectionType;
 
-public:
-    GlobalMemory::Vector<const FunctionValue*> overloads_;
+private:
+    Type* type_;
+    GlobalMemory::Vector<FunctionValue*> overloads_;
+
+private:
+    OverloadedFunctionValue(Type* type, GlobalMemory::Vector<FunctionValue*> overloads) noexcept
+        : Value(kind), type_(type), overloads_(std::move(overloads)) {}
 
 public:
-    OverloadedFunctionValue(const FunctionValue* first) noexcept : Value(kind), overloads_{first} {}
+    OverloadedFunctionValue(FunctionValue* first) noexcept
+        : Value(kind), type_(nullptr), overloads_{first} {}
+    OverloadedFunctionValue(Type* type, const OverloadedFunctionValue& other) noexcept
+        : Value(kind), type_(type), overloads_(other.overloads_) {}
     GlobalMemory::String repr() const final {
         // TODO
         return {};
     }
-    Type* get_type() const final {
-        // TODO
-        return nullptr;
+    Type* get_type() const final { return type_; }
+    OverloadedFunctionValue* resolve_to(Type* target) const final {
+        assert(target);
+        if (target->kind_ != Kind::Intersection) {
+            throw UnlocatedProblem::make<TypeMismatchError>("function overloads", target->repr());
+        }
+        GlobalMemory::Set<FunctionType*> target_types =
+            static_cast<IntersectionType*>(target)->types_ |
+            std::views::transform([](Type* func_type) {
+                return static_cast<FunctionType*>(func_type);
+            }) |
+            GlobalMemory::collect<GlobalMemory::Set<FunctionType*>>();
+        GlobalMemory::Set<FunctionType*> overload_types =
+            overloads_ | std::views::transform([](FunctionValue* func) { return func->type_; }) |
+            GlobalMemory::collect<GlobalMemory::Set<FunctionType*>>();
+        if (!target_types.is_subset_of(overload_types)) {
+            throw UnlocatedProblem::make<TypeMismatchError>("function overloads", target->repr());
+        }
+        return new OverloadedFunctionValue(target, overloads_);
     }
-    void add_overload(const FunctionValue* func) noexcept { overloads_.push_back(func); }
+    void add_overload(FunctionValue* func) noexcept { overloads_.push_back(func); }
+    FunctionValue*& get_overload(const void* source) noexcept {
+        for (FunctionValue*& overload : overloads_) {
+            if (overload->source_ == source) {
+                return overload;
+            }
+        }
+        std::unreachable();
+    }
 };
 
 class TypeRegistry {
@@ -862,15 +943,15 @@ private:
 
 private:
     std::tuple<
-        FlatSet<FunctionType*, TypeComparator>,
-        FlatSet<RecordType*, TypeComparator>,
-        FlatSet<IntersectionType*, TypeComparator>,
-        FlatSet<UnionType*, TypeComparator>>
+        GlobalMemory::Set<FunctionType*, TypeComparator>,
+        GlobalMemory::Set<RecordType*, TypeComparator>,
+        GlobalMemory::Set<IntersectionType*, TypeComparator>,
+        GlobalMemory::Set<UnionType*, TypeComparator>>
         cache_;
 
 public:
     template <TypeClass T>
-    Type* get(auto&&... args) {
+    T* get(auto&&... args) {
         if constexpr (TypeInTupleV<T, std::tuple<AnyType, NullType, StringType, BooleanType>>) {
             return &T::instance;
         } else if constexpr (std::is_same_v<T, IntegerType>) {
@@ -929,11 +1010,12 @@ public:
     Object* get_unknown() { return &UnknownType::instance; }
 
 private:
-    template <typename T>
-    Type* get_cached(auto&&... args) {
+    template <TypeClass T>
+    T* get_cached(auto&&... args) {
         T new_type(std::forward<decltype(args)>(args)...);
-        auto [it, _] =
-            std::get<FlatSet<T*, TypeComparator>>(cache_).emplace(new T(std::move(new_type)));
+        auto [it, _] = std::get<GlobalMemory::Set<T*, TypeComparator>>(cache_).emplace(
+            new T(std::move(new_type))
+        );
         return *it;
     }
 };
@@ -966,6 +1048,19 @@ inline IntegerType IntegerType::u64_instance = IntegerType(false, 64);
 inline FloatType FloatType::untyped_instance = FloatType(0);
 inline FloatType FloatType::f32_instance = FloatType(32);
 inline FloatType FloatType::f64_instance = FloatType(64);
+
+inline GlobalMemory::Set<FunctionType*> FunctionType::list_all(Type* type) {
+    if (type->kind_ == Kind::Intersection) {
+        const IntersectionType& intersection = static_cast<const IntersectionType&>(*type);
+        return intersection.types_ | std::views::transform([](Type* func_type) {
+                   return static_cast<FunctionType*>(func_type);
+               }) |
+               GlobalMemory::collect<GlobalMemory::Set<FunctionType*>>();
+    } else {
+        assert(type->kind_ == Kind::Function);
+        return GlobalMemory::Set<FunctionType*>{static_cast<FunctionType*>(type)};
+    }
+}
 
 // IntegerValue operators
 

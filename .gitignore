@@ -21,3 +21,6 @@ build-release/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Program outputs
+out/

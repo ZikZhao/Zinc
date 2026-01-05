@@ -10,6 +10,7 @@
 #include <functional>
 #include <future>
 #include <generator>
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -60,6 +61,8 @@ template <typename T>
 class ComparableSpan : public std::span<T> {
 public:
     using std::span<T>::span;
+    using std::span<T>::begin;
+    using std::span<T>::end;
 
     std::strong_ordering operator<=>(const ComparableSpan<T>& other) const noexcept {
         return std::lexicographical_compare_three_way(
@@ -127,8 +130,7 @@ public:
     class Allocator : public std::pmr::polymorphic_allocator<T> {
     public:
         using std::pmr::polymorphic_allocator<T>::polymorphic_allocator;
-        Allocator(std::pmr::memory_resource* r = GlobalMemory::pool())
-            : std::pmr::polymorphic_allocator<T>(r) {}
+        Allocator(std::pmr::memory_resource* r = pool()) : std::pmr::polymorphic_allocator<T>(r) {}
         Allocator(const std::pmr::polymorphic_allocator<T>& other) noexcept
             : std::pmr::polymorphic_allocator<T>(other) {}
 
@@ -143,8 +145,13 @@ public:
 
     using String = std::basic_string<char, std::char_traits<char>, Allocator<char>>;
 
+    /// Flat map implementation in SoA style
     template <typename K, typename V, typename C = std::less<K>>
-    using Map = std::map<K, V, C, Allocator<std::pair<const K, V>>>;
+    class Map;
+
+    /// Flat set implementation
+    template <typename K, typename C = std::less<K>>
+    class Set;
 
     static void* alloc_raw(std::size_t size, std::size_t align = alignof(std::max_align_t)) {
         return monotonic()->allocate(size, align);
@@ -176,7 +183,13 @@ public:
 
 private:
     template <typename T>
-    class RangeCollector;
+    class RangeCollector {
+        template <std::ranges::input_range R>
+        friend T operator|(R&& range, RangeCollector) {
+            T result(std::from_range, std::forward<R>(range));
+            return result;
+        }
+    };
 
     template <typename E>
     class RangeCollector<ComparableSpan<E>> {
@@ -219,26 +232,8 @@ public:
     GlobalMemory() = delete;
 };
 
-template <>
-class GlobalMemory::RangeCollector<GlobalMemory::String> {
-    template <std::ranges::input_range R>
-    friend GlobalMemory::String operator|(R&& range, RangeCollector) {
-        String result;
-        std::ranges::copy(std::forward<R>(range), std::back_inserter(result));
-        return result;
-    }
-};
-
-class MemoryManaged {
-public:
-    static void* operator new(std ::size_t size) { return GlobalMemory::alloc_raw(size); }
-    static void operator delete(void* ptr, std ::size_t size) {
-        GlobalMemory::dealloc_raw(ptr, size);
-    }
-};
-
-template <typename Key, typename Value, typename Comp = std::less<Key>>
-class FlatMap {
+template <typename Key, typename Value, typename Comp>
+class GlobalMemory::Map {
 private:
     template <bool IsConst>
     class IteratorImpl {
@@ -297,26 +292,26 @@ public:
     using const_iterator = IteratorImpl<true>;
 
 private:
-    GlobalMemory::Vector<Key> keys_;
-    GlobalMemory::Vector<Value> values_;
+    Vector<Key> keys_;
+    Vector<Value> values_;
 
 public:
-    FlatMap() noexcept = default;
-    FlatMap(FlatMap&& other) noexcept = default;
-    FlatMap& operator=(FlatMap&& other) noexcept = default;
-    FlatMap(const FlatMap& other) noexcept
+    Map() noexcept = default;
+    Map(Map&& other) noexcept = default;
+    Map& operator=(Map&& other) noexcept = default;
+    Map(const Map& other) noexcept
         requires std::is_nothrow_copy_constructible_v<Key> &&
                      std::is_nothrow_copy_constructible_v<Value>
     = default;
-    FlatMap& operator=(const FlatMap& other) noexcept
+    Map& operator=(const Map& other) noexcept
         requires std::is_nothrow_copy_constructible_v<Key> &&
                      std::is_nothrow_copy_constructible_v<Value>
     = default;
 
     template <std::ranges::input_range R>
-    FlatMap(std::from_range_t, R&& range) {
-        GlobalMemory::Vector<Key> unsorted_keys;
-        GlobalMemory::Vector<Value> unsorted_values;
+    Map(std::from_range_t, R&& range) {
+        Vector<Key> unsorted_keys;
+        Vector<Value> unsorted_values;
         if constexpr (std::ranges::sized_range<R>) {
             unsorted_keys.reserve(std::ranges::size(range));
             unsorted_values.reserve(std::ranges::size(range));
@@ -325,7 +320,7 @@ public:
             unsorted_keys.push_back(std::forward<decltype(pair.first)>(pair.first));
             unsorted_values.push_back(std::forward<decltype(pair.second)>(pair.second));
         }
-        GlobalMemory::Vector<std::size_t> indices(unsorted_keys.size());
+        Vector<std::size_t> indices(unsorted_keys.size());
         std::ranges::iota(indices.begin(), indices.end(), 0);
         std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
             return Comp{}(unsorted_keys[a], unsorted_keys[b]);
@@ -366,7 +361,7 @@ public:
             values_.erase(values_.begin() + index);
             return value;
         } else {
-            throw std::out_of_range("Key not found in FlatMap");
+            throw std::out_of_range("Key not found in GlobalMemory::Map");
         }
     }
     iterator find(const Key& key) {
@@ -392,7 +387,7 @@ public:
     Value& at(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || *it != key) {
-            throw std::out_of_range("Key not found in FlatMap");
+            throw std::out_of_range("Key not found in GlobalMemory::Map");
         }
         std::size_t index = std::distance(keys_.begin(), it);
         return values_[index];
@@ -400,7 +395,7 @@ public:
     const Value& at(const Key& key) const {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || *it != key) {
-            throw std::out_of_range("Key not found in FlatMap");
+            throw std::out_of_range("Key not found in GlobalMemory::Map");
         }
         std::size_t index = std::distance(keys_.begin(), it);
         return values_[index];
@@ -425,37 +420,50 @@ public:
     const_iterator end() const noexcept {
         return const_iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
     }
-    std::strong_ordering operator<=>(const FlatMap<Key, Value, Comp>& other) const noexcept {
+    std::strong_ordering operator<=>(const Map<Key, Value, Comp>& other) const noexcept {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
     }
-    bool operator==(const FlatMap<Key, Value, Comp>& other) const noexcept {
+    bool operator==(const Map<Key, Value, Comp>& other) const noexcept {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
 };
 
-template <typename Key, typename Comp = std::less<Key>>
-class FlatSet {
+template <typename Key, typename Comp>
+class GlobalMemory::Set {
 public:
     using key_type = Key;
     using value_type = Key;
-    using iterator = typename GlobalMemory::Vector<Key>::iterator;
-    using const_iterator = typename GlobalMemory::Vector<Key>::const_iterator;
+    using iterator = typename Vector<Key>::iterator;
+    using const_iterator = typename Vector<Key>::const_iterator;
 
 private:
-    GlobalMemory::Vector<Key> keys_;
+    Vector<Key> keys_;
 
 public:
-    FlatSet() noexcept = default;
-    FlatSet(FlatSet&& other) noexcept = default;
-    FlatSet& operator=(FlatSet&& other) noexcept = default;
-    FlatSet(const FlatSet& other) noexcept
+    Set() noexcept = default;
+    Set(Set&& other) noexcept = default;
+    Set& operator=(Set&& other) noexcept = default;
+    Set(const Set& other) noexcept
         requires std::is_nothrow_copy_constructible_v<Key>
     = default;
-    FlatSet& operator=(const FlatSet& other) noexcept
+    Set& operator=(const Set& other) noexcept
         requires std::is_nothrow_copy_constructible_v<Key>
     = default;
+    Set(std::from_range_t, auto&& range) {
+        Vector<Key> unsorted_keys;
+        if constexpr (std::ranges::sized_range<decltype(range)>) {
+            unsorted_keys.reserve(std::ranges::size(range));
+        }
+        for (auto&& key : range) {
+            unsorted_keys.push_back(std::forward<decltype(key)>(key));
+        }
+        std::sort(unsorted_keys.begin(), unsorted_keys.end(), Comp{});
+        auto last = std::unique(unsorted_keys.begin(), unsorted_keys.end());
+        keys_.assign(unsorted_keys.begin(), last);
+    }
+    Set(std::initializer_list<Key> init) : Set(std::from_range, init) {}
 
     std::pair<iterator, bool> emplace(Key&& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
@@ -465,17 +473,49 @@ public:
         return {keys_.emplace(it, std::move(key)), true};
     }
     std::size_t size() const noexcept { return keys_.size(); }
-    typename GlobalMemory::Vector<Key>::const_iterator begin() const noexcept {
-        return keys_.begin();
-    }
-    typename GlobalMemory::Vector<Key>::const_iterator end() const noexcept { return keys_.end(); }
-    std::strong_ordering operator<=>(const FlatSet<Key, Comp>& other) const noexcept {
+    typename Vector<Key>::const_iterator begin() const noexcept { return keys_.begin(); }
+    typename Vector<Key>::const_iterator end() const noexcept { return keys_.end(); }
+    std::strong_ordering operator<=>(const Set<Key, Comp>& other) const noexcept {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
     }
-    bool operator==(const FlatSet<Key, Comp>& other) const noexcept {
+    bool operator==(const Set<Key, Comp>& other) const noexcept {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
+    }
+    bool contains(const Key& key) const {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
+        return it != keys_.end() && *it == key;
+    }
+    bool is_superset_of(const Set<Key, Comp>& other) const noexcept {
+        return std::includes(this->begin(), this->end(), other.begin(), other.end(), Comp{});
+    }
+    bool is_proper_superset_of(const Set<Key, Comp>& other) const noexcept {
+        return this->size() > other.size() && is_superset_of(other);
+    }
+    bool is_subset_of(const Set<Key, Comp>& other) const noexcept {
+        return other.is_superset_of(*this);
+    }
+    bool is_proper_subset_of(const Set<Key, Comp>& other) const noexcept {
+        return this->size() < other.size() && is_subset_of(other);
+    }
+};
+
+template <>
+class GlobalMemory::RangeCollector<GlobalMemory::String> {
+    template <std::ranges::input_range R>
+    friend String operator|(R&& range, RangeCollector) {
+        String result;
+        std::ranges::copy(std::forward<R>(range), std::back_inserter(result));
+        return result;
+    }
+};
+
+class MemoryManaged {
+public:
+    static void* operator new(std ::size_t size) { return GlobalMemory::alloc_raw(size); }
+    static void operator delete(void* ptr, std ::size_t size) {
+        GlobalMemory::dealloc_raw(ptr, size);
     }
 };
 

@@ -1,3 +1,4 @@
+#include "pch.hpp"
 #include <ostream>
 
 #include "gtest/gtest.h"
@@ -29,10 +30,10 @@ public:
 };
 
 using MapTestTypes = ::testing::Types<
-    FlatMap<int, int>,
-    FlatMap<std::string, std::string>,
-    FlatMap<int, ComparableUniquePtr<int>>,
-    FlatMap<std::string, int>>;
+    GlobalMemory::Map<int, int>,
+    GlobalMemory::Map<std::string, std::string>,
+    GlobalMemory::Map<int, ComparableUniquePtr<int>>,
+    GlobalMemory::Map<std::string, int>>;
 
 TYPED_TEST_SUITE(FlatMapTest, MapTestTypes);
 
@@ -54,8 +55,10 @@ TYPED_TEST(FlatMapTest, EdgeCases) { this->test_edge_cases(); }
 
 TYPED_TEST(FlatMapTest, FuzzyTest) { this->fuzz_test(10000); }
 
-using SetTestTypes =
-    ::testing::Types<FlatSet<int>, FlatSet<std::string>, FlatSet<ComparableUniquePtr<int>>>;
+using SetTestTypes = ::testing::Types<
+    GlobalMemory::Set<int>,
+    GlobalMemory::Set<std::string>,
+    GlobalMemory::Set<ComparableUniquePtr<int>>>;
 
 TYPED_TEST_SUITE(FlatSetTest, SetTestTypes);
 

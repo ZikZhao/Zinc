@@ -18,7 +18,7 @@ public:
     };
 
 public:
-    FlatMap<GlobalMemory::String, std::uint32_t> file_id_map_;
+    GlobalMemory::Map<GlobalMemory::String, std::uint32_t> file_id_map_;
     std::vector<File> files;
 
 public:
@@ -72,7 +72,7 @@ public:
 private:
     SourceManager& sources_;
     std::mutex mutex_;
-    FlatMap<std::string_view, std::shared_future<ResultType>> map_;
+    GlobalMemory::Map<std::string_view, std::shared_future<ResultType>> map_;
 
 public:
     ImportManager(SourceManager& sources) noexcept : sources_(sources) {}
