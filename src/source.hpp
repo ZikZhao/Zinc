@@ -1,6 +1,5 @@
 #pragma once
 #include "pch.hpp"
-#include <future>
 
 struct Location {
     std::uint32_t id = 0;

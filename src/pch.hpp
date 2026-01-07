@@ -1,5 +1,6 @@
 #pragma once
 // IWYU pragma: begin_exports
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -29,6 +30,7 @@
 #include <vector>
 
 #include "antlr4-runtime.h"
+
 // IWYU pragma: end_exports
 
 using namespace std::literals::string_view_literals;
@@ -517,6 +519,12 @@ public:
     static void operator delete(void* ptr, std ::size_t size) {
         GlobalMemory::dealloc_raw(ptr, size);
     }
+
+protected:
+    /// Protected default constructor to prevent direct instantiation
+    MemoryManaged() = default;
+    /// Protected destructor to prevent deletion through base pointer
+    ~MemoryManaged() = default;
 };
 
 namespace ColourEscape {

@@ -1,16 +1,12 @@
 #pragma once
 #include "pch.hpp"
-#include <algorithm>
-#include <string_view>
-#include <type_traits>
-#include <utility>
 
 #include "diagnosis.hpp"
 #include "object.hpp"
 #include "operations.hpp"
 #include "source.hpp"
 
-class CppWriter;
+class Transpiler;
 
 class ASTNode;
 class ASTExpression;
@@ -152,7 +148,7 @@ public:
     virtual ~ASTNode() noexcept = default;
     virtual void collect_symbols(Scope& scope, OpDispatcher& ops) {}
     virtual void check_types(TypeChecker& checker) {}
-    virtual void transpile(CppWriter& writer, TypeChecker& checker) const = 0;
+    virtual void transpile(Transpiler& transpiler, TypeChecker& checker) const = 0;
 };
 
 class ASTRoot final : public ASTNode {
@@ -170,7 +166,7 @@ public:
             child->check_types(checker);
         }
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTBlock : public ASTNode {
@@ -188,7 +184,7 @@ public:
             stmt->check_types(checker);
         }
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept override;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept override;
 };
 
 class ASTLocalBlock final : public ASTBlock {
@@ -207,7 +203,7 @@ public:
         }
         checker.exit();
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTExpression : public ASTNode {
@@ -227,7 +223,7 @@ public:
     Object* eval(TypeChecker& checker) const final { return value_; }
     ExprInfo get_expr_info(TypeChecker& checker) const final { return {value_->get_type(), false}; }
     void resolve_type(Type* target_type) { value_ = value_->resolve_to(target_type); }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTIdentifier final : public ASTExpression {
@@ -237,7 +233,7 @@ public:
         : ASTExpression(loc), str_(name) {}
     Object* eval(TypeChecker& checker) const final { return checker.resolve(str_); }
     ExprInfo get_expr_info(TypeChecker& checker) const final { return checker.type_of(str_); }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 template <typename Op>
@@ -255,7 +251,7 @@ public:
         ExprInfo expr_info = expr_->get_expr_info(checker);
         return {checker.ops_.get_result_type(Op::opcode, expr_info.type), false};
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 template <typename Op>
@@ -293,7 +289,7 @@ public:
             checker.ops_.get_result_type(Op::opcode, left_info.type, right_info.type), false, true
         };
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 template <typename InnerOp>
@@ -331,7 +327,7 @@ public:
         }
         return {left_info.type, true, false};
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTFunctionCall final : public ASTExpression {
@@ -353,7 +349,7 @@ public:
         // TODO
         return {};
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 using ASTAddOp = ASTBinaryOp<OperatorFunctors::Add>;
@@ -406,7 +402,7 @@ public:
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         throw std::logic_error("Type expressions do not have result types");
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTFunctionType final : public ASTTypeExpression {
@@ -455,7 +451,7 @@ public:
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
         return {checker.types_.get_unknown()->as_type(), false, true};
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTFieldDeclaration final : public ASTNode {
@@ -467,7 +463,7 @@ public:
     ) noexcept
         : ASTNode(loc), identifier_(std::move(identifier)), type_(std::move(type)) {}
     ~ASTFieldDeclaration() noexcept final = default;
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTRecordType final : public ASTTypeExpression {
@@ -492,7 +488,7 @@ public:
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
         return {checker.types_.get_unknown()->as_type(), false, true};
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTExpressionStatement final : public ASTNode {
@@ -502,7 +498,7 @@ public:
         : ASTNode(loc), expr_(std::move(expr)) {}
     ~ASTExpressionStatement() noexcept final = default;
     void check_types(TypeChecker& checker) final { expr_->check_types(checker); }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTDeclaration final : public ASTNode {
@@ -564,7 +560,7 @@ public:
             return inferred_type;
         }
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTTypeAlias final : public ASTNode {
@@ -579,7 +575,7 @@ public:
     void collect_symbols(Scope& scope, OpDispatcher& ops) final {
         scope.add_type(identifier_, type_.get());
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTIfStatement final : public ASTNode {
@@ -622,7 +618,7 @@ public:
             checker.exit();
         }
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTForStatement final : public ASTNode {
@@ -684,21 +680,21 @@ public:
         body_->check_types(checker);
         checker.exit();
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTContinueStatement final : public ASTNode {
 public:
     ASTContinueStatement(const Location& loc) noexcept : ASTNode(loc) {}
     ~ASTContinueStatement() noexcept final = default;
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTBreakStatement final : public ASTNode {
 public:
     ASTBreakStatement(const Location& loc) noexcept : ASTNode(loc) {}
     ~ASTBreakStatement() noexcept final = default;
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTReturnStatement final : public ASTNode {
@@ -707,7 +703,7 @@ public:
     ASTReturnStatement(const Location& loc, std::unique_ptr<ASTExpression> expr = nullptr) noexcept
         : ASTNode(loc), expr_(std::move(expr)) {}
     ~ASTReturnStatement() noexcept final = default;
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTFunctionParameter final : public ASTNode {
@@ -719,7 +715,7 @@ public:
     ) noexcept
         : ASTNode(loc), identifier_(identifier), type_(std::move(type)) {}
     ~ASTFunctionParameter() noexcept final = default;
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTFunctionDefinition final : public ASTNode {
@@ -781,7 +777,7 @@ public:
         body_->check_types(checker);
         checker.exit();
     }
-    void transpile(CppWriter& writer, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 // ===================== Inline implementations of TypeChecker =====================
