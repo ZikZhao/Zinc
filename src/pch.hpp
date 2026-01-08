@@ -228,12 +228,26 @@ public:
     }
 
     template <typename... Args>
-    static String format(std::format_string<Args...> fmt, Args&&... args) {
-        std::size_t size = std::formatted_size(fmt, std::forward<Args>(args)...);
-        String result;
-        result.reserve(size);
-        std::format_to(std::back_inserter(result), fmt, std::forward<Args>(args)...);
-        return result;
+    static std::string_view format(std::format_string<Args...> fmt, Args&&... args) {
+        std::size_t size = std::formatted_size(fmt, std::forward<Args>(args)...) + 1;
+        ComparableSpan<char> result = alloc_array<char>(size);
+        std::format_to(result.begin(), fmt, std::forward<Args>(args)...);
+        result[size - 1] = '\0';
+        return static_cast<std::string_view>(result);
+    }
+
+    static std::string_view hex_string(std::string_view input) {
+        constexpr char hex_chars[] = "0123456789ABCDEF";
+        ComparableSpan<char> result = alloc_array<char>(input.size() * 2 + 3);
+        for (std::size_t i = 0; i < input.size(); ++i) {
+            unsigned char byte = static_cast<unsigned char>(input[i]);
+            result[i * 2 + 1] = hex_chars[(byte >> 4) & 0x0F];
+            result[i * 2 + 2] = hex_chars[byte & 0x0F];
+        }
+        result[0] = '\"';
+        result[input.size() * 2 + 1] = '\"';
+        result[input.size() * 2 + 2] = '\0';
+        return static_cast<std::string_view>(result);
     }
 
 public:

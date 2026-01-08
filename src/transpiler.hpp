@@ -1,6 +1,8 @@
 #include "pch.hpp"
+#include <string_view>
 
 #include "ast.hpp"
+#include "diagnosis.hpp"
 #include "object.hpp"
 #include "operations.hpp"
 #include "runtime-str.hpp"
@@ -8,8 +10,7 @@
 
 enum class Section {
     Includes,
-    ForwardDeclarations,
-    TypeDeclarations,
+    Declarations,
     Constants,
     Implementations,
     Main,
@@ -84,10 +85,9 @@ public:
             (std::filesystem::path("out") / file_.path)
                 .stem()
                 .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
-        std::fstream stream(std::format("out/{}.hpp", stem), std::ios::out);
+        std::fstream stream(GlobalMemory::format("out/{}.hpp", stem).data(), std::ios::out);
         stream << *buffers_[static_cast<std::size_t>(Section::Includes)] << "\n"
-               << *buffers_[static_cast<std::size_t>(Section::ForwardDeclarations)] << "\n"
-               << *buffers_[static_cast<std::size_t>(Section::TypeDeclarations)] << "\n"
+               << *buffers_[static_cast<std::size_t>(Section::Declarations)] << "\n"
                << *buffers_[static_cast<std::size_t>(Section::Constants)] << "\n"
                << *buffers_[static_cast<std::size_t>(Section::Implementations)] << "\n"
                << *buffers_[static_cast<std::size_t>(Section::Main)];
@@ -217,15 +217,7 @@ public:
         }
         case Kind::String: {
             const StringValue* string_value = static_cast<const StringValue*>(value);
-            *current_section_ << "\"";
-            for (char c : string_value->value_) {
-                std::format_to(
-                    std::back_inserter(**current_section_),
-                    "\\x{:02x}",
-                    static_cast<unsigned char>(c)
-                );
-            }
-            *current_section_ << "\"";
+            *current_section_ << GlobalMemory::hex_string(string_value->value_);
             break;
         }
         case Kind::Boolean: {
@@ -254,14 +246,23 @@ inline int transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker
         std::filesystem::path(sources[0].path)
             .stem()
             .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
-    int ret = std::system("g++ -std=c++20 -xc++-header -Iout out/pch.hpp -o out/pch.hpp.gch");
+    Diagnostic::message(GlobalMemory::format("Wrote {} files to ./out", sources.files.size()));
+    std::string_view pch_command =
+        "g++ -std=c++20 -xc++-header -Iout out/pch.hpp -o out/pch.hpp.gch";
+    Diagnostic::message(GlobalMemory::format("Compiling precompiled header: {}", pch_command));
+    int ret = std::system(pch_command.data());
     if (ret != 0) {
         return ret;
     }
-    return std::system(
-        std::format("g++ -std=c++20 -Iout \"out/{}.hpp\" -o \"out/{}\"", main_stem, main_stem)
-            .c_str()
+    std::string_view compile_command = GlobalMemory::format(
+        "g++ -std=c++20 -Iout \"out/{}.hpp\" -o \"out/{}\"", main_stem, main_stem
     );
+    Diagnostic::message(
+        GlobalMemory::format(
+            "Compiling output executable to ./out/{}: {}", main_stem, compile_command
+        )
+    );
+    return std::system(compile_command.data());
 }
 
 /// ===================== Inline implementations of AST nodes =====================
@@ -393,7 +394,7 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler, TypeChecker& check
 }
 
 inline void ASTTypeAlias::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler[Section::TypeDeclarations] << this;
+    transpiler[Section::Declarations] << this;
     transpiler << "using " << identifier_ << " = ";
     type_->transpile(transpiler, checker);
     transpiler << ";";
@@ -461,7 +462,7 @@ inline void ASTFunctionDefinition::transpile(
     bool is_main = checker.at_top_level() && identifier_ == "main";
 
     if (!is_main) {
-        transpiler[Section::ForwardDeclarations] << this;
+        transpiler[Section::Declarations] << this;
         return_type_->transpile(transpiler, checker);
         transpiler << " $" << identifier_ << "(";
         const char* sep = "";

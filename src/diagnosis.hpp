@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.hpp"
+#include <string_view>
 
 #include "source.hpp"
 
@@ -16,19 +17,19 @@ public:
 private:
     Severity severity_;
     Location location_;
-    GlobalMemory::String message_;
+    std::string_view message_;
 
 protected:
     Problem() = delete;
-    Problem(Severity severity, Location location, GlobalMemory::String message)
-        : severity_(severity), location_(location), message_(std::move(message)) {}
+    Problem(Severity severity, Location location, std::string_view message)
+        : severity_(severity), location_(location), message_(message) {}
     std::generator<Problem> sub_problems() const noexcept { co_return; }
 };
 
 class NameError : public Problem {
 protected:
-    NameError(const Location& location, GlobalMemory::String message)
-        : Problem(Severity::Error, location, std::move(message)) {}
+    NameError(const Location& location, std::string_view message)
+        : Problem(Severity::Error, location, message) {}
 };
 
 class UndeclaredIdentifierError final : public NameError {
@@ -58,8 +59,8 @@ public:
 
 class TypeError : public Problem {
 protected:
-    TypeError(const Location& location, GlobalMemory::String message)
-        : Problem(Severity::Error, location, std::move(message)) {}
+    TypeError(const Location& location, std::string_view message)
+        : Problem(Severity::Error, location, message) {}
 };
 
 class TypeMismatchError final : public TypeError {
@@ -151,7 +152,7 @@ public:
 
 class CompileTimeEvaluationError : public Problem {
 public:
-    CompileTimeEvaluationError(const Location& location, GlobalMemory::String message)
+    CompileTimeEvaluationError(const Location& location, std::string_view message)
         : Problem(Severity::Error, location, message) {}
 };
 
@@ -218,6 +219,12 @@ public:
         std::cerr.flush();
 
         return true;
+    }
+
+    static void message(std::string_view msg) {
+        std::lock_guard lock(print_mutex_);
+        std::print(std::cout, "{}[INFO]{} {}\n", ColourEscape::CYAN, ColourEscape::RESET, msg);
+        std::cout.flush();
     }
 
 private:

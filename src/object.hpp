@@ -2,6 +2,7 @@
 #include "pch.hpp"
 #include <ranges>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "diagnosis.hpp"
@@ -73,7 +74,7 @@ private:
 public:
     Object(Kind kind, bool is_type) noexcept : kind_(kind), is_type_(is_type) {}
     virtual ~Object() = default;
-    virtual GlobalMemory::String repr() const = 0;
+    virtual std::string_view repr() const = 0;
     constexpr std::strong_ordering operator<=>(const Object& other) const noexcept {
         return this <=> &other;
     }
@@ -114,7 +115,7 @@ private:
     UnknownType() noexcept : Type(kind) {}
 
 public:
-    GlobalMemory::String repr() const final { return "unknown"; }
+    std::string_view repr() const final { return "unknown"; }
     bool assignable_from_impl(const Type& source) const final { return true; }
 };
 
@@ -127,7 +128,7 @@ public:
 public:
     PrimitiveType() noexcept : Type(kind) {}
 
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         if constexpr (K == Kind::Any) {
             return "any";
         } else if constexpr (K == Kind::Null) {
@@ -175,7 +176,7 @@ public:
         : Type(kind), is_signed_(is_signed), bits_(bits) {
         assert(bits == 0 || bits == 8 || bits == 16 || bits == 32 || bits == 64);
     }
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         return GlobalMemory::format("{}{}", is_signed_ ? "i" : "u", bits_);
     }
     bool assignable_from_impl(const Type& source) const final {
@@ -204,7 +205,7 @@ public:
     PrimitiveType(std::uint8_t bits) noexcept : Type(kind), bits_(bits) {
         assert(bits == 0 || bits == 32 || bits == 64);
     }
-    GlobalMemory::String repr() const final { return GlobalMemory::format("f{}", bits_); }
+    std::string_view repr() const final { return GlobalMemory::format("f{}", bits_); }
     bool assignable_from_impl(const Type& source) const final {
         if (source.kind_ != kind) {
             return false;
@@ -230,7 +231,7 @@ public:
     FunctionType(ComparableSpan<Type*> parameters, Type* return_type) noexcept
         : Type(kind), parameters_(parameters), return_type_(return_type) {}
 
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         GlobalMemory::String params_repr =
             parameters_ | std::views::transform([](Type* type) { return type->repr(); }) |
             std::views::join_with(", "sv) | GlobalMemory::collect<GlobalMemory::String>();
@@ -267,7 +268,7 @@ public:
 public:
     ListType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
 
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         return GlobalMemory::format("List<{}>", element_type_->repr());
     }
 
@@ -291,7 +292,7 @@ public:
     RecordType(GlobalMemory::Map<std::string_view, Type*> fields) noexcept
         : Type(kind), fields_(std::move(fields)) {}
 
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         // TODO
         return {};
     }
@@ -337,7 +338,7 @@ public:
           extends_(extends),
           properties_(std::move(properties)) {}
 
-    GlobalMemory::String repr() const override {
+    std::string_view repr() const override {
         return GlobalMemory::String("class ") + GlobalMemory::String(name_);
     }
 
@@ -395,7 +396,7 @@ public:
 public:
     IntersectionType(Type* left, Type* right) noexcept : Type(kind), types_{combine(left, right)} {}
 
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         // TODO
         return {};
     }
@@ -474,7 +475,7 @@ public:
 public:
     UnionType(Type* left, Type* right) noexcept : Type(kind), types_(combine(left, right)) {}
 
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         // TODO
         return {};
     }
@@ -571,7 +572,7 @@ public:
 
 private:
     UnknownValue() noexcept : Value(kind) {}
-    GlobalMemory::String repr() const final { return "unknown"; }
+    std::string_view repr() const final { return "unknown"; }
     UnknownType* get_type() const final { return &UnknownType::instance; }
     UnknownValue* resolve_to(Type* target) const final { return new UnknownValue(); }
 };
@@ -583,7 +584,7 @@ public:
 
 public:
     NullValue() noexcept : Value(kind) {}
-    GlobalMemory::String repr() const final { return "null"; }
+    std::string_view repr() const final { return "null"; }
     NullType* get_type() const final { return &StaticType::instance; }
     NullValue* resolve_to(Type* target) const final {
         assert(target);
@@ -618,7 +619,7 @@ public:
     }
     explicit IntegerValue(std::string_view value) noexcept
         : Value(kind), type_(&IntegerType::untyped_instance), raw_(value) {}
-    GlobalMemory::String repr() const final { return GlobalMemory::format("{}", ivalue_); }
+    std::string_view repr() const final { return GlobalMemory::format("{}", ivalue_); }
     IntegerType* get_type() const final { return type_; }
     IntegerValue* resolve_to(Type* target) const final {
         assert(target);
@@ -720,7 +721,7 @@ public:
     FloatValue(FloatType* type, double value) noexcept : Value(kind), type_(type), value_(value) {
         assert(type != nullptr);
     }
-    GlobalMemory::String repr() const final { return GlobalMemory::format("{}", value_); }
+    std::string_view repr() const final { return GlobalMemory::format("{}", value_); }
     FloatType* get_type() const final { return type_; }
     FloatValue* resolve_to(Type* target) const final {
         assert(target);
@@ -769,7 +770,7 @@ public:
 
 public:
     StringValue(GlobalMemory::String value) noexcept : Value(kind), value_(std::move(value)) {}
-    GlobalMemory::String repr() const final { return "\"" + this->value_ + "\""; }
+    std::string_view repr() const final { return GlobalMemory::hex_string(this->value_); }
     StringType* get_type() const final { return &StaticType::instance; }
     StringValue* resolve_to(Type* target) const final {
         assert(target);
@@ -794,7 +795,7 @@ public:
 
 public:
     BooleanValue(bool value) noexcept : Value(kind), value_(value) {}
-    GlobalMemory::String repr() const final { return this->value_ ? "true" : "false"; }
+    std::string_view repr() const final { return this->value_ ? "true" : "false"; }
     BooleanType* get_type() const final { return &StaticType::instance; }
     BooleanValue* resolve_to(Type* target) const final {
         assert(target);
@@ -826,7 +827,7 @@ public:
     FunctionValue(FunctionType* type, const void* source, decltype(invoke_) invoke) noexcept
         : Value(kind), type_(type), source_(source), invoke_(std::move(invoke)) {}
 
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         return GlobalMemory::format("<function at {:p}>", static_cast<const void*>(this));
     }
     FunctionType* get_type() const final { return type_; }
@@ -871,7 +872,7 @@ public:
         : InstanceValue(nullptr), values_(std::move(values)) {
         kind_ = kind;
     }
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         // TODO: implement
         return {};
     }
@@ -897,7 +898,7 @@ public:
         : Value(kind), type_(nullptr), overloads_{first} {}
     OverloadedFunctionValue(Type* type, const OverloadedFunctionValue& other) noexcept
         : Value(kind), type_(type), overloads_(other.overloads_) {}
-    GlobalMemory::String repr() const final {
+    std::string_view repr() const final {
         // TODO
         return {};
     }
