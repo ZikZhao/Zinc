@@ -75,6 +75,12 @@ public:
     bool operator==(const ComparableSpan<T>& other) const noexcept {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
+
+    explicit operator std::string_view() const noexcept
+        requires std::is_same_v<T, char>
+    {
+        return std::string_view(this->data(), this->size());
+    }
 };
 
 class GlobalMemory {

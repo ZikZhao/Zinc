@@ -1,5 +1,7 @@
 #pragma once
 #include "pch.hpp"
+#include <format>
+#include <string_view>
 
 #include "diagnosis.hpp"
 #include "object.hpp"
@@ -53,13 +55,18 @@ public:
 
 private:
     Scope* parent_ = nullptr;
-    std::string_view name_;
     GlobalMemory::Map<std::string_view, Object*> variables_;
     GlobalMemory::Map<std::string_view, const ASTTypeExpression*> types_;
     GlobalMemory::Map<const void*, std::unique_ptr<Scope>> children_;
+    std::string_view prefix_;
 
 private:
-    Scope(Scope& parent, std::string_view name) noexcept : parent_(&parent), name_(name) {}
+    Scope(Scope& parent, std::string_view name) noexcept : parent_(&parent) {
+        std::size_t prefix_size = std::formatted_size("{}::{}", parent.prefix_, name);
+        ComparableSpan<char> buffer = GlobalMemory::alloc_array<char>(prefix_size);
+        std::format_to(buffer.begin(), "{}::{}", parent.prefix_, name);
+        prefix_ = static_cast<std::string_view>(buffer);
+    }
 
 public:
     Scope() noexcept = default;
@@ -135,6 +142,8 @@ public:
         }
         obj = new OverloadedFunctionValue(new_type, *overloads);
     }
+    std::string_view get_current_scope_prefix() const noexcept { return current_scope_->prefix_; }
+    bool at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
 
 private:
     Object* resolve_in(std::string_view identifier, Scope& scope);
