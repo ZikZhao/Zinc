@@ -1,5 +1,8 @@
 #pragma once
 #include "pch.hpp"
+#include <concepts>
+#include <type_traits>
+#include <utility>
 
 #include "diagnosis.hpp"
 
@@ -20,6 +23,8 @@ enum class Kind : std::uint16_t {
     Union,
 };
 
+class TypeRegistry;
+
 class Object;
 
 class Type;
@@ -29,12 +34,11 @@ class NullType;
 class IntegerType;
 class FloatType;
 class BooleanType;
-class StringType;
-class StringViewType;
 class FunctionType;
 class ArrayType;
-class InterfaceType;
 class StructType;
+class RecordType;
+class InterfaceType;
 class ClassType;
 class IntersectionType;
 class UnionType;
@@ -56,6 +60,73 @@ template <typename T>
 concept TypeClass = std::derived_from<T, Type>;
 template <typename V>
 concept ValueClass = std::derived_from<V, Value>;
+
+class TypeRegistry {
+    friend class ThreadGuard;
+
+private:
+    struct TypeComparator {
+        template <TypeClass T>
+        constexpr bool operator()(T* a, T* b) const noexcept {
+            return *a < *b;
+        }
+    };
+
+private:
+    static thread_local TypeRegistry instance;
+
+public:
+    template <TypeClass T>
+    static T* get(auto&&... args) {
+        using Primitives = std::tuple<AnyType, NullType, IntegerType, FloatType, BooleanType>;
+        using OtherInternals =
+            std::tuple<FunctionType, RecordType, IntersectionType, UnionType, ClassType>;
+        if constexpr (TypeInTupleV<T, Primitives>) {
+            static_assert(false);
+        } else if constexpr (std::is_same_v<T, ClassType>) {
+            // classes with same definition are distinct types
+            return new T(std::forward<decltype(args)>(args)...);
+        } else if constexpr (TypeInTupleV<T, OtherInternals>) {
+            return instance.get_cached<T>(std::forward<decltype(args)>(args)...);
+        } else {
+            // builtin singleton types, e.g. StringType
+            std::type_index type_index = std::type_index(typeid(T));
+            auto it = instance.builtin_types_.find(type_index);
+            if (it != instance.builtin_types_.end()) {
+                return static_cast<T*>(it->second);
+            } else {
+                T* new_type = new T(std::forward<decltype(args)>(args)...);
+                instance.builtin_types_.insert({type_index, new_type});
+                return new_type;
+            }
+        }
+    }
+
+    static Object* get_unknown();
+
+private:
+    std::tuple<
+        GlobalMemory::Set<FunctionType*, TypeComparator>,
+        GlobalMemory::Set<RecordType*, TypeComparator>,
+        GlobalMemory::Set<IntersectionType*, TypeComparator>,
+        GlobalMemory::Set<UnionType*, TypeComparator>>
+        cache_;
+    GlobalMemory::Map<std::type_index, Type*> builtin_types_;
+
+private:
+    template <TypeClass T>
+    T* get_cached(auto&&... args) {
+        GlobalMemory::Set<T*, TypeComparator>& type_set =
+            std::get<GlobalMemory::Set<T*, TypeComparator>>(cache_);
+        T new_type(std::forward<decltype(args)>(args)...);
+        if (auto it = type_set.find(&new_type); it != type_set.end()) {
+            return *it;
+        } else {
+            auto [it2, _] = type_set.emplace(new T(std::forward<decltype(args)>(args)...));
+            return *it2;
+        }
+    }
+};
 
 class Object : public MemoryManaged {
 public:
@@ -824,15 +895,20 @@ public:
 
 class ArrayValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::Array;
-
-public:
     ArrayType* type_;
-    GlobalMemory::Vector<Value*> elements_;
+    union {
+        GlobalMemory::Vector<Value*> elements_;
+        std::string_view string_;
+    };
 
 public:
-    ArrayValue(ArrayType* type, GlobalMemory::Vector<Value*>&& elements) noexcept
-        : Value(kind), type_(type), elements_(std::move(elements)) {}
+    ArrayValue(GlobalMemory::Vector<Value*>&& elements) noexcept
+        : Value(Kind::Array), type_(nullptr), elements_(std::move(elements)) {}
+    ArrayValue(std::string_view string) noexcept
+        : Value(Kind::Array),
+          type_(TypeRegistry::get<ArrayType>(&IntegerType::u8_instance)),
+          string_(string) {}
+    ~ArrayValue() {}
     std::string_view repr() const final {
         return GlobalMemory::format("[{}]", type_->element_type_->repr());
     }
@@ -865,147 +941,32 @@ public:
 };
 
 class OverloadedFunctionValue final : public Value {
-public:
-    static OverloadedFunctionValue* make_builtin(auto&&... overloads) {
-        static_assert((std::is_same_v<std::decay_t<decltype(overloads)>, FunctionValue*> && ...));
-        for (const auto& overload : {overloads...}) {
-            assert(overload && overload->type_);
-        }
-    }
-
 private:
     Type* type_;
-    GlobalMemory::Vector<FunctionValue*> overloads_;
-
-private:
-    OverloadedFunctionValue(Type* type, GlobalMemory::Vector<FunctionValue*> overloads) noexcept
-        : Value(Kind::Intersection), type_(type), overloads_(std::move(overloads)) {}
+    GlobalMemory::Vector<Object*> overloads_;  /// vector of FunctionType* | FunctionValue*
 
 public:
     OverloadedFunctionValue(FunctionValue* first) noexcept
-        : Value(Kind::Intersection), type_(nullptr), overloads_{first} {}
-    OverloadedFunctionValue(Type* type, const OverloadedFunctionValue& other) noexcept
-        : Value(Kind::Intersection), type_(type), overloads_(other.overloads_) {}
+        : Value(Kind::Intersection), type_(first->type_), overloads_{first} {}
+    OverloadedFunctionValue(FunctionType* first) noexcept
+        : Value(Kind::Intersection), type_(first), overloads_{first} {}
     std::string_view repr() const final {
         // TODO
         return {};
     }
     Type* get_type() const final { return type_; }
-    OverloadedFunctionValue* resolve_to(Type* target) const final {
-        assert(target);
-        if (target->kind_ != Kind::Intersection) {
-            throw UnlocatedProblem::make<TypeMismatchError>("function overloads", target->repr());
-        }
-        GlobalMemory::Set<FunctionType*> target_types =
-            static_cast<IntersectionType*>(target)->types_ |
-            std::views::transform([](Type* func_type) {
-                return static_cast<FunctionType*>(func_type);
-            }) |
-            GlobalMemory::collect<GlobalMemory::Set<FunctionType*>>();
-        GlobalMemory::Set<FunctionType*> overload_types =
-            overloads_ | std::views::transform([](FunctionValue* func) { return func->type_; }) |
-            GlobalMemory::collect<GlobalMemory::Set<FunctionType*>>();
-        if (!target_types.is_subset_of(overload_types)) {
-            throw UnlocatedProblem::make<TypeMismatchError>("function overloads", target->repr());
-        }
-        return new OverloadedFunctionValue(target, overloads_);
-    }
+    OverloadedFunctionValue* resolve_to(Type* target) const final { std::unreachable(); }
     void add_overload(FunctionValue* func) noexcept { overloads_.push_back(func); }
-    FunctionValue*& get_overload(const void* source) noexcept {
-        for (FunctionValue*& overload : overloads_) {
-            if (overload->source_ == source) {
-                return overload;
+    void overload_resolve_to(const void* source, FunctionType* target) noexcept {
+        for (Object*& overload : overloads_) {
+            if (overload->as_value() && static_cast<FunctionValue*>(overload)->source_ == source) {
+                overload = new FunctionValue(
+                    target, source, static_cast<FunctionValue*>(overload)->callback_
+                );
+                break;
             }
         }
-        std::unreachable();
-    }
-};
-
-class TypeRegistry {
-private:
-    struct TypeComparator {
-        template <TypeClass T>
-        constexpr bool operator()(T* a, T* b) const noexcept {
-            return *a < *b;
-        }
-    };
-
-private:
-    std::tuple<
-        GlobalMemory::Set<FunctionType*, TypeComparator>,
-        GlobalMemory::Set<RecordType*, TypeComparator>,
-        GlobalMemory::Set<IntersectionType*, TypeComparator>,
-        GlobalMemory::Set<UnionType*, TypeComparator>>
-        cache_;
-
-public:
-    template <TypeClass T>
-    T* get(auto&&... args) {
-        if constexpr (TypeInTupleV<T, std::tuple<AnyType, NullType, BooleanType>>) {
-            return &T::instance;
-        } else if constexpr (std::is_same_v<T, IntegerType>) {
-            const std::tuple args_tuple = std::tuple{std::forward<decltype(args)>(args)...};
-            bool unsigned_ = std::get<0>(args_tuple);
-            std::uint8_t bits = std::get<1>(args_tuple);
-            if (unsigned_) {
-                switch (bits) {
-                case 8:
-                    return &IntegerType::u8_instance;
-                case 16:
-                    return &IntegerType::u16_instance;
-                case 32:
-                    return &IntegerType::u32_instance;
-                case 64:
-                    return &IntegerType::u64_instance;
-                default:
-                    assert(false);
-                    std::unreachable();
-                }
-            } else {
-                switch (bits) {
-                case 8:
-                    return &IntegerType::i8_instance;
-                case 16:
-                    return &IntegerType::i16_instance;
-                case 32:
-                    return &IntegerType::i32_instance;
-                case 64:
-                    return &IntegerType::i64_instance;
-                default:
-                    assert(false);
-                    std::unreachable();
-                }
-            }
-            assert(false);
-            std::unreachable();
-        } else if constexpr (std::is_same_v<T, FloatType>) {
-            std::uint8_t bits = std::get<0>(std::tuple{std::forward<decltype(args)>(args)...});
-            if (bits == 32) {
-                return &FloatType::f32_instance;
-            } else if (bits == 64) {
-                return &FloatType::f64_instance;
-            } else {
-                assert(false);
-                std::unreachable();
-            }
-        } else if constexpr (std::is_same_v<T, ClassType>) {
-            // classes with same definition are distinct types
-            return new T(std::forward<decltype(args)>(args)...);
-        } else {
-            return get_cached<T>(std::forward<decltype(args)>(args)...);
-        }
-    }
-
-    Object* get_unknown() { return &UnknownType::instance; }
-
-private:
-    template <TypeClass T>
-    T* get_cached(auto&&... args) {
-        T new_type(std::forward<decltype(args)>(args)...);
-        auto [it, _] = std::get<GlobalMemory::Set<T*, TypeComparator>>(cache_).emplace(
-            new T(std::move(new_type))
-        );
-        return *it;
+        type_ = TypeRegistry::get<IntersectionType>(type_, target);
     }
 };
 
@@ -1018,6 +979,10 @@ inline Value* Object::as_value() {
     if (is_type_ && kind_ == Kind::NothingOrUnknown) return new UnknownValue();
     return !is_type_ ? static_cast<Value*>(this) : nullptr;
 }
+
+inline thread_local TypeRegistry TypeRegistry::instance;
+
+inline Object* TypeRegistry::get_unknown() { return &UnknownType::instance; }
 
 inline UnknownType UnknownType::instance;
 

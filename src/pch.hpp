@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <compare>
+#include <concepts>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -13,6 +14,7 @@
 #include <generator>
 #include <initializer_list>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <memory_resource>
@@ -85,52 +87,30 @@ public:
 
 class GlobalMemory {
 private:
-    class HeapGateway : public std::pmr::memory_resource {
-    private:
-        std::pmr::memory_resource* upstream_;
-        std::mutex mutex_;
-
-    public:
-        explicit HeapGateway(std::pmr::memory_resource* upstream) : upstream_(upstream) {}
-
-    protected:
-        void* do_allocate(std::size_t bytes, std::size_t align) override {
-            std::lock_guard lock(mutex_);
-            return upstream_->allocate(bytes, align);
-        }
-
-        void do_deallocate(void* p, std::size_t bytes, std::size_t align) override {
-            std::lock_guard lock(mutex_);
-            upstream_->deallocate(p, bytes, align);
-        }
-
-        bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-            return this == &other;
-        }
-    };
-
-private:
     static std::pmr::memory_resource* global_heap() noexcept {
-        static std::pmr::monotonic_buffer_resource resource(std::pmr::new_delete_resource());
-        return &resource;
-    }
-
-    static std::pmr::memory_resource* heap_gateway() noexcept {
-        static HeapGateway resource(global_heap());
+        // static std::pmr::monotonic_buffer_resource resource(std::pmr::new_delete_resource());
+        constexpr std::pmr::pool_options pool_opts{
+            .largest_required_pool_block = 4 * 1024 * 1024,  // 4 MB
+        };
+        static std::pmr::unsynchronized_pool_resource resource(
+            pool_opts, std::pmr::new_delete_resource()
+        );
         return &resource;
     }
 
 public:
     static std::pmr::memory_resource* monotonic() noexcept {
-        static thread_local std::byte buffer[1024 * 1024];  // 1 MB per thread
-        static thread_local std::pmr::monotonic_buffer_resource resource(
-            buffer, sizeof(buffer), heap_gateway()
-        );
+        static thread_local std::pmr::monotonic_buffer_resource resource(128 * 1024, global_heap());
         return &resource;
     }
 
     static std::pmr::memory_resource* pool() noexcept {
-        static thread_local std::pmr::unsynchronized_pool_resource resource(heap_gateway());
+        constexpr std::pmr::pool_options pool_opts{
+            .largest_required_pool_block = 4 * 1024,  // 4 KB
+        };
+        static thread_local std::pmr::unsynchronized_pool_resource resource(
+            pool_opts, global_heap()
+        );
         return &resource;
     }
 
@@ -189,15 +169,13 @@ public:
         }
     }
 
-    template <typename T>
-    static constexpr ComparableSpan<T> pack_array(auto&&... items) {
-        static_assert(
-            (std::is_convertible_v<decltype(items), T> && ...), "All items must be convertible to T"
-        );
-        ComparableSpan<T> span = alloc_array<T>(sizeof...(items));
-        T* ptr = span.data();
+    template <typename T, typename... Args>
+        requires(std::is_same_v<T, Args> && ...)
+    static constexpr ComparableSpan<std::decay_t<T>> pack_array(T&& first, Args&&... rest) {
+        ComparableSpan span = alloc_array<std::decay_t<T>>(sizeof...(rest) + 1);
         std::size_t index = 0;
-        ((ptr[index++] = std::forward<decltype(items)>(items)), ...);
+        span[0] = std::forward<T>(first);
+        ((span[++index] = std::forward<Args>(rest)), ...);
         return span;
     }
 
@@ -322,6 +300,7 @@ private:
 public:
     using key_type = Key;
     using mapped_type = Value;
+    using value_type = std::pair<const Key, Value>;
     using iterator = IteratorImpl<false>;
     using const_iterator = IteratorImpl<true>;
 
@@ -341,6 +320,14 @@ public:
         requires std::is_nothrow_copy_constructible_v<Key> &&
                      std::is_nothrow_copy_constructible_v<Value>
     = default;
+
+    Map(std::initializer_list<std::pair<Key, Value>> init) {
+        keys_.reserve(init.size());
+        values_.reserve(init.size());
+        for (const auto& pair : init) {
+            this->insert(pair);
+        }
+    }
 
     template <std::ranges::input_range R>
     Map(std::from_range_t, R&& range) {
@@ -507,7 +494,9 @@ public:
         return {keys_.emplace(it, std::move(key)), true};
     }
     std::size_t size() const noexcept { return keys_.size(); }
+    typename Vector<Key>::iterator begin() noexcept { return keys_.begin(); }
     typename Vector<Key>::const_iterator begin() const noexcept { return keys_.begin(); }
+    typename Vector<Key>::iterator end() noexcept { return keys_.end(); }
     typename Vector<Key>::const_iterator end() const noexcept { return keys_.end(); }
     std::strong_ordering operator<=>(const Set<Key, Comp>& other) const noexcept {
         return std::lexicographical_compare_three_way(
@@ -520,6 +509,20 @@ public:
     bool contains(const Key& key) const {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         return it != keys_.end() && *it == key;
+    }
+    iterator find(const Key& key) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
+        if (it == keys_.end() || *it != key) {
+            return end();
+        }
+        return it;
+    }
+    const_iterator find(const Key& key) const {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
+        if (it == keys_.end() || *it != key) {
+            return this->end();
+        }
+        return it;
     }
     bool is_superset_of(const Set<Key, Comp>& other) const noexcept {
         return std::includes(this->begin(), this->end(), other.begin(), other.end(), Comp{});

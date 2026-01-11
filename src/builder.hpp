@@ -5,8 +5,10 @@
 #include "StainlessLexer.h"
 #include "StainlessParser.h"
 #include "ast.hpp"
+#include "builtins.hpp"
 #include "object.hpp"
 #include "source.hpp"
+
 
 class ASTBuilder final : private StainlessBaseVisitor {
 private:
@@ -507,7 +509,8 @@ private:
             break;
         case StainlessParser::KW_STRING:
             /// TODO:
-            // last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &StringType::instance);
+            last_visited_ =
+                std::make_unique<ASTPrimitiveType>(loc(ctx), TypeRegistry::get<StringType>());
             break;
         case StainlessParser::KW_BOOL:
             last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &BooleanType::instance);

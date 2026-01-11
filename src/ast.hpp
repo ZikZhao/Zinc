@@ -127,18 +127,9 @@ public:
     void set_overload_type(
         std::string_view identifier, const void* source, FunctionType* type
     ) noexcept {
-        Object*& obj = current_scope_->get_variable(identifier);
+        Object* obj = current_scope_->get_variable(identifier);
         assert(obj->as_value() && obj->kind_ == Kind::Intersection);
-        OverloadedFunctionValue* overloads = static_cast<OverloadedFunctionValue*>(obj);
-        FunctionValue*& this_overload = overloads->get_overload(source);
-        this_overload = new FunctionValue(type, this_overload->source_, this_overload->callback_);
-        Type* old_type = overloads->get_type();
-        Type* new_type = type;  // when old type is nullptr
-        if (old_type) {
-            assert(old_type->kind_ == Kind::Function || old_type->kind_ == Kind::Intersection);
-            new_type = types_.get<IntersectionType>(old_type, type);
-        }
-        obj = new OverloadedFunctionValue(new_type, *overloads);
+        static_cast<OverloadedFunctionValue*>(obj)->overload_resolve_to(source, type);
     }
     std::string_view get_current_scope_prefix() const noexcept { return current_scope_->prefix_; }
     bool at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }

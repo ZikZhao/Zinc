@@ -253,7 +253,7 @@ public:
         Value* right_value = right->as_value();
         auto it = custom_table_.find({opcode, left_value->get_type(), right_value->get_type()});
         if (it != custom_table_.end()) {
-            return it->second->invoke(GlobalMemory::pack_array<Value*>(left_value, right_value));
+            return it->second->invoke(GlobalMemory::pack_array(left_value, right_value));
         } else {
             throw UnlocatedProblem::make<OperationNotDefinedError>(
                 "", left_value->repr(), right_value->repr()

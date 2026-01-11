@@ -8,7 +8,15 @@
 #include "source.hpp"
 #include "transpiler.hpp"
 
+class ThreadGuard {
+public:
+    ThreadGuard() { TypeRegistry::instance = TypeRegistry(); }
+    ~ThreadGuard() { TypeRegistry::instance = TypeRegistry(); }
+};
+
 int main(int argc, char* argv[]) {
+    ThreadGuard guard;
+
     SourceManager sources;
     ImportManager<ASTRoot> importer(sources);
 
