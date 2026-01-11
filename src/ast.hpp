@@ -1,7 +1,5 @@
 #pragma once
 #include "pch.hpp"
-#include <format>
-#include <string_view>
 
 #include "diagnosis.hpp"
 #include "object.hpp"
@@ -115,11 +113,11 @@ private:
     GlobalMemory::Map<std::pair<const Scope*, std::string_view>, CacheRecord> cache_;
 
 public:
-    const OpDispatcher& ops_;
+    const OperationHandler& ops_;
     TypeRegistry& types_;
 
 public:
-    TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& types) noexcept;
+    TypeChecker(Scope& root, const OperationHandler& ops, TypeRegistry& types) noexcept;
     void add_variable(std::string_view identifier, Object* expr);
     void enter(const ASTBlock* child) noexcept;
     void exit() noexcept;
@@ -133,9 +131,9 @@ public:
         assert(obj->as_value() && obj->kind_ == Kind::Intersection);
         OverloadedFunctionValue* overloads = static_cast<OverloadedFunctionValue*>(obj);
         FunctionValue*& this_overload = overloads->get_overload(source);
-        this_overload = new FunctionValue(type, this_overload->source_, this_overload->invoke_);
-        Type* new_type = type;  // when old type is nullptr
+        this_overload = new FunctionValue(type, this_overload->source_, this_overload->callback_);
         Type* old_type = overloads->get_type();
+        Type* new_type = type;  // when old type is nullptr
         if (old_type) {
             assert(old_type->kind_ == Kind::Function || old_type->kind_ == Kind::Intersection);
             new_type = types_.get<IntersectionType>(old_type, type);
@@ -155,7 +153,7 @@ public:
     Location location_;
     ASTNode(const Location& loc) noexcept : location_(loc) {}
     virtual ~ASTNode() noexcept = default;
-    virtual void collect_symbols(Scope& scope, OpDispatcher& ops) {}
+    virtual void collect_symbols(Scope& scope, OperationHandler& ops) {}
     virtual void check_types(TypeChecker& checker) {}
     virtual void transpile(Transpiler& transpiler, TypeChecker& checker) const = 0;
 };
@@ -165,7 +163,7 @@ public:
     std::vector<std::unique_ptr<ASTNode>> children_;
     ASTRoot(const Location& loc, std::vector<std::unique_ptr<ASTNode>> children) noexcept
         : ASTNode(loc), children_(std::move(children)) {}
-    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+    void collect_symbols(Scope& scope, OperationHandler& ops) final {
         for (auto& child : children_) {
             child->collect_symbols(scope, ops);
         }
@@ -183,7 +181,7 @@ public:
     std::vector<std::unique_ptr<ASTNode>> statements_;
     ASTBlock(const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements) noexcept
         : ASTNode(loc), statements_(std::move(statements)) {}
-    void collect_symbols(Scope& scope, OpDispatcher& ops) override {
+    void collect_symbols(Scope& scope, OperationHandler& ops) override {
         for (auto& stmt : statements_) {
             stmt->collect_symbols(scope, ops);
         }
@@ -199,7 +197,7 @@ public:
 class ASTLocalBlock final : public ASTBlock {
 public:
     using ASTBlock::ASTBlock;
-    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+    void collect_symbols(Scope& scope, OperationHandler& ops) final {
         Scope& local_scope = Scope::create(this, scope);
         for (auto& stmt : statements_) {
             stmt->collect_symbols(local_scope, ops);
@@ -581,7 +579,7 @@ public:
     ) noexcept
         : ASTNode(loc), identifier_(std::move(identifier)), type_(std::move(type)) {}
     ~ASTTypeAlias() noexcept final = default;
-    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+    void collect_symbols(Scope& scope, OperationHandler& ops) final {
         scope.add_type(identifier_, type_.get());
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
@@ -603,7 +601,7 @@ public:
           if_block_(std::move(if_block)),
           else_block_(std::move(else_block)) {}
     ~ASTIfStatement() noexcept final = default;
-    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+    void collect_symbols(Scope& scope, OperationHandler& ops) final {
         Scope& if_scope = Scope::create(if_block_.get(), scope);
         if_block_->collect_symbols(if_scope, ops);
         if (else_block_) {
@@ -663,7 +661,7 @@ public:
     ASTForStatement(const Location& loc, std::unique_ptr<ASTBlock> body) noexcept
         : ASTNode(loc), body_(std::move(body)) {}
     ~ASTForStatement() noexcept final = default;
-    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+    void collect_symbols(Scope& scope, OperationHandler& ops) final {
         Scope& local_scope = Scope::create(body_.get(), scope);
         if (initializer_) {
             initializer_->collect_symbols(local_scope, ops);
@@ -750,7 +748,7 @@ public:
           return_type_(std::move(return_type)),
           body_(std::move(body)),
           is_const_(is_const) {}
-    void collect_symbols(Scope& scope, OpDispatcher& ops) final {
+    void collect_symbols(Scope& scope, OperationHandler& ops) final {
         try {
             FunctionValue* func = new FunctionValue(this, [](auto&& args) { return nullptr; });
             scope.add_overload(identifier_, func);
@@ -791,7 +789,9 @@ public:
 
 // ===================== Inline implementations of TypeChecker =====================
 
-inline TypeChecker::TypeChecker(Scope& root, const OpDispatcher& ops, TypeRegistry& types) noexcept
+inline TypeChecker::TypeChecker(
+    Scope& root, const OperationHandler& ops, TypeRegistry& types
+) noexcept
     : current_scope_(&root), ops_(ops), types_(types) {}
 
 inline void TypeChecker::add_variable(std::string_view identifier, Object* expr) {

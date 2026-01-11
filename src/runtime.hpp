@@ -53,8 +53,10 @@
 #include <vector>
 // IWYU pragma: end_exports
 
+#pragma clang diagnostic ignored "-Wdollar-in-identifier-extension"
+
 template <typename... Sigs>
-class PolyFunction {
+class $PolyFunction {
 private:
     constexpr static inline std::size_t SBO_LIMIT = 3 * sizeof(void*);
 
@@ -73,7 +75,7 @@ private:
 
     struct InterfaceBase : virtual Callable<Sigs>... {
         using Callable<Sigs>::call...;
-        virtual void clone_to(PolyFunction& target) const = 0;
+        virtual void clone_to($PolyFunction& target) const = 0;
     };
 
     template <typename Derived, typename Signature>
@@ -96,7 +98,7 @@ private:
         decltype(auto) invoke(auto&&... args) const {
             return lambda_(std::forward<decltype(args)>(args)...);
         }
-        void clone_to(PolyFunction& target) const override {
+        void clone_to($PolyFunction& target) const override {
             if (sizeof(Lambda) > SBO_LIMIT) {
                 target.interface_ = new InterfaceImpl<Lambda>(lambda_);
             } else {
@@ -112,10 +114,10 @@ private:
 public:
     template <typename Lambda>
         requires(sizeof(Lambda) <= SBO_LIMIT)
-    PolyFunction(Lambda lambda)
+    $PolyFunction(Lambda lambda)
         : interface_(new (sbo_buffer_) InterfaceImpl<Lambda>(std::move(lambda))) {}
-    PolyFunction(const PolyFunction& other) { other.interface_->clone_to(*this); }
-    PolyFunction(PolyFunction&& other) noexcept {
+    $PolyFunction(const $PolyFunction& other) { other.interface_->clone_to(*this); }
+    $PolyFunction($PolyFunction&& other) noexcept {
         if (other.is_sbo()) {
             other.interface_->clone_to(*this);
             other.interface_->~InterfaceBase();
@@ -125,7 +127,7 @@ public:
             other.interface_ = nullptr;
         }
     }
-    PolyFunction& operator=(PolyFunction other) {
+    $PolyFunction& operator=($PolyFunction other) {
         destory();
         if (other.is_sbo()) {
             other.interface_->clone_to(*this);
@@ -134,7 +136,7 @@ public:
             other.interface_ = nullptr;
         }
     }
-    ~PolyFunction() { destory(); }
+    ~$PolyFunction() { destory(); }
     constexpr bool is_sbo() const noexcept {
         return static_cast<const void*>(interface_) == static_cast<const void*>(sbo_buffer_);
     }

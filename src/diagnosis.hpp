@@ -150,6 +150,12 @@ public:
         : TypeError(location, "Cannot multiply string by non-positive integer") {}
 };
 
+class AttributeError : public TypeError {
+public:
+    AttributeError(const Location& location, std::string_view message)
+        : TypeError(location, message) {}
+};
+
 class CompileTimeEvaluationError : public Problem {
 public:
     CompileTimeEvaluationError(const Location& location, std::string_view message)

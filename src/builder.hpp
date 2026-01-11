@@ -1,6 +1,5 @@
 #pragma once
 #include "pch.hpp"
-#include <type_traits>
 
 #include "StainlessBaseVisitor.h"
 #include "StainlessLexer.h"
@@ -446,7 +445,7 @@ private:
             break;
         case StainlessParser::T_STRING:
             last_visited_ = std::make_unique<ASTConstant>(
-                loc(ctx), text(ctx->value_), std::type_identity<StringValue>{}
+                loc(ctx), text(ctx->value_), std::type_identity<ArrayValue>{}
             );
             break;
         case StainlessParser::T_BOOL:
@@ -507,7 +506,8 @@ private:
             last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &FloatType::f64_instance);
             break;
         case StainlessParser::KW_STRING:
-            last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &StringType::instance);
+            /// TODO:
+            // last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &StringType::instance);
             break;
         case StainlessParser::KW_BOOL:
             last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &BooleanType::instance);

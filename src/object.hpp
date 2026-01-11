@@ -1,9 +1,5 @@
 #pragma once
 #include "pch.hpp"
-#include <ranges>
-#include <stdexcept>
-#include <string_view>
-#include <utility>
 
 #include "diagnosis.hpp"
 
@@ -14,11 +10,9 @@ enum class Kind : std::uint16_t {
     Null,
     Integer,
     Float,
-    String,
     Boolean,
-    NonCompositeSize,
     Function,
-    List,
+    Array,
     Record,
     Interface,
     Instance,
@@ -27,37 +21,36 @@ enum class Kind : std::uint16_t {
 };
 
 class Object;
-class Type;
-class Value;
 
-template <Kind Kind>
-class PrimitiveType;
-using AnyType = PrimitiveType<Kind::Any>;
-using NullType = PrimitiveType<Kind::Null>;
-using IntegerType = PrimitiveType<Kind::Integer>;
-using FloatType = PrimitiveType<Kind::Float>;
-using StringType = PrimitiveType<Kind::String>;
-using BooleanType = PrimitiveType<Kind::Boolean>;
+class Type;
+class UnknownType;
+class AnyType;
+class NullType;
+class IntegerType;
+class FloatType;
+class BooleanType;
+class StringType;
+class StringViewType;
+class FunctionType;
+class ArrayType;
 class InterfaceType;
 class StructType;
 class ClassType;
 class IntersectionType;
 class UnionType;
 
+class Value;
+class UnknownValue;
 class NullValue;
 class IntegerValue;
 class FloatValue;
-class StringValue;
 class BooleanValue;
 class FunctionValue;
+class ArrayValue;
 class InterfaceValue;
 class ClassValue;
 class InstanceValue;
-class ListValue;
-class DictValue;
-class SetValue;
-
-class UnknownType;
+class OverloadedFunctionValue;
 
 template <typename T>
 concept TypeClass = std::derived_from<T, Type>;
@@ -119,60 +112,50 @@ public:
     bool assignable_from_impl(const Type& source) const final { return true; }
 };
 
-template <Kind K>
-class PrimitiveType final : public Type {
+class AnyType final : public Type {
 public:
-    static constexpr Kind kind = K;
-    static PrimitiveType instance;
+    static constexpr Kind kind = Kind::Any;
+    static AnyType instance;
 
 public:
-    PrimitiveType() noexcept : Type(kind) {}
+    AnyType() noexcept : Type(kind) {}
+    std::string_view repr() const final { return "any"; }
+    bool assignable_from_impl(const Type& source) const final { return true; }
+};
 
-    std::string_view repr() const final {
-        if constexpr (K == Kind::Any) {
-            return "any";
-        } else if constexpr (K == Kind::Null) {
-            return "null";
-        } else if constexpr (K == Kind::String) {
-            return "string";
-        } else if constexpr (K == Kind::Boolean) {
-            return "boolean";
-        } else if constexpr (K == Kind::Function) {
-            return "function";
-        } else {
-            static_assert(false);
-        }
-    }
+class NullType final : public Type {
+public:
+    static constexpr Kind kind = Kind::Null;
+    static NullType instance;
 
+public:
+    NullType() noexcept : Type(kind) {}
+    std::string_view repr() const final { return "null"; }
     bool assignable_from_impl(const Type& source) const final {
-        if constexpr (K == Kind::Any) {
-            return true;
-        } else {
-            return source.kind_ == kind;
-        }
+        /// No variable can have null type except null literal
+        std::unreachable();
     }
 };
 
-template <>
-class PrimitiveType<Kind::Integer> final : public Type {
+class IntegerType final : public Type {
 public:
     static constexpr Kind kind = Kind::Integer;
-    static PrimitiveType untyped_instance;
-    static PrimitiveType i8_instance;
-    static PrimitiveType i16_instance;
-    static PrimitiveType i32_instance;
-    static PrimitiveType i64_instance;
-    static PrimitiveType u8_instance;
-    static PrimitiveType u16_instance;
-    static PrimitiveType u32_instance;
-    static PrimitiveType u64_instance;
+    static IntegerType untyped_instance;
+    static IntegerType i8_instance;
+    static IntegerType i16_instance;
+    static IntegerType i32_instance;
+    static IntegerType i64_instance;
+    static IntegerType u8_instance;
+    static IntegerType u16_instance;
+    static IntegerType u32_instance;
+    static IntegerType u64_instance;
 
 public:
     const bool is_signed_;
     const std::uint8_t bits_;  // 8,16,32,64 bits (or 0 for untyped integer)
 
 public:
-    PrimitiveType(bool is_signed, std::uint8_t bits) noexcept
+    IntegerType(bool is_signed, std::uint8_t bits) noexcept
         : Type(kind), is_signed_(is_signed), bits_(bits) {
         assert(bits == 0 || bits == 8 || bits == 16 || bits == 32 || bits == 64);
     }
@@ -183,26 +166,24 @@ public:
         if (source.kind_ != kind) {
             return false;
         }
-        const PrimitiveType<Kind::Integer>& other_int =
-            static_cast<const PrimitiveType<Kind::Integer>&>(source);
+        const IntegerType& other_int = static_cast<const IntegerType&>(source);
         return other_int.bits_ == 0 ||
                (this->is_signed_ == other_int.is_signed_ && this->bits_ >= other_int.bits_);
     }
 };
 
-template <>
-class PrimitiveType<Kind::Float> final : public Type {
+class FloatType final : public Type {
 public:
     static constexpr Kind kind = Kind::Float;
-    static PrimitiveType untyped_instance;
-    static PrimitiveType f32_instance;
-    static PrimitiveType f64_instance;
+    static FloatType untyped_instance;
+    static FloatType f32_instance;
+    static FloatType f64_instance;
 
 public:
     const std::uint8_t bits_;  // 32,64 bits (or 0 for untyped float)
 
 public:
-    PrimitiveType(std::uint8_t bits) noexcept : Type(kind), bits_(bits) {
+    FloatType(std::uint8_t bits) noexcept : Type(kind), bits_(bits) {
         assert(bits == 0 || bits == 32 || bits == 64);
     }
     std::string_view repr() const final { return GlobalMemory::format("f{}", bits_); }
@@ -210,10 +191,20 @@ public:
         if (source.kind_ != kind) {
             return false;
         }
-        const PrimitiveType<Kind::Float>& other_float =
-            static_cast<const PrimitiveType<Kind::Float>&>(source);
+        const FloatType& other_float = static_cast<const FloatType&>(source);
         return other_float.bits_ == 0 || this->bits_ >= other_float.bits_;
     }
+};
+
+class BooleanType final : public Type {
+public:
+    static constexpr Kind kind = Kind::Boolean;
+    static BooleanType instance;
+
+public:
+    BooleanType() noexcept : Type(kind) {}
+    std::string_view repr() const final { return "bool"; }
+    bool assignable_from_impl(const Type& source) const final { return source.kind_ == kind; }
 };
 
 class FunctionType final : public Type {
@@ -258,26 +249,25 @@ public:
     std::strong_ordering operator<=>(const FunctionType& other) const noexcept = default;
 };
 
-class ListType final : public Type {
+class ArrayType final : public Type {
 public:
-    static constexpr Kind kind = Kind::List;
+    static constexpr Kind kind = Kind::Array;
 
 public:
     Type* const element_type_;
+    std::size_t size_ = 0;  // 0 means dynamic size
 
-public:
-    ListType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
-
+    ArrayType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
     std::string_view repr() const final {
-        return GlobalMemory::format("List<{}>", element_type_->repr());
+        return GlobalMemory::format("{}[]", element_type_->repr());
     }
-
     bool assignable_from_impl(const Type& source) const final {
         if (source.kind_ != kind) {
             return false;
         }
-        const ListType& other_list = static_cast<const ListType&>(source);
-        return element_type_->assignable_from(*other_list.element_type_);
+        const ArrayType& other_array = static_cast<const ArrayType&>(source);
+        return element_type_->assignable_from(*other_array.element_type_) &&
+               (size_ == 0 || size_ == other_array.size_);
     }
 };
 
@@ -316,33 +306,51 @@ public:
 };
 
 class ClassType : public Type {
-public:
-    static constexpr Kind kind = Kind::Instance;
-
 private:
     const std::string_view name_;
-    const ComparableSpan<InterfaceType*> interfaces_;
+    const ComparableSpan<InterfaceType*> implements_;
     ClassType* const extends_;
-    const GlobalMemory::Map<std::string_view, Type*> properties_;
+    const GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods_;
+    const GlobalMemory::Map<std::string_view, Type*> attr_;
 
 public:
     ClassType(
         std::string_view name,
         ComparableSpan<InterfaceType*> interfaces,
         ClassType* extends,
-        GlobalMemory::Map<std::string_view, Type*> properties
+        GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods,
+        GlobalMemory::Map<std::string_view, Type*> attr
     ) noexcept
-        : Type(kind),
+        : Type(Kind::Instance),
           name_(name),
-          interfaces_(interfaces),
+          implements_(interfaces),
           extends_(extends),
-          properties_(std::move(properties)) {}
+          methods_(std::move(methods)),
+          attr_(std::move(attr)) {}
 
-    std::string_view repr() const override {
-        return GlobalMemory::String("class ") + GlobalMemory::String(name_);
-    }
+    std::string_view repr() const override { return GlobalMemory::format("class {}", name_); }
 
     bool assignable_from_impl(const Type& other) const override { return false; }
+
+    OverloadedFunctionValue* get_method(std::string_view name) const {
+        auto it = methods_.find(name);
+        if (it == methods_.end()) {
+            throw UnlocatedProblem::make<AttributeError>(
+                GlobalMemory::format("Class {} has no method named {}", name_, name)
+            );
+        }
+        return it->second;
+    }
+
+    Type* get_attr(std::string_view name) const {
+        auto it = attr_.find(name);
+        if (it == attr_.end()) {
+            throw UnlocatedProblem::make<AttributeError>(
+                GlobalMemory::format("Class {} has no attribute named {}", name_, name)
+            );
+        }
+        return it->second;
+    }
 };
 
 class IntersectionType final : public Type {
@@ -542,8 +550,11 @@ public:
                 return new V(value);
             }
             return nullptr;
-        } else if constexpr (std::is_same_v<V, StringValue>) {
-            return new V(GlobalMemory::String(literal.substr(1, literal.size() - 2)));
+        } else if constexpr (std::is_same_v<V, ArrayValue>) {
+            // String literal is treated as array of characters
+            assert(literal.size() >= 2 && literal.front() == '"' && literal.back() == '"');
+            std::string_view content = literal.substr(1, literal.size() - 2);
+            return new V(content);
         } else if constexpr (std::is_same_v<V, BooleanValue>) {
             assert(literal == "true" || literal == "false");
             if (literal == "true") {
@@ -580,12 +591,11 @@ private:
 class NullValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Null;
-    using StaticType = NullType;
 
 public:
     NullValue() noexcept : Value(kind) {}
     std::string_view repr() const final { return "null"; }
-    NullType* get_type() const final { return &StaticType::instance; }
+    NullType* get_type() const final { return &NullType::instance; }
     NullValue* resolve_to(Type* target) const final {
         assert(target);
         if (target->kind_ != Kind::Null) {
@@ -598,7 +608,6 @@ public:
 class IntegerValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Integer;
-    using StaticType = IntegerType;
 
 public:
     IntegerType* const type_;  // nullptr for integer literals without a specific type
@@ -711,7 +720,6 @@ public:
 class FloatValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Float;
-    using StaticType = FloatType;
 
 public:
     FloatType* const type_;
@@ -760,35 +768,9 @@ public:
     BooleanValue operator>=(const FloatValue& other) const;
 };
 
-class StringValue final : public Value {
-public:
-    static constexpr Kind kind = Kind::String;
-    using StaticType = StringType;
-
-public:
-    GlobalMemory::String value_;
-
-public:
-    StringValue(GlobalMemory::String value) noexcept : Value(kind), value_(std::move(value)) {}
-    std::string_view repr() const final { return GlobalMemory::hex_string(this->value_); }
-    StringType* get_type() const final { return &StaticType::instance; }
-    StringValue* resolve_to(Type* target) const final {
-        assert(target);
-        if (target->kind_ != Kind::String) {
-            throw UnlocatedProblem::make<TypeMismatchError>("string", target->repr());
-        }
-        return new StringValue(*this);
-    }
-    StringValue operator+(const StringValue& other) const;
-    StringValue operator*(const IntegerValue& other) const;
-    BooleanValue operator==(const StringValue& other) const;
-    BooleanValue operator!=(const StringValue& other) const;
-};
-
 class BooleanValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Boolean;
-    using StaticType = BooleanType;
 
 public:
     bool value_;
@@ -796,7 +778,7 @@ public:
 public:
     BooleanValue(bool value) noexcept : Value(kind), value_(value) {}
     std::string_view repr() const final { return this->value_ ? "true" : "false"; }
-    BooleanType* get_type() const final { return &StaticType::instance; }
+    BooleanType* get_type() const final { return &BooleanType::instance; }
     BooleanValue* resolve_to(Type* target) const final {
         assert(target);
         if (target->kind_ != Kind::Boolean) {
@@ -814,18 +796,17 @@ public:
 class FunctionValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Function;
-    using StaticType = FunctionType;
 
 public:
     FunctionType* type_;
     const void* source_;
-    std::function<Value*(ComparableSpan<Value*>)> invoke_;
+    std::function<Value*(ComparableSpan<Value*>)> callback_;
 
 public:
-    FunctionValue(const void* source, decltype(invoke_) invoke) noexcept
-        : Value(kind), type_(nullptr), source_(source), invoke_(std::move(invoke)) {}
-    FunctionValue(FunctionType* type, const void* source, decltype(invoke_) invoke) noexcept
-        : Value(kind), type_(type), source_(source), invoke_(std::move(invoke)) {}
+    FunctionValue(const void* source, decltype(callback_) invoke) noexcept
+        : Value(kind), type_(nullptr), source_(source), callback_(std::move(invoke)) {}
+    FunctionValue(FunctionType* type, const void* source, decltype(callback_) invoke) noexcept
+        : Value(kind), type_(type), source_(source), callback_(std::move(invoke)) {}
 
     std::string_view repr() const final {
         return GlobalMemory::format("<function at {:p}>", static_cast<const void*>(this));
@@ -834,56 +815,63 @@ public:
     FunctionValue* resolve_to(Type* target) const final {
         /// Type of function value is managed by OverloadedFunctionValue
         /// @code let func: (a) -> b = ... @endcode
-        /// Here, right-hand side is of type OverloadedFunctionValue, which holds overloads so the
-        /// resolve_to of FunctionValue will never be called.
+        /// Here, right-hand side is of type OverloadedFunctionValue, which holds overloads so
+        /// the resolve_to of FunctionValue will never be called.
         std::unreachable();
     }
+    Value* invoke(ComparableSpan<Value*> args) const { return callback_(args); }
 };
 
-class InstanceValue : public Value {
+class ArrayValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::Instance;
-    using StaticType = ClassType;
+    static constexpr Kind kind = Kind::Array;
 
+public:
+    ArrayType* type_;
+    GlobalMemory::Vector<Value*> elements_;
+
+public:
+    ArrayValue(ArrayType* type, GlobalMemory::Vector<Value*>&& elements) noexcept
+        : Value(kind), type_(type), elements_(std::move(elements)) {}
+    std::string_view repr() const final {
+        return GlobalMemory::format("[{}]", type_->element_type_->repr());
+    }
+    ArrayType* get_type() const final { return type_; }
+    ArrayValue* resolve_to(Type* target) const final {
+        /// TODO: implement
+        return nullptr;
+    }
+};
+
+class InstanceValue final : public Value {
 public:
     ClassType* cls_;
-    std::vector<Value*> attributes_;
+    GlobalMemory::Map<std::string_view, Value*> attributes_;
 
 public:
-    InstanceValue(ClassType* cls) noexcept : Value(kind), cls_(cls) {}
-
-    Value* get(const std::string_view property) const noexcept {
-        // TODO: implement
-        return nullptr;
-    }
-};
-
-class ListValue : public InstanceValue {
-private:
-    static ListValue* Append(const std::vector<Value*>& args) noexcept {
-        // TODO: implement
-        return nullptr;
-    }
-
-public:
-    std::vector<Value*> values_;
-    ListValue() noexcept : InstanceValue(nullptr) {}
-    ListValue(std::vector<Value*>&& values) noexcept
-        : InstanceValue(nullptr), values_(std::move(values)) {
-        kind_ = kind;
-    }
+    InstanceValue(ClassType* cls, decltype(attributes_) attributes) noexcept
+        : Value(Kind::Instance), cls_(cls), attributes_(std::move(attributes)) {}
     std::string_view repr() const final {
-        // TODO: implement
-        return {};
+        return GlobalMemory::format("<instance of {}>", cls_->repr());
     }
-    ListValue* operator+(const ListValue& other) const;
-    ListValue* operator*(const IntegerValue& other) const;
+    ClassType* get_type() const final { return cls_; }
+    InstanceValue* resolve_to(Type* target) const final {
+        if (target != cls_) {
+            throw UnlocatedProblem::make<TypeMismatchError>("instance", target->repr());
+        }
+        return new InstanceValue(*this);
+    }
+    Value* get(std::string_view property) noexcept { return attributes_.at(property); }
 };
 
 class OverloadedFunctionValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::Intersection;
-    using StaticType = IntersectionType;
+    static OverloadedFunctionValue* make_builtin(auto&&... overloads) {
+        static_assert((std::is_same_v<std::decay_t<decltype(overloads)>, FunctionValue*> && ...));
+        for (const auto& overload : {overloads...}) {
+            assert(overload && overload->type_);
+        }
+    }
 
 private:
     Type* type_;
@@ -891,13 +879,13 @@ private:
 
 private:
     OverloadedFunctionValue(Type* type, GlobalMemory::Vector<FunctionValue*> overloads) noexcept
-        : Value(kind), type_(type), overloads_(std::move(overloads)) {}
+        : Value(Kind::Intersection), type_(type), overloads_(std::move(overloads)) {}
 
 public:
     OverloadedFunctionValue(FunctionValue* first) noexcept
-        : Value(kind), type_(nullptr), overloads_{first} {}
+        : Value(Kind::Intersection), type_(nullptr), overloads_{first} {}
     OverloadedFunctionValue(Type* type, const OverloadedFunctionValue& other) noexcept
-        : Value(kind), type_(type), overloads_(other.overloads_) {}
+        : Value(Kind::Intersection), type_(type), overloads_(other.overloads_) {}
     std::string_view repr() const final {
         // TODO
         return {};
@@ -953,7 +941,7 @@ private:
 public:
     template <TypeClass T>
     T* get(auto&&... args) {
-        if constexpr (TypeInTupleV<T, std::tuple<AnyType, NullType, StringType, BooleanType>>) {
+        if constexpr (TypeInTupleV<T, std::tuple<AnyType, NullType, BooleanType>>) {
             return &T::instance;
         } else if constexpr (std::is_same_v<T, IntegerType>) {
             const std::tuple args_tuple = std::tuple{std::forward<decltype(args)>(args)...};
@@ -962,13 +950,13 @@ public:
             if (unsigned_) {
                 switch (bits) {
                 case 8:
-                    return &PrimitiveType<Kind::Integer>::u8_instance;
+                    return &IntegerType::u8_instance;
                 case 16:
-                    return &PrimitiveType<Kind::Integer>::u16_instance;
+                    return &IntegerType::u16_instance;
                 case 32:
-                    return &PrimitiveType<Kind::Integer>::u32_instance;
+                    return &IntegerType::u32_instance;
                 case 64:
-                    return &PrimitiveType<Kind::Integer>::u64_instance;
+                    return &IntegerType::u64_instance;
                 default:
                     assert(false);
                     std::unreachable();
@@ -976,13 +964,13 @@ public:
             } else {
                 switch (bits) {
                 case 8:
-                    return &PrimitiveType<Kind::Integer>::i8_instance;
+                    return &IntegerType::i8_instance;
                 case 16:
-                    return &PrimitiveType<Kind::Integer>::i16_instance;
+                    return &IntegerType::i16_instance;
                 case 32:
-                    return &PrimitiveType<Kind::Integer>::i32_instance;
+                    return &IntegerType::i32_instance;
                 case 64:
-                    return &PrimitiveType<Kind::Integer>::i64_instance;
+                    return &IntegerType::i64_instance;
                 default:
                     assert(false);
                     std::unreachable();
@@ -990,12 +978,12 @@ public:
             }
             assert(false);
             std::unreachable();
-        } else if constexpr (std::is_same_v<T, PrimitiveType<Kind::Float>>) {
+        } else if constexpr (std::is_same_v<T, FloatType>) {
             std::uint8_t bits = std::get<0>(std::tuple{std::forward<decltype(args)>(args)...});
             if (bits == 32) {
-                return &PrimitiveType<Kind::Float>::f32_instance;
+                return &FloatType::f32_instance;
             } else if (bits == 64) {
-                return &PrimitiveType<Kind::Float>::f64_instance;
+                return &FloatType::f64_instance;
             } else {
                 assert(false);
                 std::unreachable();
@@ -1033,8 +1021,9 @@ inline Value* Object::as_value() {
 
 inline UnknownType UnknownType::instance;
 
-template <Kind K>
-inline PrimitiveType<K> PrimitiveType<K>::instance;
+inline AnyType AnyType::instance;
+
+inline NullType NullType::instance;
 
 inline IntegerType IntegerType::untyped_instance = IntegerType(false, 0);
 inline IntegerType IntegerType::i8_instance = IntegerType(true, 8);
@@ -1049,6 +1038,8 @@ inline IntegerType IntegerType::u64_instance = IntegerType(false, 64);
 inline FloatType FloatType::untyped_instance = FloatType(0);
 inline FloatType FloatType::f32_instance = FloatType(32);
 inline FloatType FloatType::f64_instance = FloatType(64);
+
+inline BooleanType BooleanType::instance;
 
 inline GlobalMemory::Set<FunctionType*> FunctionType::list_all(Type* type) {
     if (type->kind_ == Kind::Intersection) {
@@ -1186,30 +1177,6 @@ inline BooleanValue FloatValue::operator>=(const FloatValue& other) const {
     return BooleanValue(this->value_ >= other.value_);
 }
 
-// StringValue operators
-inline StringValue StringValue::operator+(const StringValue& other) const {
-    return StringValue(this->value_ + other.value_);
-}
-
-inline StringValue StringValue::operator*(const IntegerValue& other) const {
-    if (other.ivalue_ <= 0)
-        throw std::runtime_error("Can only multiply string by positive integer");
-    GlobalMemory::String result;
-    result.reserve(this->value_.size() * static_cast<std::uint64_t>(other.ivalue_));
-    for (uint64_t i = 0; i < static_cast<std::uint64_t>(other.ivalue_); i++) {
-        result += this->value_;
-    }
-    return StringValue(std::move(result));
-}
-
-inline BooleanValue StringValue::operator==(const StringValue& other) const {
-    return BooleanValue(this->value_ == other.value_);
-}
-
-inline BooleanValue StringValue::operator!=(const StringValue& other) const {
-    return BooleanValue(this->value_ != other.value_);
-}
-
 // BooleanValue operators
 inline BooleanValue BooleanValue::operator==(const BooleanValue& other) const {
     return BooleanValue(this->value_ == other.value_);
@@ -1228,14 +1195,3 @@ inline BooleanValue BooleanValue::operator||(const BooleanValue& other) const {
 }
 
 inline BooleanValue BooleanValue::operator!() const { return BooleanValue(!this->value_); }
-
-// ListValue operators
-inline ListValue* ListValue::operator+(const ListValue& other) const {
-    // TODO: implement
-    return nullptr;
-}
-
-inline ListValue* ListValue::operator*(const IntegerValue& other) const {
-    // TODO: implement
-    return nullptr;
-}

@@ -231,203 +231,29 @@ using LeftShiftAssign = OperateAndAssign<LeftShift>;
 using RightShiftAssign = OperateAndAssign<RightShift>;
 }  // namespace OperatorFunctors
 
-class IntrinsicOpTable {
+class OperationHandler final {
 private:
-    /// Placeholder for right operand absence
-    struct NoOperand : public Value {
-        static constexpr Kind kind = Kind::NothingOrUnknown;
-        NoOperand() = delete;
-        NoOperand(const NoOperand&) = delete;
-        NoOperand& operator=(const NoOperand&) = delete;
-    };
-
-    /// Placeholder to ensure Kind enum can be directly used as array index
-    struct AnyValue : public Value {
-        static constexpr Kind kind = Kind::Any;
-        AnyValue() = delete;
-        AnyValue(const AnyValue&) = delete;
-        AnyValue& operator=(const AnyValue&) = delete;
-    };
-
-    using AllOperations = std::tuple<
-        OperatorFunctors::Add,
-        OperatorFunctors::Subtract,
-        OperatorFunctors::Negate,
-        OperatorFunctors::Multiply,
-        OperatorFunctors::Divide,
-        OperatorFunctors::Remainder,
-        OperatorFunctors::Increment,
-        OperatorFunctors::Decrement,
-        OperatorFunctors::Equal,
-        OperatorFunctors::NotEqual,
-        OperatorFunctors::LessThan,
-        OperatorFunctors::LessEqual,
-        OperatorFunctors::GreaterThan,
-        OperatorFunctors::GreaterEqual,
-        OperatorFunctors::LogicalAnd,
-        OperatorFunctors::LogicalOr,
-        OperatorFunctors::LogicalNot,
-        OperatorFunctors::BitwiseAnd,
-        OperatorFunctors::BitwiseOr,
-        OperatorFunctors::BitwiseXor,
-        OperatorFunctors::BitwiseNot,
-        OperatorFunctors::LeftShift,
-        OperatorFunctors::RightShift,
-        OperatorFunctors::Assign>;
-
-    using AllPrimitiveValues = std::
-        tuple<NoOperand, AnyValue, NullValue, IntegerValue, FloatValue, StringValue, BooleanValue>;
+    GlobalMemory::Map<std::tuple<OperatorCode, Type*, Type*>, FunctionValue*> custom_table_;
 
 public:
-    using OperatorFn = Value* (*)(Value*, Value*);
-    using TableValue = std::pair<Kind, OperatorFn>;
-
-private:
-    template <typename Op, typename Left, typename Right>
-    static consteval TableValue make_single_op() {
-        constexpr bool valid =
-            requires { Op{}(std::declval<const Left&>(), std::declval<const Right&>()).kind; };
-        if constexpr (valid) {
-            return TableValue{
-                decltype(Op{}(std::declval<const Left&>(), std::declval<const Right&>()))::kind,
-                [](Value* left, Value* right) -> Value* {
-                    auto result =
-                        Op{}(static_cast<const Left&>(*left), static_cast<const Right&>(*right));
-                    return new decltype(result)(std::move(result));
-                },
-            };
-        } else {
-            return TableValue{Kind::NothingOrUnknown, nullptr};
-        }
-    }
-
-    static constexpr const auto& operation_table() {
-        static constexpr auto table = []<typename... Ops>(std::type_identity<std::tuple<Ops...>>) {
-            return std::array{[]<typename... Ls>(std::type_identity<std::tuple<Ls...>>) {
-                using Op = Ops;
-                return std::array{[]<typename... Rs>(std::type_identity<std::tuple<Rs...>>) {
-                    using L = Ls;
-                    return std::array{make_single_op<Op, L, Rs>()...};
-                }(std::type_identity<AllPrimitiveValues>{})...};
-            }(std::type_identity<AllPrimitiveValues>{})...};
-        }(std::type_identity<AllOperations>{});
-        static_assert(table.size() == static_cast<std::size_t>(OperatorCode::SIZE));
-        static_assert(table[0].size() == static_cast<std::size_t>(Kind::NonCompositeSize));
-        static_assert(table[0][0].size() == static_cast<std::size_t>(Kind::NonCompositeSize));
-
-        return table;
-    }
-
-protected:
-    TypeRegistry& types_;
-
-public:
-    constexpr IntrinsicOpTable(TypeRegistry& types) : types_(types) {}
-
-    constexpr Object* eval_op(
-        OperatorCode opcode, Object* left, Object* right = &UnknownType::instance
-    ) const {
-        if (left->as_type() && right->as_type()) {
-            return eval_type_op(opcode, left->as_type(), right->as_type());
-        } else if (left->as_value() && right->as_value()) {
-            return eval_value_op(opcode, left->as_value(), right->as_value());
-        } else {
-            return eval_type_value_op(opcode, left, right);
-        }
-    }
-
-    Type* get_result_type(
-        OperatorCode opcode, Type* left_type, Type* right_type = &UnknownType::instance
-    ) const {
-        const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
-                                                   [static_cast<std::size_t>(left_type->kind_)]
-                                                   [static_cast<std::size_t>(right_type->kind_)];
-        if (value.first == Kind::NothingOrUnknown) {
-            throw UnlocatedProblem::make<OperationNotDefinedError>(
-                "", left_type->repr(), right_type ? right_type->repr() : ""
-            );
-        }
-        switch (value.first) {
-        case Kind::Integer: {
-            bool is_signed =
-                static_cast<const IntegerType*>(left_type)->is_signed_ ||
-                (right_type && static_cast<const IntegerType*>(right_type)->is_signed_);
-            std::uint8_t bytes = static_cast<const IntegerType*>(left_type)->bits_ >
-                                 static_cast<const IntegerType*>(right_type)->bits_;
-            return types_.get<PrimitiveType<Kind::Integer>>(is_signed, bytes);
-        }
-        case Kind::Float: {
-            std::uint8_t bytes = static_cast<const FloatType*>(left_type)->bits_ >
-                                 static_cast<const FloatType*>(right_type)->bits_;
-            return types_.get<PrimitiveType<Kind::Float>>(bytes);
-        }
-        case Kind::String:
-            return types_.get<PrimitiveType<Kind::String>>();
-        case Kind::Boolean:
-            return types_.get<PrimitiveType<Kind::Boolean>>();
-        default:
-            assert(false && "Unsupported result type kind");
-            std::unreachable();
-        }
-    }
-
-private:
-    Value* eval_value_op(OperatorCode opcode, Value* left, Value* right) const {
-        const TableValue& value = operation_table()[static_cast<std::size_t>(opcode)]
-                                                   [static_cast<std::size_t>(left->kind_)]
-                                                   [static_cast<std::size_t>(right->kind_)];
-        if (value.second == nullptr) {
-            throw UnlocatedProblem::make<OperationNotDefinedError>("", left->repr(), right->repr());
-        }
-        return value.second(left, right);
-    }
-
-    Type* eval_type_op(OperatorCode opcode, Type* left, Type* right) const {
-        switch (opcode) {
-        case OperatorCode::OPERATOR_BITWISE_AND:
-            return types_.get<IntersectionType>(left, right);
-        case OperatorCode::OPERATOR_BITWISE_OR:
-            return types_.get<UnionType>(left, right);
-        default:
-            throw UnlocatedProblem::make<OperationNotDefinedError>("", left->repr(), right->repr());
-        }
-    }
-
-    Type* eval_type_value_op(OperatorCode opcode, Object* left, Object* right) const {
-        // TODO (array index, integer + 1, etc.)
-        return {};
-    }
-};
-
-class OpDispatcher final : private IntrinsicOpTable {
-private:
-    using CustomTableKey = std::tuple<OperatorCode, Type*, Type*>;
-    using CustomTableValue = std::pair<Type*, OperatorFn>;
-    GlobalMemory::Map<CustomTableKey, CustomTableValue> custom_table_;
-
-public:
-    OpDispatcher(TypeRegistry& types) : IntrinsicOpTable(types), custom_table_() {}
+    OperationHandler(TypeRegistry& types) {}
 
     void register_custom_op(
-        OperatorCode opcode, Type* left_type, Type* right_type, Type* result_type, OperatorFn func
+        OperatorCode opcode, Type* left_type, Type* right_type, FunctionValue* func
     ) {
-        custom_table_[{opcode, left_type, right_type}] = {result_type, func};
+        custom_table_[{opcode, left_type, right_type}] = func;
     }
 
     Object* eval_op(OperatorCode opcode, Object* left, Object* right = {}) const {
-        bool both_types = left->as_type() && right->as_type();
-        bool both_primitive_values = left->as_value() && right->as_value() &&
-                                     left->as_value()->kind_ < Kind::NonCompositeSize &&
-                                     right->as_value()->kind_ < Kind::NonCompositeSize;
-        if (both_types || both_primitive_values) {
-            return IntrinsicOpTable::eval_op(opcode, left, right);
+        bool any_is_type = left->as_type() || right->as_type();
+        if (any_is_type) {
+            return eval_type_op(opcode, left, right);
         }
-        // operation on values only
         Value* left_value = left->as_value();
         Value* right_value = right->as_value();
         auto it = custom_table_.find({opcode, left_value->get_type(), right_value->get_type()});
         if (it != custom_table_.end()) {
-            return it->second.second(left_value, right_value);
+            return it->second->invoke(GlobalMemory::pack_array<Value*>(left_value, right_value));
         } else {
             throw UnlocatedProblem::make<OperationNotDefinedError>(
                 "", left_value->repr(), right_value->repr()
@@ -436,17 +262,19 @@ public:
     }
 
     Type* get_result_type(OperatorCode opcode, Type* left_type, Type* right_type = {}) const {
-        if (left_type->kind_ < Kind::NonCompositeSize &&
-            (right_type ? right_type->kind_ < Kind::NonCompositeSize : true)) {
-            return IntrinsicOpTable::get_result_type(opcode, left_type, right_type);
-        }
         auto it = custom_table_.find({opcode, left_type, right_type});
         if (it != custom_table_.end()) {
-            return (*it).second.first;
+            return (*it).second->type_->return_type_;
         } else {
             throw UnlocatedProblem::make<OperationNotDefinedError>(
                 "", left_type->repr(), right_type ? right_type->repr() : ""
             );
         }
+    }
+
+private:
+    Type* eval_type_op(OperatorCode opcode, Object* left, Object* right = {}) const {
+        /// TODO: implement type-level operations
+        return nullptr;
     }
 };

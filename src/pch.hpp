@@ -189,6 +189,18 @@ public:
         }
     }
 
+    template <typename T>
+    static constexpr ComparableSpan<T> pack_array(auto&&... items) {
+        static_assert(
+            (std::is_convertible_v<decltype(items), T> && ...), "All items must be convertible to T"
+        );
+        ComparableSpan<T> span = alloc_array<T>(sizeof...(items));
+        T* ptr = span.data();
+        std::size_t index = 0;
+        ((ptr[index++] = std::forward<decltype(items)>(items)), ...);
+        return span;
+    }
+
 private:
     template <typename T>
     class RangeCollector {

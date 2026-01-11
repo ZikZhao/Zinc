@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
 
     Scope scope;
     TypeRegistry types;
-    OpDispatcher ops(types);
+    OperationHandler ops(types);
     root->collect_symbols(scope, ops);
     TypeChecker checker(scope, ops, types);
     root->check_types(checker);

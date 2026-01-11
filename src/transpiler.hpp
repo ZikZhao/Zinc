@@ -160,9 +160,6 @@ public:
             }
             return *this;
         }
-        case Kind::String:
-            *current_section_ << "std::string";
-            break;
         case Kind::Boolean:
             *current_section_ << "bool";
             break;
@@ -182,7 +179,7 @@ public:
         }
         case Kind::Intersection: {
             const IntersectionType* intersection = static_cast<const IntersectionType*>(type);
-            *current_section_ << "PolyFunction<";
+            *current_section_ << "$PolyFunction<";
             const char* sep = "";
             for (Type* sub_type : intersection->types_) {
                 *current_section_ << sep;
@@ -212,12 +209,7 @@ public:
         }
         case Kind::Float: {
             const FloatValue* float_value = static_cast<const FloatValue*>(value);
-            std::format_to(std::back_inserter(**current_section_), "{}", float_value->value_);
-            break;
-        }
-        case Kind::String: {
-            const StringValue* string_value = static_cast<const StringValue*>(value);
-            *current_section_ << GlobalMemory::hex_string(string_value->value_);
+            std::format_to(std::back_inserter(**current_section_), "0x{:a}", float_value->value_);
             break;
         }
         case Kind::Boolean: {
