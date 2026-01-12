@@ -186,18 +186,20 @@ public:
 };
 
 class Diagnostic {
+    friend class ThreadGuard;
+
 private:
     static inline std::mutex print_mutex_;
-    static inline std::vector<Problem> problems_;
+    static thread_local Diagnostic instance;
 
 public:
-    static void report(Problem&& problem) { problems_.push_back(std::move(problem)); }
+    static void report(Problem&& problem) { instance.problems_.push_back(std::move(problem)); }
 
     static bool print(SourceManager& sources) {
         std::lock_guard lock(print_mutex_);
         std::size_t error_count = 0;
         std::size_t warning_count = 0;
-        for (const Problem& problem : problems_) {
+        for (const Problem& problem : instance.problems_) {
             print_problem(sources, problem);
             switch (problem.severity_) {
             case Problem::Severity::Error:
@@ -353,8 +355,11 @@ private:
         }
     }
 
-public:
-    Diagnostic() = delete;
+private:
+    std::vector<Problem> problems_;
+
+private:
+    Diagnostic() = default;
 };
 
 class UnlocatedProblem : std::runtime_error {
@@ -377,3 +382,5 @@ public:
         : std::runtime_error(""), callback_(std::move(callback)) {}
     void report_at(Location location) { std::move(callback_)(location); }
 };
+
+inline thread_local Diagnostic Diagnostic::instance;

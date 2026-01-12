@@ -114,6 +114,8 @@ private:
     GlobalMemory::Map<std::type_index, Type*> builtin_types_;
 
 private:
+    TypeRegistry() noexcept = default;
+
     template <TypeClass T>
     T* get_cached(auto&&... args) {
         GlobalMemory::Set<T*, TypeComparator>& type_set =
@@ -937,7 +939,7 @@ public:
         }
         return new InstanceValue(*this);
     }
-    Value* get(std::string_view property) noexcept { return attributes_.at(property); }
+    Value* get_attr(std::string_view attr) noexcept { return attributes_.at(attr); }
 };
 
 class OverloadedFunctionValue final : public Value {
@@ -966,7 +968,11 @@ public:
                 break;
             }
         }
-        type_ = TypeRegistry::get<IntersectionType>(type_, target);
+        if (type_) {
+            type_ = TypeRegistry::get<IntersectionType>(type_, target);
+        } else {
+            type_ = target;
+        }
     }
 };
 

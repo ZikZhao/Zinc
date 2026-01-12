@@ -236,8 +236,6 @@ private:
     GlobalMemory::Map<std::tuple<OperatorCode, Type*, Type*>, FunctionValue*> custom_table_;
 
 public:
-    OperationHandler(TypeRegistry& types) {}
-
     void register_custom_op(
         OperatorCode opcode, Type* left_type, Type* right_type, FunctionValue* func
     ) {

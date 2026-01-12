@@ -10,8 +10,10 @@
 
 class ThreadGuard {
 public:
-    ThreadGuard() { TypeRegistry::instance = TypeRegistry(); }
-    ~ThreadGuard() { TypeRegistry::instance = TypeRegistry(); }
+    ~ThreadGuard() {
+        TypeRegistry::instance = TypeRegistry();
+        Diagnostic::instance = Diagnostic();
+    }
 };
 
 int main(int argc, char* argv[]) {
@@ -25,10 +27,9 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<ASTRoot> root = builder();
 
     Scope scope;
-    TypeRegistry types;
-    OperationHandler ops(types);
+    OperationHandler ops;
     root->collect_symbols(scope, ops);
-    TypeChecker checker(scope, ops, types);
+    TypeChecker checker(scope, ops);
     root->check_types(checker);
 
     bool has_error = Diagnostic::print(sources);

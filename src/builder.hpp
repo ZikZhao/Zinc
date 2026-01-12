@@ -9,7 +9,6 @@
 #include "object.hpp"
 #include "source.hpp"
 
-
 class ASTBuilder final : private StainlessBaseVisitor {
 private:
     const SourceManager::File& file_;
@@ -185,7 +184,7 @@ private:
         std::unique_ptr return_type =
             static_unique_cast<ASTTypeExpression>(transform(ctx->return_type_));
         std::unique_ptr body = static_unique_cast<ASTLocalBlock>(transform(ctx->body_));
-        last_visited_ = std::make_unique<ASTFunctionDefinition>(
+        last_visited_ = std::make_unique<ASTFunctionDeclaration>(
             loc(ctx),
             identifier,
             std::move(parameters),
@@ -200,6 +199,18 @@ private:
             loc(ctx),
             text(ctx->identifier_),
             static_unique_cast<ASTTypeExpression>(transform(ctx->type_))
+        );
+        return {};
+    }
+    antlrcpp::Any visitClass_declaration(
+        StainlessParser::Class_declarationContext* ctx
+    ) noexcept final {
+        ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields =
+            transform_list<ASTFieldDeclaration>(ctx->fields_);
+        ComparableSpan<std::unique_ptr<ASTFunctionDeclaration>> functions =
+            transform_list<ASTFunctionDeclaration>(ctx->funcs_);
+        last_visited_ = std::make_unique<ASTClassDeclaration>(
+            loc(ctx), text(ctx->identifier_), std::move(fields), std::move(functions)
         );
         return {};
     }
@@ -543,7 +554,7 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitRecord_field(StainlessParser::Record_fieldContext* ctx) noexcept final {
+    antlrcpp::Any visitField(StainlessParser::FieldContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTFieldDeclaration>(
             loc(ctx),
             text(ctx->identifier_),

@@ -14,6 +14,12 @@ let f: (i32, i32) -> i32 = add;
 
 let g = sub;
 
+class MyClass {
+    data: i32;
+    data2: f64;
+    fn add1() -> i32 {}
+};
+
 fn main() -> i32 {
     f(2, 3);
     g(5, 4);

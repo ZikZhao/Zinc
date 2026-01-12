@@ -352,7 +352,7 @@ inline void ASTFieldDeclaration::transpile(
 ) const noexcept {
     transpiler << this;
     type_->transpile(transpiler, checker);
-    transpiler << identifier_ << ";";
+    transpiler << " " << identifier_ << ";";
 }
 
 inline void ASTRecordType::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
@@ -448,7 +448,7 @@ inline void ASTFunctionParameter::transpile(
     transpiler << " " << identifier_;
 }
 
-inline void ASTFunctionDefinition::transpile(
+inline void ASTFunctionDeclaration::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
     bool is_main = checker.at_top_level() && identifier_ == "main";
@@ -463,7 +463,7 @@ inline void ASTFunctionDefinition::transpile(
             param->transpile(transpiler, checker);
             sep = ", ";
         }
-        transpiler << ");";
+        transpiler << ");" << Transpiler::newline;
 
         if (transpiler.should_generate_niebloid(identifier_)) {
             transpiler[Section::Constants] << "constexpr auto " << identifier_
@@ -486,4 +486,24 @@ inline void ASTFunctionDefinition::transpile(
     checker.enter(body_.get());
     body_->transpile(transpiler, checker);
     checker.exit();
+}
+
+inline void ASTClassDeclaration::transpile(
+    Transpiler& transpiler, TypeChecker& checker
+) const noexcept {
+    transpiler[Section::Declarations] << this;
+    transpiler << "struct " << identifier_ << " {" << Transpiler::indent << Transpiler::newline;
+
+    checker.enter(this);
+    for (const auto& field : fields_) {
+        field->transpile(transpiler, checker);
+        transpiler << Transpiler::newline;
+    }
+    for (const auto& func : functions_) {
+        func->transpile(transpiler, checker);
+        transpiler << Transpiler::newline;
+    }
+    checker.exit();
+
+    transpiler[Section::Declarations] << Transpiler::dedent << "};" << Transpiler::newline;
 }

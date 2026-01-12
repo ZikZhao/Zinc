@@ -32,7 +32,7 @@ class ASTBreakStatement;
 class ASTReturnStatement;
 class ASTFunctionParameter;
 class ASTFunctionSignature;
-class ASTFunctionDefinition;
+class ASTFunctionDeclaration;
 
 struct ExprInfo {
     Type* type;
@@ -44,7 +44,7 @@ class Scope {
     friend class TypeChecker;
 
 public:
-    static Scope& create(const auto* owner, Scope& parent, std::string_view name = "") {
+    static Scope& create(const void* owner, Scope& parent, std::string_view name = "") {
         std::unique_ptr scope = std::unique_ptr<Scope>(new Scope(parent, name));
         Scope& ref = *scope;
         parent.children_.insert({owner, std::move(scope)});
@@ -114,12 +114,11 @@ private:
 
 public:
     const OperationHandler& ops_;
-    TypeRegistry& types_;
 
 public:
-    TypeChecker(Scope& root, const OperationHandler& ops, TypeRegistry& types) noexcept;
+    TypeChecker(Scope& root, const OperationHandler& ops) noexcept;
     void add_variable(std::string_view identifier, Object* expr);
-    void enter(const ASTBlock* child) noexcept;
+    void enter(const void* child) noexcept;
     void exit() noexcept;
     Object* resolve(std::string_view identifier);
     ExprInfo type_of(std::string_view identifier);
@@ -277,7 +276,7 @@ public:
             Diagnostic::report(OperationNotDefinedError(
                 location_, OperatorCodeToString(Op::opcode), left_type->repr(), right_type->repr()
             ));
-            return checker.types_.get_unknown();
+            return TypeRegistry::get_unknown();
         }
     }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
@@ -307,7 +306,7 @@ public:
     ~ASTBinaryOp() noexcept final = default;
     Object* eval(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return checker.types_.get_unknown();
+        return TypeRegistry::get_unknown();
     }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         ExprInfo left_info = left_->get_expr_info(checker);
@@ -432,22 +431,22 @@ public:
                 }
                 Diagnostic::report(SymbolCategoryMismatchError(param_expr->location_, true));
                 any_error = true;
-                return checker.types_.get_unknown()->as_type();
+                return TypeRegistry::get_unknown()->as_type();
             }) |
             GlobalMemory::collect<ComparableSpan<Type*>>();
         if (any_error) {
-            return checker.types_.get_unknown();
+            return TypeRegistry::get_unknown();
         }
         Type* return_type = std::get<1>(comps)->eval(checker)->as_type();
         if (!return_type) {
             Diagnostic::report(SymbolCategoryMismatchError(std::get<1>(comps)->location_, true));
-            return checker.types_.get_unknown();
+            return TypeRegistry::get_unknown();
         }
-        return checker.types_.get<FunctionType>(param_types, return_type);
+        return TypeRegistry::get<FunctionType>(param_types, return_type);
     }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {checker.types_.get_unknown()->as_type(), false, true};
+        return {TypeRegistry::get_unknown()->as_type(), false, true};
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -480,11 +479,11 @@ public:
                        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
                    });
         GlobalMemory::Map<std::string_view, Type*> field_types(std::from_range, std::move(rng));
-        return checker.types_.get<RecordType>(field_types);
+        return TypeRegistry::get<RecordType>(field_types);
     }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {checker.types_.get_unknown()->as_type(), false, true};
+        return {TypeRegistry::get_unknown()->as_type(), false, true};
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -716,7 +715,7 @@ public:
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
-class ASTFunctionDefinition final : public ASTNode {
+class ASTFunctionDeclaration final : public ASTNode {
 public:
     std::string_view identifier_;
     ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters_;
@@ -725,7 +724,7 @@ public:
     bool is_const_;
 
 public:
-    ASTFunctionDefinition(
+    ASTFunctionDeclaration(
         const Location& loc,
         std::string_view identifier,
         ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters,
@@ -753,20 +752,20 @@ public:
         Type* return_type = return_type_->eval(checker)->as_type();
         if (!return_type) {
             Diagnostic::report(SymbolCategoryMismatchError(return_type_->location_, true));
-            return_type = checker.types_.get_unknown()->as_type();
+            return_type = TypeRegistry::get_unknown()->as_type();
         }
         ComparableSpan<Type*> param_types =
             parameters_ | std::views::transform([&](const auto& param) -> Type* {
                 Type* param_type = param->type_->eval(checker)->as_type();
                 if (!param_type) {
                     Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
-                    return checker.types_.get_unknown()->as_type();
+                    return TypeRegistry::get_unknown()->as_type();
                 }
                 return param_type;
             }) |
             GlobalMemory::collect<ComparableSpan<Type*>>();
         try {
-            Type* func_type = checker.types_.get<FunctionType>(param_types, return_type);
+            Type* func_type = TypeRegistry::get<FunctionType>(param_types, return_type);
             checker.set_overload_type(identifier_, this, static_cast<FunctionType*>(func_type));
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
@@ -778,18 +777,52 @@ public:
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
+class ASTClassDeclaration final : public ASTNode {
+public:
+    std::string_view identifier_;
+    ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields_;
+    ComparableSpan<std::unique_ptr<ASTFunctionDeclaration>> functions_;
+
+public:
+    ASTClassDeclaration(
+        const Location& loc,
+        std::string_view identifier,
+        ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields,
+        ComparableSpan<std::unique_ptr<ASTFunctionDeclaration>> functions
+    ) noexcept
+        : ASTNode(loc),
+          identifier_(identifier),
+          fields_(std::move(fields)),
+          functions_(std::move(functions)) {}
+    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+        Scope& class_scope = Scope::create(this, scope);
+        for (auto& func : functions_) {
+            func->collect_symbols(class_scope, ops);
+        }
+    }
+    void check_types(TypeChecker& checker) final {
+        checker.enter(this);
+        for (auto& field : fields_) {
+            field->check_types(checker);
+        }
+        for (auto& func : functions_) {
+            func->check_types(checker);
+        }
+        checker.exit();
+    }
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+};
+
 // ===================== Inline implementations of TypeChecker =====================
 
-inline TypeChecker::TypeChecker(
-    Scope& root, const OperationHandler& ops, TypeRegistry& types
-) noexcept
-    : current_scope_(&root), ops_(ops), types_(types) {}
+inline TypeChecker::TypeChecker(Scope& root, const OperationHandler& ops) noexcept
+    : current_scope_(&root), ops_(ops) {}
 
 inline void TypeChecker::add_variable(std::string_view identifier, Object* expr) {
     current_scope_->set_variable(identifier, expr);
 }
 
-inline void TypeChecker::enter(const ASTBlock* child) noexcept {
+inline void TypeChecker::enter(const void* child) noexcept {
     current_scope_ = current_scope_->children_.at(child).get();
 }
 

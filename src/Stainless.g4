@@ -16,7 +16,8 @@ statement:
 	| continue_statement
 	| return_statement
 	| type_alias_declaration
-	| function_declaration;
+	| function_declaration
+	| class_declaration;
 
 code_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 
@@ -56,6 +57,12 @@ function_declaration:
 	)? OP_RPAREN (OP_ARROW return_type_ = type)? body_ = code_block;
 
 parameter: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
+
+class_declaration:
+	KW_CLASS identifier_ = T_IDENTIFIER OP_LBRACE (
+		fields_ += field
+		| funcs_ += function_declaration
+	)* OP_RBRACE OP_SEMICOLON;
 
 expr:
 	<assoc = right> left_ = expr op_ = (
@@ -124,12 +131,12 @@ type:
 	)												# PrimitiveType
 	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType
 	| identifier_ = identifier						# IdentifierType
-	| OP_LBRACE fields_ += record_field* OP_RBRACE	# RecordType
+	| OP_LBRACE fields_ += field* OP_RBRACE			# RecordType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type # FunctionType;
 
-record_field:
+field:
 	identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_SEMICOLON;
 
 KW_LET: 'let';
@@ -158,6 +165,7 @@ KW_BREAK: 'break';
 KW_CONTINUE: 'continue';
 KW_RETURN: 'return';
 KW_TYPE: 'type';
+KW_CLASS: 'class';
 
 OP_ADD: '+';
 OP_SUB: '-';
