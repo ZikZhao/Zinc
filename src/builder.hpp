@@ -77,10 +77,11 @@ public:
 
 private:
     antlrcpp::Any visitProgram(StainlessParser::ProgramContext* ctx) noexcept final {
-        auto rng = ctx->statements_ |
-                   std::views::transform([this](auto child) { return transform(child); });
-        std::vector<std::unique_ptr<ASTNode>> nodes(rng.begin(), rng.end());
-        last_visited_ = std::make_unique<ASTRoot>(loc(ctx), std::move(nodes));
+        ComparableSpan statements =
+            ctx->statements_ |
+            std::views::transform([this](auto child) { return transform(child); }) |
+            GlobalMemory::collect<ComparableSpan<std::unique_ptr<ASTNode>>>();
+        last_visited_ = std::make_unique<ASTRoot>(loc(ctx), std::move(statements));
         return {};
     }
     antlrcpp::Any visitStatement(StainlessParser::StatementContext* ctx) noexcept final {
@@ -190,7 +191,8 @@ private:
             std::move(parameters),
             std::move(return_type),
             std::make_unique<ASTBlock>(std::move(*body)),
-            false
+            ctx->KW_CONST() != nullptr,
+            ctx->KW_STATIC() != nullptr
         );
         return {};
     }

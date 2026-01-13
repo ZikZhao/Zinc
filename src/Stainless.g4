@@ -50,7 +50,7 @@ type_alias_declaration:
 	KW_TYPE identifier_ = T_IDENTIFIER OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_declaration:
-	KW_FUNC identifier_ = T_IDENTIFIER OP_LPAREN (
+	KW_CONST? KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
@@ -141,6 +141,7 @@ field:
 
 KW_LET: 'let';
 KW_MUT: 'mut';
+KW_CONST: 'const';
 KW_NULL: 'null';
 KW_INT8: 'i8';
 KW_INT16: 'i16';
@@ -166,6 +167,7 @@ KW_CONTINUE: 'continue';
 KW_RETURN: 'return';
 KW_TYPE: 'type';
 KW_CLASS: 'class';
+KW_STATIC: 'static';
 
 OP_ADD: '+';
 OP_SUB: '-';

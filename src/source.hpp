@@ -25,7 +25,7 @@ public:
         GlobalMemory::String path =
             std::filesystem::canonical(input_path)
                 .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
-        std::ifstream file_stream(input_path.data());
+        std::ifstream file_stream(GlobalMemory::String(input_path).c_str());
         if (file_stream.fail()) {
             return nullptr;
         }

@@ -17,7 +17,9 @@ let g = sub;
 class MyClass {
     data: i32;
     data2: f64;
-    fn add1() -> i32 {}
+    fn add1() -> i32 {
+        return data;
+    }
 };
 
 fn main() -> i32 {

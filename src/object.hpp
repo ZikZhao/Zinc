@@ -233,7 +233,7 @@ public:
         assert(bits == 0 || bits == 8 || bits == 16 || bits == 32 || bits == 64);
     }
     std::string_view repr() const final {
-        return GlobalMemory::format("{}{}", is_signed_ ? "i" : "u", bits_);
+        return GlobalMemory::format_view("{}{}", is_signed_ ? "i" : "u", bits_);
     }
     bool assignable_from_impl(const Type& source) const final {
         if (source.kind_ != kind) {
@@ -259,7 +259,7 @@ public:
     FloatType(std::uint8_t bits) noexcept : Type(kind), bits_(bits) {
         assert(bits == 0 || bits == 32 || bits == 64);
     }
-    std::string_view repr() const final { return GlobalMemory::format("f{}", bits_); }
+    std::string_view repr() const final { return GlobalMemory::format_view("f{}", bits_); }
     bool assignable_from_impl(const Type& source) const final {
         if (source.kind_ != kind) {
             return false;
@@ -299,7 +299,7 @@ public:
         GlobalMemory::String params_repr =
             parameters_ | std::views::transform([](Type* type) { return type->repr(); }) |
             std::views::join_with(", "sv) | GlobalMemory::collect<GlobalMemory::String>();
-        return GlobalMemory::format("({}) => {}", params_repr, return_type_->repr());
+        return GlobalMemory::format_view("({}) => {}", params_repr, return_type_->repr());
     }
 
     bool assignable_from_impl(const Type& source) const final {
@@ -332,7 +332,7 @@ public:
 
     ArrayType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
     std::string_view repr() const final {
-        return GlobalMemory::format("{}[]", element_type_->repr());
+        return GlobalMemory::format_view("{}[]", element_type_->repr());
     }
     bool assignable_from_impl(const Type& source) const final {
         if (source.kind_ != kind) {
@@ -401,7 +401,7 @@ public:
           methods_(std::move(methods)),
           attr_(std::move(attr)) {}
 
-    std::string_view repr() const override { return GlobalMemory::format("class {}", name_); }
+    std::string_view repr() const override { return GlobalMemory::format_view("class {}", name_); }
 
     bool assignable_from_impl(const Type& other) const override { return false; }
 
@@ -409,7 +409,7 @@ public:
         auto it = methods_.find(name);
         if (it == methods_.end()) {
             throw UnlocatedProblem::make<AttributeError>(
-                GlobalMemory::format("Class {} has no method named {}", name_, name)
+                GlobalMemory::format_view("Class {} has no method named {}", name_, name)
             );
         }
         return it->second;
@@ -419,7 +419,7 @@ public:
         auto it = attr_.find(name);
         if (it == attr_.end()) {
             throw UnlocatedProblem::make<AttributeError>(
-                GlobalMemory::format("Class {} has no attribute named {}", name_, name)
+                GlobalMemory::format_view("Class {} has no attribute named {}", name_, name)
             );
         }
         return it->second;
@@ -701,7 +701,7 @@ public:
     }
     explicit IntegerValue(std::string_view value) noexcept
         : Value(kind), type_(&IntegerType::untyped_instance), raw_(value) {}
-    std::string_view repr() const final { return GlobalMemory::format("{}", ivalue_); }
+    std::string_view repr() const final { return GlobalMemory::format_view("{}", ivalue_); }
     IntegerType* get_type() const final { return type_; }
     IntegerValue* resolve_to(Type* target) const final {
         assert(target);
@@ -802,7 +802,7 @@ public:
     FloatValue(FloatType* type, double value) noexcept : Value(kind), type_(type), value_(value) {
         assert(type != nullptr);
     }
-    std::string_view repr() const final { return GlobalMemory::format("{}", value_); }
+    std::string_view repr() const final { return GlobalMemory::format_view("{}", value_); }
     FloatType* get_type() const final { return type_; }
     FloatValue* resolve_to(Type* target) const final {
         assert(target);
@@ -882,7 +882,7 @@ public:
         : Value(kind), type_(type), source_(source), callback_(std::move(invoke)) {}
 
     std::string_view repr() const final {
-        return GlobalMemory::format("<function at {:p}>", static_cast<const void*>(this));
+        return GlobalMemory::format_view("<function at {:p}>", static_cast<const void*>(this));
     }
     FunctionType* get_type() const final { return type_; }
     FunctionValue* resolve_to(Type* target) const final {
@@ -912,7 +912,7 @@ public:
           string_(string) {}
     ~ArrayValue() {}
     std::string_view repr() const final {
-        return GlobalMemory::format("[{}]", type_->element_type_->repr());
+        return GlobalMemory::format_view("[{}]", type_->element_type_->repr());
     }
     ArrayType* get_type() const final { return type_; }
     ArrayValue* resolve_to(Type* target) const final {
@@ -930,7 +930,7 @@ public:
     InstanceValue(ClassType* cls, decltype(attributes_) attributes) noexcept
         : Value(Kind::Instance), cls_(cls), attributes_(std::move(attributes)) {}
     std::string_view repr() const final {
-        return GlobalMemory::format("<instance of {}>", cls_->repr());
+        return GlobalMemory::format_view("<instance of {}>", cls_->repr());
     }
     ClassType* get_type() const final { return cls_; }
     InstanceValue* resolve_to(Type* target) const final {

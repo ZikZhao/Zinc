@@ -60,10 +60,11 @@ private:
 
 private:
     Scope(Scope& parent, std::string_view name) noexcept : parent_(&parent) {
-        std::size_t prefix_size = std::formatted_size("{}::{}", parent.prefix_, name);
-        ComparableSpan<char> buffer = GlobalMemory::alloc_array<char>(prefix_size);
-        std::format_to(buffer.begin(), "{}::{}", parent.prefix_, name);
-        prefix_ = static_cast<std::string_view>(buffer);
+        if (name.empty()) {
+            prefix_ = parent.prefix_;
+        } else {
+            prefix_ = GlobalMemory::format_view("{}{}::", parent.prefix_, name);
+        }
     }
 
 public:
@@ -150,16 +151,15 @@ public:
 
 class ASTRoot final : public ASTNode {
 public:
-    std::vector<std::unique_ptr<ASTNode>> children_;
-    ASTRoot(const Location& loc, std::vector<std::unique_ptr<ASTNode>> children) noexcept
-        : ASTNode(loc), children_(std::move(children)) {}
+    ComparableSpan<std::unique_ptr<ASTNode>> statements_;
+    ASTRoot(const Location& loc, ComparableSpan<std::unique_ptr<ASTNode>> statements) noexcept;
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
-        for (auto& child : children_) {
+        for (auto& child : statements_) {
             child->collect_symbols(scope, ops);
         }
     }
     void check_types(TypeChecker& checker) final {
-        for (auto& child : children_) {
+        for (auto& child : statements_) {
             child->check_types(checker);
         }
     }
@@ -722,6 +722,7 @@ public:
     std::unique_ptr<ASTTypeExpression> return_type_;
     std::unique_ptr<ASTBlock> body_;
     bool is_const_;
+    bool is_static_;
 
 public:
     ASTFunctionDeclaration(
@@ -730,14 +731,16 @@ public:
         ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters,
         std::unique_ptr<ASTTypeExpression> return_type,
         std::unique_ptr<ASTBlock> body,
-        bool is_const
+        bool is_const,
+        bool is_static
     ) noexcept
         : ASTNode(loc),
           identifier_(identifier),
           parameters_(std::move(parameters)),
           return_type_(std::move(return_type)),
           body_(std::move(body)),
-          is_const_(is_const) {}
+          is_const_(is_const),
+          is_static_(is_static) {}
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
         try {
             FunctionValue* func = new FunctionValue(this, [](auto&& args) { return nullptr; });
@@ -795,20 +798,33 @@ public:
           fields_(std::move(fields)),
           functions_(std::move(functions)) {}
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
-        Scope& class_scope = Scope::create(this, scope);
+        Scope& static_scope = Scope::create(this, scope, identifier_);
+        Scope& instance_scope = Scope::create(&identifier_, static_scope);
         for (auto& func : functions_) {
-            func->collect_symbols(class_scope, ops);
+            if (func->is_static_) {
+                func->collect_symbols(static_scope, ops);
+            } else {
+                func->collect_symbols(instance_scope, ops);
+            }
         }
     }
     void check_types(TypeChecker& checker) final {
-        checker.enter(this);
+        checker.enter(this);          // static scope
+        checker.enter(&identifier_);  // instance scope
         for (auto& field : fields_) {
             field->check_types(checker);
         }
+        checker.exit();  // instance scope
         for (auto& func : functions_) {
+            if (!func->is_static_) {
+                checker.enter(&identifier_);  // instance scope
+            }
             func->check_types(checker);
+            if (!func->is_static_) {
+                checker.exit();  // instance scope
+            }
         }
-        checker.exit();
+        checker.exit();  // static scope
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -882,4 +898,15 @@ inline ExprInfo TypeChecker::type_of_in(std::string_view identifier, Scope& scop
         return type_of_in(identifier, *scope.parent_);
     }
     throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
+}
+
+inline ASTRoot::ASTRoot(
+    const Location& loc, ComparableSpan<std::unique_ptr<ASTNode>> statements
+) noexcept
+    : ASTNode(loc), statements_(statements) {
+    for (auto& stmt : statements_) {
+        if (auto func_decl = dynamic_cast<ASTFunctionDeclaration*>(stmt.get())) {
+            func_decl->is_static_ = true;
+        }
+    }
 }

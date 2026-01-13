@@ -218,11 +218,17 @@ public:
     }
 
     template <typename... Args>
-    static std::string_view format(std::format_string<Args...> fmt, Args&&... args) {
-        std::size_t size = std::formatted_size(fmt, std::forward<Args>(args)...) + 1;
+    static GlobalMemory::String format(std::format_string<Args...> fmt, Args&&... args) {
+        GlobalMemory::String result;
+        std::format_to(std::back_inserter(result), fmt, std::forward<Args>(args)...);
+        return result;
+    }
+
+    template <typename... Args>
+    static std::string_view format_view(std::format_string<Args...> fmt, Args&&... args) {
+        std::size_t size = std::formatted_size(fmt, std::forward<Args>(args)...);
         ComparableSpan<char> result = alloc_array<char>(size);
         std::format_to(result.begin(), fmt, std::forward<Args>(args)...);
-        result[size - 1] = '\0';
         return static_cast<std::string_view>(result);
     }
 

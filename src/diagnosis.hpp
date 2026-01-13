@@ -35,13 +35,17 @@ protected:
 class UndeclaredIdentifierError final : public NameError {
 public:
     UndeclaredIdentifierError(const Location& location, std::string_view identifier)
-        : NameError(location, GlobalMemory::format("Undeclared identifier: '{}'", identifier)) {}
+        : NameError(
+              location, GlobalMemory::format_view("Undeclared identifier: '{}'", identifier)
+          ) {}
 };
 
 class RedeclaredIdentifierError final : public NameError {
 public:
     RedeclaredIdentifierError(const Location& location, std::string_view identifier)
-        : NameError(location, GlobalMemory::format("Redeclared identifier: '{}'", identifier)) {}
+        : NameError(
+              location, GlobalMemory::format_view("Redeclared identifier: '{}'", identifier)
+          ) {}
 };
 
 class SymbolCategoryMismatchError final : public NameError {
@@ -49,7 +53,7 @@ public:
     SymbolCategoryMismatchError(const Location& location, bool expected_is_type)
         : NameError(
               location,
-              GlobalMemory::format(
+              GlobalMemory::format_view(
                   "Symbol kind mismatch: expected {}, got {}",
                   expected_is_type ? "type" : "value",
                   !expected_is_type ? "type" : "value"
@@ -68,7 +72,7 @@ public:
     TypeMismatchError(const Location& location, std::string_view expected, std::string_view actual)
         : TypeError(
               location,
-              GlobalMemory::format("Type mismatch: expected '{}', got '{}'", expected, actual)
+              GlobalMemory::format_view("Type mismatch: expected '{}', got '{}'", expected, actual)
           ) {}
 };
 
@@ -83,13 +87,13 @@ public:
         : TypeError(
               location,
               right_type_repr.size()
-                  ? GlobalMemory::format(
+                  ? GlobalMemory::format_view(
                         "Undefined operator '{}' for types '{}' and '{}'",
                         operator_repr,
                         left_type_repr,
                         right_type_repr
                     )
-                  : GlobalMemory::format(
+                  : GlobalMemory::format_view(
                         "Undefined operator '{}' for type '{}'", operator_repr, left_type_repr
                     )
           ) {}
@@ -98,7 +102,7 @@ public:
 class NotCallableError final : public TypeError {
 public:
     NotCallableError(const Location& location, std::string_view type_repr)
-        : TypeError(location, GlobalMemory::format("Type '{}' is not callable", type_repr)) {}
+        : TypeError(location, GlobalMemory::format_view("Type '{}' is not callable", type_repr)) {}
 };
 
 class ArgumentMismatchError final : public TypeError {
@@ -108,7 +112,7 @@ public:
     )
         : TypeError(
               location,
-              GlobalMemory::format(
+              GlobalMemory::format_view(
                   "Argument count mismatch: expected {}, got {}", expected_count, actual_count
               )
           ) {}
@@ -117,13 +121,13 @@ public:
 class CircularTypeDependencyError final : public TypeError {
 public:
     CircularTypeDependencyError(const Location& location)
-        : TypeError(location, GlobalMemory::format("Circular type definition detected")) {}
+        : TypeError(location, GlobalMemory::format_view("Circular type definition detected")) {}
 };
 
 class ImmutableMutationError final : public TypeError {
 public:
     ImmutableMutationError(const Location& location)
-        : TypeError(location, GlobalMemory::format("Attempted mutation of immutable value")) {}
+        : TypeError(location, GlobalMemory::format_view("Attempted mutation of immutable value")) {}
 };
 
 class InvalidAssignmentTargetError final : public TypeError {
@@ -166,7 +170,8 @@ class InvalidLiteralError final : public CompileTimeEvaluationError {
 public:
     InvalidLiteralError(const Location& location, std::string_view literal, std::string_view type)
         : CompileTimeEvaluationError(
-              location, GlobalMemory::format("Invalid literal '{}' for type '{}'", literal, type)
+              location,
+              GlobalMemory::format_view("Invalid literal '{}' for type '{}'", literal, type)
           ) {}
 };
 
@@ -175,7 +180,9 @@ public:
     OverflowError(const Location& location, std::string_view literal, std::string_view type)
         : CompileTimeEvaluationError(
               location,
-              GlobalMemory::format("Literal '{}' overflows the range of type '{}'", literal, type)
+              GlobalMemory::format_view(
+                  "Literal '{}' overflows the range of type '{}'", literal, type
+              )
           ) {}
 };
 

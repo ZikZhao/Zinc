@@ -12,8 +12,8 @@ enum class Section {
     Includes,
     Declarations,
     Constants,
-    Implementations,
     Main,
+    Implementations,
 };
 
 class Buffer {
@@ -69,7 +69,7 @@ public:
 
 private:
     const SourceManager::File& file_;
-    Buffer buffers_[static_cast<std::size_t>(Section::Main) + 1];
+    Buffer buffers_[static_cast<std::size_t>(Section::Implementations) + 1];
     std::size_t current_line_ = 0;
     Buffer* current_section_ = &buffers_[static_cast<std::size_t>(Section::Constants)];
     std::set<std::string_view> niebloids_;
@@ -85,34 +85,22 @@ public:
             (std::filesystem::path("out") / file_.path)
                 .stem()
                 .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
-        std::fstream stream(GlobalMemory::format("out/{}.hpp", stem).data(), std::ios::out);
-        stream << *buffers_[static_cast<std::size_t>(Section::Includes)] << "\n"
+        std::fstream stream(GlobalMemory::format("out/{}.hpp", stem).c_str(), std::ios::out);
+        stream << "#pragma once\n\n"
+               << *buffers_[static_cast<std::size_t>(Section::Includes)] << "\n"
+               << "/* ---------- Declarations ---------- */\n\n"
                << *buffers_[static_cast<std::size_t>(Section::Declarations)] << "\n"
+               << "/* ---------- Constants ---------- */\n\n"
                << *buffers_[static_cast<std::size_t>(Section::Constants)] << "\n"
-               << *buffers_[static_cast<std::size_t>(Section::Implementations)] << "\n"
-               << *buffers_[static_cast<std::size_t>(Section::Main)];
+               << "/* ---------- Main ---------- */\n\n"
+               << *buffers_[static_cast<std::size_t>(Section::Main)] << "\n"
+               << "/* ---------- Implementations ---------- */\n\n"
+               << *buffers_[static_cast<std::size_t>(Section::Implementations)];
         current_section_ = nullptr;
     }
     Transpiler& operator[](Section section) {
         current_section_ = &buffers_[static_cast<std::size_t>(section)];
         current_line_ = 0;
-        return *this;
-    }
-    Transpiler& operator<<(const ASTNode* node) {
-        std::size_t line_number = static_cast<std::size_t>(std::distance(
-            file_.line_offsets.begin(),
-            std::upper_bound(
-                file_.line_offsets.begin(), file_.line_offsets.end(), node->location_.begin
-            )
-        ));
-        if (line_number != current_line_) {
-            current_section_->newline();
-            std::format_to(
-                std::back_inserter(**current_section_), "#line {} \"{}\"", line_number, file_.path
-            );
-            current_section_->newline();
-            current_line_ = line_number;
-        }
         return *this;
     }
     Transpiler& operator<<(std::string_view token) {
@@ -238,33 +226,31 @@ inline int transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker
         std::filesystem::path(sources[0].path)
             .stem()
             .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
-    Diagnostic::message(GlobalMemory::format("Wrote {} files to ./out", sources.files.size()));
-    std::string_view pch_command =
-        "g++ -std=c++20 -xc++-header -Iout out/pch.hpp -o out/pch.hpp.gch";
-    Diagnostic::message(GlobalMemory::format("Compiling precompiled header: {}", pch_command));
-    int ret = std::system(pch_command.data());
+    Diagnostic::message(GlobalMemory::format_view("Wrote {} files to ./out", sources.files.size()));
+    const char* pch_command = "g++ -std=c++20 -xc++-header -Iout out/pch.hpp -o out/pch.hpp.gch";
+    Diagnostic::message(GlobalMemory::format_view("Compiling precompiled header: {}", pch_command));
+    int ret = std::system(pch_command);
     if (ret != 0) {
         return ret;
     }
-    std::string_view compile_command = GlobalMemory::format(
+    GlobalMemory::String compile_command = GlobalMemory::format(
         "g++ -std=c++20 -Iout \"out/{}.hpp\" -o \"out/{}\"", main_stem, main_stem
     );
     Diagnostic::message(
-        GlobalMemory::format(
+        GlobalMemory::format_view(
             "Compiling output executable to ./out/{}: {}", main_stem, compile_command
         )
     );
-    return std::system(compile_command.data());
+    return std::system(GlobalMemory::String(compile_command).c_str());
 }
 
 /// ===================== Inline implementations of AST nodes =====================
 
 inline void ASTRoot::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
     transpiler[Section::Includes] << "#include \"pch.hpp\"" << Transpiler::newline;
-    for (const auto& child : children_) {
+    for (const auto& child : statements_) {
         transpiler[Section::Constants];
         child->transpile(transpiler, checker);
-        transpiler << Transpiler::newline;
     }
 }
 
@@ -272,9 +258,8 @@ inline void ASTBlock::transpile(Transpiler& transpiler, TypeChecker& checker) co
     transpiler << "{" << Transpiler::indent << Transpiler::newline;
     for (const auto& stmt : statements_) {
         stmt->transpile(transpiler, checker);
-        transpiler << Transpiler::newline;
     }
-    transpiler << Transpiler::dedent << "}";
+    transpiler << Transpiler::dedent << "}" << Transpiler::newline;
 }
 
 inline void ASTLocalBlock::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
@@ -285,18 +270,18 @@ inline void ASTLocalBlock::transpile(Transpiler& transpiler, TypeChecker& checke
 }
 
 inline void ASTConstant::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler << this << value_;
+    transpiler << value_;
 }
 
 inline void ASTIdentifier::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler << this << str_;
+    transpiler << str_;
 }
 
 template <typename Op>
 inline void ASTBinaryOp<Op>::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this << "(";
+    transpiler << "(";
     left_->transpile(transpiler, checker);
     transpiler << OperatorCodeToString(Op::opcode);
     right_->transpile(transpiler, checker);
@@ -307,7 +292,7 @@ template <typename Op>
 inline void ASTBinaryOp<OperatorFunctors::OperateAndAssign<Op>>::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this << "(";
+    transpiler << "(";
     left_->transpile(transpiler, checker);
     transpiler << OperatorCodeToString(Op::opcode) << "=";
     right_->transpile(transpiler, checker);
@@ -317,7 +302,7 @@ inline void ASTBinaryOp<OperatorFunctors::OperateAndAssign<Op>>::transpile(
 template <typename Op>
 inline void ASTUnaryOp<Op>::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
     /// TODO: handle prefix/postfix
-    transpiler << this << OperatorCodeToString(Op::opcode);
+    transpiler << OperatorCodeToString(Op::opcode);
     expr_->transpile(transpiler, checker);
 }
 
@@ -338,19 +323,18 @@ inline void ASTFunctionCall::transpile(
 inline void ASTPrimitiveType::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this << type_;
+    transpiler << type_;
 }
 
 inline void ASTFunctionType::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this << eval(checker)->as_type();
+    transpiler << eval(checker)->as_type();
 }
 
 inline void ASTFieldDeclaration::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this;
     type_->transpile(transpiler, checker);
     transpiler << " " << identifier_ << ";";
 }
@@ -367,13 +351,11 @@ inline void ASTRecordType::transpile(Transpiler& transpiler, TypeChecker& checke
 inline void ASTExpressionStatement::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this;
     expr_->transpile(transpiler, checker);
-    transpiler << ";";
+    transpiler << ";" << Transpiler::newline;
 }
 
 inline void ASTDeclaration::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler << this;
     if (is_constant_) {
         transpiler << "constexpr ";
     } else if (!is_mutable_) {
@@ -382,18 +364,16 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler, TypeChecker& check
     transpiler << get_declared_type(checker, expr_->get_expr_info(checker).type) << " ";
     transpiler << identifier_ << " = ";
     expr_->transpile(transpiler, checker);
-    transpiler << ";";
+    transpiler << ";" << Transpiler::newline;
 }
 
 inline void ASTTypeAlias::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler[Section::Declarations] << this;
-    transpiler << "using " << identifier_ << " = ";
+    transpiler[Section::Declarations] << "using " << identifier_ << " = ";
     type_->transpile(transpiler, checker);
-    transpiler << ";";
+    transpiler << ";" << Transpiler::newline;
 }
 
 inline void ASTIfStatement::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler << this;
     transpiler << "if (";
     condition_->transpile(transpiler, checker);
     transpiler << ") ";
@@ -407,7 +387,6 @@ inline void ASTIfStatement::transpile(Transpiler& transpiler, TypeChecker& check
 inline void ASTForStatement::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this;
     transpiler << "for (";
     initializer_->transpile(transpiler, checker);
     condition_->transpile(transpiler, checker);
@@ -420,30 +399,29 @@ inline void ASTForStatement::transpile(
 inline void ASTBreakStatement::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this << "break;";
+    transpiler << "break;" << Transpiler::newline;
 }
 
 inline void ASTContinueStatement::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this << "continue;";
+    transpiler << "continue;" << Transpiler::newline;
 }
 
 inline void ASTReturnStatement::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this << "return";
+    transpiler << "return";
     if (expr_) {
         transpiler << " ";
         expr_->transpile(transpiler, checker);
     }
-    transpiler << ";";
+    transpiler << ";" << Transpiler::newline;
 }
 
 inline void ASTFunctionParameter::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << this;
     type_->transpile(transpiler, checker);
     transpiler << " " << identifier_;
 }
@@ -452,11 +430,12 @@ inline void ASTFunctionDeclaration::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
     bool is_main = checker.at_top_level() && identifier_ == "main";
+    bool will_mangle = !is_main && is_static_;
 
     if (!is_main) {
-        transpiler[Section::Declarations] << this;
+        transpiler[Section::Declarations];
         return_type_->transpile(transpiler, checker);
-        transpiler << " $" << identifier_ << "(";
+        transpiler << (will_mangle ? " $" : " ") << identifier_ << "(";
         const char* sep = "";
         for (const auto& param : parameters_) {
             transpiler << sep;
@@ -465,7 +444,7 @@ inline void ASTFunctionDeclaration::transpile(
         }
         transpiler << ");" << Transpiler::newline;
 
-        if (transpiler.should_generate_niebloid(identifier_)) {
+        if (is_static_ && transpiler.should_generate_niebloid(identifier_)) {
             transpiler[Section::Constants] << "constexpr auto " << identifier_
                                            << " = [](auto&&... args) { return $" << identifier_
                                            << "(std::forward<decltype(args)>(args)...); };"
@@ -473,9 +452,10 @@ inline void ASTFunctionDeclaration::transpile(
         }
     }
 
-    transpiler[is_main ? Section::Main : Section::Implementations];
+    transpiler[is_main ? Section::Main : Section::Implementations] << (is_main ? "" : "inline ");
     return_type_->transpile(transpiler, checker);
-    transpiler << (is_main ? " " : " $") << identifier_ << "(";
+    transpiler << " " << checker.get_current_scope_prefix() << (will_mangle ? "$" : "")
+               << identifier_ << "(";
     const char* sep = "";
     for (const auto& param : parameters_) {
         transpiler << sep;
@@ -491,17 +471,25 @@ inline void ASTFunctionDeclaration::transpile(
 inline void ASTClassDeclaration::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler[Section::Declarations] << this;
+    transpiler[Section::Declarations];
     transpiler << "struct " << identifier_ << " {" << Transpiler::indent << Transpiler::newline;
 
     checker.enter(this);
+    checker.enter(&identifier_);
     for (const auto& field : fields_) {
         field->transpile(transpiler, checker);
         transpiler << Transpiler::newline;
     }
+    checker.exit();
     for (const auto& func : functions_) {
+        if (!func->is_static_) {
+            checker.enter(&identifier_);
+        }
         func->transpile(transpiler, checker);
         transpiler << Transpiler::newline;
+        if (!func->is_static_) {
+            checker.exit();
+        }
     }
     checker.exit();
 
