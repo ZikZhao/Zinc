@@ -1,8 +1,5 @@
 #pragma once
 #include "pch.hpp"
-#include <StainlessParser.h>
-#include <type_traits>
-#include <utility>
 
 #include "diagnosis.hpp"
 #include "object.hpp"

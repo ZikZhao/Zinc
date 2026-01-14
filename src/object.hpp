@@ -1,8 +1,5 @@
 #pragma once
 #include "pch.hpp"
-#include <concepts>
-#include <type_traits>
-#include <utility>
 
 #include "diagnosis.hpp"
 
@@ -22,6 +19,8 @@ enum class Kind : std::uint16_t {
     Intersection,
     Union,
 };
+
+class Transpiler;
 
 class TypeRegistry;
 
@@ -147,6 +146,7 @@ public:
     constexpr bool operator==(const Object& other) const noexcept { return this == &other; }
     Type* as_type();
     Value* as_value();
+    virtual void transpile(Transpiler& transpiler) const noexcept = 0;
 };
 
 class Type : public Object {
@@ -183,6 +183,7 @@ private:
 public:
     std::string_view repr() const final { return "unknown"; }
     bool assignable_from_impl(const Type& source) const final { return true; }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class AnyType final : public Type {
@@ -194,6 +195,7 @@ public:
     AnyType() noexcept : Type(kind) {}
     std::string_view repr() const final { return "any"; }
     bool assignable_from_impl(const Type& source) const final { return true; }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class NullType final : public Type {
@@ -208,6 +210,7 @@ public:
         /// No variable can have null type except null literal
         std::unreachable();
     }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class IntegerType final : public Type {
@@ -243,6 +246,7 @@ public:
         return other_int.bits_ == 0 ||
                (this->is_signed_ == other_int.is_signed_ && this->bits_ >= other_int.bits_);
     }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class FloatType final : public Type {
@@ -267,6 +271,7 @@ public:
         const FloatType& other_float = static_cast<const FloatType&>(source);
         return other_float.bits_ == 0 || this->bits_ >= other_float.bits_;
     }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class BooleanType final : public Type {
@@ -278,6 +283,7 @@ public:
     BooleanType() noexcept : Type(kind) {}
     std::string_view repr() const final { return "bool"; }
     bool assignable_from_impl(const Type& source) const final { return source.kind_ == kind; }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class FunctionType final : public Type {
@@ -320,28 +326,27 @@ public:
         return return_type_->assignable_from(*func_other.return_type_);
     }
     std::strong_ordering operator<=>(const FunctionType& other) const noexcept = default;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ArrayType final : public Type {
 public:
-    static constexpr Kind kind = Kind::Array;
-
-public:
     Type* const element_type_;
     std::size_t size_ = 0;  // 0 means dynamic size
 
-    ArrayType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
+    ArrayType(Type* element_type) noexcept : Type(Kind::Array), element_type_(element_type) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view("{}[]", element_type_->repr());
     }
     bool assignable_from_impl(const Type& source) const final {
-        if (source.kind_ != kind) {
+        if (source.kind_ != Kind::Array) {
             return false;
         }
         const ArrayType& other_array = static_cast<const ArrayType&>(source);
         return element_type_->assignable_from(*other_array.element_type_) &&
                (size_ == 0 || size_ == other_array.size_);
     }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class RecordType : public Type {
@@ -376,11 +381,12 @@ public:
         return true;
     }
     std::strong_ordering operator<=>(const RecordType& other) const noexcept = default;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ClassType : public Type {
 private:
-    const std::string_view name_;
+    const std::string_view identifier_;
     const ComparableSpan<InterfaceType*> implements_;
     ClassType* const extends_;
     const GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods_;
@@ -388,20 +394,22 @@ private:
 
 public:
     ClassType(
-        std::string_view name,
+        std::string_view identifier,
         ComparableSpan<InterfaceType*> interfaces,
         ClassType* extends,
         GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods,
         GlobalMemory::Map<std::string_view, Type*> attr
     ) noexcept
         : Type(Kind::Instance),
-          name_(name),
+          identifier_(identifier),
           implements_(interfaces),
           extends_(extends),
           methods_(std::move(methods)),
           attr_(std::move(attr)) {}
 
-    std::string_view repr() const override { return GlobalMemory::format_view("class {}", name_); }
+    std::string_view repr() const override {
+        return GlobalMemory::format_view("class {}", identifier_);
+    }
 
     bool assignable_from_impl(const Type& other) const override { return false; }
 
@@ -409,7 +417,7 @@ public:
         auto it = methods_.find(name);
         if (it == methods_.end()) {
             throw UnlocatedProblem::make<AttributeError>(
-                GlobalMemory::format_view("Class {} has no method named {}", name_, name)
+                GlobalMemory::format_view("Class {} has no method named {}", identifier_, name)
             );
         }
         return it->second;
@@ -419,11 +427,12 @@ public:
         auto it = attr_.find(name);
         if (it == attr_.end()) {
             throw UnlocatedProblem::make<AttributeError>(
-                GlobalMemory::format_view("Class {} has no attribute named {}", name_, name)
+                GlobalMemory::format_view("Class {} has no attribute named {}", identifier_, name)
             );
         }
         return it->second;
     }
+    void transpile(Transpiler& transpiler) const noexcept override;
 };
 
 class IntersectionType final : public Type {
@@ -507,6 +516,7 @@ public:
     }
 
     std::strong_ordering operator<=>(const IntersectionType& other) const noexcept = default;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class UnionType final : public Type {
@@ -591,6 +601,7 @@ public:
     }
 
     std::strong_ordering operator<=>(const UnionType& other) const noexcept = default;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class Value : public Object {
@@ -659,6 +670,7 @@ private:
     std::string_view repr() const final { return "unknown"; }
     UnknownType* get_type() const final { return &UnknownType::instance; }
     UnknownValue* resolve_to(Type* target) const final { return new UnknownValue(); }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class NullValue final : public Value {
@@ -676,6 +688,7 @@ public:
         }
         return new NullValue();
     }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class IntegerValue final : public Value {
@@ -788,6 +801,7 @@ public:
     IntegerValue operator~() const;
     IntegerValue operator<<(const IntegerValue& other) const;
     IntegerValue operator>>(const IntegerValue& other) const;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class FloatValue final : public Value {
@@ -839,6 +853,7 @@ public:
     BooleanValue operator<=(const FloatValue& other) const;
     BooleanValue operator>(const FloatValue& other) const;
     BooleanValue operator>=(const FloatValue& other) const;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class BooleanValue final : public Value {
@@ -864,6 +879,7 @@ public:
     BooleanValue operator&&(const BooleanValue& other) const;
     BooleanValue operator||(const BooleanValue& other) const;
     BooleanValue operator!() const;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class FunctionValue final : public Value {
@@ -893,6 +909,7 @@ public:
         std::unreachable();
     }
     Value* invoke(ComparableSpan<Value*> args) const { return callback_(args); }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ArrayValue final : public Value {
@@ -919,6 +936,7 @@ public:
         /// TODO: implement
         return nullptr;
     }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class InstanceValue final : public Value {
@@ -940,6 +958,7 @@ public:
         return new InstanceValue(*this);
     }
     Value* get_attr(std::string_view attr) noexcept { return attributes_.at(attr); }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class OverloadedFunctionValue final : public Value {
@@ -974,6 +993,7 @@ public:
             type_ = target;
         }
     }
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 inline Type* Object::as_type() {

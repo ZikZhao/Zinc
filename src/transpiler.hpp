@@ -1,5 +1,4 @@
 #include "pch.hpp"
-#include <string_view>
 
 #include "ast.hpp"
 #include "diagnosis.hpp"
@@ -107,112 +106,35 @@ public:
         *current_section_ << token;
         return *this;
     }
-    Transpiler& operator<<(const Type* type) {
-        switch (type->kind_) {
-        case Kind::Integer: {
-            const IntegerType* int_type = static_cast<const IntegerType*>(type);
-            *current_section_ << "std::";
-            if (int_type->is_signed_) {
-                *current_section_ << "int";
-            } else {
-                *current_section_ << "uint";
-            }
-            switch (int_type->bits_) {
-            case 8:
-                *current_section_ << "8_t";
-                break;
-            case 16:
-                *current_section_ << "16_t";
-                break;
-            case 32:
-                *current_section_ << "32_t";
-                break;
-            case 64:
-                *current_section_ << "64_t";
-                break;
-            default:
-                assert(false);
-                std::unreachable();
-            }
-            break;
-        }
-        case Kind::Float: {
-            const FloatType* float_type = static_cast<const FloatType*>(type);
-            switch (float_type->bits_) {
-            case 32:
-                *current_section_ << "float";
-                break;
-            case 64:
-                *current_section_ << "double";
-                break;
-            }
-            return *this;
-        }
-        case Kind::Boolean:
-            *current_section_ << "bool";
-            break;
-        case Kind::Function: {
-            const FunctionType* func_type = static_cast<const FunctionType*>(type);
-            *current_section_ << "std::function<";
-            *this << func_type->return_type_;
-            *current_section_ << "(";
-            const char* sep = "";
-            for (Type* param_type : func_type->parameters_) {
-                *current_section_ << sep;
-                *this << param_type;
-                sep = ", ";
-            }
-            *current_section_ << ")>";
-            break;
-        }
-        case Kind::Intersection: {
-            const IntersectionType* intersection = static_cast<const IntersectionType*>(type);
-            *current_section_ << "$PolyFunction<";
-            const char* sep = "";
-            for (Type* sub_type : intersection->types_) {
-                *current_section_ << sep;
-                *this << sub_type;
-                sep = ", ";
-            }
-            *current_section_ << ">";
-            break;
-        }
-        default:
-            *this << "/* UnsupportedType */";
-            break;
-        }
-        return *this;
-    }
-    Transpiler& operator<<(const Value* value) {
-        switch (value->kind_) {
-        case Kind::Integer: {
-            const IntegerValue* int_value = static_cast<const IntegerValue*>(value);
-            const IntegerType* int_type = static_cast<const IntegerType*>(value->get_type());
-            if (int_type->is_signed_) {
-                std::format_to(std::back_inserter(**current_section_), "{}", int_value->ivalue_);
-            } else {
-                std::format_to(std::back_inserter(**current_section_), "{}", int_value->uvalue_);
-            }
-            break;
-        }
-        case Kind::Float: {
-            const FloatValue* float_value = static_cast<const FloatValue*>(value);
-            std::format_to(std::back_inserter(**current_section_), "0x{:a}", float_value->value_);
-            break;
-        }
-        case Kind::Boolean: {
-            const BooleanValue* bool_value = static_cast<const BooleanValue*>(value);
-            *current_section_ << (bool_value->value_ ? "true" : "false");
-            break;
-        }
-        default:
-            *current_section_ << "/* UnsupportedValue */";
-            break;
-        }
-        return *this;
-    }
     Transpiler& operator<<(Transpiler& (*manip)(Transpiler&)) { return manip(*this); }
 };
+
+inline void precompile_headers() {
+    std::fstream pch_file = std::fstream("out/pch.hpp", std::ios::in);
+    pch_file.seekg(0, std::ios::end);
+    std::size_t size = static_cast<std::size_t>(pch_file.tellg());
+    if (size == runtime_hpp_str().size()) {
+        GlobalMemory::String content;
+        content.resize(size);
+        pch_file.seekg(0, std::ios::beg);
+        pch_file.read(content.data(), static_cast<std::streamsize>(size));
+        if (content == runtime_hpp_str()) {
+            Diagnostic::message("Precompiled header is up to date");
+            return;
+        }
+    }
+
+    pch_file.close();
+    pch_file.open("out/pch.hpp", std::ios::out | std::ios::trunc);
+    pch_file << runtime_hpp_str();
+    pch_file.close();
+    const char* pch_command = "g++ -std=c++20 -x c++-header -I out out/pch.hpp -o out/pch.hpp.gch";
+    Diagnostic::message(GlobalMemory::format_view("Compiling precompiled header: {}", pch_command));
+    int ret = std::system(pch_command);
+    if (ret != 0) {
+        throw std::runtime_error("Failed to precompile headers");
+    }
+}
 
 inline int transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker) {
     std::filesystem::create_directory("out");
@@ -226,15 +148,14 @@ inline int transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker
         std::filesystem::path(sources[0].path)
             .stem()
             .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
-    Diagnostic::message(GlobalMemory::format_view("Wrote {} files to ./out", sources.files.size()));
-    const char* pch_command = "g++ -std=c++20 -xc++-header -Iout out/pch.hpp -o out/pch.hpp.gch";
-    Diagnostic::message(GlobalMemory::format_view("Compiling precompiled header: {}", pch_command));
-    int ret = std::system(pch_command);
-    if (ret != 0) {
-        return ret;
-    }
+    Diagnostic::message(
+        GlobalMemory::format_view("Transformed {} files to ./out", sources.files.size())
+    );
+    precompile_headers();
     GlobalMemory::String compile_command = GlobalMemory::format(
-        "g++ -std=c++20 -Iout \"out/{}.hpp\" -o \"out/{}\"", main_stem, main_stem
+        "g++ -std=c++20 -x c++ -I out -include \"out/{}.hpp\" /dev/null -o \"out/{}\"",
+        main_stem,
+        main_stem
     );
     Diagnostic::message(
         GlobalMemory::format_view(
@@ -242,6 +163,142 @@ inline int transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker
         )
     );
     return std::system(GlobalMemory::String(compile_command).c_str());
+}
+
+/// ===================== Inline implementations of Objects =====================
+
+inline void UnknownType::transpile(Transpiler& transpiler) const noexcept {
+    // UnknownType can never be instantiated in user code
+    std::unreachable();
+}
+
+inline void AnyType::transpile(Transpiler& transpiler) const noexcept { transpiler << "std::any"; }
+
+inline void NullType::transpile(Transpiler& transpiler) const noexcept {
+    // NullType can never be instantiated in user code
+    std::unreachable();
+}
+
+inline void IntegerType::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << "std::";
+    if (is_signed_) {
+        transpiler << "int";
+    } else {
+        transpiler << "uint";
+    }
+    switch (bits_) {
+    case 8:
+        transpiler << "8_t";
+        break;
+    case 16:
+        transpiler << "16_t";
+        break;
+    case 32:
+        transpiler << "32_t";
+        break;
+    case 64:
+        transpiler << "64_t";
+        break;
+    default:
+        assert(false);
+        std::unreachable();
+    }
+}
+
+inline void FloatType::transpile(Transpiler& transpiler) const noexcept {
+    switch (bits_) {
+    case 32:
+        transpiler << "float";
+        break;
+    case 64:
+        transpiler << "double";
+        break;
+    }
+}
+
+inline void BooleanType::transpile(Transpiler& transpiler) const noexcept { transpiler << "bool"; }
+
+inline void FunctionType::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << "std::function<";
+    return_type_->transpile(transpiler);
+    transpiler << "(";
+    const char* sep = "";
+    for (Type* param_type : parameters_) {
+        transpiler << sep;
+        param_type->transpile(transpiler);
+        sep = ", ";
+    }
+    transpiler << ")>";
+}
+
+inline void ArrayType::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << "std::vector<";
+    element_type_->transpile(transpiler);
+    transpiler << ">";
+}
+
+inline void RecordType::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << "struct {" << Transpiler::indent << Transpiler::newline;
+}
+
+inline void ClassType::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << identifier_;
+}
+
+inline void IntersectionType::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << "$PolyFunction<";
+    const char* sep = "";
+    for (Type* sub_type : types_) {
+        transpiler << sep;
+        sub_type->transpile(transpiler);
+        sep = ", ";
+    }
+    transpiler << ">";
+}
+
+inline void UnionType::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << "std::variant<";
+    const char* sep = "";
+    for (Type* sub_type : types_) {
+        transpiler << sep;
+        sub_type->transpile(transpiler);
+        sep = ", ";
+    }
+    transpiler << ">";
+}
+
+inline void UnknownValue::transpile(Transpiler& transpiler) const noexcept { std::unreachable(); }
+
+inline void NullValue::transpile(Transpiler& transpiler) const noexcept { transpiler << "nullptr"; }
+
+inline void IntegerValue::transpile(Transpiler& transpiler) const noexcept {
+    const IntegerType* int_type = static_cast<const IntegerType*>(get_type());
+    if (int_type->is_signed_) {
+        transpiler << GlobalMemory::format_view("{}", ivalue_);
+    } else {
+        transpiler << GlobalMemory::format_view("{}", uvalue_);
+    }
+}
+
+inline void FloatValue::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << GlobalMemory::format_view("0x{:a}", value_);
+}
+
+inline void BooleanValue::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << (value_ ? "true" : "false");
+}
+
+inline void FunctionValue::transpile(Transpiler& transpiler) const noexcept { std::unreachable(); }
+
+inline void ArrayValue::transpile(Transpiler& transpiler) const noexcept {
+    /// TODO:
+    return;
+}
+
+inline void InstanceValue::transpile(Transpiler& transpiler) const noexcept { std::unreachable(); }
+
+inline void OverloadedFunctionValue::transpile(Transpiler& transpiler) const noexcept {
+    std::unreachable();
 }
 
 /// ===================== Inline implementations of AST nodes =====================
@@ -270,7 +327,7 @@ inline void ASTLocalBlock::transpile(Transpiler& transpiler, TypeChecker& checke
 }
 
 inline void ASTConstant::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler << value_;
+    value_->transpile(transpiler);
 }
 
 inline void ASTIdentifier::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
@@ -323,13 +380,13 @@ inline void ASTFunctionCall::transpile(
 inline void ASTPrimitiveType::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << type_;
+    type_->transpile(transpiler);
 }
 
 inline void ASTFunctionType::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << eval(checker)->as_type();
+    eval(checker)->transpile(transpiler);
 }
 
 inline void ASTFieldDeclaration::transpile(
@@ -361,8 +418,8 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler, TypeChecker& check
     } else if (!is_mutable_) {
         transpiler << "const ";
     }
-    transpiler << get_declared_type(checker, expr_->get_expr_info(checker).type) << " ";
-    transpiler << identifier_ << " = ";
+    get_declared_type(checker, expr_->get_expr_info(checker).type)->transpile(transpiler);
+    transpiler << " " << identifier_ << " = ";
     expr_->transpile(transpiler, checker);
     transpiler << ";" << Transpiler::newline;
 }
@@ -452,6 +509,10 @@ inline void ASTFunctionDeclaration::transpile(
         }
     }
 
+    if (is_main) {
+        transpiler[Section::Main] << "// NOLINTNEXTLINE(misc-definitions-in-headers)"
+                                  << Transpiler::newline;
+    }
     transpiler[is_main ? Section::Main : Section::Implementations] << (is_main ? "" : "inline ");
     return_type_->transpile(transpiler, checker);
     transpiler << " " << checker.get_current_scope_prefix() << (will_mangle ? "$" : "")

@@ -53,10 +53,23 @@
 #include <vector>
 // IWYU pragma: end_exports
 
-#pragma clang diagnostic ignored "-Wdollar-in-identifier-extension"
+#pragma clang diagnostic ignored "-Weverything"
+
+template <typename T>
+struct FunctionDecay {
+    using type = T;
+};
+
+template <typename R, typename... Args>
+struct FunctionDecay<std::function<R(Args...)>> {
+    using type = R(Args...);
+};
+
+template <typename T>
+using FunctionDecayT = typename FunctionDecay<T>::type;
 
 template <typename... Sigs>
-class $PolyFunction {
+class $PolyFunctionImpl {
 private:
     constexpr static inline std::size_t SBO_LIMIT = 3 * sizeof(void*);
 
@@ -70,12 +83,9 @@ private:
         virtual R call(Args... args) const = 0;
     };
 
-    template <typename R, typename... Args>
-    struct Callable<std::function<R(Args...)>> : Callable<R(Args...)> {};
-
     struct InterfaceBase : virtual Callable<Sigs>... {
         using Callable<Sigs>::call...;
-        virtual void clone_to($PolyFunction& target) const = 0;
+        virtual void clone_to($PolyFunctionImpl& target) const = 0;
     };
 
     template <typename Derived, typename Signature>
@@ -88,21 +98,18 @@ private:
         }
     };
 
-    template <typename Derived, typename R, typename... Args>
-    struct ImplMixin<Derived, std::function<R(Args...)>> : ImplMixin<Derived, R(Args...)> {};
-
     template <typename Lambda>
-    struct InterfaceImpl : InterfaceBase, ImplMixin<InterfaceImpl<Lambda>, Sigs>... {
+    struct InterfaceImpl : virtual InterfaceBase, ImplMixin<InterfaceImpl<Lambda>, Sigs>... {
         mutable Lambda lambda_;
         InterfaceImpl(Lambda lambda) : lambda_(std::move(lambda)) {}
         decltype(auto) invoke(auto&&... args) const {
             return lambda_(std::forward<decltype(args)>(args)...);
         }
-        void clone_to($PolyFunction& target) const override {
-            if (sizeof(Lambda) > SBO_LIMIT) {
-                target.interface_ = new InterfaceImpl<Lambda>(lambda_);
+        void clone_to($PolyFunctionImpl& target) const override {
+            if constexpr (sizeof(InterfaceImpl) > SBO_LIMIT) {
+                target.interface_ = new InterfaceImpl(lambda_);
             } else {
-                target.interface_ = new (target.sbo_buffer_) InterfaceImpl<Lambda>(lambda_);
+                target.interface_ = new (target.sbo_buffer_) InterfaceImpl(lambda_);
             }
         }
     };
@@ -112,12 +119,12 @@ private:
     std::byte sbo_buffer_[SBO_LIMIT]{};
 
 public:
-    template <typename Lambda>
-        requires(sizeof(Lambda) <= SBO_LIMIT)
-    $PolyFunction(Lambda lambda)
-        : interface_(new (sbo_buffer_) InterfaceImpl<Lambda>(std::move(lambda))) {}
-    $PolyFunction(const $PolyFunction& other) { other.interface_->clone_to(*this); }
-    $PolyFunction($PolyFunction&& other) noexcept {
+    $PolyFunctionImpl(auto lambda)
+        requires(sizeof(InterfaceImpl<decltype(lambda)>) <= SBO_LIMIT)
+        : interface_(new (sbo_buffer_) InterfaceImpl(std::move(lambda))) {}
+    $PolyFunctionImpl(auto lambda) : interface_(new InterfaceImpl(std::move(lambda))) {}
+    $PolyFunctionImpl(const $PolyFunctionImpl& other) { other.interface_->clone_to(*this); }
+    $PolyFunctionImpl($PolyFunctionImpl&& other) noexcept {
         if (other.is_sbo()) {
             other.interface_->clone_to(*this);
             other.interface_->~InterfaceBase();
@@ -127,7 +134,7 @@ public:
             other.interface_ = nullptr;
         }
     }
-    $PolyFunction& operator=($PolyFunction other) {
+    $PolyFunctionImpl& operator=($PolyFunctionImpl other) {
         destory();
         if (other.is_sbo()) {
             other.interface_->clone_to(*this);
@@ -136,7 +143,7 @@ public:
             other.interface_ = nullptr;
         }
     }
-    ~$PolyFunction() { destory(); }
+    ~$PolyFunctionImpl() { destory(); }
     constexpr bool is_sbo() const noexcept {
         return static_cast<const void*>(interface_) == static_cast<const void*>(sbo_buffer_);
     }
@@ -157,3 +164,6 @@ public:
         return interface_->call(std::forward<decltype(args)>(args)...);
     }
 };
+
+template <typename... Sigs>
+using $PolyFunction = $PolyFunctionImpl<FunctionDecayT<Sigs>...>;
