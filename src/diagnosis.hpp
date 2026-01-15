@@ -196,16 +196,16 @@ class Diagnostic {
 
 private:
     static inline std::mutex print_mutex_;
-    static thread_local Diagnostic instance;
+    static thread_local std::optional<Diagnostic> instance;
 
 public:
-    static void report(Problem&& problem) { instance.problems_.push_back(std::move(problem)); }
+    static void report(Problem&& problem) { instance->problems_.push_back(std::move(problem)); }
 
     static bool print(SourceManager& sources) {
         std::lock_guard lock(print_mutex_);
         std::size_t error_count = 0;
         std::size_t warning_count = 0;
-        for (const Problem& problem : instance.problems_) {
+        for (const Problem& problem : instance->problems_) {
             print_problem(sources, problem);
             switch (problem.severity_) {
             case Problem::Severity::Error:
@@ -239,6 +239,12 @@ public:
         std::lock_guard lock(print_mutex_);
         std::print(std::cout, "{}[INFO]{} {}\n", ColourEscape::CYAN, ColourEscape::RESET, msg);
         std::cout.flush();
+    }
+
+    static void error(std::string_view msg) {
+        std::lock_guard lock(print_mutex_);
+        std::print(std::cerr, "{}[ERROR]{} {}\n", ColourEscape::RED, ColourEscape::RESET, msg);
+        std::cerr.flush();
     }
 
 private:
@@ -364,8 +370,8 @@ private:
 private:
     std::vector<Problem> problems_;
 
-private:
-    Diagnostic() = default;
+public:
+    Diagnostic() noexcept = default;
 };
 
 class UnlocatedProblem : std::runtime_error {
@@ -389,4 +395,4 @@ public:
     void report_at(Location location) { std::move(callback_)(location); }
 };
 
-inline thread_local Diagnostic Diagnostic::instance;
+inline thread_local std::optional<Diagnostic> Diagnostic::instance;

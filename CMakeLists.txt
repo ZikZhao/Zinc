@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Stainless)
+project(Zinc)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 23)
@@ -44,12 +44,12 @@ set(ANTLR4_OUTPUT_DIR ${CMAKE_BINARY_DIR}/antlr4_generated)
 
 # ANTLR4 generated file names
 set(ANTLR4_GENERATED_SRC
-    ${ANTLR4_OUTPUT_DIR}/StainlessLexer.cpp
-    ${ANTLR4_OUTPUT_DIR}/StainlessParser.cpp
-    ${ANTLR4_OUTPUT_DIR}/StainlessBaseListener.cpp
-    ${ANTLR4_OUTPUT_DIR}/StainlessListener.cpp
-    ${ANTLR4_OUTPUT_DIR}/StainlessBaseVisitor.cpp
-    ${ANTLR4_OUTPUT_DIR}/StainlessVisitor.cpp
+    ${ANTLR4_OUTPUT_DIR}/ZincLexer.cpp
+    ${ANTLR4_OUTPUT_DIR}/ZincParser.cpp
+    ${ANTLR4_OUTPUT_DIR}/ZincBaseListener.cpp
+    ${ANTLR4_OUTPUT_DIR}/ZincListener.cpp
+    ${ANTLR4_OUTPUT_DIR}/ZincBaseVisitor.cpp
+    ${ANTLR4_OUTPUT_DIR}/ZincVisitor.cpp
 )
 
 # Generate ANTLR4 parser and lexer using custom command
@@ -61,9 +61,9 @@ add_custom_command(
         -o ${ANTLR4_OUTPUT_DIR}
         -visitor
         -listener
-        ${SOURCE_DIR}/Stainless.g4
-    DEPENDS ${SOURCE_DIR}/Stainless.g4
-    COMMENT "Generating ANTLR4 parser and lexer from Stainless.g4"
+        ${SOURCE_DIR}/Zinc.g4
+    DEPENDS ${SOURCE_DIR}/Zinc.g4
+    COMMENT "Generating ANTLR4 parser and lexer from Zinc.g4"
     VERBATIM
 )
 
@@ -96,18 +96,18 @@ target_include_directories(antlr4_generated_lib SYSTEM PUBLIC ${ANTLR4_OUTPUT_DI
 target_compile_options(antlr4_generated_lib PRIVATE -w)
 
 # Create executable
-add_executable(transpiler ${SRC_MAIN} ${RUNTIME_HPP_STR})
+add_executable(zinc ${SRC_MAIN} ${RUNTIME_HPP_STR})
 
 # Link ANTLR4 generated library and runtime
-target_link_libraries(transpiler PRIVATE antlr4_generated_lib)
-target_include_directories(transpiler PRIVATE ${ANTLR4_OUTPUT_DIR})
+target_link_libraries(zinc PRIVATE antlr4_generated_lib)
+target_include_directories(zinc PRIVATE ${ANTLR4_OUTPUT_DIR})
 
 # Set precompiled header
-target_precompile_headers(transpiler PRIVATE ${PCH_HEADER})
+target_precompile_headers(zinc PRIVATE ${PCH_HEADER})
 
 # Set target properties
-set_target_properties(transpiler PROPERTIES
-    OUTPUT_NAME transpiler
+set_target_properties(zinc PROPERTIES
+    OUTPUT_NAME zinc
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out
 )
 

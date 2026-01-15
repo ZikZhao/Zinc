@@ -10,9 +10,15 @@
 
 class ThreadGuard {
 public:
+    ThreadGuard() {
+        TypeRegistry::instance.emplace();
+        Diagnostic::instance.emplace();
+    }
     ~ThreadGuard() {
-        TypeRegistry::instance = TypeRegistry();
-        Diagnostic::instance = Diagnostic();
+        GlobalMemory::monotonic()->release();
+        GlobalMemory::pool()->release();
+        TypeRegistry::instance.reset();
+        Diagnostic::instance.reset();
     }
 };
 
@@ -29,12 +35,13 @@ int main(int argc, char* argv[]) {
     Scope scope;
     OperationHandler ops;
     root->collect_symbols(scope, ops);
+
     TypeChecker checker(scope, ops);
     root->check_types(checker);
 
     bool has_error = Diagnostic::print(sources);
     if (!has_error) {
-        return transpile(root.get(), sources, checker);
+        transpile(root.get(), sources, checker);
     }
 
     return has_error ? EXIT_FAILURE : EXIT_SUCCESS;

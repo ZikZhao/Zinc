@@ -130,28 +130,26 @@ inline void precompile_headers() {
     pch_file.close();
     const char* pch_command = "g++ -std=c++20 -x c++-header -I out out/pch.hpp -o out/pch.hpp.gch";
     Diagnostic::message(GlobalMemory::format_view("Compiling precompiled header: {}", pch_command));
-    int ret = std::system(pch_command);
-    if (ret != 0) {
-        throw std::runtime_error("Failed to precompile headers");
+    if (std::system(pch_command) != 0) {
+        Diagnostic::error("Failed to precompile headers");
     }
 }
 
-inline int transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker) {
+inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker) {
     std::filesystem::create_directory("out");
-    std::fstream pch_file = std::fstream("out/pch.hpp", std::ios::out);
-    pch_file << runtime_hpp_str();
-    pch_file.close();
     Transpiler transpiler(sources[0]);
     root->transpile(transpiler, checker);
     transpiler.finalize();
+    Diagnostic::message(
+        GlobalMemory::format_view("Transformed {} modules to ./out", sources.files.size())
+    );
+
+    precompile_headers();
+
     const GlobalMemory::String main_stem =
         std::filesystem::path(sources[0].path)
             .stem()
             .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
-    Diagnostic::message(
-        GlobalMemory::format_view("Transformed {} files to ./out", sources.files.size())
-    );
-    precompile_headers();
     GlobalMemory::String compile_command = GlobalMemory::format(
         "g++ -std=c++20 -x c++ -I out -include \"out/{}.hpp\" /dev/null -o \"out/{}\"",
         main_stem,
@@ -162,7 +160,9 @@ inline int transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker
             "Compiling output executable to ./out/{}: {}", main_stem, compile_command
         )
     );
-    return std::system(GlobalMemory::String(compile_command).c_str());
+    if (std::system(GlobalMemory::String(compile_command).c_str()) != 0) {
+        Diagnostic::error("Failed to compile output executable");
+    }
 }
 
 /// ===================== Inline implementations of Objects =====================
@@ -340,7 +340,7 @@ inline void ASTBinaryOp<Op>::transpile(
 ) const noexcept {
     transpiler << "(";
     left_->transpile(transpiler, checker);
-    transpiler << OperatorCodeToString(Op::opcode);
+    transpiler << " " << OperatorCodeToString(Op::opcode) << " ";
     right_->transpile(transpiler, checker);
     transpiler << ")";
 }
@@ -351,7 +351,7 @@ inline void ASTBinaryOp<OperatorFunctors::OperateAndAssign<Op>>::transpile(
 ) const noexcept {
     transpiler << "(";
     left_->transpile(transpiler, checker);
-    transpiler << OperatorCodeToString(Op::opcode) << "=";
+    transpiler << " " << OperatorCodeToString(Op::opcode) << "= ";
     right_->transpile(transpiler, checker);
     transpiler << ")";
 }

@@ -1,4 +1,4 @@
-grammar Stainless;
+grammar Zinc;
 
 options {
 	language = Cpp;

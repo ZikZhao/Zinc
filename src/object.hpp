@@ -72,7 +72,7 @@ private:
     };
 
 private:
-    static thread_local TypeRegistry instance;
+    static thread_local std::optional<TypeRegistry> instance;
 
 public:
     template <TypeClass T>
@@ -86,16 +86,16 @@ public:
             // classes with same definition are distinct types
             return new T(std::forward<decltype(args)>(args)...);
         } else if constexpr (TypeInTupleV<T, OtherInternals>) {
-            return instance.get_cached<T>(std::forward<decltype(args)>(args)...);
+            return instance->get_cached<T>(std::forward<decltype(args)>(args)...);
         } else {
             // builtin singleton types, e.g. StringType
             std::type_index type_index = std::type_index(typeid(T));
-            auto it = instance.builtin_types_.find(type_index);
-            if (it != instance.builtin_types_.end()) {
+            auto it = instance->builtin_types_.find(type_index);
+            if (it != instance->builtin_types_.end()) {
                 return static_cast<T*>(it->second);
             } else {
                 T* new_type = new T(std::forward<decltype(args)>(args)...);
-                instance.builtin_types_.insert({type_index, new_type});
+                instance->builtin_types_.insert({type_index, new_type});
                 return new_type;
             }
         }
@@ -113,8 +113,6 @@ private:
     GlobalMemory::Map<std::type_index, Type*> builtin_types_;
 
 private:
-    TypeRegistry() noexcept = default;
-
     template <TypeClass T>
     T* get_cached(auto&&... args) {
         GlobalMemory::Set<T*, TypeComparator>& type_set =
@@ -127,6 +125,9 @@ private:
             return *it2;
         }
     }
+
+public:
+    TypeRegistry() noexcept = default;
 };
 
 class Object : public MemoryManaged {
@@ -1006,7 +1007,7 @@ inline Value* Object::as_value() {
     return !is_type_ ? static_cast<Value*>(this) : nullptr;
 }
 
-inline thread_local TypeRegistry TypeRegistry::instance;
+inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
 
 inline Object* TypeRegistry::get_unknown() { return &UnknownType::instance; }
 

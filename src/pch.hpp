@@ -98,12 +98,12 @@ private:
     }
 
 public:
-    static std::pmr::memory_resource* monotonic() noexcept {
+    static std::pmr::monotonic_buffer_resource* monotonic() noexcept {
         static thread_local std::pmr::monotonic_buffer_resource resource(128 * 1024, global_heap());
         return &resource;
     }
 
-    static std::pmr::memory_resource* pool() noexcept {
+    static std::pmr::unsynchronized_pool_resource* pool() noexcept {
         constexpr std::pmr::pool_options pool_opts{
             .largest_required_pool_block = 4 * 1024,  // 4 KB
         };

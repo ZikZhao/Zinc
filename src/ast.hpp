@@ -168,9 +168,9 @@ public:
 
 class ASTBlock : public ASTNode {
 public:
-    std::vector<std::unique_ptr<ASTNode>> statements_;
-    ASTBlock(const Location& loc, std::vector<std::unique_ptr<ASTNode>> statements) noexcept
-        : ASTNode(loc), statements_(std::move(statements)) {}
+    ComparableSpan<std::unique_ptr<ASTNode>> statements_;
+    ASTBlock(const Location& loc, ComparableSpan<std::unique_ptr<ASTNode>> statements) noexcept
+        : ASTNode(loc), statements_(statements) {}
     void collect_symbols(Scope& scope, OperationHandler& ops) override {
         for (auto& stmt : statements_) {
             stmt->collect_symbols(scope, ops);

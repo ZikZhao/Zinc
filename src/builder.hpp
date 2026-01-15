@@ -1,15 +1,15 @@
 #pragma once
 #include "pch.hpp"
 
-#include "StainlessBaseVisitor.h"
-#include "StainlessLexer.h"
-#include "StainlessParser.h"
+#include "ZincBaseVisitor.h"
+#include "ZincLexer.h"
+#include "ZincParser.h"
 #include "ast.hpp"
 #include "builtins.hpp"
 #include "object.hpp"
 #include "source.hpp"
 
-class ASTBuilder final : private StainlessBaseVisitor {
+class ASTBuilder final : private ZincBaseVisitor {
 private:
     const SourceManager::File& file_;
     ImportManager<ASTRoot>& importer_;
@@ -23,7 +23,7 @@ private:
     }
     std::unique_ptr<ASTNode> transform(antlr4::tree::ParseTree* ctx) noexcept {
         if (ctx) {
-            StainlessBaseVisitor::visit(ctx);
+            ZincBaseVisitor::visit(ctx);
             return std::move(last_visited_);
         } else {
             return nullptr;
@@ -68,15 +68,15 @@ public:
         : file_(file), importer_(importer) {}
     std::unique_ptr<ASTRoot> operator()() noexcept {
         antlr4::ANTLRInputStream input(file_.content.data(), file_.content.size());
-        StainlessLexer lexer(&input);
+        ZincLexer lexer(&input);
         antlr4::CommonTokenStream tokens(&lexer);
-        StainlessParser parser(&tokens);
+        ZincParser parser(&tokens);
         antlr4::tree::ParseTree* tree = parser.program();
         return static_unique_cast<ASTRoot>(transform(tree));
     }
 
 private:
-    antlrcpp::Any visitProgram(StainlessParser::ProgramContext* ctx) noexcept final {
+    antlrcpp::Any visitProgram(ZincParser::ProgramContext* ctx) noexcept final {
         ComparableSpan statements =
             ctx->statements_ |
             std::views::transform([this](auto child) { return transform(child); }) |
@@ -84,25 +84,26 @@ private:
         last_visited_ = std::make_unique<ASTRoot>(loc(ctx), std::move(statements));
         return {};
     }
-    antlrcpp::Any visitStatement(StainlessParser::StatementContext* ctx) noexcept final {
+    antlrcpp::Any visitStatement(ZincParser::StatementContext* ctx) noexcept final {
         last_visited_ = transform(ctx->children[0]);
         return {};
     }
-    antlrcpp::Any visitCode_block(StainlessParser::Code_blockContext* ctx) noexcept final {
-        auto rng = ctx->statements_ |
-                   std::views::transform([this](auto child) { return transform(child); });
-        std::vector<std::unique_ptr<ASTNode>> nodes(rng.begin(), rng.end());
-        last_visited_ = std::make_unique<ASTLocalBlock>(loc(ctx), std::move(nodes));
+    antlrcpp::Any visitCode_block(ZincParser::Code_blockContext* ctx) noexcept final {
+        ComparableSpan statements =
+            ctx->statements_ |
+            std::views::transform([this](auto child) { return transform(child); }) |
+            GlobalMemory::collect<ComparableSpan<std::unique_ptr<ASTNode>>>();
+        last_visited_ = std::make_unique<ASTLocalBlock>(loc(ctx), statements);
         return {};
     }
-    antlrcpp::Any visitExpr_statement(StainlessParser::Expr_statementContext* ctx) noexcept final {
+    antlrcpp::Any visitExpr_statement(ZincParser::Expr_statementContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTExpressionStatement>(
             loc(ctx), static_unique_cast<ASTExpression>(transform(ctx->expr()))
         );
         return {};
     }
     antlrcpp::Any visitDeclaration_statement(
-        StainlessParser::Declaration_statementContext* ctx
+        ZincParser::Declaration_statementContext* ctx
     ) noexcept final {
         last_visited_ = std::make_unique<ASTDeclaration>(
             loc(ctx),
@@ -114,7 +115,7 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitIf_statement(StainlessParser::If_statementContext* ctx) noexcept final {
+    antlrcpp::Any visitIf_statement(ZincParser::If_statementContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTIfStatement>(
             loc(ctx),
             static_unique_cast<ASTExpression>(transform(ctx->condition_)),
@@ -123,7 +124,7 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitFor_statement(StainlessParser::For_statementContext* ctx) noexcept final {
+    antlrcpp::Any visitFor_statement(ZincParser::For_statementContext* ctx) noexcept final {
         if (ctx->init_decl_) {
             last_visited_ = std::make_unique<ASTForStatement>(
                 loc(ctx),
@@ -147,19 +148,19 @@ private:
         return {};
     }
     antlrcpp::Any visitBreak_statement(
-        StainlessParser::Break_statementContext* ctx
+        ZincParser::Break_statementContext* ctx
     ) noexcept final {
         last_visited_ = std::make_unique<ASTBreakStatement>(loc(ctx));
         return {};
     }
     antlrcpp::Any visitContinue_statement(
-        StainlessParser::Continue_statementContext* ctx
+        ZincParser::Continue_statementContext* ctx
     ) noexcept final {
         last_visited_ = std::make_unique<ASTContinueStatement>(loc(ctx));
         return {};
     }
     antlrcpp::Any visitReturn_statement(
-        StainlessParser::Return_statementContext* ctx
+        ZincParser::Return_statementContext* ctx
     ) noexcept final {
         last_visited_ = std::make_unique<ASTReturnStatement>(
             loc(ctx), static_unique_cast<ASTExpression>(transform(ctx->expr_))
@@ -167,7 +168,7 @@ private:
         return {};
     }
     antlrcpp::Any visitType_alias_declaration(
-        StainlessParser::Type_alias_declarationContext* ctx
+        ZincParser::Type_alias_declarationContext* ctx
     ) noexcept final {
         last_visited_ = std::make_unique<ASTTypeAlias>(
             loc(ctx),
@@ -177,7 +178,7 @@ private:
         return {};
     }
     antlrcpp::Any visitFunction_declaration(
-        StainlessParser::Function_declarationContext* ctx
+        ZincParser::Function_declarationContext* ctx
     ) noexcept final {
         ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters =
             transform_list<ASTFunctionParameter>(ctx->parameters_);
@@ -196,7 +197,7 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitParameter(StainlessParser::ParameterContext* ctx) noexcept final {
+    antlrcpp::Any visitParameter(ZincParser::ParameterContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTFunctionParameter>(
             loc(ctx),
             text(ctx->identifier_),
@@ -205,7 +206,7 @@ private:
         return {};
     }
     antlrcpp::Any visitClass_declaration(
-        StainlessParser::Class_declarationContext* ctx
+        ZincParser::Class_declarationContext* ctx
     ) noexcept final {
         ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields =
             transform_list<ASTFieldDeclaration>(ctx->fields_);
@@ -216,64 +217,64 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitAssignExpr(StainlessParser::AssignExprContext* ctx) noexcept final {
+    antlrcpp::Any visitAssignExpr(ZincParser::AssignExprContext* ctx) noexcept final {
         std::unique_ptr<ASTExpression> left =
             static_unique_cast<ASTExpression>(transform(ctx->left_));
         std::unique_ptr<ASTExpression> right =
             static_unique_cast<ASTExpression>(transform(ctx->right_));
         switch (ctx->op_->getType()) {
-        case StainlessParser::OP_ASSIGN:
+        case ZincParser::OP_ASSIGN:
             last_visited_ =
                 std::make_unique<ASTAssignOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_ADD_ASSIGN:
+        case ZincParser::OP_ADD_ASSIGN:
             last_visited_ =
                 std::make_unique<ASTAddAssignOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_SUB_ASSIGN:
+        case ZincParser::OP_SUB_ASSIGN:
             last_visited_ =
                 std::make_unique<ASTSubtractAssignOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_MUL_ASSIGN:
+        case ZincParser::OP_MUL_ASSIGN:
             last_visited_ =
                 std::make_unique<ASTMultiplyAssignOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_DIV_ASSIGN:
+        case ZincParser::OP_DIV_ASSIGN:
             last_visited_ =
                 std::make_unique<ASTDivideAssignOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_REM_ASSIGN:
+        case ZincParser::OP_REM_ASSIGN:
             last_visited_ =
                 std::make_unique<ASTRemainderAssignOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_AND_ASSIGN:
+        case ZincParser::OP_AND_ASSIGN:
             last_visited_ = std::make_unique<ASTLogicalAndAssignOp>(
                 loc(ctx), std::move(left), std::move(right)
             );
             break;
-        case StainlessParser::OP_OR_ASSIGN:
+        case ZincParser::OP_OR_ASSIGN:
             last_visited_ =
                 std::make_unique<ASTLogicalOrAssignOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_BITAND_ASSIGN:
+        case ZincParser::OP_BITAND_ASSIGN:
             last_visited_ = std::make_unique<ASTBitwiseAndAssignOp>(
                 loc(ctx), std::move(left), std::move(right)
             );
             break;
-        case StainlessParser::OP_BITOR_ASSIGN:
+        case ZincParser::OP_BITOR_ASSIGN:
             last_visited_ =
                 std::make_unique<ASTBitwiseOrAssignOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_BITXOR_ASSIGN:
+        case ZincParser::OP_BITXOR_ASSIGN:
             last_visited_ = std::make_unique<ASTBitwiseXorAssignOp>(
                 loc(ctx), std::move(left), std::move(right)
             );
             break;
-        case StainlessParser::OP_LSHIFT_ASSIGN:
+        case ZincParser::OP_LSHIFT_ASSIGN:
             last_visited_ =
                 std::make_unique<ASTLeftShiftAssignOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_RSHIFT_ASSIGN:
+        case ZincParser::OP_RSHIFT_ASSIGN:
             last_visited_ = std::make_unique<ASTRightShiftAssignOp>(
                 loc(ctx), std::move(left), std::move(right)
             );
@@ -284,17 +285,17 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitEqualityExpr(StainlessParser::EqualityExprContext* ctx) noexcept final {
+    antlrcpp::Any visitEqualityExpr(ZincParser::EqualityExprContext* ctx) noexcept final {
         std::unique_ptr<ASTExpression> left =
             static_unique_cast<ASTExpression>(transform(ctx->left_));
         std::unique_ptr<ASTExpression> right =
             static_unique_cast<ASTExpression>(transform(ctx->right_));
         switch (ctx->op_->getType()) {
-        case StainlessParser::OP_EQ:
+        case ZincParser::OP_EQ:
             last_visited_ =
                 std::make_unique<ASTEqualOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_NEQ:
+        case ZincParser::OP_NEQ:
             last_visited_ =
                 std::make_unique<ASTNotEqualOp>(loc(ctx), std::move(left), std::move(right));
             break;
@@ -304,25 +305,25 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitRelationalExpr(StainlessParser::RelationalExprContext* ctx) noexcept final {
+    antlrcpp::Any visitRelationalExpr(ZincParser::RelationalExprContext* ctx) noexcept final {
         std::unique_ptr<ASTExpression> left =
             static_unique_cast<ASTExpression>(transform(ctx->left_));
         std::unique_ptr<ASTExpression> right =
             static_unique_cast<ASTExpression>(transform(ctx->right_));
         switch (ctx->op_->getType()) {
-        case StainlessParser::OP_LT:
+        case ZincParser::OP_LT:
             last_visited_ =
                 std::make_unique<ASTLessThanOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_LTE:
+        case ZincParser::OP_LTE:
             last_visited_ =
                 std::make_unique<ASTLessEqualOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_GT:
+        case ZincParser::OP_GT:
             last_visited_ =
                 std::make_unique<ASTGreaterThanOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_GTE:
+        case ZincParser::OP_GTE:
             last_visited_ =
                 std::make_unique<ASTGreaterEqualOp>(loc(ctx), std::move(left), std::move(right));
             break;
@@ -332,17 +333,17 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitShiftExpr(StainlessParser::ShiftExprContext* ctx) noexcept final {
+    antlrcpp::Any visitShiftExpr(ZincParser::ShiftExprContext* ctx) noexcept final {
         std::unique_ptr<ASTExpression> left =
             static_unique_cast<ASTExpression>(transform(ctx->left_));
         std::unique_ptr<ASTExpression> right =
             static_unique_cast<ASTExpression>(transform(ctx->right_));
         switch (ctx->op_->getType()) {
-        case StainlessParser::OP_LSHIFT:
+        case ZincParser::OP_LSHIFT:
             last_visited_ =
                 std::make_unique<ASTLeftShiftOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_RSHIFT:
+        case ZincParser::OP_RSHIFT:
             last_visited_ =
                 std::make_unique<ASTRightShiftOp>(loc(ctx), std::move(left), std::move(right));
             break;
@@ -352,16 +353,16 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitAdditiveExpr(StainlessParser::AdditiveExprContext* ctx) noexcept final {
+    antlrcpp::Any visitAdditiveExpr(ZincParser::AdditiveExprContext* ctx) noexcept final {
         std::unique_ptr<ASTExpression> left =
             static_unique_cast<ASTExpression>(transform(ctx->left_));
         std::unique_ptr<ASTExpression> right =
             static_unique_cast<ASTExpression>(transform(ctx->right_));
         switch (ctx->op_->getType()) {
-        case StainlessParser::OP_ADD:
+        case ZincParser::OP_ADD:
             last_visited_ = std::make_unique<ASTAddOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_SUB:
+        case ZincParser::OP_SUB:
             last_visited_ =
                 std::make_unique<ASTSubtractOp>(loc(ctx), std::move(left), std::move(right));
             break;
@@ -372,22 +373,22 @@ private:
         return {};
     }
     antlrcpp::Any visitMultiplicativeExpr(
-        StainlessParser::MultiplicativeExprContext* ctx
+        ZincParser::MultiplicativeExprContext* ctx
     ) noexcept final {
         std::unique_ptr<ASTExpression> left =
             static_unique_cast<ASTExpression>(transform(ctx->left_));
         std::unique_ptr<ASTExpression> right =
             static_unique_cast<ASTExpression>(transform(ctx->right_));
         switch (ctx->op_->getType()) {
-        case StainlessParser::OP_MUL:
+        case ZincParser::OP_MUL:
             last_visited_ =
                 std::make_unique<ASTMultiplyOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_DIV:
+        case ZincParser::OP_DIV:
             last_visited_ =
                 std::make_unique<ASTDivideOp>(loc(ctx), std::move(left), std::move(right));
             break;
-        case StainlessParser::OP_REM:
+        case ZincParser::OP_REM:
             last_visited_ =
                 std::make_unique<ASTRemainderOp>(loc(ctx), std::move(left), std::move(right));
             break;
@@ -397,23 +398,23 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitUnaryExpr(StainlessParser::UnaryExprContext* ctx) noexcept final {
+    antlrcpp::Any visitUnaryExpr(ZincParser::UnaryExprContext* ctx) noexcept final {
         std::unique_ptr<ASTExpression> expr =
             static_unique_cast<ASTExpression>(transform(ctx->expr_));
         switch (ctx->op_->getType()) {
-        case StainlessParser::OP_INC:
+        case ZincParser::OP_INC:
             last_visited_ = std::make_unique<ASTIncrementOp>(loc(ctx), std::move(expr));
             break;
-        case StainlessParser::OP_DEC:
+        case ZincParser::OP_DEC:
             last_visited_ = std::make_unique<ASTDecrementOp>(loc(ctx), std::move(expr));
             break;
-        case StainlessParser::OP_SUB:
+        case ZincParser::OP_SUB:
             last_visited_ = std::make_unique<ASTNegateOp>(loc(ctx), std::move(expr));
             break;
-        case StainlessParser::OP_NOT:
+        case ZincParser::OP_NOT:
             last_visited_ = std::make_unique<ASTLogicalNotOp>(loc(ctx), std::move(expr));
             break;
-        case StainlessParser::OP_BITNOT:
+        case ZincParser::OP_BITNOT:
             last_visited_ = std::make_unique<ASTBitwiseNotOp>(loc(ctx), std::move(expr));
             break;
         default:
@@ -422,11 +423,11 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitConstExpr(StainlessParser::ConstExprContext* ctx) noexcept final {
+    antlrcpp::Any visitConstExpr(ZincParser::ConstExprContext* ctx) noexcept final {
         last_visited_ = transform(ctx->constant_);
         return {};
     }
-    antlrcpp::Any visitCallExpr(StainlessParser::CallExprContext* ctx) noexcept final {
+    antlrcpp::Any visitCallExpr(ZincParser::CallExprContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTFunctionCall>(
             loc(ctx),
             static_unique_cast<ASTValueExpression>(transform(ctx->func_)),
@@ -434,41 +435,41 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitParenExpr(StainlessParser::ParenExprContext* ctx) noexcept final {
+    antlrcpp::Any visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept final {
         last_visited_ = transform(ctx->inner_expr_);
         return {};
     }
-    antlrcpp::Any visitIdentifierExpr(StainlessParser::IdentifierExprContext* ctx) noexcept final {
+    antlrcpp::Any visitIdentifierExpr(ZincParser::IdentifierExprContext* ctx) noexcept final {
         last_visited_ = transform(ctx->identifier_);
         return {};
     }
-    antlrcpp::Any visitIdentifier(StainlessParser::IdentifierContext* ctx) noexcept final {
+    antlrcpp::Any visitIdentifier(ZincParser::IdentifierContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTIdentifier>(loc(ctx), text(ctx->name_));
         return {};
     }
-    antlrcpp::Any visitConstant(StainlessParser::ConstantContext* ctx) noexcept final {
+    antlrcpp::Any visitConstant(ZincParser::ConstantContext* ctx) noexcept final {
         switch (ctx->value_->getType()) {
-        case StainlessParser::T_INT:
+        case ZincParser::T_INT:
             last_visited_ = std::make_unique<ASTConstant>(
                 loc(ctx), text(ctx->value_), std::type_identity<IntegerValue>{}
             );
             break;
-        case StainlessParser::T_FLOAT:
+        case ZincParser::T_FLOAT:
             last_visited_ = std::make_unique<ASTConstant>(
                 loc(ctx), text(ctx->value_), std::type_identity<FloatValue>{}
             );
             break;
-        case StainlessParser::T_STRING:
+        case ZincParser::T_STRING:
             last_visited_ = std::make_unique<ASTConstant>(
                 loc(ctx), text(ctx->value_), std::type_identity<ArrayValue>{}
             );
             break;
-        case StainlessParser::T_BOOL:
+        case ZincParser::T_BOOL:
             last_visited_ = std::make_unique<ASTConstant>(
                 loc(ctx), text(ctx->value_), std::type_identity<BooleanValue>{}
             );
             break;
-        case StainlessParser::KW_NULL:
+        case ZincParser::KW_NULL:
             last_visited_ = std::make_unique<ASTConstant>(
                 loc(ctx), text(ctx->value_), std::type_identity<NullValue>{}
             );
@@ -479,53 +480,53 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitPrimitiveType(StainlessParser::PrimitiveTypeContext* ctx) noexcept final {
+    antlrcpp::Any visitPrimitiveType(ZincParser::PrimitiveTypeContext* ctx) noexcept final {
         switch (ctx->primitive_->getType()) {
-        case StainlessParser::KW_NULL:
+        case ZincParser::KW_NULL:
             last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &NullType::instance);
             break;
-        case StainlessParser::KW_INT8:
+        case ZincParser::KW_INT8:
             last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &IntegerType::i8_instance);
             break;
-        case StainlessParser::KW_INT16:
+        case ZincParser::KW_INT16:
             last_visited_ =
                 std::make_unique<ASTPrimitiveType>(loc(ctx), &IntegerType::i16_instance);
             break;
-        case StainlessParser::KW_INT32:
+        case ZincParser::KW_INT32:
             last_visited_ =
                 std::make_unique<ASTPrimitiveType>(loc(ctx), &IntegerType::i32_instance);
             break;
-        case StainlessParser::KW_INT64:
+        case ZincParser::KW_INT64:
             last_visited_ =
                 std::make_unique<ASTPrimitiveType>(loc(ctx), &IntegerType::i64_instance);
             break;
-        case StainlessParser::KW_UINT8:
+        case ZincParser::KW_UINT8:
             last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &IntegerType::u8_instance);
             break;
-        case StainlessParser::KW_UINT16:
+        case ZincParser::KW_UINT16:
             last_visited_ =
                 std::make_unique<ASTPrimitiveType>(loc(ctx), &IntegerType::u16_instance);
             break;
-        case StainlessParser::KW_UINT32:
+        case ZincParser::KW_UINT32:
             last_visited_ =
                 std::make_unique<ASTPrimitiveType>(loc(ctx), &IntegerType::u32_instance);
             break;
-        case StainlessParser::KW_UINT64:
+        case ZincParser::KW_UINT64:
             last_visited_ =
                 std::make_unique<ASTPrimitiveType>(loc(ctx), &IntegerType::u64_instance);
             break;
-        case StainlessParser::KW_FLOAT32:
+        case ZincParser::KW_FLOAT32:
             last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &FloatType::f32_instance);
             break;
-        case StainlessParser::KW_FLOAT64:
+        case ZincParser::KW_FLOAT64:
             last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &FloatType::f64_instance);
             break;
-        case StainlessParser::KW_STRING:
+        case ZincParser::KW_STRING:
             /// TODO:
             last_visited_ =
                 std::make_unique<ASTPrimitiveType>(loc(ctx), TypeRegistry::get<StringType>());
             break;
-        case StainlessParser::KW_BOOL:
+        case ZincParser::KW_BOOL:
             last_visited_ = std::make_unique<ASTPrimitiveType>(loc(ctx), &BooleanType::instance);
             break;
         default:
@@ -534,21 +535,21 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitParenType(StainlessParser::ParenTypeContext* ctx) noexcept final {
+    antlrcpp::Any visitParenType(ZincParser::ParenTypeContext* ctx) noexcept final {
         last_visited_ = transform(ctx->inner_type_);
         return {};
     }
-    antlrcpp::Any visitIdentifierType(StainlessParser::IdentifierTypeContext* ctx) noexcept final {
+    antlrcpp::Any visitIdentifierType(ZincParser::IdentifierTypeContext* ctx) noexcept final {
         last_visited_ = transform(ctx->identifier_);
         return {};
     }
-    antlrcpp::Any visitRecordType(StainlessParser::RecordTypeContext* ctx) noexcept final {
+    antlrcpp::Any visitRecordType(ZincParser::RecordTypeContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTRecordType>(
             loc(ctx), transform_list<ASTFieldDeclaration>(ctx->fields_)
         );
         return {};
     }
-    antlrcpp::Any visitFunctionType(StainlessParser::FunctionTypeContext* ctx) noexcept final {
+    antlrcpp::Any visitFunctionType(ZincParser::FunctionTypeContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTFunctionType>(
             loc(ctx),
             transform_list<ASTTypeExpression>(ctx->parameters_),
@@ -556,7 +557,7 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitField(StainlessParser::FieldContext* ctx) noexcept final {
+    antlrcpp::Any visitField(ZincParser::FieldContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTFieldDeclaration>(
             loc(ctx),
             text(ctx->identifier_),
