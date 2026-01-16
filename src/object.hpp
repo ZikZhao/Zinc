@@ -76,7 +76,7 @@ private:
 
 public:
     template <TypeClass T>
-    static T* get(auto&&... args) {
+    static T* get(auto&&... args) noexcept {
         using Primitives = std::tuple<AnyType, NullType, IntegerType, FloatType, BooleanType>;
         using OtherInternals =
             std::tuple<FunctionType, RecordType, IntersectionType, UnionType, ClassType>;
@@ -101,7 +101,7 @@ public:
         }
     }
 
-    static Object* get_unknown();
+    static Object* get_unknown() noexcept;
 
 private:
     std::tuple<
@@ -114,7 +114,7 @@ private:
 
 private:
     template <TypeClass T>
-    T* get_cached(auto&&... args) {
+    T* get_cached(auto&&... args) noexcept {
         GlobalMemory::Set<T*, TypeComparator>& type_set =
             std::get<GlobalMemory::Set<T*, TypeComparator>>(cache_);
         T new_type(std::forward<decltype(args)>(args)...);
@@ -385,28 +385,47 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
+class InterfaceType : public Type {
+private:
+    std::string_view identifier_;
+    GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods_;
+
+public:
+    InterfaceType(std::string_view identifier) noexcept
+        : Type(Kind::Interface), identifier_(identifier) {}
+    std::string_view repr() const override {
+        // TODO
+        return {};
+    }
+    bool assignable_from_impl(const Type& source) const override {
+        // TODO
+        return false;
+    }
+    void transpile(Transpiler& transpiler) const noexcept override;
+};
+
 class ClassType : public Type {
 private:
     const std::string_view identifier_;
-    const ComparableSpan<InterfaceType*> implements_;
     ClassType* const extends_;
-    const GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods_;
+    const ComparableSpan<InterfaceType*> implements_;
     const GlobalMemory::Map<std::string_view, Type*> attr_;
+    const GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods_;
 
 public:
     ClassType(
         std::string_view identifier,
-        ComparableSpan<InterfaceType*> interfaces,
         ClassType* extends,
-        GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods,
-        GlobalMemory::Map<std::string_view, Type*> attr
+        ComparableSpan<InterfaceType*> interfaces,
+        GlobalMemory::Map<std::string_view, Type*> attr,
+        GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods
     ) noexcept
         : Type(Kind::Instance),
           identifier_(identifier),
-          implements_(interfaces),
           extends_(extends),
-          methods_(std::move(methods)),
-          attr_(std::move(attr)) {}
+          implements_(interfaces),
+          attr_(std::move(attr)),
+          methods_(std::move(methods)) {}
 
     std::string_view repr() const override {
         return GlobalMemory::format_view("class {}", identifier_);
@@ -964,36 +983,24 @@ public:
 
 class OverloadedFunctionValue final : public Value {
 private:
-    Type* type_;
-    GlobalMemory::Vector<Object*> overloads_;  /// vector of FunctionType* | FunctionValue*
+    ComparableSpan<Object*> overloads_;  /// array of FunctionType* | FunctionValue*
 
 public:
-    OverloadedFunctionValue(FunctionValue* first) noexcept
-        : Value(Kind::Intersection), type_(first->type_), overloads_{first} {}
-    OverloadedFunctionValue(FunctionType* first) noexcept
-        : Value(Kind::Intersection), type_(first), overloads_{first} {}
+    OverloadedFunctionValue(Object* first) noexcept
+        : Value(Kind::Intersection), overloads_(GlobalMemory::alloc_array<Object*>(1)) {
+        overloads_[0] = first;
+    }
+    OverloadedFunctionValue(ComparableSpan<Object*> overloads) noexcept
+        : Value(Kind::Intersection), overloads_(overloads) {}
     std::string_view repr() const final {
-        // TODO
+        /// TODO:
         return {};
     }
-    Type* get_type() const final { return type_; }
-    OverloadedFunctionValue* resolve_to(Type* target) const final { std::unreachable(); }
-    void add_overload(FunctionValue* func) noexcept { overloads_.push_back(func); }
-    void overload_resolve_to(const void* source, FunctionType* target) noexcept {
-        for (Object*& overload : overloads_) {
-            if (overload->as_value() && static_cast<FunctionValue*>(overload)->source_ == source) {
-                overload = new FunctionValue(
-                    target, source, static_cast<FunctionValue*>(overload)->callback_
-                );
-                break;
-            }
-        }
-        if (type_) {
-            type_ = TypeRegistry::get<IntersectionType>(type_, target);
-        } else {
-            type_ = target;
-        }
+    Type* get_type() const final {
+        /// TODO:
+        return {};
     }
+    OverloadedFunctionValue* resolve_to(Type* target) const final { std::unreachable(); }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -1009,7 +1016,7 @@ inline Value* Object::as_value() {
 
 inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
 
-inline Object* TypeRegistry::get_unknown() { return &UnknownType::instance; }
+inline Object* TypeRegistry::get_unknown() noexcept { return &UnknownType::instance; }
 
 inline UnknownType UnknownType::instance;
 

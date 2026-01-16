@@ -6,6 +6,7 @@
 #include <cmath>
 #include <compare>
 #include <concepts>
+#include <expected>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -32,6 +33,7 @@
 #include <vector>
 
 #include "antlr4-runtime.h"
+
 // IWYU pragma: end_exports
 
 using namespace std::literals::string_view_literals;
@@ -193,17 +195,17 @@ private:
         template <std::ranges::input_range R>
         friend ComparableSpan<E> operator|(R&& range, RangeCollector) {
             if constexpr (std::ranges::sized_range<R>) {
-                ComparableSpan<E> span = alloc_array<E>(std::ranges::size(range));
+                ComparableSpan span = alloc_array<E>(std::ranges::size(range));
                 std::uninitialized_copy(
                     std::ranges::begin(range), std::ranges::end(range), span.data()
                 );
                 return span;
             } else {
-                std::vector<E> temp;
+                GlobalMemory::Vector<E> temp;
                 for (auto&& item : range) {
                     temp.push_back(std::forward<decltype(item)>(item));
                 }
-                ComparableSpan<E> span = alloc_array<E>(temp.size());
+                ComparableSpan span = alloc_array<E>(temp.size());
                 std::uninitialized_copy(temp.begin(), temp.end(), span.data());
                 return span;
             }

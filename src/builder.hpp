@@ -147,9 +147,7 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitBreak_statement(
-        ZincParser::Break_statementContext* ctx
-    ) noexcept final {
+    antlrcpp::Any visitBreak_statement(ZincParser::Break_statementContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTBreakStatement>(loc(ctx));
         return {};
     }
@@ -159,9 +157,7 @@ private:
         last_visited_ = std::make_unique<ASTContinueStatement>(loc(ctx));
         return {};
     }
-    antlrcpp::Any visitReturn_statement(
-        ZincParser::Return_statementContext* ctx
-    ) noexcept final {
+    antlrcpp::Any visitReturn_statement(ZincParser::Return_statementContext* ctx) noexcept final {
         last_visited_ = std::make_unique<ASTReturnStatement>(
             loc(ctx), static_unique_cast<ASTExpression>(transform(ctx->expr_))
         );
@@ -177,8 +173,8 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitFunction_declaration(
-        ZincParser::Function_declarationContext* ctx
+    antlrcpp::Any visitFunction_definition(
+        ZincParser::Function_definitionContext* ctx
     ) noexcept final {
         ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters =
             transform_list<ASTFunctionParameter>(ctx->parameters_);
@@ -186,10 +182,10 @@ private:
         std::unique_ptr return_type =
             static_unique_cast<ASTTypeExpression>(transform(ctx->return_type_));
         std::unique_ptr body = static_unique_cast<ASTLocalBlock>(transform(ctx->body_));
-        last_visited_ = std::make_unique<ASTFunctionDeclaration>(
+        last_visited_ = std::make_unique<ASTFunctionDefinition>(
             loc(ctx),
             identifier,
-            std::move(parameters),
+            parameters,
             std::move(return_type),
             std::make_unique<ASTBlock>(std::move(*body)),
             ctx->KW_CONST() != nullptr,
@@ -205,15 +201,21 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitClass_declaration(
-        ZincParser::Class_declarationContext* ctx
-    ) noexcept final {
+    antlrcpp::Any visitClass_definition(ZincParser::Class_definitionContext* ctx) noexcept final {
+        ComparableSpan<std::string_view> implements =
+            ctx->implements_ | std::views::transform([this](auto child) { return text(child); }) |
+            GlobalMemory::collect<ComparableSpan<std::string_view>>();
         ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields =
             transform_list<ASTFieldDeclaration>(ctx->fields_);
-        ComparableSpan<std::unique_ptr<ASTFunctionDeclaration>> functions =
-            transform_list<ASTFunctionDeclaration>(ctx->funcs_);
+        ComparableSpan<std::unique_ptr<ASTFunctionDefinition>> functions =
+            transform_list<ASTFunctionDefinition>(ctx->funcs_);
         last_visited_ = std::make_unique<ASTClassDeclaration>(
-            loc(ctx), text(ctx->identifier_), std::move(fields), std::move(functions)
+            loc(ctx),
+            text(ctx->identifier_),
+            ctx->extends_ ? text(ctx->extends_) : "",
+            implements,
+            fields,
+            functions
         );
         return {};
     }

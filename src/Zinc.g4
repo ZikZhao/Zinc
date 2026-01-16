@@ -16,8 +16,8 @@ statement:
 	| continue_statement
 	| return_statement
 	| type_alias_declaration
-	| function_declaration
-	| class_declaration;
+	| function_definition
+	| class_definition;
 
 code_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 
@@ -49,7 +49,7 @@ return_statement: KW_RETURN expr_ = expr? OP_SEMICOLON;
 type_alias_declaration:
 	KW_TYPE identifier_ = T_IDENTIFIER OP_ASSIGN type_ = type OP_SEMICOLON;
 
-function_declaration:
+function_definition:
 	KW_CONST? KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
@@ -58,10 +58,16 @@ function_declaration:
 
 parameter: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 
-class_declaration:
-	KW_CLASS identifier_ = T_IDENTIFIER OP_LBRACE (
+class_definition:
+	KW_CLASS identifier_ = T_IDENTIFIER (
+		KW_EXTENDS extends_ = identifier
+	)? (
+		KW_IMPLEMENTS implements_ += identifier (
+			OP_COMMA implements_ += identifier
+		)*
+	)? OP_LBRACE (
 		fields_ += field
-		| funcs_ += function_declaration
+		| funcs_ += function_definition
 	)* OP_RBRACE OP_SEMICOLON;
 
 expr:
@@ -167,6 +173,8 @@ KW_CONTINUE: 'continue';
 KW_RETURN: 'return';
 KW_TYPE: 'type';
 KW_CLASS: 'class';
+KW_EXTENDS: 'extends';
+KW_IMPLEMENTS: 'implements';
 KW_STATIC: 'static';
 
 OP_ADD: '+';

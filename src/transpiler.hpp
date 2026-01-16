@@ -79,7 +79,6 @@ public:
     bool should_generate_niebloid(std::string_view name) { return niebloids_.insert(name).second; }
     void finalize() {
         assert(current_section_ != nullptr);
-        std::filesystem::create_directory("out");
         const GlobalMemory::String stem =
             (std::filesystem::path("out") / file_.path)
                 .stem()
@@ -136,12 +135,19 @@ inline void precompile_headers() {
 }
 
 inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker) {
-    std::filesystem::create_directory("out");
+    try {
+        std::filesystem::create_directory("out");
+    } catch (const std::filesystem::filesystem_error& e) {
+        Diagnostic::error(
+            GlobalMemory::format_view("Failed to create output directory './out': {}", e.what())
+        );
+    }
+
     Transpiler transpiler(sources[0]);
     root->transpile(transpiler, checker);
     transpiler.finalize();
     Diagnostic::message(
-        GlobalMemory::format_view("Transformed {} modules to ./out", sources.files.size())
+        GlobalMemory::format_view("Transformed {} modules to './out'", sources.files.size())
     );
 
     precompile_headers();
@@ -157,7 +163,7 @@ inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checke
     );
     Diagnostic::message(
         GlobalMemory::format_view(
-            "Compiling output executable to ./out/{}: {}", main_stem, compile_command
+            "Compiling output executable to './out/{}': {}", main_stem, compile_command
         )
     );
     if (std::system(GlobalMemory::String(compile_command).c_str()) != 0) {
@@ -239,6 +245,10 @@ inline void ArrayType::transpile(Transpiler& transpiler) const noexcept {
 
 inline void RecordType::transpile(Transpiler& transpiler) const noexcept {
     transpiler << "struct {" << Transpiler::indent << Transpiler::newline;
+}
+
+inline void InterfaceType::transpile(Transpiler& transpiler) const noexcept {
+    transpiler << identifier_;
 }
 
 inline void ClassType::transpile(Transpiler& transpiler) const noexcept {
@@ -324,6 +334,13 @@ inline void ASTLocalBlock::transpile(Transpiler& transpiler, TypeChecker& checke
     checker.enter(this);
     ASTBlock::transpile(transpiler, checker);
     checker.exit();
+}
+
+inline void ASTHiddenTypeExpression::transpile(
+    Transpiler& transpiler, TypeChecker& checker
+) const noexcept {
+    assert(false);
+    std::unreachable();
 }
 
 inline void ASTConstant::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
@@ -483,7 +500,7 @@ inline void ASTFunctionParameter::transpile(
     transpiler << " " << identifier_;
 }
 
-inline void ASTFunctionDeclaration::transpile(
+inline void ASTFunctionDefinition::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
     bool is_main = checker.at_top_level() && identifier_ == "main";
@@ -537,7 +554,7 @@ inline void ASTClassDeclaration::transpile(
 
     checker.enter(this);
     checker.enter(&identifier_);
-    for (const auto& field : fields_) {
+    for (const auto& field : attrs_) {
         field->transpile(transpiler, checker);
         transpiler << Transpiler::newline;
     }

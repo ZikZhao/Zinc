@@ -6,7 +6,7 @@ class StringViewType final : public ClassType {
     friend class TypeRegistry;
 
 private:
-    StringViewType() : ClassType("string_view", {}, nullptr, get_methods(), get_attr()) {}
+    StringViewType() : ClassType("string_view", nullptr, {}, get_attr(), get_methods()) {}
 
     GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> get_methods() {
         return GlobalMemory::Map<std::string_view, OverloadedFunctionValue*>{
@@ -33,7 +33,9 @@ class StringType final : public ClassType {
     friend class TypeRegistry;
 
 private:
-    static GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> get_methods() {
+    StringType() : ClassType("string", nullptr, {}, get_attr(), get_methods()) {}
+
+    GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> get_methods() {
         return GlobalMemory::Map<std::string_view, OverloadedFunctionValue*>{
             {"at",
              new OverloadedFunctionValue(new FunctionType(
@@ -42,10 +44,7 @@ private:
         };
     }
 
-    static GlobalMemory::Map<std::string_view, Type*> get_attr() {
+    GlobalMemory::Map<std::string_view, Type*> get_attr() {
         return GlobalMemory::Map<std::string_view, Type*>{{"length_", &IntegerType::u64_instance}};
     }
-
-private:
-    StringType() : ClassType("string", {}, nullptr, get_methods(), get_attr()) {}
 };

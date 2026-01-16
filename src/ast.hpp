@@ -32,12 +32,17 @@ class ASTBreakStatement;
 class ASTReturnStatement;
 class ASTFunctionParameter;
 class ASTFunctionSignature;
-class ASTFunctionDeclaration;
+class ASTFunctionDefinition;
+class ASTClassDeclaration;
 
 struct ExprInfo {
     Type* type;
     bool is_mutable = false;
     bool is_rvalue = false;
+};
+
+struct Resolving {
+    Type** cache_record;
 };
 
 class Scope {
@@ -54,7 +59,7 @@ public:
 private:
     Scope* parent_ = nullptr;
     GlobalMemory::Map<std::string_view, Object*> variables_;
-    GlobalMemory::Map<std::string_view, const ASTTypeExpression*> types_;
+    GlobalMemory::Map<std::string_view, const ASTExpression*> types_;
     GlobalMemory::Map<const void*, std::unique_ptr<Scope>> children_;
     std::string_view prefix_;
 
@@ -82,23 +87,12 @@ public:
         variables_.insert({identifier, expr});
     }
 
-    Object*& get_variable(std::string_view identifier) noexcept {
-        Object*& obj = variables_.at(identifier);
-        return obj;
-    }
-
-    void add_overload(std::string_view identifier, FunctionValue* func) {
-        auto it = variables_.find(identifier);
-        if (it == variables_.end()) {
-            variables_.insert({identifier, new OverloadedFunctionValue(func)});
-        } else {
-            Value* existing = it->second->as_value();
-            if (existing == nullptr || existing->kind_ != Kind::Intersection) {
-                throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
-            }
-            OverloadedFunctionValue* overloads = static_cast<OverloadedFunctionValue*>(existing);
-            overloads->add_overload(func);
+    std::optional<const ASTExpression**> get_type_expr(std::string_view identifier) {
+        if (variables_.contains(identifier)) {
+            return std::nullopt;
         }
+        const ASTExpression*& existing = types_[identifier];
+        return &existing;
     }
 };
 
@@ -117,26 +111,42 @@ public:
     const OperationHandler& ops_;
 
 public:
-    TypeChecker(Scope& root, const OperationHandler& ops) noexcept;
-    void add_variable(std::string_view identifier, Object* expr);
-    void enter(const void* child) noexcept;
-    void exit() noexcept;
-    Object* resolve(std::string_view identifier);
-    ExprInfo type_of(std::string_view identifier);
-    /// Set the type of an overload function in an overloaded function value
-    void set_overload_type(
-        std::string_view identifier, const void* source, FunctionType* type
-    ) noexcept {
-        Object* obj = current_scope_->get_variable(identifier);
-        assert(obj->as_value() && obj->kind_ == Kind::Intersection);
-        static_cast<OverloadedFunctionValue*>(obj)->overload_resolve_to(source, type);
+    TypeChecker(Scope& root, const OperationHandler& ops) noexcept
+        : current_scope_(&root), ops_(ops) {}
+    void add_variable(std::string_view identifier, Object* expr) {
+        current_scope_->set_variable(identifier, expr);
+    }
+    void enter(const void* child) noexcept {
+        current_scope_ = current_scope_->children_.at(child).get();
+    }
+    void exit() noexcept { current_scope_ = current_scope_->parent_; }
+    std::expected<Object*, Resolving> resolve(std::string_view identifier) {
+        return resolve_in(identifier, *current_scope_);
+    }
+    ExprInfo var_type(std::string_view identifier) {
+        return var_type_in(identifier, *current_scope_);
     }
     std::string_view get_current_scope_prefix() const noexcept { return current_scope_->prefix_; }
     bool at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
 
 private:
-    Object* resolve_in(std::string_view identifier, Scope& scope);
-    ExprInfo type_of_in(std::string_view identifier, Scope& scope);
+    std::expected<Object*, Resolving> resolve_in(std::string_view identifier, Scope& scope);
+    ExprInfo var_type_in(std::string_view identifier, Scope& scope) {
+        if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
+            Type* type = it_var->second->as_type();
+            if (!type) {
+                type = it_var->second->as_value()->get_type();
+            }
+            return ExprInfo{type, it_var->second->as_type() != nullptr};
+        }
+        if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
+            throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
+        }
+        if (scope.parent_ != nullptr) {
+            return var_type_in(identifier, *scope.parent_);
+        }
+        throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
+    }
 };
 
 class ASTNode : public MemoryManaged {
@@ -204,11 +214,37 @@ public:
 };
 
 class ASTExpression : public ASTNode {
+protected:
+    static bool expect_type(std::expected<Object*, Resolving> result, const Location& loc) {
+        if (result) {
+            Object* actual = *result;
+            if (actual->as_type()) {
+                return true;
+            } else {
+                Diagnostic::report(SymbolCategoryMismatchError(loc, true));
+            }
+        } else {
+            Diagnostic::report(CircularTypeDependencyError(loc));
+        }
+        return false;
+    }
+
 public:
     ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
     virtual Object* eval(TypeChecker& checker) const = 0;
     virtual ExprInfo get_expr_info(TypeChecker& checker) const = 0;
     void check_types(TypeChecker& checker) final { std::ignore = get_expr_info(checker); }
+};
+
+/// A hidden type expression that does not appear in source code
+class ASTHiddenTypeExpression : public ASTTypeExpression {
+public:
+    ASTHiddenTypeExpression() noexcept : ASTTypeExpression({}) {}
+    ExprInfo get_expr_info(TypeChecker& checker) const final {
+        assert(false);
+        std::unreachable();
+    }
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
 class ASTConstant final : public ASTExpression {
@@ -228,8 +264,16 @@ public:
     const std::string_view str_;
     ASTIdentifier(const Location& loc, std::string_view name) noexcept
         : ASTExpression(loc), str_(name) {}
-    Object* eval(TypeChecker& checker) const final { return checker.resolve(str_); }
-    ExprInfo get_expr_info(TypeChecker& checker) const final { return checker.type_of(str_); }
+    Object* eval(TypeChecker& checker) const final {
+        auto result = checker.resolve(str_);
+        if (result) {
+            return *result;
+        } else {
+            Diagnostic::report(CircularTypeDependencyError(location_));
+            return TypeRegistry::get_unknown();
+        }
+    }
+    ExprInfo get_expr_info(TypeChecker& checker) const final { return checker.var_type(str_); }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
@@ -336,7 +380,7 @@ public:
         std::unique_ptr<ASTValueExpression> function,
         ComparableSpan<std::unique_ptr<ASTValueExpression>> arguments
     ) noexcept
-        : ASTExpression(loc), function_(std::move(function)), arguments_(std::move(arguments)) {}
+        : ASTExpression(loc), function_(std::move(function)), arguments_(arguments) {}
     ~ASTFunctionCall() noexcept final = default;
     Object* eval(TypeChecker& checker) const final {
         // TODO
@@ -416,7 +460,7 @@ public:
         std::unique_ptr<ASTTypeExpression> return_type
     ) noexcept
         : ASTTypeExpression(loc),
-          representation_(Components(std::move(parameter_types), std::move(return_type))) {}
+          representation_(Components(parameter_types, std::move(return_type))) {}
     ASTFunctionType(FunctionType* func) noexcept : ASTTypeExpression({}), representation_(func) {}
     Object* eval(TypeChecker& checker) const final {
         if (std::holds_alternative<FunctionType*>(representation_)) {
@@ -469,15 +513,22 @@ public:
     ASTRecordType(
         const Location& loc, ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields
     ) noexcept
-        : ASTTypeExpression(loc), fields_(std::move(fields)) {}
+        : ASTTypeExpression(loc), fields_(fields) {}
     ~ASTRecordType() noexcept final = default;
     Object* eval(TypeChecker& checker) const final {
-        auto rng = fields_ | std::views::transform([&](const auto& decl) {
-                       if (Type* type = checker.resolve(decl->identifier_)->as_type()) {
-                           return std::pair(decl->identifier_, type);
-                       }
-                       throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
-                   });
+        auto func = [&](const std::unique_ptr<ASTFieldDeclaration>& decl) {
+            auto result = checker.resolve(decl->identifier_);
+            if (!result) {
+                Diagnostic::report(CircularTypeDependencyError(decl->location_));
+                return std::pair(decl->identifier_, TypeRegistry::get_unknown()->as_type());
+            } else if (Type* type = (*result)->as_type()) {
+                return std::pair(decl->identifier_, type);
+            } else {
+                Diagnostic::report(SymbolCategoryMismatchError(decl->location_, true));
+                return std::pair(decl->identifier_, TypeRegistry::get_unknown()->as_type());
+            }
+        };
+        auto rng = fields_ | std::views::transform(func);
         GlobalMemory::Map<std::string_view, Type*> field_types(std::from_range, std::move(rng));
         return TypeRegistry::get<RecordType>(field_types);
     }
@@ -715,7 +766,14 @@ public:
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
-class ASTFunctionDeclaration final : public ASTNode {
+class ASTFunctionSignature final : public ASTHiddenTypeExpression {
+public:
+    const ASTFunctionDefinition* owner_;
+    ASTFunctionSignature(const ASTFunctionDefinition* owner) noexcept : owner_(owner) {}
+    Object* eval(TypeChecker& checker) const final;
+};
+
+class ASTFunctionDefinition final : public ASTNode {
 public:
     std::string_view identifier_;
     ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters_;
@@ -723,9 +781,10 @@ public:
     std::unique_ptr<ASTBlock> body_;
     bool is_const_;
     bool is_static_;
+    std::unique_ptr<ASTFunctionSignature> signature_;
 
 public:
-    ASTFunctionDeclaration(
+    ASTFunctionDefinition(
         const Location& loc,
         std::string_view identifier,
         ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters,
@@ -736,67 +795,78 @@ public:
     ) noexcept
         : ASTNode(loc),
           identifier_(identifier),
-          parameters_(std::move(parameters)),
+          parameters_(parameters),
           return_type_(std::move(return_type)),
           body_(std::move(body)),
           is_const_(is_const),
-          is_static_(is_static) {}
+          is_static_(is_static),
+          signature_(std::make_unique<ASTFunctionSignature>(this)) {}
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
-        try {
-            FunctionValue* func = new FunctionValue(this, [](auto&& args) { return nullptr; });
-            scope.add_overload(identifier_, func);
-        } catch (UnlocatedProblem& e) {
-            e.report_at(location_);
-        }
+        update_overload(scope);
         Scope& local_scope = Scope::create(body_.get(), scope);
         body_->collect_symbols(local_scope, ops);
     }
     void check_types(TypeChecker& checker) final {
-        Type* return_type = return_type_->eval(checker)->as_type();
-        if (!return_type) {
-            Diagnostic::report(SymbolCategoryMismatchError(return_type_->location_, true));
-            return_type = TypeRegistry::get_unknown()->as_type();
-        }
-        ComparableSpan<Type*> param_types =
-            parameters_ | std::views::transform([&](const auto& param) -> Type* {
-                Type* param_type = param->type_->eval(checker)->as_type();
-                if (!param_type) {
-                    Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
-                    return TypeRegistry::get_unknown()->as_type();
-                }
-                return param_type;
-            }) |
-            GlobalMemory::collect<ComparableSpan<Type*>>();
-        try {
-            Type* func_type = TypeRegistry::get<FunctionType>(param_types, return_type);
-            checker.set_overload_type(identifier_, this, static_cast<FunctionType*>(func_type));
-        } catch (UnlocatedProblem& e) {
-            e.report_at(location_);
-        }
         checker.enter(body_.get());
         body_->check_types(checker);
         checker.exit();
     }
+    void update_overload(Scope& scope) noexcept;
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+};
+
+class ASTOverloadedFunctionSignature final : public ASTHiddenTypeExpression {
+public:
+    mutable GlobalMemory::Vector<const ASTFunctionDefinition*> overloads_;
+
+public:
+    ASTOverloadedFunctionSignature(const ASTFunctionDefinition* first) noexcept
+        : overloads_{first} {}
+
+    OverloadedFunctionValue* eval(TypeChecker& checker) const final {
+        /// TODO: support constexpr function
+        ComparableSpan funcs = overloads_ |
+                               std::views::transform([&](const ASTFunctionDefinition* func_def) {
+                                   return func_def->signature_->eval(checker);
+                               }) |
+                               GlobalMemory::collect<ComparableSpan<Object*>>();
+        return new OverloadedFunctionValue(funcs);
+    }
+};
+
+class ASTClassSignature final : public ASTHiddenTypeExpression {
+public:
+    const ASTClassDeclaration* owner_;
+    ASTClassSignature(const ASTClassDeclaration* owner) noexcept : owner_(owner) {}
+    Type* eval(TypeChecker& checker) const final;
 };
 
 class ASTClassDeclaration final : public ASTNode {
 public:
     std::string_view identifier_;
-    ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields_;
-    ComparableSpan<std::unique_ptr<ASTFunctionDeclaration>> functions_;
+    std::string_view extends_;
+    ComparableSpan<std::string_view> implements_;
+    ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> attrs_;
+    ComparableSpan<std::unique_ptr<ASTFunctionDefinition>> functions_;
+
+    std::unique_ptr<ASTClassSignature> signature_;
 
 public:
     ASTClassDeclaration(
         const Location& loc,
         std::string_view identifier,
-        ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields,
-        ComparableSpan<std::unique_ptr<ASTFunctionDeclaration>> functions
+        std::string_view extends,
+        ComparableSpan<std::string_view> implements,
+        ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> attrs,
+        ComparableSpan<std::unique_ptr<ASTFunctionDefinition>> functions
     ) noexcept
         : ASTNode(loc),
           identifier_(identifier),
-          fields_(std::move(fields)),
-          functions_(std::move(functions)) {}
+          extends_(extends),
+          implements_(implements),
+          attrs_(attrs),
+          functions_(functions),
+          signature_(std::make_unique<ASTClassSignature>(this)) {}
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
         Scope& static_scope = Scope::create(this, scope, identifier_);
         Scope& instance_scope = Scope::create(&identifier_, static_scope);
@@ -811,7 +881,7 @@ public:
     void check_types(TypeChecker& checker) final {
         checker.enter(this);          // static scope
         checker.enter(&identifier_);  // instance scope
-        for (auto& field : fields_) {
+        for (auto& field : attrs_) {
             field->check_types(checker);
         }
         checker.exit();  // instance scope
@@ -831,28 +901,9 @@ public:
 
 // ===================== Inline implementations of TypeChecker =====================
 
-inline TypeChecker::TypeChecker(Scope& root, const OperationHandler& ops) noexcept
-    : current_scope_(&root), ops_(ops) {}
-
-inline void TypeChecker::add_variable(std::string_view identifier, Object* expr) {
-    current_scope_->set_variable(identifier, expr);
-}
-
-inline void TypeChecker::enter(const void* child) noexcept {
-    current_scope_ = current_scope_->children_.at(child).get();
-}
-
-inline void TypeChecker::exit() noexcept { current_scope_ = current_scope_->parent_; }
-
-inline Object* TypeChecker::resolve(std::string_view identifier) {
-    return resolve_in(identifier, *current_scope_);
-}
-
-inline ExprInfo TypeChecker::type_of(std::string_view identifier) {
-    return type_of_in(identifier, *current_scope_);
-}
-
-inline Object* TypeChecker::resolve_in(std::string_view identifier, Scope& scope) {
+inline std::expected<Object*, Resolving> TypeChecker::resolve_in(
+    std::string_view identifier, Scope& scope
+) {
     // Check cache
     auto& record = cache_[std::pair(&scope, identifier)];
     if (record.is_resolving) {
@@ -864,38 +915,22 @@ inline Object* TypeChecker::resolve_in(std::string_view identifier, Scope& scope
     // Cache miss; resolve
     record.is_resolving = true;
     if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
-        record.result = it_type->second->eval(*this);
-        return record.result;
+        return (record.result = it_type->second->eval(*this));
     }
     if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
         if (it_var->second->as_type()) {
             throw UnlocatedProblem::make<NotConstantExpressionError>();
         } else {
             // constant (it_var->second is the value stored)
-            record.result = it_var->second->as_value()->get_type();
-            return record.result;
+            return (record.result = it_var->second->as_value());
         }
     }
     if (scope.parent_ != nullptr) {
-        record.result = resolve_in(identifier, *scope.parent_);
-        return record.result;
-    }
-    throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
-}
-
-inline ExprInfo TypeChecker::type_of_in(std::string_view identifier, Scope& scope) {
-    if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
-        Type* type = it_var->second->as_type();
-        if (!type) {
-            type = it_var->second->as_value()->get_type();
+        std::expected<Object*, Resolving> parent_result = resolve_in(identifier, *scope.parent_);
+        if (parent_result) {
+            record.result = *parent_result;
         }
-        return ExprInfo{type, it_var->second->as_type() != nullptr};
-    }
-    if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
-        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
-    }
-    if (scope.parent_ != nullptr) {
-        return type_of_in(identifier, *scope.parent_);
+        return parent_result;
     }
     throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
 }
@@ -905,8 +940,137 @@ inline ASTRoot::ASTRoot(
 ) noexcept
     : ASTNode(loc), statements_(statements) {
     for (auto& stmt : statements_) {
-        if (auto func_decl = dynamic_cast<ASTFunctionDeclaration*>(stmt.get())) {
+        if (auto func_decl = dynamic_cast<ASTFunctionDefinition*>(stmt.get())) {
             func_decl->is_static_ = true;
         }
     }
+}
+
+inline Object* ASTFunctionSignature::eval(TypeChecker& checker) const {
+    ComparableSpan params =
+        owner_->parameters_ | std::views::transform([&](const auto& param) {
+            Type* param_type = param->type_->eval(checker)->as_type();
+            if (!param_type) {
+                Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
+                return TypeRegistry::get_unknown()->as_type();
+            }
+            return param_type;
+        }) |
+        GlobalMemory::collect<ComparableSpan<Type*>>();
+    Type* return_type = owner_->return_type_->eval(checker)->as_type();
+    if (!return_type) {
+        Diagnostic::report(SymbolCategoryMismatchError(owner_->return_type_->location_, true));
+        return TypeRegistry::get_unknown()->as_type();
+    }
+    return TypeRegistry::get<FunctionType>(params, return_type);
+}
+
+inline void ASTFunctionDefinition::update_overload(Scope& scope) noexcept {
+    std::optional overload_expr = scope.get_type_expr(identifier_);
+    if (!overload_expr ||
+        (*overload_expr && !dynamic_cast<const ASTOverloadedFunctionSignature*>(**overload_expr))) {
+        Diagnostic::report(RedeclaredIdentifierError(location_, identifier_));
+        return;
+    }
+    if (*overload_expr) {
+        // Append to existing overload set
+        static_cast<const ASTOverloadedFunctionSignature*>(**overload_expr)
+            ->overloads_.push_back(this);
+    } else {
+        // Create new overload set
+        **overload_expr = new ASTOverloadedFunctionSignature(this);
+    }
+}
+
+inline Type* ASTClassSignature::eval(TypeChecker& checker) const {
+    bool any_error = false;
+    // Resolve base class
+    ClassType* extends_ = nullptr;
+    if (!owner_->extends_.empty()) {
+        std::expected result = checker.resolve(owner_->extends_);
+        if (expect_type(result, owner_->location_)) {
+            if ((*result)->as_type()->kind_ != Kind::Instance) {
+                Diagnostic::report(
+                    TypeMismatchError(owner_->location_, "class", (*result)->as_type()->repr())
+                );
+                any_error = true;
+            } else {
+                extends_ = static_cast<ClassType*>((*result)->as_type());
+            }
+        } else {
+            any_error = true;
+        }
+    }
+    if (any_error) {
+        return TypeRegistry::get_unknown()->as_type();
+    }
+    // Resolve implemented interfaces
+    ComparableSpan interfaces =
+        owner_->implements_ |
+        std::views::transform([&](std::string_view interface_name) -> InterfaceType* {
+            std::expected result = checker.resolve(interface_name);
+            if (any_error = !expect_type(result, owner_->location_); !any_error) {
+                if ((*result)->as_type()->kind_ != Kind::Interface) {
+                    Diagnostic::report(TypeMismatchError(
+                        owner_->location_, "interface", (*result)->as_type()->repr()
+                    ));
+                    any_error = true;
+                    return nullptr;
+                } else {
+                    return static_cast<InterfaceType*>(*result);
+                }
+            } else {
+                return nullptr;
+            }
+        }) |
+        GlobalMemory::collect<ComparableSpan<InterfaceType*>>();
+    if (any_error) {
+        return TypeRegistry::get_unknown()->as_type();
+    }
+    // Collect attributes
+    GlobalMemory::Map<std::string_view, Type*> attrs =
+        owner_->attrs_ | std::views::transform([&](const auto& field_decl) {
+            std::pair<std::string_view, Type*> result;
+            result.first = field_decl->identifier_;
+            Type* field_type = field_decl->type_->eval(checker)->as_type();
+            if (!field_type) {
+                Diagnostic::report(SymbolCategoryMismatchError(field_decl->type_->location_, true));
+                any_error = true;
+                result.second = TypeRegistry::get_unknown()->as_type();
+            } else {
+                result.second = field_type;
+            }
+            return result;
+        }) |
+        GlobalMemory::collect<GlobalMemory::Map<std::string_view, Type*>>();
+    if (any_error) {
+        return TypeRegistry::get_unknown()->as_type();
+    }
+    // Collect methods
+    ComparableSpan non_static_functions =
+        owner_->functions_ |
+        std::views::filter([](const auto& func_def) { return !func_def->is_static_; }) |
+        std::views::transform([](const auto& func_def) { return func_def.get(); }) |
+        GlobalMemory::collect<ComparableSpan<const ASTFunctionDefinition*>>();
+    std::ranges::sort(non_static_functions, [](const auto& a, const auto& b) {
+        return a->identifier_ < b->identifier_;
+    });
+    GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods =
+        non_static_functions | std::views::chunk_by([](const auto& a, const auto& b) {
+            return a->identifier_ == b->identifier_;
+        }) |
+        std::views::transform(
+            [&](auto group) -> std::pair<std::string_view, OverloadedFunctionValue*> {
+                std::string_view identifier = (*group.begin())->identifier_;
+                OverloadedFunctionValue* overload = new OverloadedFunctionValue(
+                    group | std::views::transform([&](const auto& func_def) {
+                        return func_def->signature_->eval(checker);
+                    }) |
+                    GlobalMemory::collect<ComparableSpan<Object*>>()
+                );
+                return {identifier, overload};
+            }
+        ) |
+        GlobalMemory::collect<GlobalMemory::Map<std::string_view, OverloadedFunctionValue*>>();
+    return TypeRegistry::get<ClassType>(owner_->identifier_, extends_, interfaces, attrs, methods);
 }
