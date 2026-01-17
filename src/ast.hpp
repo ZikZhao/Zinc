@@ -213,7 +213,7 @@ protected:
 
 public:
     ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
-    virtual Object* eval(TypeChecker& checker) const = 0;
+    virtual Object* eval(TypeChecker& checker) const noexcept = 0;
     virtual ExprInfo get_expr_info(TypeChecker& checker) const = 0;
     void check_types(TypeChecker& checker) final { std::ignore = get_expr_info(checker); }
 };
@@ -235,7 +235,7 @@ public:
     template <ValueClass V>
     ASTConstant(const Location& loc, std::string_view str, std::type_identity<V>)
         : ASTExpression(loc), value_(Value::from_literal<V>(str)) {}
-    Object* eval(TypeChecker& checker) const final { return value_; }
+    Value* eval(TypeChecker& checker) const noexcept final { return value_; }
     ExprInfo get_expr_info(TypeChecker& checker) const final { return {value_->get_type(), false}; }
     void resolve_type(Type* target_type) { value_ = value_->resolve_to(target_type); }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
@@ -246,12 +246,17 @@ public:
     const std::string_view str_;
     ASTIdentifier(const Location& loc, std::string_view name) noexcept
         : ASTExpression(loc), str_(name) {}
-    Object* eval(TypeChecker& checker) const final {
-        auto result = checker.resolve(str_);
-        if (result) {
-            return *result;
-        } else {
-            Diagnostic::report(CircularTypeDependencyError(location_));
+    Object* eval(TypeChecker& checker) const noexcept final {
+        try {
+            std::expected result = checker.resolve(str_);
+            if (result) {
+                return *result;
+            } else {
+                Diagnostic::report(CircularTypeDependencyError(location_));
+                return TypeRegistry::get_unknown();
+            }
+        } catch (UnlocatedProblem& e) {
+            e.report_at(location_);
             return TypeRegistry::get_unknown();
         }
     }
@@ -266,16 +271,12 @@ public:
     ASTUnaryOp(const Location& loc, std::unique_ptr<ASTExpression> expr) noexcept
         : ASTExpression(loc), expr_(std::move(expr)) {}
     ~ASTUnaryOp() noexcept final = default;
-    Object* eval(TypeChecker& checker) const final {
+    Object* eval(TypeChecker& checker) const noexcept final {
         Object* expr_result = expr_->eval(checker);
         try {
             return checker.ops_.eval_op(Op::opcode, expr_result);
-        } catch (const UnlocatedProblem& e) {
-            Type* expr_type = expr_result->as_type() ? expr_result->as_type()
-                                                     : expr_result->as_value()->get_type();
-            Diagnostic::report(OperationNotDefinedError(
-                location_, OperatorCodeToString(Op::opcode), expr_type->repr()
-            ));
+        } catch (UnlocatedProblem& e) {
+            e.report_at(location_);
             return TypeRegistry::get_unknown();
         }
     }
@@ -298,19 +299,13 @@ public:
     ) noexcept
         : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
-    Object* eval(TypeChecker& checker) const final {
+    Object* eval(TypeChecker& checker) const noexcept final {
         Object* left_result = left_->eval(checker);
         Object* right_result = right_->eval(checker);
         try {
             return checker.ops_.eval_op(Op::opcode, left_result, right_result);
-        } catch (const UnlocatedProblem& e) {
-            Type* left_type = left_result->as_type() ? left_result->as_type()
-                                                     : left_result->as_value()->get_type();
-            Type* right_type = right_result->as_type() ? right_result->as_type()
-                                                       : right_result->as_value()->get_type();
-            Diagnostic::report(OperationNotDefinedError(
-                location_, OperatorCodeToString(Op::opcode), left_type->repr(), right_type->repr()
-            ));
+        } catch (UnlocatedProblem& e) {
+            e.report_at(location_);
             return TypeRegistry::get_unknown();
         }
     }
@@ -339,7 +334,7 @@ public:
     ) noexcept
         : ASTExpression(loc), left_(std::move(left)), right_(std::move(right)) {}
     ~ASTBinaryOp() noexcept final = default;
-    Object* eval(TypeChecker& checker) const final {
+    Object* eval(TypeChecker& checker) const noexcept final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
         return TypeRegistry::get_unknown();
     }
@@ -352,7 +347,7 @@ public:
         if (left_info.is_rvalue) {
             Diagnostic::report(InvalidAssignmentTargetError(location_));
         }
-        if (!left_info.type->assignable_from(*right_info.type)) {
+        if (!left_info.type->assignable_from(right_info.type)) {
             Diagnostic::report(
                 TypeMismatchError(location_, left_info.type->repr(), right_info.type->repr())
             );
@@ -373,7 +368,7 @@ public:
     ) noexcept
         : ASTExpression(loc), function_(std::move(function)), arguments_(arguments) {}
     ~ASTFunctionCall() noexcept final = default;
-    Object* eval(TypeChecker& checker) const final {
+    Value* eval(TypeChecker& checker) const noexcept final {
         // TODO
         return {};
     }
@@ -430,7 +425,7 @@ public:
     Type* type_;
     ASTPrimitiveType(const Location& loc, Type* type) noexcept
         : ASTTypeExpression(loc), type_(type) {}
-    Object* eval(TypeChecker& checker) const final { return type_; }
+    Type* eval(TypeChecker& checker) const noexcept final { return type_; }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         throw std::logic_error("Type expressions do not have result types");
     }
@@ -453,7 +448,7 @@ public:
         : ASTTypeExpression(loc),
           representation_(Components(parameter_types, std::move(return_type))) {}
     ASTFunctionType(FunctionType* func) noexcept : ASTTypeExpression({}), representation_(func) {}
-    Object* eval(TypeChecker& checker) const final {
+    Type* eval(TypeChecker& checker) const noexcept final {
         if (std::holds_alternative<FunctionType*>(representation_)) {
             return std::get<FunctionType*>(representation_);
         }
@@ -466,7 +461,7 @@ public:
                 }
                 Diagnostic::report(SymbolCategoryMismatchError(param_expr->location_, true));
                 any_error = true;
-                return TypeRegistry::get_unknown()->as_type();
+                return TypeRegistry::get_unknown();
             }) |
             GlobalMemory::collect<ComparableSpan<Type*>>();
         if (any_error) {
@@ -481,7 +476,7 @@ public:
     }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {TypeRegistry::get_unknown()->as_type(), false, true};
+        return {TypeRegistry::get_unknown(), false, true};
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -506,17 +501,22 @@ public:
     ) noexcept
         : ASTTypeExpression(loc), fields_(fields) {}
     ~ASTRecordType() noexcept final = default;
-    Object* eval(TypeChecker& checker) const final {
+    Type* eval(TypeChecker& checker) const noexcept final {
         auto func = [&](const std::unique_ptr<ASTFieldDeclaration>& decl) {
-            auto result = checker.resolve(decl->identifier_);
-            if (!result) {
-                Diagnostic::report(CircularTypeDependencyError(decl->location_));
-                return std::pair(decl->identifier_, TypeRegistry::get_unknown()->as_type());
-            } else if (Type* type = (*result)->as_type()) {
-                return std::pair(decl->identifier_, type);
-            } else {
-                Diagnostic::report(SymbolCategoryMismatchError(decl->location_, true));
-                return std::pair(decl->identifier_, TypeRegistry::get_unknown()->as_type());
+            try {
+                std::expected result = checker.resolve(decl->identifier_);
+                if (!result) {
+                    Diagnostic::report(CircularTypeDependencyError(decl->location_));
+                    return std::pair(decl->identifier_, TypeRegistry::get_unknown());
+                } else if (Type* type = (*result)->as_type()) {
+                    return std::pair(decl->identifier_, type);
+                } else {
+                    Diagnostic::report(SymbolCategoryMismatchError(decl->location_, true));
+                    return std::pair(decl->identifier_, TypeRegistry::get_unknown());
+                }
+            } catch (UnlocatedProblem& e) {
+                e.report_at(decl->location_);
+                return std::pair(decl->identifier_, TypeRegistry::get_unknown());
             }
         };
         auto rng = fields_ | std::views::transform(func);
@@ -525,7 +525,7 @@ public:
     }
     ExprInfo get_expr_info(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {TypeRegistry::get_unknown()->as_type(), false, true};
+        return {TypeRegistry::get_unknown(), false, true};
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -589,7 +589,7 @@ public:
             if (!declared_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(type_->location_, true));
             }
-            if (!declared_type->assignable_from(*inferred_type)) {
+            if (!declared_type->assignable_from(inferred_type)) {
                 Diagnostic::report(
                     TypeMismatchError(location_, declared_type->repr(), inferred_type->repr())
                 );
@@ -761,7 +761,7 @@ class ASTFunctionSignature final : public ASTHiddenTypeExpression {
 public:
     const ASTFunctionDefinition* owner_;
     ASTFunctionSignature(const ASTFunctionDefinition* owner) noexcept : owner_(owner) {}
-    Object* eval(TypeChecker& checker) const final;
+    Type* eval(TypeChecker& checker) const noexcept final;
 };
 
 class ASTFunctionDefinition final : public ASTNode {
@@ -809,7 +809,7 @@ class ASTClassSignature final : public ASTHiddenTypeExpression {
 public:
     const ASTClassDeclaration* owner_;
     ASTClassSignature(const ASTClassDeclaration* owner) noexcept : owner_(owner) {}
-    Type* eval(TypeChecker& checker) const final;
+    Type* eval(TypeChecker& checker) const noexcept final;
 };
 
 class ASTClassDeclaration final : public ASTNode {
@@ -908,7 +908,7 @@ inline std::expected<Object*, Resolving> TypeChecker::resolve_in(
             std::views::transform([&](const auto& func_sig) { return func_sig->eval(*this); }) |
             GlobalMemory::collect<ComparableSpan<Object*>>();
         record.result = std::ranges::contains(overloads, TypeRegistry::get_unknown())
-                            ? TypeRegistry::get_unknown()
+                            ? TypeRegistry::get_unknown()->as<Object>()
                             : new OverloadedFunctionValue(overloads);
         std::swap(previous_scope, current_scope_);
         return record.result;
@@ -940,7 +940,7 @@ inline ExprInfo TypeChecker::var_type_in(std::string_view identifier, Scope& sco
                 if (auto type = obj->as_type()) {
                     return type;
                 }
-                return static_cast<FunctionValue*>(obj)->get_type();
+                return obj->cast<FunctionValue>()->get_type();
             }) |
             GlobalMemory::collect<ComparableSpan<Type*>>();
         IntersectionType* intersection_type = TypeRegistry::get<IntersectionType>(overload_types);
@@ -967,70 +967,83 @@ inline ASTRoot::ASTRoot(
     }
 }
 
-inline Object* ASTFunctionSignature::eval(TypeChecker& checker) const {
+inline Type* ASTFunctionSignature::eval(TypeChecker& checker) const noexcept {
+    bool any_error = false;
     ComparableSpan params =
-        owner_->parameters_ | std::views::transform([&](const auto& param) {
+        owner_->parameters_ | std::views::transform([&](const auto& param) -> Type* {
             Type* param_type = param->type_->eval(checker)->as_type();
             if (!param_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
-                return TypeRegistry::get_unknown()->as_type();
+                any_error = true;
+                return nullptr;
             }
             return param_type;
         }) |
         GlobalMemory::collect<ComparableSpan<Type*>>();
+    if (any_error) {
+        return TypeRegistry::get_unknown();
+    }
     Type* return_type = owner_->return_type_->eval(checker)->as_type();
     if (!return_type) {
         Diagnostic::report(SymbolCategoryMismatchError(owner_->return_type_->location_, true));
-        return TypeRegistry::get_unknown()->as_type();
+        return TypeRegistry::get_unknown();
     }
     /// TODO: handle constexpr functions
     return TypeRegistry::get<FunctionType>(params, return_type);
 }
 
-inline Type* ASTClassSignature::eval(TypeChecker& checker) const {
-    bool any_error = false;
+inline Type* ASTClassSignature::eval(TypeChecker& checker) const noexcept {
     // Resolve base class
-    ClassType* extends_ = nullptr;
-    if (!owner_->extends_.empty()) {
-        std::expected result = checker.resolve(owner_->extends_);
-        if (expect_type(result, owner_->location_)) {
-            if ((*result)->as_type()->kind_ != Kind::Instance) {
-                Diagnostic::report(
-                    TypeMismatchError(owner_->location_, "class", (*result)->as_type()->repr())
-                );
-                any_error = true;
-            } else {
-                extends_ = static_cast<ClassType*>((*result)->as_type());
-            }
-        } else {
-            any_error = true;
+    ClassType* extends_ = [&]() -> ClassType* {
+        if (owner_->extends_.empty()) {
+            return nullptr;
         }
-    }
-    if (any_error) {
-        return TypeRegistry::get_unknown()->as_type();
+        std::expected<Object*, Resolving> result;
+        try {
+            result = checker.resolve(owner_->extends_);
+        } catch (UnlocatedProblem& e) {
+            e.report_at(owner_->location_);
+            return nullptr;
+        }
+        if (!expect_type(result, owner_->location_)) {
+            return nullptr;
+        }
+        if ((*result)->as_type()->kind_ != Kind::Instance) {
+            Diagnostic::report(
+                TypeMismatchError(owner_->location_, "class", (*result)->as_type()->repr())
+            );
+            return nullptr;
+        }
+        return (*result)->cast<ClassType>();
+    }();
+    if (extends_ == nullptr && !owner_->extends_.empty()) {
+        return TypeRegistry::get_unknown();
     }
     // Resolve implemented interfaces
     ComparableSpan interfaces =
         owner_->implements_ |
         std::views::transform([&](std::string_view interface_name) -> InterfaceType* {
-            std::expected result = checker.resolve(interface_name);
-            if (any_error = !expect_type(result, owner_->location_); !any_error) {
-                if ((*result)->as_type()->kind_ != Kind::Interface) {
-                    Diagnostic::report(TypeMismatchError(
-                        owner_->location_, "interface", (*result)->as_type()->repr()
-                    ));
-                    any_error = true;
-                    return nullptr;
-                } else {
-                    return static_cast<InterfaceType*>(*result);
-                }
-            } else {
+            std::expected<Object*, Resolving> result;
+            try {
+                result = checker.resolve(interface_name);
+            } catch (UnlocatedProblem& e) {
+                e.report_at(owner_->location_);
                 return nullptr;
             }
+            if (!expect_type(result, owner_->location_)) {
+                return nullptr;
+            }
+            if ((*result)->as_type()->kind_ != Kind::Interface) {
+                Diagnostic::report(
+                    TypeMismatchError(owner_->location_, "interface", (*result)->as_type()->repr())
+                );
+                return nullptr;
+            }
+            return (*result)->cast<InterfaceType>();
         }) |
         GlobalMemory::collect<ComparableSpan<InterfaceType*>>();
-    if (any_error) {
-        return TypeRegistry::get_unknown()->as_type();
+    if (std::ranges::contains(interfaces, nullptr)) {
+        return TypeRegistry::get_unknown();
     }
     // Collect attributes
     GlobalMemory::Map<std::string_view, Type*> attrs =
@@ -1040,16 +1053,15 @@ inline Type* ASTClassSignature::eval(TypeChecker& checker) const {
             Type* field_type = field_decl->type_->eval(checker)->as_type();
             if (!field_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(field_decl->type_->location_, true));
-                any_error = true;
-                result.second = TypeRegistry::get_unknown()->as_type();
+                result.second = TypeRegistry::get_unknown();
             } else {
                 result.second = field_type;
             }
             return result;
         }) |
         GlobalMemory::collect<GlobalMemory::Map<std::string_view, Type*>>();
-    if (any_error) {
-        return TypeRegistry::get_unknown()->as_type();
+    if (std::ranges::contains(attrs | std::views::values, TypeRegistry::get_unknown())) {
+        return TypeRegistry::get_unknown();
     }
     // Collect methods
     GlobalMemory::Vector non_static_functions =

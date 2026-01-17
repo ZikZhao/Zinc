@@ -248,7 +248,8 @@ inline void RecordType::transpile(Transpiler& transpiler) const noexcept {
 }
 
 inline void InterfaceType::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << identifier_;
+    /// TODO:
+    // transpiler << identifier_;
 }
 
 inline void ClassType::transpile(Transpiler& transpiler) const noexcept {
@@ -282,8 +283,7 @@ inline void UnknownValue::transpile(Transpiler& transpiler) const noexcept { std
 inline void NullValue::transpile(Transpiler& transpiler) const noexcept { transpiler << "nullptr"; }
 
 inline void IntegerValue::transpile(Transpiler& transpiler) const noexcept {
-    const IntegerType* int_type = static_cast<const IntegerType*>(get_type());
-    if (int_type->is_signed_) {
+    if (type_->is_signed_) {
         transpiler << GlobalMemory::format_view("{}", ivalue_);
     } else {
         transpiler << GlobalMemory::format_view("{}", uvalue_);

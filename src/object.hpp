@@ -101,7 +101,7 @@ public:
         }
     }
 
-    static Object* get_unknown() noexcept;
+    static Type* get_unknown() noexcept;
 
 private:
     std::tuple<
@@ -147,6 +147,16 @@ public:
     constexpr bool operator==(const Object& other) const noexcept { return this == &other; }
     Type* as_type();
     Value* as_value();
+    template <std::same_as<Object> T>
+    T* as() {
+        return this;
+    }
+    template <typename T>
+        requires(!std::is_same_v<T, Type> && !std::is_same_v<T, Value>)
+    T* cast() {
+        assert(kind_ == T::kind && ((as_type() != nullptr) == std::is_same_v<T, Type>));
+        return static_cast<T*>(this);
+    }
     virtual void transpile(Transpiler& transpiler) const noexcept = 0;
 };
 
@@ -161,13 +171,19 @@ public:
 
     constexpr bool operator==(const Type& other) const noexcept { return this == &other; }
 
-    bool assignable_from(const Type& source) const {
-        assert(!(this == &source) || assignable_from_impl(source));
-        return this == &source || assignable_from_impl(source);
+    bool assignable_from(Type* source) const {
+        assert(!(this == source) || assignable_from_impl(source));
+        return this == source || assignable_from_impl(source);
+    }
+
+    using Object::as;
+    template <TypeClass T>
+    T* as() {
+        return kind_ == T::kind ? static_cast<T*>(this) : nullptr;
     }
 
 protected:
-    virtual bool assignable_from_impl(const Type& source) const = 0;
+    virtual bool assignable_from_impl(Type* source) const = 0;
 };
 
 class UnknownType final : public Type {
@@ -183,7 +199,7 @@ private:
 
 public:
     std::string_view repr() const final { return "unknown"; }
-    bool assignable_from_impl(const Type& source) const final { return true; }
+    bool assignable_from_impl(Type* source) const final { return true; }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -195,7 +211,7 @@ public:
 public:
     AnyType() noexcept : Type(kind) {}
     std::string_view repr() const final { return "any"; }
-    bool assignable_from_impl(const Type& source) const final { return true; }
+    bool assignable_from_impl(Type* source) const final { return true; }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -207,7 +223,7 @@ public:
 public:
     NullType() noexcept : Type(kind) {}
     std::string_view repr() const final { return "null"; }
-    bool assignable_from_impl(const Type& source) const final {
+    bool assignable_from_impl(Type* source) const final {
         /// No variable can have null type except null literal
         std::unreachable();
     }
@@ -239,13 +255,10 @@ public:
     std::string_view repr() const final {
         return GlobalMemory::format_view("{}{}", is_signed_ ? "i" : "u", bits_);
     }
-    bool assignable_from_impl(const Type& source) const final {
-        if (source.kind_ != kind) {
-            return false;
-        }
-        const IntegerType& other_int = static_cast<const IntegerType&>(source);
-        return other_int.bits_ == 0 ||
-               (this->is_signed_ == other_int.is_signed_ && this->bits_ >= other_int.bits_);
+    bool assignable_from_impl(Type* source) const final {
+        IntegerType* other_int = source->as<IntegerType>();
+        return other_int && (other_int->bits_ == 0 || (this->is_signed_ == other_int->is_signed_ &&
+                                                       this->bits_ >= other_int->bits_));
     }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -265,12 +278,9 @@ public:
         assert(bits == 0 || bits == 32 || bits == 64);
     }
     std::string_view repr() const final { return GlobalMemory::format_view("f{}", bits_); }
-    bool assignable_from_impl(const Type& source) const final {
-        if (source.kind_ != kind) {
-            return false;
-        }
-        const FloatType& other_float = static_cast<const FloatType&>(source);
-        return other_float.bits_ == 0 || this->bits_ >= other_float.bits_;
+    bool assignable_from_impl(Type* source) const final {
+        FloatType* other_float = source->as<FloatType>();
+        return other_float && (other_float->bits_ == 0 || this->bits_ >= other_float->bits_);
     }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -283,18 +293,23 @@ public:
 public:
     BooleanType() noexcept : Type(kind) {}
     std::string_view repr() const final { return "bool"; }
-    bool assignable_from_impl(const Type& source) const final { return source.kind_ == kind; }
+    bool assignable_from_impl(Type* source) const final {
+        return source->as<BooleanType>() != nullptr;
+    }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class FunctionType final : public Type {
+public:
+    static constexpr Kind kind = Kind::Function;
+
 public:
     const ComparableSpan<Type*> parameters_;
     Type* const return_type_;
 
 public:
     FunctionType(ComparableSpan<Type*> parameters, Type* return_type) noexcept
-        : Type(Kind::Function), parameters_(parameters), return_type_(return_type) {}
+        : Type(kind), parameters_(parameters), return_type_(return_type) {}
 
     std::string_view repr() const final {
         GlobalMemory::String params_repr =
@@ -303,27 +318,27 @@ public:
         return GlobalMemory::format_view("({}) => {}", params_repr, return_type_->repr());
     }
 
-    bool assignable_from_impl(const Type& source) const final;
+    bool assignable_from_impl(Type* source) const final;
     std::strong_ordering operator<=>(const FunctionType& other) const noexcept = default;
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ArrayType final : public Type {
 public:
+    static constexpr Kind kind = Kind::Array;
+
+public:
     Type* const element_type_;
     std::size_t size_ = 0;  // 0 means dynamic size
 
-    ArrayType(Type* element_type) noexcept : Type(Kind::Array), element_type_(element_type) {}
+    ArrayType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view("{}[]", element_type_->repr());
     }
-    bool assignable_from_impl(const Type& source) const final {
-        if (source.kind_ != Kind::Array) {
-            return false;
-        }
-        const ArrayType& other_array = static_cast<const ArrayType&>(source);
-        return element_type_->assignable_from(*other_array.element_type_) &&
-               (size_ == 0 || size_ == other_array.size_);
+    bool assignable_from_impl(Type* source) const final {
+        ArrayType* other_array = source->as<ArrayType>();
+        return other_array && element_type_->assignable_from(other_array->element_type_) &&
+               (size_ == 0 || size_ == other_array->size_);
     }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -344,16 +359,16 @@ public:
         return {};
     }
 
-    bool assignable_from_impl(const Type& source) const final {
+    bool assignable_from_impl(Type* source) const final {
         // (a,b,c) is assignable to (a,b)
         // i.e., source must have at least all fields of this
-        if (source.kind_ != kind) {
+        RecordType* other_record = source->as<RecordType>();
+        if (other_record == nullptr) {
             return false;
         }
-        const RecordType& other_record = static_cast<const RecordType&>(source);
         for (const auto& [name, type] : fields_) {
-            auto it = other_record.fields_.find(name);
-            if (it == other_record.fields_.end() || !(*it).second->assignable_from(*type)) {
+            auto it = other_record->fields_.find(name);
+            if (it == other_record->fields_.end() || !(*it).second->assignable_from(type)) {
                 return false;
             }
         }
@@ -363,26 +378,30 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class InterfaceType : public Type {
+class InterfaceType final : public Type {
+public:
+    static constexpr Kind kind = Kind::Interface;
+
 private:
-    std::string_view identifier_;
     GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods_;
 
 public:
-    InterfaceType(std::string_view identifier) noexcept
-        : Type(Kind::Interface), identifier_(identifier) {}
+    InterfaceType() noexcept : Type(kind) {}
     std::string_view repr() const override {
         // TODO
         return {};
     }
-    bool assignable_from_impl(const Type& source) const override {
+    bool assignable_from_impl(Type* source) const final {
         // TODO
         return false;
     }
-    void transpile(Transpiler& transpiler) const noexcept override;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ClassType : public Type {
+public:
+    static constexpr Kind kind = Kind::Instance;
+
 private:
     const std::string_view identifier_;
     ClassType* const extends_;
@@ -398,7 +417,7 @@ public:
         GlobalMemory::Map<std::string_view, Type*> attr,
         GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods
     ) noexcept
-        : Type(Kind::Instance),
+        : Type(kind),
           identifier_(identifier),
           extends_(extends),
           implements_(interfaces),
@@ -409,7 +428,7 @@ public:
         return GlobalMemory::format_view("class {}", identifier_);
     }
 
-    bool assignable_from_impl(const Type& other) const override { return false; }
+    bool assignable_from_impl(Type* other) const final { return false; }
 
     OverloadedFunctionValue* get_method(std::string_view name) const {
         auto it = methods_.find(name);
@@ -434,13 +453,15 @@ public:
 };
 
 class IntersectionType final : public Type {
+public:
+    static constexpr Kind kind = Kind::Intersection;
+
 private:
     static ComparableSpan<Type*> flatten(ComparableSpan<Type*> unflattened_types) {
         std::size_t size = 0;
         for (Type* type : unflattened_types) {
-            if (type->kind_ == Kind::Intersection) {
-                const IntersectionType& intersection = static_cast<const IntersectionType&>(*type);
-                size += intersection.types_.size();
+            if (IntersectionType* intersection_type = type->as<IntersectionType>()) {
+                size += intersection_type->types_.size();
             } else {
                 size++;
             }
@@ -448,9 +469,8 @@ private:
         ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
         std::size_t index = 0;
         for (Type* type : unflattened_types) {
-            if (type->kind_ == Kind::Intersection) {
-                const IntersectionType& intersection = static_cast<const IntersectionType&>(*type);
-                for (Type* inner_type : intersection.types_) {
+            if (IntersectionType* intersection_type = type->as<IntersectionType>()) {
+                for (Type* inner_type : intersection_type->types_) {
                     buffer[index++] = inner_type;
                 }
             } else {
@@ -469,23 +489,21 @@ public:
 
 public:
     IntersectionType(auto&&... unflattened_types) noexcept
-        : Type(Kind::Intersection), types_{flatten(unflattened_types...)} {}
+        : Type(kind), types_{flatten(unflattened_types...)} {}
 
     std::string_view repr() const final {
         // TODO
         return {};
     }
 
-    bool assignable_from_impl(const Type& source) const final {
+    bool assignable_from_impl(Type* source) const final {
         // (a & b & c) is assignable to (a & b)
         // i.e., source supports at least all the function overloads of this
-        if (source.kind_ == Kind::Intersection) {
-            const IntersectionType& other_intersection =
-                static_cast<const IntersectionType&>(source);
+        if (IntersectionType* other_intersection = source->as<IntersectionType>()) {
             for (const auto& type : types_) {
                 bool found = false;
-                for (const auto& other_type : other_intersection.types_) {
-                    if (type->assignable_from(*other_type)) {
+                for (const auto& other_type : other_intersection->types_) {
+                    if (type->assignable_from(other_type)) {
                         found = true;
                         break;
                     }
@@ -512,9 +530,8 @@ private:
     static ComparableSpan<Type*> flatten(ComparableSpan<Type*> unflattened_types) {
         std::size_t size = 0;
         for (Type* type : unflattened_types) {
-            if (type->kind_ == Kind::Union) {
-                const UnionType& union_type = static_cast<const UnionType&>(*type);
-                size += union_type.types_.size();
+            if (UnionType* union_type = type->as<UnionType>()) {
+                size += union_type->types_.size();
             } else {
                 size++;
             }
@@ -522,9 +539,8 @@ private:
         ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
         std::size_t index = 0;
         for (Type* type : unflattened_types) {
-            if (type->kind_ == Kind::Union) {
-                const UnionType& union_type = static_cast<const UnionType&>(*type);
-                for (Type* inner_type : union_type.types_) {
+            if (UnionType* union_type = type->as<UnionType>()) {
+                for (Type* inner_type : union_type->types_) {
                     buffer[index++] = inner_type;
                 }
             } else {
@@ -550,15 +566,14 @@ public:
         return {};
     }
 
-    bool assignable_from_impl(const Type& source) const final {
+    bool assignable_from_impl(Type* source) const final {
         // (a | b) is assignable to (a | b | c)
         // i.e., source must be assignable to at least one of the types in this
-        if (source.kind_ == Kind::Union) {
-            const UnionType& other_union = static_cast<const UnionType&>(source);
-            for (const auto& type : other_union.types_) {
+        if (UnionType* other_union = source->as<UnionType>()) {
+            for (const auto& type : other_union->types_) {
                 bool found = false;
                 for (const auto& other_type : types_) {
-                    if (other_type->assignable_from(*type)) {
+                    if (other_type->assignable_from(type)) {
                         found = true;
                         break;
                     }
@@ -568,15 +583,8 @@ public:
                 }
             }
             return true;
-        } else {
-            assert(source.kind_ == Kind::Function);
-            for (const auto& type : types_) {
-                if (type->assignable_from(source)) {
-                    return true;
-                }
-            }
-            return false;
         }
+        return false;
     }
 
     std::strong_ordering operator<=>(const UnionType& other) const noexcept = default;
@@ -636,6 +644,12 @@ protected:
 public:
     virtual Type* get_type() const = 0;
     virtual Value* resolve_to(Type* target) const = 0;
+
+    using Object::as;
+    template <ValueClass V>
+    V* as() {
+        return kind_ == V::kind ? static_cast<V*>(this) : nullptr;
+    }
 };
 
 class UnknownValue final : public Value {
@@ -697,10 +711,10 @@ public:
     IntegerType* get_type() const final { return type_; }
     IntegerValue* resolve_to(Type* target) const final {
         assert(target);
-        if (target->kind_ != Kind::Integer) {
+        if (!target->as<IntegerType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("integer", target->repr());
         }
-        IntegerType* int_target = static_cast<IntegerType*>(target);
+        IntegerType* int_target = target->cast<IntegerType>();
         if (int_target == &IntegerType::untyped_instance) {
             // most suitable type inference
             if (type_) {
@@ -799,10 +813,10 @@ public:
     FloatType* get_type() const final { return type_; }
     FloatValue* resolve_to(Type* target) const final {
         assert(target);
-        if (target->kind_ != Kind::Float) {
+        if (!target->as<FloatType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("float", target->repr());
         }
-        FloatType* float_target = static_cast<FloatType*>(target);
+        FloatType* float_target = target->cast<FloatType>();
         if (float_target == &FloatType::untyped_instance) {
             // default to double
             if (type_) {
@@ -887,6 +901,9 @@ public:
 
 class ArrayValue final : public Value {
 public:
+    static constexpr Kind kind = Kind::Array;
+
+public:
     ArrayType* type_;
     union {
         GlobalMemory::Vector<Value*> elements_;
@@ -895,9 +912,9 @@ public:
 
 public:
     ArrayValue(GlobalMemory::Vector<Value*>&& elements) noexcept
-        : Value(Kind::Array), type_(nullptr), elements_(std::move(elements)) {}
+        : Value(kind), type_(nullptr), elements_(std::move(elements)) {}
     ArrayValue(std::string_view string) noexcept
-        : Value(Kind::Array),
+        : Value(kind),
           type_(TypeRegistry::get<ArrayType>(&IntegerType::u8_instance)),
           string_(string) {}
     ~ArrayValue() {}
@@ -914,12 +931,15 @@ public:
 
 class InstanceValue final : public Value {
 public:
+    static constexpr Kind kind = Kind::Instance;
+
+public:
     ClassType* cls_;
     GlobalMemory::Map<std::string_view, Value*> attributes_;
 
 public:
     InstanceValue(ClassType* cls, decltype(attributes_) attributes) noexcept
-        : Value(Kind::Instance), cls_(cls), attributes_(std::move(attributes)) {}
+        : Value(kind), cls_(cls), attributes_(std::move(attributes)) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view("<instance of {}>", cls_->repr());
     }
@@ -935,21 +955,24 @@ public:
 };
 
 class OverloadedFunctionValue final : public Value {
+public:
+    static constexpr Kind kind = Kind::Intersection;
+
 private:
     IntersectionType* type_;
     ComparableSpan<Object*> overloads_;  /// array of FunctionType* | FunctionValue*
 
 public:
     OverloadedFunctionValue(ComparableSpan<Object*> overloads) noexcept
-        : Value(Kind::Intersection), overloads_(overloads) {
-        ComparableSpan<Type*> overload_types =
-            overloads_ | std::views::transform([](Object* obj) -> Type* {
-                if (auto type = obj->as_type()) {
-                    return type;
-                }
-                return static_cast<FunctionValue*>(obj)->get_type();
-            }) |
-            GlobalMemory::collect<ComparableSpan<Type*>>();
+        : Value(kind), overloads_(overloads) {
+        ComparableSpan<Type*> overload_types = overloads_ |
+                                               std::views::transform([](Object* obj) -> Type* {
+                                                   if (auto type = obj->as_type()) {
+                                                       return type;
+                                                   }
+                                                   return obj->cast<FunctionValue>()->get_type();
+                                               }) |
+                                               GlobalMemory::collect<ComparableSpan<Type*>>();
         type_ = TypeRegistry::get<IntersectionType>(overload_types);
     }
     std::string_view repr() const final {
@@ -973,7 +996,7 @@ inline Value* Object::as_value() {
 
 inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
 
-inline Object* TypeRegistry::get_unknown() noexcept { return &UnknownType::instance; }
+inline Type* TypeRegistry::get_unknown() noexcept { return &UnknownType::instance; }
 
 inline UnknownType UnknownType::instance;
 
@@ -997,32 +1020,27 @@ inline FloatType FloatType::f64_instance = FloatType(64);
 
 inline BooleanType BooleanType::instance;
 
-inline bool FunctionType::assignable_from_impl(const Type& source) const {
+inline bool FunctionType::assignable_from_impl(Type* source) const {
     // (Base) => Derived is assignable to (Derived) => Base
     // i.e., parameters are contravariant, return type is covariant
-    switch (source.kind_) {
-    case Kind::Function: {
-        const FunctionType& func_other = static_cast<const FunctionType&>(source);
-        if (parameters_.size() != func_other.parameters_.size()) {
+    if (auto func_other = source->as<FunctionType>()) {
+        if (parameters_.size() != func_other->parameters_.size()) {
             return false;
         }
         for (std::size_t i = 0; i < parameters_.size(); ++i) {
-            if (!func_other.parameters_[i]->assignable_from(*parameters_[i])) {
+            if (!func_other->parameters_[i]->assignable_from(parameters_[i])) {
                 return false;
             }
         }
-        return return_type_->assignable_from(*func_other.return_type_);
-    }
-    case Kind::Intersection: {
-        const IntersectionType& intersection_other = static_cast<const IntersectionType&>(source);
-        for (Type* member_type : intersection_other.types_) {
-            if (this->assignable_from(*member_type)) {
+        return return_type_->assignable_from(func_other->return_type_);
+    } else if (auto intersection_other = source->as<IntersectionType>()) {
+        for (Type* member_type : intersection_other->types_) {
+            if (this->assignable_from(member_type)) {
                 return true;
             }
         }
         return false;
-    }
-    default:
+    } else {
         return false;
     }
 }
