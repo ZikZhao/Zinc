@@ -289,18 +289,12 @@ public:
 
 class FunctionType final : public Type {
 public:
-    static constexpr Kind kind = Kind::Function;
-
-public:
-    static GlobalMemory::Set<FunctionType*> list_all(Type* type);
-
-public:
     const ComparableSpan<Type*> parameters_;
     Type* const return_type_;
 
 public:
     FunctionType(ComparableSpan<Type*> parameters, Type* return_type) noexcept
-        : Type(kind), parameters_(parameters), return_type_(return_type) {}
+        : Type(Kind::Function), parameters_(parameters), return_type_(return_type) {}
 
     std::string_view repr() const final {
         GlobalMemory::String params_repr =
@@ -309,23 +303,7 @@ public:
         return GlobalMemory::format_view("({}) => {}", params_repr, return_type_->repr());
     }
 
-    bool assignable_from_impl(const Type& source) const final {
-        // (Base) => Derived is assignable to (Derived) => Base
-        // i.e., parameters are contravariant, return type is covariant
-        if (source.kind_ != Kind::Function) {
-            return false;
-        }
-        const FunctionType& func_other = static_cast<const FunctionType&>(source);
-        if (parameters_.size() != func_other.parameters_.size()) {
-            return false;
-        }
-        for (std::size_t i = 0; i < parameters_.size(); ++i) {
-            if (!func_other.parameters_[i]->assignable_from(*parameters_[i])) {
-                return false;
-            }
-        }
-        return return_type_->assignable_from(*func_other.return_type_);
-    }
+    bool assignable_from_impl(const Type& source) const final;
     std::strong_ordering operator<=>(const FunctionType& other) const noexcept = default;
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -456,55 +434,42 @@ public:
 };
 
 class IntersectionType final : public Type {
-public:
-    static constexpr Kind kind = Kind::Intersection;
-
 private:
-    static ComparableSpan<Type*> combine(Type* left, Type* right) {
+    static ComparableSpan<Type*> flatten(ComparableSpan<Type*> unflattened_types) {
         std::size_t size = 0;
-        if (right < left) std::swap(left, right);
-        if (left->kind_ == Kind::Intersection) {
-            const IntersectionType& left_intersection = static_cast<const IntersectionType&>(*left);
-            size += left_intersection.types_.size();
-        } else {
-            assert(left->kind_ == Kind::Function);
-            size++;
-        }
-        if (right->kind_ == Kind::Intersection) {
-            const IntersectionType& right_intersection =
-                static_cast<const IntersectionType&>(*right);
-            size += right_intersection.types_.size();
-        } else {
-            assert(right->kind_ == Kind::Function);
-            size++;
+        for (Type* type : unflattened_types) {
+            if (type->kind_ == Kind::Intersection) {
+                const IntersectionType& intersection = static_cast<const IntersectionType&>(*type);
+                size += intersection.types_.size();
+            } else {
+                size++;
+            }
         }
         ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
         std::size_t index = 0;
-        if (left->kind_ == Kind::Intersection) {
-            const IntersectionType& left_intersection = static_cast<const IntersectionType&>(*left);
-            for (const auto& type : left_intersection.types_) {
+        for (Type* type : unflattened_types) {
+            if (type->kind_ == Kind::Intersection) {
+                const IntersectionType& intersection = static_cast<const IntersectionType&>(*type);
+                for (Type* inner_type : intersection.types_) {
+                    buffer[index++] = inner_type;
+                }
+            } else {
                 buffer[index++] = type;
             }
-        } else {
-            buffer[index++] = left;
-        }
-        if (right->kind_ == Kind::Intersection) {
-            const IntersectionType& right_intersection =
-                static_cast<const IntersectionType&>(*right);
-            for (const auto& type : right_intersection.types_) {
-                buffer[index++] = type;
-            }
-        } else {
-            buffer[index++] = right;
         }
         return buffer;
+    }
+    static ComparableSpan<Type*> flatten(Type* left, Type* right) {
+        Type* types[] = {left, right};
+        return flatten(ComparableSpan<Type*>(types));
     }
 
 public:
     const ComparableSpan<Type*> types_;
 
 public:
-    IntersectionType(Type* left, Type* right) noexcept : Type(kind), types_{combine(left, right)} {}
+    IntersectionType(auto&&... unflattened_types) noexcept
+        : Type(Kind::Intersection), types_{flatten(unflattened_types...)} {}
 
     std::string_view repr() const final {
         // TODO
@@ -544,47 +509,41 @@ public:
     static constexpr Kind kind = Kind::Union;
 
 private:
-    static ComparableSpan<Type*> combine(Type* left, Type* right) {
+    static ComparableSpan<Type*> flatten(ComparableSpan<Type*> unflattened_types) {
         std::size_t size = 0;
-        if (right < left) std::swap(left, right);
-        if (left->kind_ == Kind::Union) {
-            const UnionType& left_union = static_cast<const UnionType&>(*left);
-            size += left_union.types_.size();
-        } else {
-            size++;
-        }
-        if (right->kind_ == Kind::Union) {
-            const UnionType& right_union = static_cast<const UnionType&>(*right);
-            size += right_union.types_.size();
-        } else {
-            size++;
+        for (Type* type : unflattened_types) {
+            if (type->kind_ == Kind::Union) {
+                const UnionType& union_type = static_cast<const UnionType&>(*type);
+                size += union_type.types_.size();
+            } else {
+                size++;
+            }
         }
         ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
         std::size_t index = 0;
-        if (left->kind_ == Kind::Union) {
-            const UnionType& left_union = static_cast<const UnionType&>(*left);
-            for (const auto& type : left_union.types_) {
+        for (Type* type : unflattened_types) {
+            if (type->kind_ == Kind::Union) {
+                const UnionType& union_type = static_cast<const UnionType&>(*type);
+                for (Type* inner_type : union_type.types_) {
+                    buffer[index++] = inner_type;
+                }
+            } else {
                 buffer[index++] = type;
             }
-        } else {
-            buffer[index++] = left;
-        }
-        if (right->kind_ == Kind::Union) {
-            const UnionType& right_union = static_cast<const UnionType&>(*right);
-            for (const auto& type : right_union.types_) {
-                buffer[index++] = type;
-            }
-        } else {
-            buffer[index++] = right;
         }
         return buffer;
+    }
+    static ComparableSpan<Type*> flatten(Type* left, Type* right) {
+        Type* types[] = {left, right};
+        return flatten(ComparableSpan<Type*>(types));
     }
 
 public:
     const ComparableSpan<Type*> types_;
 
 public:
-    UnionType(Type* left, Type* right) noexcept : Type(kind), types_(combine(left, right)) {}
+    UnionType(auto&&... unflattened_types) noexcept
+        : Type(kind), types_(flatten(unflattened_types...)) {}
 
     std::string_view repr() const final {
         // TODO
@@ -908,24 +867,18 @@ public:
 
 public:
     FunctionType* type_;
-    const void* source_;
     std::function<Value*(ComparableSpan<Value*>)> callback_;
 
 public:
-    FunctionValue(const void* source, decltype(callback_) invoke) noexcept
-        : Value(kind), type_(nullptr), source_(source), callback_(std::move(invoke)) {}
-    FunctionValue(FunctionType* type, const void* source, decltype(callback_) invoke) noexcept
-        : Value(kind), type_(type), source_(source), callback_(std::move(invoke)) {}
+    FunctionValue(FunctionType* type, decltype(callback_) invoke) noexcept
+        : Value(kind), type_(type), callback_(std::move(invoke)) {}
 
     std::string_view repr() const final {
         return GlobalMemory::format_view("<function at {:p}>", static_cast<const void*>(this));
     }
     FunctionType* get_type() const final { return type_; }
     FunctionValue* resolve_to(Type* target) const final {
-        /// Type of function value is managed by OverloadedFunctionValue
-        /// @code let func: (a) -> b = ... @endcode
-        /// Here, right-hand side is of type OverloadedFunctionValue, which holds overloads so
-        /// the resolve_to of FunctionValue will never be called.
+        assert(false);
         std::unreachable();
     }
     Value* invoke(ComparableSpan<Value*> args) const { return callback_(args); }
@@ -983,23 +936,27 @@ public:
 
 class OverloadedFunctionValue final : public Value {
 private:
+    IntersectionType* type_;
     ComparableSpan<Object*> overloads_;  /// array of FunctionType* | FunctionValue*
 
 public:
-    OverloadedFunctionValue(Object* first) noexcept
-        : Value(Kind::Intersection), overloads_(GlobalMemory::alloc_array<Object*>(1)) {
-        overloads_[0] = first;
-    }
     OverloadedFunctionValue(ComparableSpan<Object*> overloads) noexcept
-        : Value(Kind::Intersection), overloads_(overloads) {}
+        : Value(Kind::Intersection), overloads_(overloads) {
+        ComparableSpan<Type*> overload_types =
+            overloads_ | std::views::transform([](Object* obj) -> Type* {
+                if (auto type = obj->as_type()) {
+                    return type;
+                }
+                return static_cast<FunctionValue*>(obj)->get_type();
+            }) |
+            GlobalMemory::collect<ComparableSpan<Type*>>();
+        type_ = TypeRegistry::get<IntersectionType>(overload_types);
+    }
     std::string_view repr() const final {
         /// TODO:
         return {};
     }
-    Type* get_type() const final {
-        /// TODO:
-        return {};
-    }
+    Type* get_type() const final { return type_; }
     OverloadedFunctionValue* resolve_to(Type* target) const final { std::unreachable(); }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -1040,16 +997,33 @@ inline FloatType FloatType::f64_instance = FloatType(64);
 
 inline BooleanType BooleanType::instance;
 
-inline GlobalMemory::Set<FunctionType*> FunctionType::list_all(Type* type) {
-    if (type->kind_ == Kind::Intersection) {
-        const IntersectionType& intersection = static_cast<const IntersectionType&>(*type);
-        return intersection.types_ | std::views::transform([](Type* func_type) {
-                   return static_cast<FunctionType*>(func_type);
-               }) |
-               GlobalMemory::collect<GlobalMemory::Set<FunctionType*>>();
-    } else {
-        assert(type->kind_ == Kind::Function);
-        return GlobalMemory::Set<FunctionType*>{static_cast<FunctionType*>(type)};
+inline bool FunctionType::assignable_from_impl(const Type& source) const {
+    // (Base) => Derived is assignable to (Derived) => Base
+    // i.e., parameters are contravariant, return type is covariant
+    switch (source.kind_) {
+    case Kind::Function: {
+        const FunctionType& func_other = static_cast<const FunctionType&>(source);
+        if (parameters_.size() != func_other.parameters_.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < parameters_.size(); ++i) {
+            if (!func_other.parameters_[i]->assignable_from(*parameters_[i])) {
+                return false;
+            }
+        }
+        return return_type_->assignable_from(*func_other.return_type_);
+    }
+    case Kind::Intersection: {
+        const IntersectionType& intersection_other = static_cast<const IntersectionType&>(source);
+        for (Type* member_type : intersection_other.types_) {
+            if (this->assignable_from(*member_type)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    default:
+        return false;
     }
 }
 

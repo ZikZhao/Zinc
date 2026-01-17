@@ -146,12 +146,6 @@ public:
         return monotonic()->allocate(size, align);
     }
 
-    static void dealloc_raw(
-        void* ptr, std::size_t size, std::size_t align = alignof(std::max_align_t)
-    ) {
-        monotonic()->deallocate(ptr, size, align);
-    }
-
     template <typename T, typename... Args>
     static constexpr T* alloc(Args&&... args) {
         void* ptr = monotonic()->allocate(sizeof(T), alignof(T));
@@ -185,8 +179,12 @@ private:
     class RangeCollector {
         template <std::ranges::input_range R>
         friend T operator|(R&& range, RangeCollector) {
-            T result(std::from_range, std::forward<R>(range));
-            return result;
+            if constexpr (requires { T(std::from_range, std::forward<R>(range)); }) {
+                return T(std::from_range, std::forward<R>(range));
+            } else {
+                auto common = range | std::views::common;
+                return T(common.begin(), common.end());
+            }
         }
     };
 
@@ -558,9 +556,7 @@ class GlobalMemory::RangeCollector<GlobalMemory::String> {
 class MemoryManaged {
 public:
     static void* operator new(std ::size_t size) { return GlobalMemory::alloc_raw(size); }
-    static void operator delete(void* ptr, std ::size_t size) {
-        GlobalMemory::dealloc_raw(ptr, size);
-    }
+    static void operator delete(void* ptr, std ::size_t size) {}
 
 protected:
     /// Protected default constructor to prevent direct instantiation

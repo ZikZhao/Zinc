@@ -11,16 +11,20 @@ private:
     GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> get_methods() {
         return GlobalMemory::Map<std::string_view, OverloadedFunctionValue*>{
             {"init",
-             new OverloadedFunctionValue(new FunctionType(
-                 GlobalMemory::pack_array<Type*>(
-                     TypeRegistry::get<ArrayType>(&IntegerType::u8_instance)
-                 ),
-                 this
-             ))},
+             new OverloadedFunctionValue(
+                 GlobalMemory::pack_array<Object*>(new FunctionType(
+                     GlobalMemory::pack_array<Type*>(
+                         TypeRegistry::get<ArrayType>(&IntegerType::u8_instance)
+                     ),
+                     this
+                 ))
+             )},
             {"at",
-             new OverloadedFunctionValue(new FunctionType(
-                 GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
-             ))}
+             new OverloadedFunctionValue(
+                 GlobalMemory::pack_array<Object*>(new FunctionType(
+                     GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
+                 ))
+             )}
         };
     }
 
@@ -38,9 +42,11 @@ private:
     GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> get_methods() {
         return GlobalMemory::Map<std::string_view, OverloadedFunctionValue*>{
             {"at",
-             new OverloadedFunctionValue(new FunctionType(
-                 GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
-             ))}
+             new OverloadedFunctionValue(
+                 GlobalMemory::pack_array<Object*>(new FunctionType(
+                     GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
+                 ))
+             )}
         };
     }
 
