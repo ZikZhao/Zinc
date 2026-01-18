@@ -404,16 +404,16 @@ public:
 
 private:
     const std::string_view identifier_;
-    ClassType* const extends_;
-    const ComparableSpan<InterfaceType*> implements_;
+    Type* const extends_;
+    const ComparableSpan<Type*> implements_;
     const GlobalMemory::Map<std::string_view, Type*> attr_;
     const GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods_;
 
 public:
     ClassType(
         std::string_view identifier,
-        ClassType* extends,
-        ComparableSpan<InterfaceType*> interfaces,
+        Type* extends,
+        ComparableSpan<Type*> interfaces,
         GlobalMemory::Map<std::string_view, Type*> attr,
         GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods
     ) noexcept

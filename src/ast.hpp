@@ -9,10 +9,11 @@
 class Transpiler;
 
 class ASTNode;
+class ASTRoot;
+class ASTLocalBlock;
 class ASTExpression;
 using ASTValueExpression = ASTExpression;
 using ASTTypeExpression = ASTExpression;
-class ASTBlock;
 class ASTConstant;
 class ASTIdentifier;
 template <typename Op>
@@ -33,7 +34,7 @@ class ASTReturnStatement;
 class ASTFunctionParameter;
 class ASTFunctionSignature;
 class ASTFunctionDefinition;
-class ASTClassDeclaration;
+class ASTClassDefinition;
 
 struct ExprInfo {
     Type* type;
@@ -158,27 +159,11 @@ public:
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
-class ASTBlock : public ASTNode {
+class ASTLocalBlock final : public ASTNode {
 public:
     ComparableSpan<std::unique_ptr<ASTNode>> statements_;
-    ASTBlock(const Location& loc, ComparableSpan<std::unique_ptr<ASTNode>> statements) noexcept
+    ASTLocalBlock(const Location& loc, ComparableSpan<std::unique_ptr<ASTNode>> statements) noexcept
         : ASTNode(loc), statements_(statements) {}
-    void collect_symbols(Scope& scope, OperationHandler& ops) override {
-        for (auto& stmt : statements_) {
-            stmt->collect_symbols(scope, ops);
-        }
-    }
-    void check_types(TypeChecker& checker) override {
-        for (auto& stmt : statements_) {
-            stmt->check_types(checker);
-        }
-    }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept override;
-};
-
-class ASTLocalBlock final : public ASTBlock {
-public:
-    using ASTBlock::ASTBlock;
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
         Scope& local_scope = Scope::create(this, scope);
         for (auto& stmt : statements_) {
@@ -620,40 +605,48 @@ public:
 class ASTIfStatement final : public ASTNode {
 public:
     const std::unique_ptr<ASTExpression> condition_;
-    const std::unique_ptr<ASTBlock> if_block_;
-    const std::unique_ptr<ASTBlock> else_block_;
+    const ComparableSpan<std::unique_ptr<ASTNode>> if_block_;
+    const ComparableSpan<std::unique_ptr<ASTNode>> else_block_;
     ASTIfStatement(
         const Location& loc,
         std::unique_ptr<ASTExpression> condition,
-        std::unique_ptr<ASTBlock> if_block,
-        std::unique_ptr<ASTBlock> else_block = nullptr
+        ComparableSpan<std::unique_ptr<ASTNode>> if_block,
+        ComparableSpan<std::unique_ptr<ASTNode>> else_block = {}
     ) noexcept
         : ASTNode(loc),
           condition_(std::move(condition)),
-          if_block_(std::move(if_block)),
-          else_block_(std::move(else_block)) {}
+          if_block_(if_block),
+          else_block_(else_block) {}
     ~ASTIfStatement() noexcept final = default;
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
-        Scope& if_scope = Scope::create(if_block_.get(), scope);
-        if_block_->collect_symbols(if_scope, ops);
-        if (else_block_) {
-            Scope& else_scope = Scope::create(else_block_.get(), scope);
-            else_block_->collect_symbols(else_scope, ops);
+        Scope& if_scope = Scope::create(&if_block_, scope);
+        for (auto& stmt : if_block_) {
+            stmt->collect_symbols(if_scope, ops);
+        }
+        if (!else_block_.empty()) {
+            Scope& else_scope = Scope::create(&else_block_, scope);
+            for (auto& stmt : else_block_) {
+                stmt->collect_symbols(else_scope, ops);
+            }
         }
     }
     void check_types(TypeChecker& checker) final {
-        checker.enter(if_block_.get());
+        checker.enter(&if_block_);
         ExprInfo cond_info = condition_->get_expr_info(checker);
         if (cond_info.type->kind_ != Kind::Boolean) {
             Diagnostic::report(
                 TypeMismatchError(condition_->location_, "bool", cond_info.type->repr())
             );
         }
-        if_block_->check_types(checker);
+        for (auto& stmt : if_block_) {
+            stmt->check_types(checker);
+        }
         checker.exit();
-        if (else_block_) {
-            checker.enter(else_block_.get());
-            else_block_->check_types(checker);
+        if (!else_block_.empty()) {
+            checker.enter(&else_block_);
+            for (auto& stmt : else_block_) {
+                stmt->check_types(checker);
+            }
             checker.exit();
         }
     }
@@ -665,43 +658,45 @@ public:
     const std::unique_ptr<ASTNode> initializer_;  // Can be either a declaration or an expression
     const std::unique_ptr<ASTExpression> condition_;
     const std::unique_ptr<ASTExpression> increment_;
-    const std::unique_ptr<ASTBlock> body_;
+    const ComparableSpan<std::unique_ptr<ASTNode>> body_;
     ASTForStatement(
         const Location& loc,
         std::unique_ptr<ASTDeclaration> initializer,
         std::unique_ptr<ASTExpression> condition,
         std::unique_ptr<ASTExpression> increment,
-        std::unique_ptr<ASTBlock> body
+        ComparableSpan<std::unique_ptr<ASTNode>> body
     ) noexcept
         : ASTNode(loc),
           initializer_(std::move(initializer)),
           condition_(std::move(condition)),
           increment_(std::move(increment)),
-          body_(std::move(body)) {}
+          body_(body) {}
     ASTForStatement(
         const Location& loc,
         std::unique_ptr<ASTValueExpression> initializer,
         std::unique_ptr<ASTExpression> condition,
         std::unique_ptr<ASTExpression> increment,
-        std::unique_ptr<ASTBlock> body
+        ComparableSpan<std::unique_ptr<ASTNode>> body
     ) noexcept
         : ASTNode(loc),
           initializer_(std::move(initializer)),
           condition_(std::move(condition)),
           increment_(std::move(increment)),
-          body_(std::move(body)) {}
-    ASTForStatement(const Location& loc, std::unique_ptr<ASTBlock> body) noexcept
-        : ASTNode(loc), body_(std::move(body)) {}
+          body_(body) {}
+    ASTForStatement(const Location& loc, ComparableSpan<std::unique_ptr<ASTNode>> body) noexcept
+        : ASTNode(loc), body_(body) {}
     ~ASTForStatement() noexcept final = default;
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
-        Scope& local_scope = Scope::create(body_.get(), scope);
+        Scope& local_scope = Scope::create(&body_, scope);
         if (initializer_) {
             initializer_->collect_symbols(local_scope, ops);
         }
-        body_->collect_symbols(local_scope, ops);
+        for (auto& stmt : body_) {
+            stmt->collect_symbols(local_scope, ops);
+        }
     }
     void check_types(TypeChecker& checker) final {
-        checker.enter(body_.get());
+        checker.enter(&body_);
         if (initializer_) {
             initializer_->check_types(checker);
         }
@@ -716,7 +711,9 @@ public:
         if (increment_) {
             increment_->get_expr_info(checker);
         }
-        body_->check_types(checker);
+        for (auto& stmt : body_) {
+            stmt->check_types(checker);
+        }
         checker.exit();
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
@@ -769,7 +766,7 @@ public:
     std::string_view identifier_;
     ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters_;
     std::unique_ptr<ASTTypeExpression> return_type_;
-    std::unique_ptr<ASTBlock> body_;
+    ComparableSpan<std::unique_ptr<ASTNode>> body_;
     bool is_const_;
     bool is_static_;
     std::unique_ptr<ASTFunctionSignature> signature_;
@@ -780,7 +777,7 @@ public:
         std::string_view identifier,
         ComparableSpan<std::unique_ptr<ASTFunctionParameter>> parameters,
         std::unique_ptr<ASTTypeExpression> return_type,
-        std::unique_ptr<ASTBlock> body,
+        ComparableSpan<std::unique_ptr<ASTNode>> body,
         bool is_const,
         bool is_static
     ) noexcept
@@ -788,18 +785,22 @@ public:
           identifier_(identifier),
           parameters_(parameters),
           return_type_(std::move(return_type)),
-          body_(std::move(body)),
+          body_(body),
           is_const_(is_const),
           is_static_(is_static),
           signature_(std::make_unique<ASTFunctionSignature>(this)) {}
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
         scope.add_function(identifier_, signature_.get());
-        Scope& local_scope = Scope::create(body_.get(), scope);
-        body_->collect_symbols(local_scope, ops);
+        Scope& local_scope = Scope::create(&body_, scope);
+        for (auto& stmt : body_) {
+            stmt->collect_symbols(local_scope, ops);
+        }
     }
     void check_types(TypeChecker& checker) final {
-        checker.enter(body_.get());
-        body_->check_types(checker);
+        checker.enter(&body_);
+        for (auto& stmt : body_) {
+            stmt->check_types(checker);
+        }
         checker.exit();
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
@@ -807,36 +808,42 @@ public:
 
 class ASTClassSignature final : public ASTHiddenTypeExpression {
 public:
-    const ASTClassDeclaration* owner_;
-    ASTClassSignature(const ASTClassDeclaration* owner) noexcept : owner_(owner) {}
+    const ASTClassDefinition* owner_;
+    ASTClassSignature(const ASTClassDefinition* owner) noexcept : owner_(owner) {}
     Type* eval(TypeChecker& checker) const noexcept final;
 };
 
-class ASTClassDeclaration final : public ASTNode {
+class ASTClassDefinition final : public ASTNode {
 public:
     std::string_view identifier_;
     std::string_view extends_;
     ComparableSpan<std::string_view> implements_;
-    ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> attrs_;
+    ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields_;
+    ComparableSpan<std::unique_ptr<ASTTypeAlias>> aliases_;
     ComparableSpan<std::unique_ptr<ASTFunctionDefinition>> functions_;
+    ComparableSpan<std::unique_ptr<ASTClassDefinition>> classes_;
 
     std::unique_ptr<ASTClassSignature> signature_;
 
 public:
-    ASTClassDeclaration(
+    ASTClassDefinition(
         const Location& loc,
         std::string_view identifier,
         std::string_view extends,
         ComparableSpan<std::string_view> implements,
-        ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> attrs,
-        ComparableSpan<std::unique_ptr<ASTFunctionDefinition>> functions
+        ComparableSpan<std::unique_ptr<ASTFieldDeclaration>> fields,
+        ComparableSpan<std::unique_ptr<ASTTypeAlias>> aliases,
+        ComparableSpan<std::unique_ptr<ASTFunctionDefinition>> functions,
+        ComparableSpan<std::unique_ptr<ASTClassDefinition>> classes
     ) noexcept
         : ASTNode(loc),
           identifier_(identifier),
           extends_(extends),
           implements_(implements),
-          attrs_(attrs),
+          fields_(fields),
+          aliases_(aliases),
           functions_(functions),
+          classes_(classes),
           signature_(std::make_unique<ASTClassSignature>(this)) {}
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
         Scope& static_scope = Scope::create(this, scope, identifier_);
@@ -852,7 +859,7 @@ public:
     void check_types(TypeChecker& checker) final {
         checker.enter(this);          // static scope
         checker.enter(&identifier_);  // instance scope
-        for (auto& field : attrs_) {
+        for (auto& field : fields_) {
             field->check_types(checker);
         }
         checker.exit();  // instance scope
@@ -870,7 +877,33 @@ public:
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
-// ===================== Inline implementations of TypeChecker =====================
+class ASTNamespaceDefinition final : public ASTNode {
+public:
+    std::string_view identifier_;
+    ComparableSpan<std::unique_ptr<ASTNode>> items_;
+    ASTNamespaceDefinition(
+        const Location& loc,
+        std::string_view identifier,
+        ComparableSpan<std::unique_ptr<ASTNode>> items
+    ) noexcept
+        : ASTNode(loc), identifier_(identifier), items_(items) {}
+    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+        Scope& namespace_scope = Scope::create(this, scope, identifier_);
+        for (auto& item : items_) {
+            item->collect_symbols(namespace_scope, ops);
+        }
+    }
+    void check_types(TypeChecker& checker) final {
+        checker.enter(this);
+        for (auto& item : items_) {
+            item->check_types(checker);
+        }
+        checker.exit();
+    }
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+};
+
+// ===================== Inline implementations =====================
 
 inline std::expected<Object*, Resolving> TypeChecker::resolve_in(
     std::string_view identifier, Scope& scope
@@ -907,9 +940,7 @@ inline std::expected<Object*, Resolving> TypeChecker::resolve_in(
             it_func->second |
             std::views::transform([&](const auto& func_sig) { return func_sig->eval(*this); }) |
             GlobalMemory::collect<ComparableSpan<Object*>>();
-        record.result = std::ranges::contains(overloads, TypeRegistry::get_unknown())
-                            ? TypeRegistry::get_unknown()->as<Object>()
-                            : new OverloadedFunctionValue(overloads);
+        record.result = new OverloadedFunctionValue(overloads);
         std::swap(previous_scope, current_scope_);
         return record.result;
     }
@@ -994,7 +1025,7 @@ inline Type* ASTFunctionSignature::eval(TypeChecker& checker) const noexcept {
 
 inline Type* ASTClassSignature::eval(TypeChecker& checker) const noexcept {
     // Resolve base class
-    ClassType* extends_ = [&]() -> ClassType* {
+    Type* extends_ = [&]() -> Type* {
         if (owner_->extends_.empty()) {
             return nullptr;
         }
@@ -1003,51 +1034,46 @@ inline Type* ASTClassSignature::eval(TypeChecker& checker) const noexcept {
             result = checker.resolve(owner_->extends_);
         } catch (UnlocatedProblem& e) {
             e.report_at(owner_->location_);
-            return nullptr;
+            return TypeRegistry::get_unknown();
         }
         if (!expect_type(result, owner_->location_)) {
-            return nullptr;
+            return TypeRegistry::get_unknown();
         }
         if ((*result)->as_type()->kind_ != Kind::Instance) {
             Diagnostic::report(
                 TypeMismatchError(owner_->location_, "class", (*result)->as_type()->repr())
             );
-            return nullptr;
+            return TypeRegistry::get_unknown();
         }
         return (*result)->cast<ClassType>();
     }();
-    if (extends_ == nullptr && !owner_->extends_.empty()) {
-        return TypeRegistry::get_unknown();
-    }
     // Resolve implemented interfaces
     ComparableSpan interfaces =
-        owner_->implements_ |
-        std::views::transform([&](std::string_view interface_name) -> InterfaceType* {
+        owner_->implements_ | std::views::transform([&](std::string_view interface_name) -> Type* {
             std::expected<Object*, Resolving> result;
             try {
                 result = checker.resolve(interface_name);
             } catch (UnlocatedProblem& e) {
                 e.report_at(owner_->location_);
-                return nullptr;
+                return TypeRegistry::get_unknown();
             }
             if (!expect_type(result, owner_->location_)) {
-                return nullptr;
+                return TypeRegistry::get_unknown();
             }
             if ((*result)->as_type()->kind_ != Kind::Interface) {
                 Diagnostic::report(
                     TypeMismatchError(owner_->location_, "interface", (*result)->as_type()->repr())
                 );
-                return nullptr;
+                return TypeRegistry::get_unknown();
             }
             return (*result)->cast<InterfaceType>();
         }) |
-        GlobalMemory::collect<ComparableSpan<InterfaceType*>>();
-    if (std::ranges::contains(interfaces, nullptr)) {
-        return TypeRegistry::get_unknown();
-    }
+        GlobalMemory::collect<ComparableSpan<Type*>>();
     // Collect attributes
+    checker.enter(this);
+    checker.enter(&owner_->identifier_);
     GlobalMemory::Map<std::string_view, Type*> attrs =
-        owner_->attrs_ | std::views::transform([&](const auto& field_decl) {
+        owner_->fields_ | std::views::transform([&](const auto& field_decl) {
             std::pair<std::string_view, Type*> result;
             result.first = field_decl->identifier_;
             Type* field_type = field_decl->type_->eval(checker)->as_type();
@@ -1060,9 +1086,6 @@ inline Type* ASTClassSignature::eval(TypeChecker& checker) const noexcept {
             return result;
         }) |
         GlobalMemory::collect<GlobalMemory::Map<std::string_view, Type*>>();
-    if (std::ranges::contains(attrs | std::views::values, TypeRegistry::get_unknown())) {
-        return TypeRegistry::get_unknown();
-    }
     // Collect methods
     GlobalMemory::Vector non_static_functions =
         owner_->functions_ |
@@ -1074,23 +1097,21 @@ inline Type* ASTClassSignature::eval(TypeChecker& checker) const noexcept {
     std::ranges::sort(non_static_functions, [](const auto& a, const auto& b) {
         return a->identifier_ < b->identifier_;
     });
-    // GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods =
-    //     non_static_functions | std::views::chunk_by([](const auto& a, const auto& b) {
-    //         return a->identifier_ == b->identifier_;
-    //     }) |
-    //     std::views::transform(
-    //         [&](auto group) -> std::pair<std::string_view, OverloadedFunctionValue*> {
-    //             std::string_view identifier = (*group.begin())->identifier_;
-    //             OverloadedFunctionValue* overload = new OverloadedFunctionValue(
-    //                 group | std::views::transform([&](const auto& func_def) {
-    //                     return func_def->signature_->eval(checker);
-    //                 }) |
-    //                 GlobalMemory::collect<ComparableSpan<Object*>>()
-    //             );
-    //             return {identifier, overload};
-    //         }
-    //     ) |
-    //     GlobalMemory::collect<GlobalMemory::Map<std::string_view, OverloadedFunctionValue*>>();
-    GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods;
+    std::ranges::unique(non_static_functions, [](const auto& a, const auto& b) {
+        return a->identifier_ == b->identifier_;
+    });
+    GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods =
+        non_static_functions |
+        std::views::transform(
+            [&](auto func_def) -> std::pair<std::string_view, OverloadedFunctionValue*> {
+                std::expected<Object*, Resolving> result = checker.resolve(func_def->identifier_);
+                return {
+                    func_def->identifier_, (*result)->as_value()->cast<OverloadedFunctionValue>()
+                };
+            }
+        ) |
+        GlobalMemory::collect<GlobalMemory::Map<std::string_view, OverloadedFunctionValue*>>();
+    checker.exit();
+    checker.exit();
     return TypeRegistry::get<ClassType>(owner_->identifier_, extends_, interfaces, attrs, methods);
 }

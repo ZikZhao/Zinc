@@ -4,10 +4,17 @@ options {
 	language = Cpp;
 }
 
-program: statements_ += statement* EOF;
+program: statements_ += top_level_statement* EOF;
+
+top_level_statement:
+	declaration_statement
+	| type_alias
+	| function_definition
+	| class_definition
+	| namespace_definition;
 
 statement:
-	code_block
+	local_block
 	| expr_statement
 	| declaration_statement
 	| if_statement
@@ -15,11 +22,18 @@ statement:
 	| break_statement
 	| continue_statement
 	| return_statement
-	| type_alias_declaration
+	| type_alias
 	| function_definition
 	| class_definition;
 
-code_block: OP_LBRACE statements_ += statement* OP_RBRACE;
+namespace_item:
+	declaration_statement
+	| type_alias
+	| function_definition
+	| class_definition
+	| namespace_definition;
+
+local_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 
 expr_statement: expr_ = expr OP_SEMICOLON;
 
@@ -29,8 +43,10 @@ declaration_statement:
 	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON;
 
 if_statement:
-	KW_IF OP_LPAREN condition_ = expr OP_RPAREN then_ = code_block (
-		KW_ELSE else_ = code_block
+	KW_IF OP_LPAREN condition_ = expr OP_RPAREN OP_LBRACE (
+		then_ += statement
+	)* OP_RBRACE (
+		KW_ELSE OP_LBRACE (else_ += statement)* OP_RBRACE
 	)?;
 
 for_statement:
@@ -38,7 +54,9 @@ for_statement:
 		init_decl_ = declaration_statement
 		| init_expr_ = expr_statement
 		| OP_SEMICOLON
-	) condition_ = expr? OP_SEMICOLON update_ = expr? OP_RPAREN body_ = code_block;
+	) condition_ = expr? OP_SEMICOLON update_ = expr? OP_RPAREN OP_LBRACE (
+		body_ += statement
+	)* OP_RBRACE;
 
 break_statement: KW_BREAK OP_SEMICOLON;
 
@@ -46,7 +64,7 @@ continue_statement: KW_CONTINUE OP_SEMICOLON;
 
 return_statement: KW_RETURN expr_ = expr? OP_SEMICOLON;
 
-type_alias_declaration:
+type_alias:
 	KW_TYPE identifier_ = T_IDENTIFIER OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
@@ -54,7 +72,7 @@ function_definition:
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
-	)? OP_RPAREN (OP_ARROW return_type_ = type)? body_ = code_block;
+	)? OP_RPAREN (OP_ARROW return_type_ = type)? OP_LBRACE body_ += statement* OP_RBRACE;
 
 parameter: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 
@@ -66,9 +84,14 @@ class_definition:
 			OP_COMMA implements_ += identifier
 		)*
 	)? OP_LBRACE (
-		fields_ += field
-		| funcs_ += function_definition
+		fields_ += field_declaration
+		| types_ += type_alias
+		| functions_ += function_definition
+		| classes_ += class_definition
 	)* OP_RBRACE OP_SEMICOLON;
+
+namespace_definition:
+	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += namespace_item* OP_RBRACE;
 
 expr:
 	<assoc = right> left_ = expr op_ = (
@@ -134,15 +157,15 @@ type:
 		| KW_FLOAT64
 		| KW_STRING
 		| KW_BOOL
-	)												# PrimitiveType
-	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType
-	| identifier_ = identifier						# IdentifierType
-	| OP_LBRACE fields_ += field* OP_RBRACE			# RecordType
+	)													# PrimitiveType
+	| OP_LBRACKET inner_type_ = type OP_RBRACKET		# ParenType
+	| identifier_ = identifier							# IdentifierType
+	| OP_LBRACE fields_ += field_declaration* OP_RBRACE	# RecordType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type # FunctionType;
 
-field:
+field_declaration:
 	identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_SEMICOLON;
 
 KW_LET: 'let';
@@ -176,6 +199,7 @@ KW_CLASS: 'class';
 KW_EXTENDS: 'extends';
 KW_IMPLEMENTS: 'implements';
 KW_STATIC: 'static';
+KW_NAMESPACE: 'namespace';
 
 OP_ADD: '+';
 OP_SUB: '-';

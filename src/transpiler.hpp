@@ -321,18 +321,13 @@ inline void ASTRoot::transpile(Transpiler& transpiler, TypeChecker& checker) con
     }
 }
 
-inline void ASTBlock::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler << "{" << Transpiler::indent << Transpiler::newline;
+inline void ASTLocalBlock::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
+    transpiler << Transpiler::newline << "{" << Transpiler::indent << Transpiler::newline;
+    checker.enter(this);
     for (const auto& stmt : statements_) {
         stmt->transpile(transpiler, checker);
     }
     transpiler << Transpiler::dedent << "}" << Transpiler::newline;
-}
-
-inline void ASTLocalBlock::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler << Transpiler::newline;
-    checker.enter(this);
-    ASTBlock::transpile(transpiler, checker);
     checker.exit();
 }
 
@@ -450,11 +445,21 @@ inline void ASTTypeAlias::transpile(Transpiler& transpiler, TypeChecker& checker
 inline void ASTIfStatement::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
     transpiler << "if (";
     condition_->transpile(transpiler, checker);
-    transpiler << ") ";
-    if_block_->transpile(transpiler, checker);
-    if (else_block_) {
-        transpiler << "else ";
-        else_block_->transpile(transpiler, checker);
+    transpiler << ") {" << Transpiler::indent << Transpiler::newline;
+    checker.enter(&if_block_);
+    for (const auto& stmt : if_block_) {
+        stmt->transpile(transpiler, checker);
+    }
+    checker.exit();
+    transpiler << Transpiler::dedent << "}" << Transpiler::newline;
+    if (!else_block_.empty()) {
+        transpiler << "else {" << Transpiler::indent << Transpiler::newline;
+        checker.enter(&else_block_);
+        for (const auto& stmt : else_block_) {
+            stmt->transpile(transpiler, checker);
+        }
+        checker.exit();
+        transpiler << Transpiler::dedent << "}" << Transpiler::newline;
     }
 }
 
@@ -466,8 +471,13 @@ inline void ASTForStatement::transpile(
     condition_->transpile(transpiler, checker);
     transpiler << "; ";
     increment_->transpile(transpiler, checker);
-    transpiler << ") ";
-    body_->transpile(transpiler, checker);
+    transpiler << ") {" << Transpiler::indent << Transpiler::newline;
+    checker.enter(&body_);
+    for (const auto& stmt : body_) {
+        stmt->transpile(transpiler, checker);
+    }
+    checker.exit();
+    transpiler << Transpiler::dedent << "}" << Transpiler::newline;
 }
 
 inline void ASTBreakStatement::transpile(
@@ -540,13 +550,16 @@ inline void ASTFunctionDefinition::transpile(
         param->transpile(transpiler, checker);
         sep = ", ";
     }
-    transpiler << ") ";
-    checker.enter(body_.get());
-    body_->transpile(transpiler, checker);
+    transpiler << ") {" << Transpiler::indent << Transpiler::newline;
+    checker.enter(&body_);
+    for (const auto& stmt : body_) {
+        stmt->transpile(transpiler, checker);
+    }
+    transpiler << Transpiler::dedent << "}" << Transpiler::newline;
     checker.exit();
 }
 
-inline void ASTClassDeclaration::transpile(
+inline void ASTClassDefinition::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
     transpiler[Section::Declarations];
@@ -554,7 +567,7 @@ inline void ASTClassDeclaration::transpile(
 
     checker.enter(this);
     checker.enter(&identifier_);
-    for (const auto& field : attrs_) {
+    for (const auto& field : fields_) {
         field->transpile(transpiler, checker);
         transpiler << Transpiler::newline;
     }
@@ -572,4 +585,17 @@ inline void ASTClassDeclaration::transpile(
     checker.exit();
 
     transpiler[Section::Declarations] << Transpiler::dedent << "};" << Transpiler::newline;
+}
+
+inline void ASTNamespaceDefinition::transpile(
+    Transpiler& transpiler, TypeChecker& checker
+) const noexcept {
+    transpiler[Section::Declarations];
+    transpiler << "namespace " << identifier_ << " {" << Transpiler::indent << Transpiler::newline;
+
+    checker.enter(this);
+    for (const auto& item : items_) {
+        item->transpile(transpiler, checker);
+    }
+    checker.exit();
 }
