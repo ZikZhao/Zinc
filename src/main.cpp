@@ -30,7 +30,7 @@ int main(int argc, char* argv[]) {
 
     std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
     ASTBuilder builder(*sources.load(input_path), importer);
-    std::unique_ptr<ASTRoot> root = builder();
+    ASTRoot* root = builder();
 
     Scope scope;
     OperationHandler ops;
@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
 
     bool has_error = Diagnostic::print(sources);
     if (!has_error) {
-        transpile(root.get(), sources, checker);
+        transpile(root, sources, checker);
     }
 
     return has_error ? EXIT_FAILURE : EXIT_SUCCESS;
