@@ -711,6 +711,11 @@ public:
     ASTExpression* const expr_;
     ASTReturnStatement(const Location& loc, ASTExpression* expr = nullptr) noexcept
         : ASTNode(loc), expr_(expr) {}
+    void check_types(TypeChecker& checker) final {
+        if (expr_) {
+            expr_->get_expr_info(checker);
+        }
+    }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
@@ -769,6 +774,14 @@ public:
     }
     void check_types(TypeChecker& checker) final {
         checker.enter(&body_);
+        for (auto& param : parameters_) {
+            Type* param_type = param->type_->eval(checker)->as_type();
+            if (!param_type) {
+                Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
+                param_type = TypeRegistry::get_unknown();
+            }
+            checker.add_variable(param->identifier_, param_type);
+        }
         for (auto& stmt : body_) {
             stmt->check_types(checker);
         }

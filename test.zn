@@ -14,11 +14,22 @@ let f: (i32, i32) -> i32 = add;
 
 let g = sub;
 
-class MyClass {
+class Base {
     data: i32;
     data2: f64;
     fn add1() -> i32 {
         return data;
+    }
+};
+
+class Derived {
+    data3: bool;
+    fn sub1() -> i32 {
+        if (data3) {
+            return 1;
+        } else {
+            return 0;
+        }
     }
 };
 

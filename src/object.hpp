@@ -67,7 +67,8 @@ private:
     struct TypeComparator {
         template <TypeClass T>
         constexpr bool operator()(T* a, T* b) const noexcept {
-            return *a < *b;
+            GlobalMemory::Set<std::pair<Type*, Type*>> assumed_equal;
+            return a->compare_congruent(b, assumed_equal) == std::strong_ordering::less;
         }
     };
 
@@ -139,24 +140,27 @@ private:
 
 public:
     Object(Kind kind, bool is_type) noexcept : kind_(kind), is_type_(is_type) {}
-    virtual ~Object() = default;
-    virtual std::string_view repr() const = 0;
-    constexpr std::strong_ordering operator<=>(const Object& other) const noexcept {
-        return this <=> &other;
-    }
-    constexpr bool operator==(const Object& other) const noexcept { return this == &other; }
+
     Type* as_type();
+
     Value* as_value();
+
     template <std::same_as<Object> T>
     T* as() {
         return this;
     }
+
     template <typename T>
         requires(!std::is_same_v<T, Type> && !std::is_same_v<T, Value>)
     T* cast() {
         assert(kind_ == T::kind && ((as_type() != nullptr) == std::is_same_v<T, Type>));
         return static_cast<T*>(this);
     }
+
+    virtual ~Object() = default;
+
+    virtual std::string_view repr() const = 0;
+
     virtual void transpile(Transpiler& transpiler) const noexcept = 0;
 };
 
@@ -165,25 +169,43 @@ protected:
     Type(Kind kind) noexcept : Object(kind, true) {}
 
 public:
-    constexpr std::strong_ordering operator<=>(const Type& other) const noexcept {
-        return this <=> &other;
-    }
-
-    constexpr bool operator==(const Type& other) const noexcept { return this == &other; }
-
-    bool assignable_from(Type* source) const {
-        assert(!(this == source) || assignable_from_impl(source));
-        return this == source || assignable_from_impl(source);
-    }
-
     using Object::as;
     template <TypeClass T>
     T* as() {
         return kind_ == T::kind ? static_cast<T*>(this) : nullptr;
     }
 
+    std::strong_ordering compare_congruent(
+        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
+    ) noexcept {
+        if (this == other) {
+            return std::strong_ordering::equal;
+        }
+        if (kind_ != other->kind_) {
+            return kind_ <=> other->kind_;
+        }
+        if (assumed_equal.contains({this, other})) {
+            return std::strong_ordering::equal;
+        }
+        assumed_equal.emplace({this, other});
+        return compare_congruent_impl(other, assumed_equal);
+    }
+
+    bool assignable_from(Type* source) const {
+        assert(!(this == source) || assignable_from_impl(source));
+        return this == source || assignable_from_impl(source);
+    }
+
 protected:
     virtual bool assignable_from_impl(Type* source) const = 0;
+
+    virtual std::strong_ordering compare_congruent_impl(
+        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
+    ) noexcept {
+        // Default implementation for primitive types
+        assert(false);
+        std::unreachable();
+    };
 };
 
 class UnknownType final : public Type {
@@ -319,7 +341,23 @@ public:
     }
 
     bool assignable_from_impl(Type* source) const final;
-    std::strong_ordering operator<=>(const FunctionType& other) const noexcept = default;
+    std::strong_ordering compare_congruent_impl(
+        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
+    ) noexcept final {
+        FunctionType* other_func = other->cast<FunctionType>();
+        if (parameters_.size() != other_func->parameters_.size()) {
+            return parameters_.size() <=> other_func->parameters_.size();
+        }
+        for (std::size_t i = 0; i < parameters_.size(); ++i) {
+            assumed_equal.emplace({parameters_[i], other_func->parameters_[i]});
+            auto cmp = parameters_[i]->compare_congruent(other_func->parameters_[i], assumed_equal);
+            if (cmp != std::strong_ordering::equal) {
+                return cmp;
+            }
+        }
+        assumed_equal.emplace({return_type_, other_func->return_type_});
+        return return_type_->compare_congruent(other_func->return_type_, assumed_equal);
+    }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -339,6 +377,16 @@ public:
         ArrayType* other_array = source->as<ArrayType>();
         return other_array && element_type_->assignable_from(other_array->element_type_) &&
                (size_ == 0 || size_ == other_array->size_);
+    }
+    std::strong_ordering compare_congruent_impl(
+        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
+    ) noexcept final {
+        ArrayType* other_array = other->cast<ArrayType>();
+        if (size_ != other_array->size_) {
+            return size_ <=> other_array->size_;
+        }
+        assumed_equal.emplace({element_type_, other_array->element_type_});
+        return element_type_->compare_congruent(other_array->element_type_, assumed_equal);
     }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -374,7 +422,27 @@ public:
         }
         return true;
     }
-    std::strong_ordering operator<=>(const RecordType& other) const noexcept = default;
+    std::strong_ordering compare_congruent_impl(
+        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
+    ) noexcept final {
+        RecordType* other_record = other->cast<RecordType>();
+        if (fields_.size() != other_record->fields_.size()) {
+            return fields_.size() <=> other_record->fields_.size();
+        }
+        auto it1 = fields_.begin();
+        auto it2 = other_record->fields_.begin();
+        for (; it1 != fields_.end() && it2 != other_record->fields_.end(); ++it1, ++it2) {
+            if (it1->first != it2->first) {
+                return it1->first <=> it2->first;
+            }
+            assumed_equal.emplace({it1->second, it2->second});
+            auto cmp = it1->second->compare_congruent(it2->second, assumed_equal);
+            if (cmp != std::strong_ordering::equal) {
+                return cmp;
+            }
+        }
+        return std::strong_ordering::equal;
+    }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -429,6 +497,14 @@ public:
     }
 
     bool assignable_from_impl(Type* other) const final { return false; }
+
+    std::strong_ordering compare_congruent_impl(
+        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
+    ) noexcept final {
+        // ClassType is not interned, so this function is never called
+        assert(false);
+        std::unreachable();
+    }
 
     OverloadedFunctionValue* get_method(std::string_view name) const {
         auto it = methods_.find(name);
@@ -518,7 +594,23 @@ public:
         }
     }
 
-    std::strong_ordering operator<=>(const IntersectionType& other) const noexcept = default;
+    std::strong_ordering compare_congruent_impl(
+        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
+    ) noexcept final {
+        IntersectionType* other_intersection = other->cast<IntersectionType>();
+        if (types_.size() != other_intersection->types_.size()) {
+            return types_.size() <=> other_intersection->types_.size();
+        }
+        for (std::size_t i = 0; i < types_.size(); ++i) {
+            assumed_equal.emplace({types_[i], other_intersection->types_[i]});
+            auto cmp = types_[i]->compare_congruent(other_intersection->types_[i], assumed_equal);
+            if (cmp != std::strong_ordering::equal) {
+                return cmp;
+            }
+        }
+        return std::strong_ordering::equal;
+    }
+
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -587,7 +679,23 @@ public:
         return false;
     }
 
-    std::strong_ordering operator<=>(const UnionType& other) const noexcept = default;
+    std::strong_ordering compare_congruent_impl(
+        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
+    ) noexcept final {
+        UnionType* other_union = other->cast<UnionType>();
+        if (types_.size() != other_union->types_.size()) {
+            return types_.size() <=> other_union->types_.size();
+        }
+        for (std::size_t i = 0; i < types_.size(); ++i) {
+            assumed_equal.emplace({types_[i], other_union->types_[i]});
+            auto cmp = types_[i]->compare_congruent(other_union->types_[i], assumed_equal);
+            if (cmp != std::strong_ordering::equal) {
+                return cmp;
+            }
+        }
+        return std::strong_ordering::equal;
+    }
+
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -642,14 +750,14 @@ protected:
     Value(Kind kind) noexcept : Object(kind, false) {}
 
 public:
-    virtual Type* get_type() const = 0;
-    virtual Value* resolve_to(Type* target) const = 0;
-
     using Object::as;
     template <ValueClass V>
     V* as() {
         return kind_ == V::kind ? static_cast<V*>(this) : nullptr;
     }
+
+    virtual Type* get_type() const = 0;
+    virtual Value* resolve_to(Type* target) const = 0;
 };
 
 class UnknownValue final : public Value {
