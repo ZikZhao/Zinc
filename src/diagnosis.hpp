@@ -191,6 +191,63 @@ public:
         : CompileTimeEvaluationError(location, "Expression is not a constant expression") {}
 };
 
+class TemplateError : public Problem {
+protected:
+    TemplateError(const Location& location, std::string_view message)
+        : Problem(Severity::Error, location, message) {}
+};
+
+class TemplateArgumentCountMismatchError final : public TemplateError {
+public:
+    TemplateArgumentCountMismatchError(
+        const Location& location, std::size_t expected_count, std::size_t actual_count
+    )
+        : TemplateError(
+              location,
+              GlobalMemory::format_view(
+                  "Template argument count mismatch: expected {}, got {}",
+                  expected_count,
+                  actual_count
+              )
+          ) {}
+};
+
+class TemplateArgumentCategoryMismatchError final : public TemplateError {
+public:
+    TemplateArgumentCategoryMismatchError(
+        const Location& location, std::string_view param_name, bool expected_is_type
+    )
+        : TemplateError(
+              location,
+              GlobalMemory::format_view(
+                  "Template argument category mismatch for parameter '{}': expected {}, got {}",
+                  param_name,
+                  expected_is_type ? "type" : "value",
+                  !expected_is_type ? "type" : "value"
+              )
+          ) {}
+};
+
+class TemplateArgumentTypeMismatchError final : public TemplateError {
+public:
+    TemplateArgumentTypeMismatchError(
+        const Location& location,
+        std::string_view param_name,
+        std::string_view expected_type,
+        std::string_view actual_type
+    )
+        : TemplateError(
+              location,
+              GlobalMemory::format_view(
+                  "Template argument type mismatch for parameter '{}': expected type '{}', got "
+                  "type '{}'",
+                  param_name,
+                  expected_type,
+                  actual_type
+              )
+          ) {}
+};
+
 class Diagnostic {
     friend class ThreadGuard;
 

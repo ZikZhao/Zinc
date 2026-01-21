@@ -35,6 +35,7 @@ class ASTFunctionParameter;
 class ASTFunctionSignature;
 class ASTFunctionDefinition;
 class ASTClassDefinition;
+class ASTTemplateDefinition;
 
 struct ExprInfo {
     Type* type;
@@ -57,12 +58,21 @@ public:
         return ref;
     }
 
+    static Scope& create_temp(Scope& parent) { return *new Scope(parent, ""); }
+
 private:
     Scope* parent_ = nullptr;
-    GlobalMemory::Map<std::string_view, const ASTTypeExpression*> types_;
-    GlobalMemory::Map<std::string_view, Object*> variables_;
-    GlobalMemory::Map<std::string_view, GlobalMemory::Vector<const ASTExpression*>> functions_;
+    GlobalMemory::Map<
+        std::string_view,
+        PointerVariant<
+            const ASTTypeExpression*,
+            Object*,
+            GlobalMemory::Vector<const ASTExpression*>*,
+            const ASTTemplateDefinition*>>
+        identifiers_;
     GlobalMemory::Map<const void*, Scope*> children_;
+
+public:
     std::string_view prefix_;
 
 private:
@@ -79,18 +89,38 @@ public:
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
     void add_type(std::string_view identifier, const ASTTypeExpression* expr) {
-        types_.insert({identifier, expr});
-    }
-
-    void set_variable(std::string_view identifier, Object* expr) {
-        if (types_.contains(identifier)) {
+        auto [_, inserted] = identifiers_.insert({identifier, expr});
+        if (!inserted) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
-        variables_.insert({identifier, expr});
+    }
+
+    void set_variable(std::string_view identifier, Object* type_or_value) {
+        auto [_, inserted] = identifiers_.insert({identifier, type_or_value});
+        if (!inserted) {
+            throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+        }
     }
 
     void add_function(std::string_view identifier, const ASTExpression* expr) {
-        functions_[identifier].push_back(expr);
+        if (!identifiers_.contains(identifier)) {
+            auto overloads = GlobalMemory::alloc<GlobalMemory::Vector<const ASTExpression*>>();
+            overloads->push_back(expr);
+            identifiers_[identifier] = overloads;
+        } else {
+            auto it = identifiers_.find(identifier);
+            if (it != identifiers_.end() &&
+                !it->second.get_if<GlobalMemory::Vector<const ASTExpression*>*>()) {
+                throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+            }
+        }
+    }
+
+    void add_template(std::string_view identifier, const ASTTemplateDefinition* definition) {
+        auto [_, inserted] = identifiers_.insert({identifier, definition});
+        if (!inserted) {
+            throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+        }
     }
 };
 
@@ -106,24 +136,23 @@ private:
     GlobalMemory::Map<std::pair<const Scope*, std::string_view>, CacheRecord> cache_;
 
 public:
-    const OperationHandler& ops_;
+    OperationHandler& ops_;
 
 public:
-    TypeChecker(Scope& root, const OperationHandler& ops) noexcept
-        : current_scope_(&root), ops_(ops) {}
+    TypeChecker(Scope& root, OperationHandler& ops) noexcept : current_scope_(&root), ops_(ops) {}
     void add_variable(std::string_view identifier, Object* expr) {
         current_scope_->set_variable(identifier, expr);
     }
     void enter(const void* child) noexcept { current_scope_ = current_scope_->children_.at(child); }
     void exit() noexcept { current_scope_ = current_scope_->parent_; }
+    Scope* get_current_scope() noexcept { return current_scope_; }
     std::expected<Object*, Resolving> resolve(std::string_view identifier) {
         return resolve_in(identifier, *current_scope_);
     }
     ExprInfo var_type(std::string_view identifier) {
         return var_type_in(identifier, *current_scope_);
     }
-    std::string_view get_current_scope_prefix() const noexcept { return current_scope_->prefix_; }
-    bool at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
+    bool is_at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
 
 private:
     std::expected<Object*, Resolving> resolve_in(std::string_view identifier, Scope& scope);
@@ -138,6 +167,13 @@ public:
     virtual void collect_symbols(Scope& scope, OperationHandler& ops) {}
     virtual void check_types(TypeChecker& checker) {}
     virtual void transpile(Transpiler& transpiler, TypeChecker& checker) const = 0;
+};
+
+class ASTTemplateTarget {
+public:
+    virtual ~ASTTemplateTarget() noexcept = default;
+    virtual ASTNode* as_node() noexcept = 0;
+    virtual std::string_view get_template_name() const noexcept = 0;
 };
 
 class ASTRoot final : public ASTNode {
@@ -564,7 +600,7 @@ public:
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
-class ASTTypeAlias final : public ASTNode {
+class ASTTypeAlias final : public ASTNode, public ASTTemplateTarget {
 public:
     const std::string_view identifier_;
     ASTTypeExpression* const type_;
@@ -573,6 +609,8 @@ public:
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
         scope.add_type(identifier_, type_);
     }
+    ASTNode* as_node() noexcept final { return this; }
+    std::string_view get_template_name() const noexcept final { return identifier_; }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
@@ -885,6 +923,80 @@ public:
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
+class ASTTemplateTypeArgument final : public ASTHiddenTypeExpression {
+public:
+    Type* type_;
+    ASTTemplateTypeArgument(Type* type) noexcept : type_(type) {}
+    Type* eval(TypeChecker& checker) const noexcept final { return type_; }
+};
+
+class ASTTemplateDefinition final : public ASTNode {
+public:
+    ASTTemplateTarget* target_;
+    ComparableSpan<std::pair<std::string_view, ASTTypeExpression*>> parameters_;
+
+public:
+    ASTTemplateDefinition(
+        const Location& loc,
+        ASTTemplateTarget* target,
+        ComparableSpan<std::pair<std::string_view, ASTTypeExpression*>> parameters
+    ) noexcept
+        : ASTNode(loc), target_(target), parameters_(parameters) {}
+    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+        scope.add_template(target_->get_template_name(), this);
+    }
+    void instantiate(TypeChecker& checker, ComparableSpan<Object*> arguments) {
+        if (arguments.size() != parameters_.size()) {
+            Diagnostic::report(
+                TemplateArgumentCountMismatchError(location_, parameters_.size(), arguments.size())
+            );
+            return;
+        }
+        Scope& template_scope = Scope::create(this, *checker.get_current_scope());
+        for (size_t i = 0; i < parameters_.size(); ++i) {
+            const auto& [param_name, param_type] = parameters_[i];
+            Object* argument = arguments[i];
+            if ((param_type == nullptr) != (argument->as_type() != nullptr)) {
+                Diagnostic::report(TemplateArgumentCategoryMismatchError(
+                    location_, param_name, param_type != nullptr
+                ));
+                return;
+            }
+            if (param_type == nullptr) {
+                // type parameter
+                template_scope.add_type(
+                    param_name, new ASTTemplateTypeArgument(argument->cast<Type>())
+                );
+            } else {
+                Type* constraint_type = param_type->eval(checker)->as_type();
+                if (!constraint_type) {
+                    Diagnostic::report(SymbolCategoryMismatchError(param_type->location_, true));
+                    return;
+                }
+                if (!constraint_type->assignable_from(argument->cast<Value>()->get_type())) {
+                    Diagnostic::report(TemplateArgumentTypeMismatchError(
+                        location_,
+                        param_name,
+                        constraint_type->repr(),
+                        argument->cast<Value>()->get_type()->repr()
+                    ));
+                    return;
+                }
+                template_scope.set_variable(param_name, argument);
+            }
+        }
+        Scope& instantiation_scope = Scope::create(this, template_scope);
+        ASTNode* node = target_->as_node();
+        node->collect_symbols(instantiation_scope, checker.ops_);
+        checker.enter(this);
+        checker.enter(this);
+        node->check_types(checker);
+        checker.exit();
+        checker.exit();
+    }
+    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+};
+
 // ===================== Inline implementations =====================
 
 inline std::expected<Object*, Resolving> TypeChecker::resolve_in(
@@ -900,55 +1012,66 @@ inline std::expected<Object*, Resolving> TypeChecker::resolve_in(
     }
     // Cache miss; resolve
     record.is_resolving = true;
-    if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
-        if (it_var->second->as_type()) {
-            throw UnlocatedProblem::make<NotConstantExpressionError>();
-        } else {
-            // constant (it_var->second is the value stored)
-            return (record.result = it_var->second->as_value());
+    auto it = scope.identifiers_.find(identifier);
+    if (it == scope.identifiers_.end()) {
+        if (scope.parent_ != nullptr) {
+            std::expected<Object*, Resolving> parent_result =
+                resolve_in(identifier, *scope.parent_);
+            if (parent_result) {
+                record.result = *parent_result;
+            }
+            return parent_result;
         }
-    }
-    if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
+        throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
+    } else if (auto type = it->second.get_if<const ASTTypeExpression*>()) {
         Scope* previous_scope = &scope;
         std::swap(previous_scope, current_scope_);
-        record.result = it_type->second->eval(*this);
+        record.result = (*type)->eval(*this);
         std::swap(previous_scope, current_scope_);
         return record.result;
-    }
-    if (auto it_func = scope.functions_.find(identifier); it_func != scope.functions_.end()) {
+    } else if (auto var = it->second.get_if<Object*>()) {
+        if ((*var)->as_type()) {
+            // not a constant
+            throw UnlocatedProblem::make<NotConstantExpressionError>();
+        } else {
+            return (record.result = (*var)->as_value());
+        }
+    } else if (auto func = it->second.get_if<GlobalMemory::Vector<const ASTExpression*>*>()) {
         Scope* previous_scope = &scope;
         std::swap(previous_scope, current_scope_);
-        ComparableSpan overloads =
-            it_func->second |
-            std::views::transform([&](const auto& func_sig) { return func_sig->eval(*this); }) |
+        ComparableSpan<Object*> overloads =
+            (**func) | std::views::transform([this](const ASTExpression* func_sig) {
+                return func_sig->eval(*this);
+            }) |
             GlobalMemory::collect<ComparableSpan<Object*>>();
         record.result = new OverloadedFunctionValue(overloads);
         std::swap(previous_scope, current_scope_);
         return record.result;
+    } else {
+        /// TODO: template instantiation
+        assert(false);
     }
-    if (scope.parent_ != nullptr) {
-        std::expected<Object*, Resolving> parent_result = resolve_in(identifier, *scope.parent_);
-        if (parent_result) {
-            record.result = *parent_result;
-        }
-        return parent_result;
-    }
-    throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
 }
 
 inline ExprInfo TypeChecker::var_type_in(std::string_view identifier, Scope& scope) {
-    if (auto it_var = scope.variables_.find(identifier); it_var != scope.variables_.end()) {
-        Type* type = it_var->second->as_type();
-        if (!type) {
-            type = it_var->second->as_value()->get_type();
+    auto it = scope.identifiers_.find(identifier);
+    if (it == scope.identifiers_.end()) {
+        if (scope.parent_ != nullptr) {
+            return var_type_in(identifier, *scope.parent_);
         }
-        return ExprInfo{type, it_var->second->as_type() != nullptr};
-    }
-    if (auto it_func = scope.functions_.find(identifier); it_func != scope.functions_.end()) {
+        throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
+    } else if (auto var = it->second.get_if<Object*>(); var != nullptr) {
+        Type* type = (*var)->as_type();
+        if (!type) {
+            type = (*var)->as_value()->get_type();
+        }
+        return ExprInfo{type, (*var)->as_type() != nullptr};
+    } else if (auto func = it->second.get_if<GlobalMemory::Vector<const ASTExpression*>*>();
+               func != nullptr) {
         Scope* previous_scope = &scope;
         std::swap(previous_scope, current_scope_);
         ComparableSpan<Type*> overload_types =
-            it_func->second | std::views::transform([this](const ASTExpression* expr) -> Type* {
+            (**func) | std::views::transform([this](const ASTExpression* expr) -> Type* {
                 Object* obj = expr->eval(*this);
                 if (auto type = obj->as_type()) {
                     return type;
@@ -959,14 +1082,12 @@ inline ExprInfo TypeChecker::var_type_in(std::string_view identifier, Scope& sco
         IntersectionType* intersection_type = TypeRegistry::get<IntersectionType>(overload_types);
         std::swap(previous_scope, current_scope_);
         return ExprInfo{intersection_type, false};
-    }
-    if (auto it_type = scope.types_.find(identifier); it_type != scope.types_.end()) {
+    } else if (auto type = it->second.get_if<const ASTTypeExpression*>(); type != nullptr) {
         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
+    } else {
+        /// TODO: template instantiation
+        assert(false);
     }
-    if (scope.parent_ != nullptr) {
-        return var_type_in(identifier, *scope.parent_);
-    }
-    throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
 }
 
 inline ASTRoot::ASTRoot(const Location& loc, ComparableSpan<ASTNode*> statements) noexcept

@@ -230,13 +230,11 @@ using RightShiftAssign = OperateAndAssign<RightShift>;
 
 class OperationHandler final {
 private:
-    GlobalMemory::Map<std::tuple<OperatorCode, Type*, Type*>, FunctionValue*> custom_table_;
+    GlobalMemory::Map<std::tuple<OperatorCode, Type*, Type*>, Object*> map_;
 
 public:
-    void register_custom_op(
-        OperatorCode opcode, Type* left_type, Type* right_type, FunctionValue* func
-    ) {
-        custom_table_[{opcode, left_type, right_type}] = func;
+    void register_custom_op(OperatorCode opcode, Type* left_type, Type* right_type, Object* func) {
+        map_[{opcode, left_type, right_type}] = func;
     }
 
     Object* eval_op(OperatorCode opcode, Object* left, Object* right = {}) const {
@@ -246,8 +244,8 @@ public:
         }
         Value* left_value = left->as_value();
         Value* right_value = right->as_value();
-        auto it = custom_table_.find({opcode, left_value->get_type(), right_value->get_type()});
-        if (it != custom_table_.end()) {
+        auto it = map_.find({opcode, left_value->get_type(), right_value->get_type()});
+        if (it != map_.end()) {
             return it->second->invoke(GlobalMemory::pack_array(left_value, right_value));
         } else {
             throw UnlocatedProblem::make<OperationNotDefinedError>(
@@ -257,8 +255,8 @@ public:
     }
 
     Type* get_result_type(OperatorCode opcode, Type* left_type, Type* right_type = {}) const {
-        auto it = custom_table_.find({opcode, left_type, right_type});
-        if (it != custom_table_.end()) {
+        auto it = map_.find({opcode, left_type, right_type});
+        if (it != map_.end()) {
             return (*it).second->type_->return_type_;
         } else {
             throw UnlocatedProblem::make<OperationNotDefinedError>(

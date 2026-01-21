@@ -513,7 +513,7 @@ inline void ASTFunctionParameter::transpile(
 inline void ASTFunctionDefinition::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    bool is_main = checker.at_top_level() && identifier_ == "main";
+    bool is_main = checker.is_at_top_level() && identifier_ == "main";
     bool will_mangle = !is_main && is_static_;
 
     if (!is_main) {
@@ -542,7 +542,7 @@ inline void ASTFunctionDefinition::transpile(
     }
     transpiler[is_main ? Section::Main : Section::Implementations] << (is_main ? "" : "inline ");
     return_type_->transpile(transpiler, checker);
-    transpiler << " " << checker.get_current_scope_prefix() << (will_mangle ? "$" : "")
+    transpiler << " " << checker.get_current_scope()->prefix_ << (will_mangle ? "$" : "")
                << identifier_ << "(";
     const char* sep = "";
     for (const auto& param : parameters_) {

@@ -18,6 +18,7 @@ enum class Kind : std::uint16_t {
     Instance,
     Intersection,
     Union,
+    Template,
 };
 
 class Transpiler;
@@ -151,7 +152,6 @@ public:
     }
 
     template <typename T>
-        requires(!std::is_same_v<T, Type> && !std::is_same_v<T, Value>)
     T* cast() {
         assert(kind_ == T::kind && ((as_type() != nullptr) == std::is_same_v<T, Type>));
         return static_cast<T*>(this);

@@ -47,20 +47,53 @@ struct TypeInTuple<T, std::tuple<Ts...>> : std::disjunction<std::is_same<T, Ts>.
 template <typename T, typename Tuple>
 inline constexpr bool TypeInTupleV = TypeInTuple<T, Tuple>::value;
 
-template <typename Derived, typename Base>
-    requires(std::has_virtual_destructor_v<Base>)
-constexpr std::unique_ptr<Derived> static_unique_cast(std::unique_ptr<Base> ptr) {
-    assert(ptr ? dynamic_cast<Derived*>(ptr.get()) != nullptr : true);
-    return std::unique_ptr<Derived>(static_cast<Derived*>(ptr.release()));
-}
+template <typename Target, typename... Ts>
+    requires(std::disjunction_v<std::is_same<Target, Ts>...>)
+struct IndexOfTypeInTuple;
 
-template <typename Derived, typename Base, typename Deleter>
-    requires(!std::is_same_v<Deleter, std::default_delete<Base>>)
-constexpr std::unique_ptr<Derived, Deleter> static_unique_cast(std::unique_ptr<Base, Deleter> ptr) {
-    return std::unique_ptr<Derived, Deleter>(
-        static_cast<Derived*>(ptr.release()), std::move(ptr.get_deleter())
-    );
-}
+template <typename Target, typename Head, typename... Tail>
+struct IndexOfTypeInTuple<Target, Head, Tail...> {
+    static constexpr std::size_t value =
+        std::is_same_v<Target, Head> ? 0 : 1 + IndexOfTypeInTuple<Target, Tail...>::value;
+};
+
+template <typename Target, typename... Ts>
+constexpr std::size_t IndexOfTypeInTupleV = IndexOfTypeInTuple<Target, Ts...>::value;
+
+template <typename... Ts>
+class PointerVariant {
+private:
+    static constexpr std::size_t mask = std::bit_ceil(sizeof...(Ts)) - 1;
+
+    template <typename U>
+    static constexpr bool IsCandidate = TypeInTupleV<U, std::tuple<Ts...>>;
+
+private:
+    void* ptr_;
+
+public:
+    PointerVariant() noexcept = default;
+
+    template <typename T>
+        requires(IsCandidate<T>)
+    PointerVariant(T ptr) noexcept : ptr_(ptr | IndexOfTypeInTupleV<T, Ts...>) {
+        static_assert(
+            alignof(T) >= sizeof...(Ts),
+            "PointerVariant targets must have alignment >= sizeof...(Ts) to store the type tag."
+        );
+    }
+
+    template <typename T>
+        requires(IsCandidate<T>)
+    T* get_if() noexcept {
+        constexpr std::size_t index = IndexOfTypeInTupleV<T, Ts...>;
+        if ((reinterpret_cast<std::uintptr_t>(ptr_) & index) == index) {
+            return reinterpret_cast<T*>(reinterpret_cast<std::uintptr_t>(ptr_) & ~mask);
+        } else {
+            return nullptr;
+        }
+    }
+};
 
 template <typename T>
 class ComparableSpan : public std::span<T> {
