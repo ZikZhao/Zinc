@@ -57,9 +57,9 @@ class InstanceValue;
 class OverloadedFunctionValue;
 
 template <typename T>
-concept TypeClass = std::derived_from<T, Type>;
+concept TypeClass = !std::is_same_v<T, Type> && std::derived_from<T, Type>;
 template <typename V>
-concept ValueClass = std::derived_from<V, Value>;
+concept ValueClass = !std::is_same_v<V, Value> && std::derived_from<V, Value>;
 
 class TypeRegistry {
     friend class ThreadGuard;
@@ -146,15 +146,28 @@ public:
 
     Value* as_value();
 
-    template <std::same_as<Object> T>
+    template <TypeClass T>
     T* as() {
-        return this;
+        return is_type_ && kind_ == T::kind ? static_cast<T*>(this) : nullptr;
+    }
+
+    template <ValueClass V>
+    V* as() {
+        return !is_type_ && kind_ == V::kind ? static_cast<V*>(this) : nullptr;
     }
 
     template <typename T>
     T* cast() {
-        assert(kind_ == T::kind && ((as_type() != nullptr) == std::is_same_v<T, Type>));
-        return static_cast<T*>(this);
+        if constexpr (std::is_same_v<T, Value>) {
+            assert(!is_type_);
+            return static_cast<T*>(this);
+        } else if constexpr (std::is_same_v<T, Type>) {
+            assert(is_type_);
+            return static_cast<T*>(this);
+        } else {
+            assert(kind_ == T::kind && ((as_type() != nullptr) == TypeClass<T>));
+            return static_cast<T*>(this);
+        }
     }
 
     virtual ~Object() = default;
@@ -169,12 +182,6 @@ protected:
     Type(Kind kind) noexcept : Object(kind, true) {}
 
 public:
-    using Object::as;
-    template <TypeClass T>
-    T* as() {
-        return kind_ == T::kind ? static_cast<T*>(this) : nullptr;
-    }
-
     std::strong_ordering compare_congruent(
         Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
     ) noexcept {
@@ -203,8 +210,7 @@ protected:
         Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
     ) noexcept {
         // Default implementation for primitive types
-        assert(false);
-        std::unreachable();
+        UNREACHABLE();
     };
 };
 
@@ -502,8 +508,7 @@ public:
         Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
     ) noexcept final {
         // ClassType is not interned, so this function is never called
-        assert(false);
-        std::unreachable();
+        UNREACHABLE();
     }
 
     OverloadedFunctionValue* get_method(std::string_view name) const {
@@ -750,14 +755,9 @@ protected:
     Value(Kind kind) noexcept : Object(kind, false) {}
 
 public:
-    using Object::as;
-    template <ValueClass V>
-    V* as() {
-        return kind_ == V::kind ? static_cast<V*>(this) : nullptr;
-    }
-
     virtual Type* get_type() const = 0;
     virtual Value* resolve_to(Type* target) const = 0;
+    virtual void assign_from(Value* source) = 0;
 };
 
 class UnknownValue final : public Value {
@@ -771,6 +771,7 @@ private:
     std::string_view repr() const final { return "unknown"; }
     UnknownType* get_type() const final { return &UnknownType::instance; }
     UnknownValue* resolve_to(Type* target) const final { return new UnknownValue(); }
+    void assign_from(Value* source) final { UNREACHABLE(); }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -789,6 +790,7 @@ public:
         }
         return new NullValue();
     }
+    void assign_from(Value* source) final { UNREACHABLE(); }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -798,110 +800,99 @@ public:
 
 public:
     IntegerType* const type_;  // nullptr for integer literals without a specific type
-    union {
-        std::int64_t ivalue_;
-        std::uint64_t uvalue_;
-        std::string_view raw_;
-    };
+    BigInt value_;
 
 public:
-    IntegerValue(IntegerType* type, std::int64_t value) noexcept
-        : Value(kind), type_(type), ivalue_(value) {
-        assert(type != nullptr && type->is_signed_);
-    }
-    IntegerValue(IntegerType* type, std::uint64_t value) noexcept
-        : Value(kind), type_(type), uvalue_(value) {
-        assert(type != nullptr && !type->is_signed_);
-    }
     explicit IntegerValue(std::string_view value) noexcept
-        : Value(kind), type_(&IntegerType::untyped_instance), raw_(value) {}
-    std::string_view repr() const final { return GlobalMemory::format_view("{}", ivalue_); }
+        : Value(kind), type_(&IntegerType::untyped_instance), value_(value) {}
+    IntegerValue(IntegerType* type, BigInt value) noexcept
+        : Value(kind), type_(type), value_(std::move(value)) {
+        assert(type && type != &IntegerType::untyped_instance);
+    }
+    std::string_view repr() const final {
+        return GlobalMemory::format_view("{}", value_.to_string());
+    }
     IntegerType* get_type() const final { return type_; }
     IntegerValue* resolve_to(Type* target) const final {
-        assert(target);
-        if (!target->as<IntegerType>()) {
+        if (target && !target->as<IntegerType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("integer", target->repr());
         }
-        IntegerType* int_target = target->cast<IntegerType>();
-        if (int_target == &IntegerType::untyped_instance) {
+        if (target == nullptr) {
             // most suitable type inference
             if (type_) {
                 return new IntegerValue(*this);
-            }
-            if (raw_[0] == '-') {
-                std::int64_t value;
-                auto [ptr, ec] = std::from_chars(raw_.data(), raw_.data() + raw_.size(), value);
-                if (ec != std::errc()) {
-                    std::unreachable();
-                }
-                if (std::in_range<std::int32_t>(value)) {
-                    return new IntegerValue(&IntegerType::i32_instance, value);
-                } else {
-                    return new IntegerValue(&IntegerType::i64_instance, value);
-                }
+            } else if (value_.fits_in<std::int32_t>()) {
+                return new IntegerValue(&IntegerType::i32_instance, value_);
+            } else if (value_.fits_in<std::int64_t>()) {
+                return new IntegerValue(&IntegerType::i64_instance, value_);
             } else {
-                std::uint64_t uvalue;
-                auto [ptr, ec] = std::from_chars(raw_.data(), raw_.data() + raw_.size(), uvalue);
-                if (ec != std::errc()) {
-                    std::unreachable();
-                }
-                if (std::in_range<std::int32_t>(uvalue)) {
-                    return new IntegerValue(&IntegerType::i32_instance, uvalue);
-                } else if (std::in_range<std::int64_t>(uvalue)) {
-                    return new IntegerValue(&IntegerType::i64_instance, uvalue);
-                } else {
-                    return new IntegerValue(&IntegerType::u64_instance, uvalue);
-                }
+                throw UnlocatedProblem::make<OverflowError>(
+                    value_.to_string(), "cannot fit into i64"
+                );
             }
-        } else {
+        } else if (type_) {
+            IntegerType* int_target = target->cast<IntegerType>();
             // convert to the specified target type
-            if (type_ == int_target) {
-                return new IntegerValue(*this);
-            } else if (type_) {
+            if (type_->is_signed_ != int_target->is_signed_) {
                 throw UnlocatedProblem::make<TypeMismatchError>(type_->repr(), target->repr());
             }
-            if (int_target->is_signed_) {
-                int64_t value;
-                auto [ptr, ec] = std::from_chars(raw_.data(), raw_.data() + raw_.size(), value);
-                if (ec != std::errc()) {
-                    std::unreachable();
-                }
-                if (std::size_t shift = 64 - int_target->bits_;
-                    (value << shift) >> shift != value) {
-                    throw UnlocatedProblem::make<OverflowError>(raw_, int_target->repr());
-                }
-                return new IntegerValue(int_target, value);
-            } else {
-                uint64_t uvalue;
-                auto [ptr, ec] = std::from_chars(raw_.data(), raw_.data() + raw_.size(), uvalue);
-                if (ec != std::errc()) {
-                    std::unreachable();
-                }
-                if (uvalue >> int_target->bits_ != 0) {
-                    throw UnlocatedProblem::make<OverflowError>(raw_, int_target->repr());
-                }
-                return new IntegerValue(int_target, uvalue);
+            if (type_->bits_ > int_target->bits_) {
+                throw UnlocatedProblem::make<OverflowError>(
+                    value_.to_string(),
+                    GlobalMemory::format_view("cannot fit into {}", target->repr())
+                );
             }
+            return new IntegerValue(int_target, value_);
+        } else {
+            IntegerType* int_target = target->cast<IntegerType>();
+            std::string_view error;
+            if (int_target->is_signed_) {
+                switch (int_target->bits_) {
+                case 8:
+                    error = value_.fits_in<std::int8_t>() ? "" : "i8";
+                    break;
+                case 16:
+                    error = value_.fits_in<std::int16_t>() ? "" : "i16";
+                    break;
+                case 32:
+                    error = value_.fits_in<std::int32_t>() ? "" : "i32";
+                    break;
+                case 64:
+                    error = value_.fits_in<std::int64_t>() ? "" : "i64";
+                    break;
+                default:
+                    UNREACHABLE();
+                }
+            } else {
+                switch (int_target->bits_) {
+                case 8:
+                    error = value_.fits_in<std::uint8_t>() ? "" : "u8";
+                    break;
+                case 16:
+                    error = value_.fits_in<std::uint16_t>() ? "" : "u16";
+                    break;
+                case 32:
+                    error = value_.fits_in<std::uint32_t>() ? "" : "u32";
+                    break;
+                case 64:
+                    error = value_.fits_in<std::uint64_t>() ? "" : "u64";
+                    break;
+                default:
+                    UNREACHABLE();
+                }
+            }
+            if (!error.empty()) {
+                throw UnlocatedProblem::make<OverflowError>(
+                    value_.to_string(), GlobalMemory::format_view("cannot fit into {}", error)
+                );
+            }
+            return new IntegerValue(int_target, value_);
         }
     }
-    IntegerValue operator+(const IntegerValue& other) const;
-    IntegerValue operator-(const IntegerValue& other) const;
-    IntegerValue operator-() const;
-    IntegerValue operator*(const IntegerValue& other) const;
-    IntegerValue operator/(const IntegerValue& other) const;
-    IntegerValue operator%(const IntegerValue& other) const;
-    BooleanValue operator==(const IntegerValue& other) const;
-    BooleanValue operator!=(const IntegerValue& other) const;
-    BooleanValue operator<(const IntegerValue& other) const;
-    BooleanValue operator<=(const IntegerValue& other) const;
-    BooleanValue operator>(const IntegerValue& other) const;
-    BooleanValue operator>=(const IntegerValue& other) const;
-    IntegerValue operator&(const IntegerValue& other) const;
-    IntegerValue operator|(const IntegerValue& other) const;
-    IntegerValue operator^(const IntegerValue& other) const;
-    IntegerValue operator~() const;
-    IntegerValue operator<<(const IntegerValue& other) const;
-    IntegerValue operator>>(const IntegerValue& other) const;
+    void assign_from(Value* source) final {
+        IntegerValue* int_source = source->cast<IntegerValue>();
+        this->value_ = int_source->value_;
+    }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -914,46 +905,40 @@ public:
     double value_;
 
 public:
+    explicit FloatValue(double value) noexcept
+        : Value(kind), type_(&FloatType::untyped_instance), value_(value) {}
     FloatValue(FloatType* type, double value) noexcept : Value(kind), type_(type), value_(value) {
-        assert(type != nullptr);
+        assert(type && type != &FloatType::untyped_instance);
     }
     std::string_view repr() const final { return GlobalMemory::format_view("{}", value_); }
     FloatType* get_type() const final { return type_; }
     FloatValue* resolve_to(Type* target) const final {
-        assert(target);
-        if (!target->as<FloatType>()) {
+        if (target && !target->as<FloatType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("float", target->repr());
         }
-        FloatType* float_target = target->cast<FloatType>();
-        if (float_target == &FloatType::untyped_instance) {
-            // default to double
+        if (target == nullptr) {
             if (type_) {
                 return new FloatValue(*this);
             }
+            // default to double
             return new FloatValue(&FloatType::f64_instance, value_);
-        } else {
+        } else if (type_) {
+            FloatType* float_target = target->cast<FloatType>();
             if (type_ == float_target) {
                 return new FloatValue(*this);
             } else if (type_) {
                 throw UnlocatedProblem::make<TypeMismatchError>(type_->repr(), target->repr());
             }
             return new FloatValue(float_target, value_);
+        } else {
+            FloatType* float_target = target->cast<FloatType>();
+            return new FloatValue(float_target, value_);
         }
     }
-    explicit FloatValue(double value) noexcept
-        : Value(kind), type_(&FloatType::untyped_instance), value_(value) {}
-    FloatValue operator+(const FloatValue& other) const;
-    FloatValue operator-(const FloatValue& other) const;
-    FloatValue operator-() const;
-    FloatValue operator*(const FloatValue& other) const;
-    FloatValue operator/(const FloatValue& other) const;
-    FloatValue operator%(const FloatValue& other) const;
-    BooleanValue operator==(const FloatValue& other) const;
-    BooleanValue operator!=(const FloatValue& other) const;
-    BooleanValue operator<(const FloatValue& other) const;
-    BooleanValue operator<=(const FloatValue& other) const;
-    BooleanValue operator>(const FloatValue& other) const;
-    BooleanValue operator>=(const FloatValue& other) const;
+    void assign_from(Value* source) final {
+        FloatValue* float_source = source->cast<FloatValue>();
+        this->value_ = float_source->value_;
+    }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -969,17 +954,15 @@ public:
     std::string_view repr() const final { return this->value_ ? "true" : "false"; }
     BooleanType* get_type() const final { return &BooleanType::instance; }
     BooleanValue* resolve_to(Type* target) const final {
-        assert(target);
-        if (target->kind_ != Kind::Boolean) {
+        if (target && target->kind_ != Kind::Boolean) {
             throw UnlocatedProblem::make<TypeMismatchError>("boolean", target->repr());
         }
         return new BooleanValue(*this);
     }
-    BooleanValue operator==(const BooleanValue& other) const;
-    BooleanValue operator!=(const BooleanValue& other) const;
-    BooleanValue operator&&(const BooleanValue& other) const;
-    BooleanValue operator||(const BooleanValue& other) const;
-    BooleanValue operator!() const;
+    void assign_from(Value* source) final {
+        BooleanValue* bool_source = source->cast<BooleanValue>();
+        this->value_ = bool_source->value_;
+    }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -999,10 +982,8 @@ public:
         return GlobalMemory::format_view("<function at {:p}>", static_cast<const void*>(this));
     }
     FunctionType* get_type() const final { return type_; }
-    FunctionValue* resolve_to(Type* target) const final {
-        assert(false);
-        std::unreachable();
-    }
+    FunctionValue* resolve_to(Type* target) const final { UNREACHABLE(); }
+    void assign_from(Value* source) final { UNREACHABLE(); }
     Value* invoke(ComparableSpan<Value*> args) const { return callback_(args); }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -1034,6 +1015,10 @@ public:
         /// TODO: implement
         return nullptr;
     }
+    void assign_from(Value* source) final {
+        /// TODO: implement
+        UNREACHABLE();
+    }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -1053,10 +1038,14 @@ public:
     }
     ClassType* get_type() const final { return cls_; }
     InstanceValue* resolve_to(Type* target) const final {
-        if (target != cls_) {
+        if (target && target != cls_) {
             throw UnlocatedProblem::make<TypeMismatchError>("instance", target->repr());
         }
         return new InstanceValue(*this);
+    }
+    void assign_from(Value* source) final {
+        InstanceValue* instance_source = source->cast<InstanceValue>();
+        this->attributes_ = instance_source->attributes_;
     }
     Value* get_attr(std::string_view attr) noexcept { return attributes_.at(attr); }
     void transpile(Transpiler& transpiler) const noexcept final;
@@ -1088,8 +1077,28 @@ public:
         return {};
     }
     Type* get_type() const final { return type_; }
-    OverloadedFunctionValue* resolve_to(Type* target) const final { std::unreachable(); }
+    OverloadedFunctionValue* resolve_to(Type* target) const final { UNREACHABLE(); }
+    void assign_from(Value* source) final { UNREACHABLE(); }
     void transpile(Transpiler& transpiler) const noexcept final;
+};
+
+class Term {
+public:
+    Object* ptr_;
+
+public:
+    Term() noexcept = default;
+    explicit Term(Object* ptr) noexcept : ptr_(ptr) {}
+    Type* get_type() const noexcept {
+        if (auto type = ptr_->as_type()) {
+            return type;
+        } else {
+            return ptr_->as_value()->get_type();
+        }
+    }
+    bool is_const() const noexcept { return ptr_->as_value() != nullptr; }
+    Object* operator->() const noexcept { return ptr_; }
+    operator bool() const noexcept { return ptr_ != nullptr; }
 };
 
 inline Type* Object::as_type() {
@@ -1131,7 +1140,7 @@ inline BooleanType BooleanType::instance;
 inline bool FunctionType::assignable_from_impl(Type* source) const {
     // (Base) => Derived is assignable to (Derived) => Base
     // i.e., parameters are contravariant, return type is covariant
-    if (auto func_other = source->as<FunctionType>()) {
+    if (FunctionType* func_other = source->as<FunctionType>()) {
         if (parameters_.size() != func_other->parameters_.size()) {
             return false;
         }
@@ -1141,7 +1150,7 @@ inline bool FunctionType::assignable_from_impl(Type* source) const {
             }
         }
         return return_type_->assignable_from(func_other->return_type_);
-    } else if (auto intersection_other = source->as<IntersectionType>()) {
+    } else if (IntersectionType* intersection_other = source->as<IntersectionType>()) {
         for (Type* member_type : intersection_other->types_) {
             if (this->assignable_from(member_type)) {
                 return true;
@@ -1152,145 +1161,3 @@ inline bool FunctionType::assignable_from_impl(Type* source) const {
         return false;
     }
 }
-
-// IntegerValue operators
-
-inline IntegerValue IntegerValue::operator+(const IntegerValue& other) const {
-    return IntegerValue(std::max(type_, other.type_), ivalue_ + other.ivalue_);
-}
-
-inline IntegerValue IntegerValue::operator-(const IntegerValue& other) const {
-    return IntegerValue(std::max(type_, other.type_), ivalue_ - other.ivalue_);
-}
-
-inline IntegerValue IntegerValue::operator-() const { return IntegerValue(type_, -this->ivalue_); }
-
-inline IntegerValue IntegerValue::operator*(const IntegerValue& other) const {
-    return IntegerValue(std::max(type_, other.type_), ivalue_ * other.ivalue_);
-}
-
-inline IntegerValue IntegerValue::operator/(const IntegerValue& other) const {
-    if (other.ivalue_ == 0) throw UnlocatedProblem::make<DivisionByZeroError>();
-    return IntegerValue(std::max(type_, other.type_), ivalue_ / other.ivalue_);
-}
-
-inline IntegerValue IntegerValue::operator%(const IntegerValue& other) const {
-    if (other.ivalue_ == 0) throw UnlocatedProblem::make<DivisionByZeroError>();
-    return IntegerValue(std::max(type_, other.type_), ivalue_ % other.ivalue_);
-}
-
-inline BooleanValue IntegerValue::operator==(const IntegerValue& other) const {
-    return BooleanValue(this->ivalue_ == other.ivalue_);
-}
-
-inline BooleanValue IntegerValue::operator!=(const IntegerValue& other) const {
-    return BooleanValue(this->ivalue_ != other.ivalue_);
-}
-
-inline BooleanValue IntegerValue::operator<(const IntegerValue& other) const {
-    return BooleanValue(this->ivalue_ < other.ivalue_);
-}
-
-inline BooleanValue IntegerValue::operator<=(const IntegerValue& other) const {
-    return BooleanValue(this->ivalue_ <= other.ivalue_);
-}
-
-inline BooleanValue IntegerValue::operator>(const IntegerValue& other) const {
-    return BooleanValue(this->ivalue_ > other.ivalue_);
-}
-
-inline BooleanValue IntegerValue::operator>=(const IntegerValue& other) const {
-    return BooleanValue(this->ivalue_ >= other.ivalue_);
-}
-
-inline IntegerValue IntegerValue::operator&(const IntegerValue& other) const {
-    return IntegerValue(std::max(type_, other.type_), ivalue_ & other.ivalue_);
-}
-
-inline IntegerValue IntegerValue::operator|(const IntegerValue& other) const {
-    return IntegerValue(std::max(type_, other.type_), ivalue_ | other.ivalue_);
-}
-
-inline IntegerValue IntegerValue::operator^(const IntegerValue& other) const {
-    return IntegerValue(std::max(type_, other.type_), ivalue_ ^ other.ivalue_);
-}
-
-inline IntegerValue IntegerValue::operator~() const { return IntegerValue(type_, ~this->ivalue_); }
-
-inline IntegerValue IntegerValue::operator<<(const IntegerValue& other) const {
-    if (other.ivalue_ < 0) throw UnlocatedProblem::make<ShiftByNegativeError>();
-    return IntegerValue(type_, this->ivalue_ << other.ivalue_);
-}
-
-inline IntegerValue IntegerValue::operator>>(const IntegerValue& other) const {
-    if (other.ivalue_ < 0) throw UnlocatedProblem::make<ShiftByNegativeError>();
-    return IntegerValue(type_, this->ivalue_ >> other.ivalue_);
-}
-
-// FloatValue operators
-inline FloatValue FloatValue::operator+(const FloatValue& other) const {
-    return FloatValue(type_, this->value_ + other.value_);
-}
-
-inline FloatValue FloatValue::operator-(const FloatValue& other) const {
-    return FloatValue(type_, this->value_ - other.value_);
-}
-
-inline FloatValue FloatValue::operator-() const { return FloatValue(type_, -this->value_); }
-
-inline FloatValue FloatValue::operator*(const FloatValue& other) const {
-    return FloatValue(type_, this->value_ * other.value_);
-}
-
-inline FloatValue FloatValue::operator/(const FloatValue& other) const {
-    if (other.value_ == 0.0) throw UnlocatedProblem::make<DivisionByZeroError>();
-    return FloatValue(type_, this->value_ / other.value_);
-}
-
-inline FloatValue FloatValue::operator%(const FloatValue& other) const {
-    if (other.value_ == 0.0) throw UnlocatedProblem::make<DivisionByZeroError>();
-    return FloatValue(type_, std::fmod(this->value_, other.value_));
-}
-
-inline BooleanValue FloatValue::operator==(const FloatValue& other) const {
-    return BooleanValue(this->value_ == other.value_);
-}
-
-inline BooleanValue FloatValue::operator!=(const FloatValue& other) const {
-    return BooleanValue(this->value_ != other.value_);
-}
-
-inline BooleanValue FloatValue::operator<(const FloatValue& other) const {
-    return BooleanValue(this->value_ < other.value_);
-}
-
-inline BooleanValue FloatValue::operator<=(const FloatValue& other) const {
-    return BooleanValue(this->value_ <= other.value_);
-}
-
-inline BooleanValue FloatValue::operator>(const FloatValue& other) const {
-    return BooleanValue(this->value_ > other.value_);
-}
-
-inline BooleanValue FloatValue::operator>=(const FloatValue& other) const {
-    return BooleanValue(this->value_ >= other.value_);
-}
-
-// BooleanValue operators
-inline BooleanValue BooleanValue::operator==(const BooleanValue& other) const {
-    return BooleanValue(this->value_ == other.value_);
-}
-
-inline BooleanValue BooleanValue::operator!=(const BooleanValue& other) const {
-    return BooleanValue(this->value_ != other.value_);
-}
-
-inline BooleanValue BooleanValue::operator&&(const BooleanValue& other) const {
-    return BooleanValue(this->value_ && other.value_);
-}
-
-inline BooleanValue BooleanValue::operator||(const BooleanValue& other) const {
-    return BooleanValue(this->value_ || other.value_);
-}
-
-inline BooleanValue BooleanValue::operator!() const { return BooleanValue(!this->value_); }

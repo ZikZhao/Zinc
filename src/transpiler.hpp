@@ -206,8 +206,7 @@ inline void IntegerType::transpile(Transpiler& transpiler) const noexcept {
         transpiler << "64_t";
         break;
     default:
-        assert(false);
-        std::unreachable();
+        UNREACHABLE();
     }
 }
 
@@ -283,11 +282,7 @@ inline void UnknownValue::transpile(Transpiler& transpiler) const noexcept { std
 inline void NullValue::transpile(Transpiler& transpiler) const noexcept { transpiler << "nullptr"; }
 
 inline void IntegerValue::transpile(Transpiler& transpiler) const noexcept {
-    if (type_->is_signed_) {
-        transpiler << GlobalMemory::format_view("{}", ivalue_);
-    } else {
-        transpiler << GlobalMemory::format_view("{}", uvalue_);
-    }
+    transpiler << GlobalMemory::format_view("{}", value_.to_string());
 }
 
 inline void FloatValue::transpile(Transpiler& transpiler) const noexcept {
@@ -334,8 +329,7 @@ inline void ASTLocalBlock::transpile(Transpiler& transpiler, TypeChecker& checke
 inline void ASTHiddenTypeExpression::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    assert(false);
-    std::unreachable();
+    UNREACHABLE();
 }
 
 inline void ASTConstant::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
@@ -430,7 +424,8 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler, TypeChecker& check
     } else if (!is_mutable_) {
         transpiler << "const ";
     }
-    get_declared_type(checker, expr_->get_expr_info(checker).type)->transpile(transpiler);
+    get_declared_type(checker, expr_->get_term_info(checker).term.get_type())
+        ->transpile(transpiler);
     transpiler << " " << identifier_ << " = ";
     expr_->transpile(transpiler, checker);
     transpiler << ";" << Transpiler::newline;

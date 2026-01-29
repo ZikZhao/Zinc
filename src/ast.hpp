@@ -37,8 +37,8 @@ class ASTFunctionDefinition;
 class ASTClassDefinition;
 class ASTTemplateDefinition;
 
-struct ExprInfo {
-    Type* type;
+struct TermInfo {
+    Term term;
     bool is_mutable = false;
     bool is_rvalue = false;
 };
@@ -46,6 +46,12 @@ struct ExprInfo {
 struct Resolving {
     Object** cache_value;
 };
+
+using ScopeValue = PointerVariant<
+    const ASTTypeExpression*,                     // type alias
+    Object*,                                      // type of variable or its value
+    GlobalMemory::Vector<const ASTExpression*>*,  // function overloads
+    const ASTTemplateDefinition*>;                // template definition
 
 class Scope : public MemoryManaged {
     friend class TypeChecker;
@@ -62,14 +68,7 @@ public:
 
 private:
     Scope* parent_ = nullptr;
-    GlobalMemory::Map<
-        std::string_view,
-        PointerVariant<
-            const ASTTypeExpression*,
-            Object*,
-            GlobalMemory::Vector<const ASTExpression*>*,
-            const ASTTemplateDefinition*>>
-        identifiers_;
+    GlobalMemory::Map<std::string_view, ScopeValue> identifiers_;
     GlobalMemory::Map<const void*, Scope*> children_;
 
 public:
@@ -122,6 +121,11 @@ public:
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
     }
+
+    ScopeValue& operator[](std::string_view identifier) noexcept {
+        assert(identifiers_.contains(identifier));
+        return identifiers_.at(identifier);
+    }
 };
 
 class TypeChecker {
@@ -149,14 +153,14 @@ public:
     std::expected<Object*, Resolving> resolve(std::string_view identifier) {
         return resolve_in(identifier, *current_scope_);
     }
-    ExprInfo var_type(std::string_view identifier) {
+    TermInfo var_type(std::string_view identifier) {
         return var_type_in(identifier, *current_scope_);
     }
     bool is_at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
 
 private:
     std::expected<Object*, Resolving> resolve_in(std::string_view identifier, Scope& scope);
-    ExprInfo var_type_in(std::string_view identifier, Scope& scope);
+    TermInfo var_type_in(std::string_view identifier, Scope& scope);
 };
 
 class ASTNode : public MemoryManaged {
@@ -233,15 +237,15 @@ protected:
 public:
     ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
     virtual Object* eval(TypeChecker& checker) const noexcept = 0;
-    virtual ExprInfo get_expr_info(TypeChecker& checker) const = 0;
-    void check_types(TypeChecker& checker) final { std::ignore = get_expr_info(checker); }
+    virtual TermInfo get_term_info(TypeChecker& checker) const = 0;
+    void check_types(TypeChecker& checker) final { std::ignore = get_term_info(checker); }
 };
 
 /// A hidden type expression that does not appear in source code
 class ASTHiddenTypeExpression : public ASTTypeExpression {
 public:
     ASTHiddenTypeExpression() noexcept : ASTTypeExpression({}) {}
-    ExprInfo get_expr_info(TypeChecker& checker) const final {
+    TermInfo get_term_info(TypeChecker& checker) const final {
         assert(false);
         std::unreachable();
     }
@@ -255,7 +259,7 @@ public:
     ASTConstant(const Location& loc, std::string_view str, std::type_identity<V>)
         : ASTExpression(loc), value_(Value::from_literal<V>(str)) {}
     Value* eval(TypeChecker& checker) const noexcept final { return value_; }
-    ExprInfo get_expr_info(TypeChecker& checker) const final { return {value_->get_type(), false}; }
+    TermInfo get_term_info(TypeChecker& checker) const final { return {Term(value_), false}; }
     void resolve_type(Type* target_type) { value_ = value_->resolve_to(target_type); }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -279,7 +283,7 @@ public:
             return TypeRegistry::get_unknown();
         }
     }
-    ExprInfo get_expr_info(TypeChecker& checker) const final { return checker.var_type(str_); }
+    TermInfo get_term_info(TypeChecker& checker) const final { return checker.var_type(str_); }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
@@ -292,15 +296,15 @@ public:
     Object* eval(TypeChecker& checker) const noexcept final {
         Object* expr_result = expr_->eval(checker);
         try {
-            return checker.ops_.eval_op(Op::opcode, expr_result);
+            return checker.ops_.eval_type_op(Op::opcode, expr_result);
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
             return TypeRegistry::get_unknown();
         }
     }
-    ExprInfo get_expr_info(TypeChecker& checker) const final {
-        ExprInfo expr_info = expr_->get_expr_info(checker);
-        return {checker.ops_.get_result_type(Op::opcode, expr_info.type), false};
+    TermInfo get_term_info(TypeChecker& checker) const final {
+        TermInfo expr_info = expr_->get_term_info(checker);
+        return {checker.ops_.eval_value_op(Op::opcode, expr_info.term), false};
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -316,17 +320,17 @@ public:
         Object* left_result = left_->eval(checker);
         Object* right_result = right_->eval(checker);
         try {
-            return checker.ops_.eval_op(Op::opcode, left_result, right_result);
+            return checker.ops_.eval_type_op(Op::opcode, left_result, right_result);
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
             return TypeRegistry::get_unknown();
         }
     }
-    ExprInfo get_expr_info(TypeChecker& checker) const final {
-        ExprInfo left_info = left_->get_expr_info(checker);
-        ExprInfo right_info = right_->get_expr_info(checker);
+    TermInfo get_term_info(TypeChecker& checker) const final {
+        TermInfo left_info = left_->get_term_info(checker);
+        TermInfo right_info = right_->get_term_info(checker);
         return {
-            checker.ops_.get_result_type(Op::opcode, left_info.type, right_info.type), false, true
+            checker.ops_.eval_value_op(Op::opcode, left_info.term, right_info.term), false, true
         };
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
@@ -346,21 +350,21 @@ public:
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
         return TypeRegistry::get_unknown();
     }
-    ExprInfo get_expr_info(TypeChecker& checker) const final {
-        ExprInfo left_info = left_->get_expr_info(checker);
-        ExprInfo right_info = right_->get_expr_info(checker);
+    TermInfo get_term_info(TypeChecker& checker) const final {
+        TermInfo left_info = left_->get_term_info(checker);
+        TermInfo right_info = right_->get_term_info(checker);
         if (!left_info.is_mutable) {
             Diagnostic::report(ImmutableMutationError(location_));
         }
         if (left_info.is_rvalue) {
             Diagnostic::report(InvalidAssignmentTargetError(location_));
         }
-        if (!left_info.type->assignable_from(right_info.type)) {
+        if (!left_info.term.get_type()->assignable_from(right_info.term.get_type())) {
             Diagnostic::report(
-                TypeMismatchError(location_, left_info.type->repr(), right_info.type->repr())
+                TypeMismatchError(location_, left_info.term->repr(), right_info.term->repr())
             );
         }
-        return {left_info.type, true, false};
+        return {left_info.term, true, false};
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -379,7 +383,7 @@ public:
         // TODO
         return {};
     }
-    ExprInfo get_expr_info(TypeChecker& checker) const final {
+    TermInfo get_term_info(TypeChecker& checker) const final {
         // TODO
         return {};
     }
@@ -433,7 +437,7 @@ public:
     ASTPrimitiveType(const Location& loc, Type* type) noexcept
         : ASTTypeExpression(loc), type_(type) {}
     Type* eval(TypeChecker& checker) const noexcept final { return type_; }
-    ExprInfo get_expr_info(TypeChecker& checker) const final {
+    TermInfo get_term_info(TypeChecker& checker) const final {
         throw std::logic_error("Type expressions do not have result types");
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
@@ -478,9 +482,9 @@ public:
         }
         return TypeRegistry::get<FunctionType>(param_types, return_type);
     }
-    ExprInfo get_expr_info(TypeChecker& checker) const final {
+    TermInfo get_term_info(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {TypeRegistry::get_unknown(), false, true};
+        return {Term(TypeRegistry::get_unknown()), false, true};
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -523,9 +527,9 @@ public:
         GlobalMemory::Map<std::string_view, Type*> field_types(std::from_range, std::move(rng));
         return TypeRegistry::get<RecordType>(field_types);
     }
-    ExprInfo get_expr_info(TypeChecker& checker) const final {
+    TermInfo get_term_info(TypeChecker& checker) const final {
         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {TypeRegistry::get_unknown(), false, true};
+        return {Term(TypeRegistry::get_unknown()), false, true};
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -576,7 +580,7 @@ public:
                 e.report_at(location_);
             }
         } else {
-            Type* inferred_type = expr_->get_expr_info(checker).type;
+            Type* inferred_type = expr_->get_term_info(checker).term.get_type();
             Type* declared_type = get_declared_type(checker, inferred_type);
             checker.add_variable(identifier_, declared_type);
         }
@@ -640,10 +644,10 @@ public:
     }
     void check_types(TypeChecker& checker) final {
         checker.enter(&if_block_);
-        ExprInfo cond_info = condition_->get_expr_info(checker);
-        if (cond_info.type->kind_ != Kind::Boolean) {
+        TermInfo cond_info = condition_->get_term_info(checker);
+        if (cond_info.term->kind_ != Kind::Boolean) {
             Diagnostic::report(
-                TypeMismatchError(condition_->location_, "bool", cond_info.type->repr())
+                TypeMismatchError(condition_->location_, "bool", cond_info.term->repr())
             );
         }
         for (auto& stmt : if_block_) {
@@ -712,15 +716,15 @@ public:
             initializer_->check_types(checker);
         }
         if (condition_) {
-            ExprInfo cond_info = condition_->get_expr_info(checker);
-            if (cond_info.type->kind_ != Kind::Boolean) {
+            TermInfo cond_info = condition_->get_term_info(checker);
+            if (cond_info.term->kind_ != Kind::Boolean) {
                 Diagnostic::report(
-                    TypeMismatchError(condition_->location_, "bool", cond_info.type->repr())
+                    TypeMismatchError(condition_->location_, "bool", cond_info.term->repr())
                 );
             }
         }
         if (increment_) {
-            increment_->get_expr_info(checker);
+            increment_->get_term_info(checker);
         }
         for (auto& stmt : body_) {
             stmt->check_types(checker);
@@ -751,7 +755,7 @@ public:
         : ASTNode(loc), expr_(expr) {}
     void check_types(TypeChecker& checker) final {
         if (expr_) {
-            expr_->get_expr_info(checker);
+            expr_->get_term_info(checker);
         }
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
@@ -945,12 +949,12 @@ public:
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
         scope.add_template(target_->get_template_name(), this);
     }
-    void instantiate(TypeChecker& checker, ComparableSpan<Object*> arguments) {
+    ScopeValue instantiate(TypeChecker& checker, ComparableSpan<Object*> arguments) {
         if (arguments.size() != parameters_.size()) {
             Diagnostic::report(
                 TemplateArgumentCountMismatchError(location_, parameters_.size(), arguments.size())
             );
-            return;
+            return {static_cast<Object*>(TypeRegistry::get_unknown())};
         }
         Scope& template_scope = Scope::create(this, *checker.get_current_scope());
         for (size_t i = 0; i < parameters_.size(); ++i) {
@@ -960,7 +964,7 @@ public:
                 Diagnostic::report(TemplateArgumentCategoryMismatchError(
                     location_, param_name, param_type != nullptr
                 ));
-                return;
+                return {static_cast<Object*>(TypeRegistry::get_unknown())};
             }
             if (param_type == nullptr) {
                 // type parameter
@@ -971,7 +975,7 @@ public:
                 Type* constraint_type = param_type->eval(checker)->as_type();
                 if (!constraint_type) {
                     Diagnostic::report(SymbolCategoryMismatchError(param_type->location_, true));
-                    return;
+                    return {static_cast<Object*>(TypeRegistry::get_unknown())};
                 }
                 if (!constraint_type->assignable_from(argument->cast<Value>()->get_type())) {
                     Diagnostic::report(TemplateArgumentTypeMismatchError(
@@ -980,19 +984,17 @@ public:
                         constraint_type->repr(),
                         argument->cast<Value>()->get_type()->repr()
                     ));
-                    return;
+                    return {static_cast<Object*>(TypeRegistry::get_unknown())};
                 }
                 template_scope.set_variable(param_name, argument);
             }
         }
-        Scope& instantiation_scope = Scope::create(this, template_scope);
         ASTNode* node = target_->as_node();
-        node->collect_symbols(instantiation_scope, checker.ops_);
-        checker.enter(this);
+        node->collect_symbols(template_scope, checker.ops_);
         checker.enter(this);
         node->check_types(checker);
         checker.exit();
-        checker.exit();
+        return template_scope[target_->get_template_name()];
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -1053,7 +1055,7 @@ inline std::expected<Object*, Resolving> TypeChecker::resolve_in(
     }
 }
 
-inline ExprInfo TypeChecker::var_type_in(std::string_view identifier, Scope& scope) {
+inline TermInfo TypeChecker::var_type_in(std::string_view identifier, Scope& scope) {
     auto it = scope.identifiers_.find(identifier);
     if (it == scope.identifiers_.end()) {
         if (scope.parent_ != nullptr) {
@@ -1065,7 +1067,7 @@ inline ExprInfo TypeChecker::var_type_in(std::string_view identifier, Scope& sco
         if (!type) {
             type = (*var)->as_value()->get_type();
         }
-        return ExprInfo{type, (*var)->as_type() != nullptr};
+        return TermInfo{Term(type), (*var)->as_type() != nullptr};
     } else if (auto func = it->second.get_if<GlobalMemory::Vector<const ASTExpression*>*>();
                func != nullptr) {
         Scope* previous_scope = &scope;
@@ -1081,7 +1083,7 @@ inline ExprInfo TypeChecker::var_type_in(std::string_view identifier, Scope& sco
             GlobalMemory::collect<ComparableSpan<Type*>>();
         IntersectionType* intersection_type = TypeRegistry::get<IntersectionType>(overload_types);
         std::swap(previous_scope, current_scope_);
-        return ExprInfo{intersection_type, false};
+        return TermInfo{Term(intersection_type), false};
     } else if (auto type = it->second.get_if<const ASTTypeExpression*>(); type != nullptr) {
         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
     } else {

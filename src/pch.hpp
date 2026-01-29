@@ -34,6 +34,16 @@
 
 #include "antlr4-runtime.h"
 
+#ifdef NDEBUG
+#define UNREACHABLE() std::unreachable()
+#else
+#define UNREACHABLE()     \
+    do {                  \
+        assert(false);    \
+        std::terminate(); \
+    } while (0)
+#endif
+
 // IWYU pragma: end_exports
 
 using namespace std::literals::string_view_literals;
@@ -51,10 +61,14 @@ template <typename Target, typename... Ts>
     requires(std::disjunction_v<std::is_same<Target, Ts>...>)
 struct IndexOfTypeInTuple;
 
+template <typename Target, typename... Tail>
+struct IndexOfTypeInTuple<Target, Target, Tail...> {
+    static constexpr std::size_t value = 0;
+};
+
 template <typename Target, typename Head, typename... Tail>
 struct IndexOfTypeInTuple<Target, Head, Tail...> {
-    static constexpr std::size_t value =
-        std::is_same_v<Target, Head> ? 0 : 1 + IndexOfTypeInTuple<Target, Tail...>::value;
+    static constexpr std::size_t value = 1 + IndexOfTypeInTuple<Target, Tail...>::value;
 };
 
 template <typename Target, typename... Ts>
@@ -76,7 +90,12 @@ public:
 
     template <typename T>
         requires(IsCandidate<T>)
-    PointerVariant(T ptr) noexcept : ptr_(ptr | IndexOfTypeInTupleV<T, Ts...>) {
+    PointerVariant(T ptr) noexcept
+        : ptr_(
+              reinterpret_cast<void*>(
+                  reinterpret_cast<std::uintptr_t>(ptr) | IndexOfTypeInTupleV<T, Ts...>
+              )
+          ) {
         static_assert(
             alignof(T) >= sizeof...(Ts),
             "PointerVariant targets must have alignment >= sizeof...(Ts) to store the type tag."
@@ -174,6 +193,10 @@ public:
     /// Flat set implementation
     template <typename K, typename C = std::less<K>>
     class Set;
+
+    /// Multi-map implementation in SoA style
+    template <typename K, typename V, typename C = std::less<K>>
+    class MultiMap;
 
     static void* alloc_raw(std::size_t size, std::size_t align = alignof(std::max_align_t)) {
         return monotonic()->allocate(size, align);
@@ -576,6 +599,204 @@ public:
     }
 };
 
+template <typename K, typename V, typename C>
+class GlobalMemory::MultiMap {
+private:
+    template <bool IsConst>
+    class IteratorImpl {
+    private:
+        using KeyType = const K;
+        using MappedType = std::conditional_t<IsConst, const V, V>;
+
+        class Proxy {
+        private:
+            const std::pair<KeyType&, MappedType&> pair_;
+
+        public:
+            Proxy(KeyType& key, MappedType& value) : pair_(key, value) {}
+            const std::pair<KeyType&, MappedType&>* operator->() { return &pair_; }
+        };
+
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = std::pair<KeyType, MappedType>;
+        using pointer = value_type*;
+        using reference = value_type&;
+
+    private:
+        KeyType* key_ptr_;
+        MappedType* value_ptr_;
+
+    public:
+        IteratorImpl() = default;
+        IteratorImpl(KeyType* key_ptr, MappedType* value_ptr)
+            : key_ptr_(key_ptr), value_ptr_(value_ptr) {}
+        IteratorImpl& operator++() {
+            ++key_ptr_;
+            ++value_ptr_;
+            return *this;
+        }
+        IteratorImpl operator++(int) {
+            IteratorImpl temp = *this;
+            ++(*this);
+            return temp;
+        }
+        bool operator==(const IteratorImpl& other) const noexcept {
+            return key_ptr_ == other.key_ptr_;
+        }
+        bool operator!=(const IteratorImpl& other) const noexcept { return !(*this == other); }
+        value_type operator*() const {
+            return std::pair<KeyType, MappedType>{*key_ptr_, *value_ptr_};
+        }
+        Proxy operator->() { return Proxy(*key_ptr_, *value_ptr_); }
+    };
+
+public:
+    using key_type = K;
+    using mapped_type = V;
+    using value_type = std::pair<const K, V>;
+    using iterator = IteratorImpl<false>;
+    using const_iterator = IteratorImpl<true>;
+
+private:
+    Vector<K> keys_;
+    Vector<V> values_;
+
+public:
+    MultiMap() noexcept = default;
+    MultiMap(MultiMap&& other) noexcept = default;
+    MultiMap& operator=(MultiMap&& other) noexcept = default;
+    MultiMap(const MultiMap& other) noexcept
+        requires std::is_nothrow_copy_constructible_v<K> && std::is_nothrow_copy_constructible_v<V>
+    = default;
+    MultiMap& operator=(const MultiMap& other) noexcept
+        requires std::is_nothrow_copy_constructible_v<K> && std::is_nothrow_copy_constructible_v<V>
+    = default;
+
+    MultiMap(std::initializer_list<std::pair<K, V>> init) {
+        keys_.reserve(init.size());
+        values_.reserve(init.size());
+        for (const auto& pair : init) {
+            this->insert(pair);
+        }
+    }
+
+    constexpr std::size_t size() const noexcept { return keys_.size(); }
+    constexpr bool empty() const noexcept { return keys_.empty(); }
+
+    iterator insert(std::pair<K, V> pair) {
+        auto it = std::upper_bound(keys_.begin(), keys_.end(), pair.first, C{});
+        std::size_t index = std::distance(keys_.begin(), it);
+        keys_.insert(it, std::move(pair.first));
+        values_.insert(values_.begin() + index, std::move(pair.second));
+        return iterator(&keys_[index], &values_[index]);
+    }
+
+    template <typename... Args>
+    iterator emplace(const K& key, Args&&... args) {
+        auto it = std::upper_bound(keys_.begin(), keys_.end(), key, C{});
+        std::size_t index = std::distance(keys_.begin(), it);
+        keys_.insert(it, key);
+        values_.emplace(values_.begin() + index, std::forward<Args>(args)...);
+        return iterator(&keys_[index], &values_[index]);
+    }
+
+    iterator find(const K& key) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, C{});
+        if (it == keys_.end() || C{}(key, *it) || C{}(*it, key)) {
+            return this->end();
+        }
+        std::size_t index = std::distance(keys_.begin(), it);
+        return iterator(&keys_[index], &values_[index]);
+    }
+
+    const_iterator find(const K& key) const {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, C{});
+        if (it == keys_.end() || C{}(key, *it) || C{}(*it, key)) {
+            return this->end();
+        }
+        std::size_t index = std::distance(keys_.begin(), it);
+        return const_iterator(&keys_[index], &values_[index]);
+    }
+
+    std::pair<iterator, iterator> equal_range(const K& key) {
+        auto lower = std::lower_bound(keys_.begin(), keys_.end(), key, C{});
+        auto upper = std::upper_bound(keys_.begin(), keys_.end(), key, C{});
+        std::size_t lower_idx = std::distance(keys_.begin(), lower);
+        std::size_t upper_idx = std::distance(keys_.begin(), upper);
+        return {
+            iterator(&keys_[lower_idx], &values_[lower_idx]),
+            iterator(&keys_[upper_idx], &values_[upper_idx])
+        };
+    }
+
+    std::pair<const_iterator, const_iterator> equal_range(const K& key) const {
+        auto lower = std::lower_bound(keys_.begin(), keys_.end(), key, C{});
+        auto upper = std::upper_bound(keys_.begin(), keys_.end(), key, C{});
+        std::size_t lower_idx = std::distance(keys_.begin(), lower);
+        std::size_t upper_idx = std::distance(keys_.begin(), upper);
+        return {
+            const_iterator(&keys_[lower_idx], &values_[lower_idx]),
+            const_iterator(&keys_[upper_idx], &values_[upper_idx])
+        };
+    }
+
+    std::size_t count(const K& key) const {
+        auto [lower, upper] = std::equal_range(keys_.begin(), keys_.end(), key, C{});
+        return std::distance(lower, upper);
+    }
+
+    bool contains(const K& key) const {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, C{});
+        return it != keys_.end() && !C{}(key, *it) && !C{}(*it, key);
+    }
+
+    iterator erase(iterator pos) {
+        std::size_t index = pos.key_ptr_ - keys_.data();
+        keys_.erase(keys_.begin() + index);
+        values_.erase(values_.begin() + index);
+        if (index >= keys_.size()) {
+            return end();
+        }
+        return iterator(&keys_[index], &values_[index]);
+    }
+
+    std::size_t erase(const K& key) {
+        auto [lower, upper] = std::equal_range(keys_.begin(), keys_.end(), key, C{});
+        std::size_t count = std::distance(lower, upper);
+        if (count > 0) {
+            std::size_t lower_idx = std::distance(keys_.begin(), lower);
+            keys_.erase(lower, upper);
+            values_.erase(values_.begin() + lower_idx, values_.begin() + lower_idx + count);
+        }
+        return count;
+    }
+
+    void clear() noexcept {
+        keys_.clear();
+        values_.clear();
+    }
+
+    iterator begin() noexcept { return iterator(keys_.data(), values_.data()); }
+    iterator end() noexcept {
+        return iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
+    }
+    const_iterator begin() const noexcept { return const_iterator(keys_.data(), values_.data()); }
+    const_iterator end() const noexcept {
+        return const_iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
+    }
+
+    std::strong_ordering operator<=>(const MultiMap<K, V, C>& other) const noexcept {
+        return std::lexicographical_compare_three_way(
+            this->begin(), this->end(), other.begin(), other.end()
+        );
+    }
+    bool operator==(const MultiMap<K, V, C>& other) const noexcept {
+        return std::equal(this->begin(), this->end(), other.begin(), other.end());
+    }
+};
+
 template <>
 class GlobalMemory::RangeCollector<GlobalMemory::String> {
     template <std::ranges::input_range R>
@@ -596,6 +817,675 @@ protected:
     MemoryManaged() = default;
     /// Protected destructor to prevent deletion through base pointer
     ~MemoryManaged() = default;
+};
+
+class BigInt {
+private:
+    GlobalMemory::Vector<std::uint32_t>
+        digits_;  // Little-endian representation (least significant first)
+    bool is_negative_;
+
+    // Internal helpers
+    void normalize() noexcept {
+        while (digits_.size() > 1 && digits_.back() == 0) {
+            digits_.pop_back();
+        }
+        if (digits_.size() == 1 && digits_[0] == 0) {
+            is_negative_ = false;
+        }
+    }
+
+    bool is_zero() const noexcept { return digits_.size() == 1 && digits_[0] == 0; }
+
+    // Compare absolute values: -1 if |this| < |other|, 0 if equal, 1 if |this| > |other|
+    int compare_abs(const BigInt& other) const noexcept {
+        if (digits_.size() != other.digits_.size()) {
+            return digits_.size() < other.digits_.size() ? -1 : 1;
+        }
+        for (std::size_t i = digits_.size(); i > 0; --i) {
+            if (digits_[i - 1] != other.digits_[i - 1]) {
+                return digits_[i - 1] < other.digits_[i - 1] ? -1 : 1;
+            }
+        }
+        return 0;
+    }
+
+    // Add absolute values (ignores signs)
+    static BigInt add_abs(const BigInt& a, const BigInt& b) {
+        BigInt result;
+        result.digits_.clear();
+        const std::size_t max_size = std::max(a.digits_.size(), b.digits_.size());
+        result.digits_.reserve(max_size + 1);
+
+        std::uint64_t carry = 0;
+        for (std::size_t i = 0; i < max_size || carry; ++i) {
+            std::uint64_t sum = carry;
+            if (i < a.digits_.size()) sum += a.digits_[i];
+            if (i < b.digits_.size()) sum += b.digits_[i];
+            result.digits_.push_back(static_cast<std::uint32_t>(sum));
+            carry = sum >> 32;
+        }
+        result.normalize();
+        return result;
+    }
+
+    // Subtract absolute values: |a| - |b|, assumes |a| >= |b|
+    static BigInt sub_abs(const BigInt& a, const BigInt& b) {
+        BigInt result;
+        result.digits_.clear();
+        result.digits_.reserve(a.digits_.size());
+
+        std::int64_t borrow = 0;
+        for (std::size_t i = 0; i < a.digits_.size(); ++i) {
+            std::int64_t diff = static_cast<std::int64_t>(a.digits_[i]) - borrow;
+            if (i < b.digits_.size()) diff -= b.digits_[i];
+            if (diff < 0) {
+                diff += (1LL << 32);
+                borrow = 1;
+            } else {
+                borrow = 0;
+            }
+            result.digits_.push_back(static_cast<std::uint32_t>(diff));
+        }
+        result.normalize();
+        return result;
+    }
+
+    // Multiply by a single digit
+    BigInt mul_digit(std::uint32_t d) const {
+        if (d == 0 || is_zero()) return BigInt(0ul);
+        BigInt result;
+        result.digits_.clear();
+        result.digits_.reserve(digits_.size() + 1);
+        result.is_negative_ = is_negative_;
+
+        std::uint64_t carry = 0;
+        for (std::size_t i = 0; i < digits_.size() || carry; ++i) {
+            std::uint64_t prod = carry;
+            if (i < digits_.size()) prod += static_cast<std::uint64_t>(digits_[i]) * d;
+            result.digits_.push_back(static_cast<std::uint32_t>(prod));
+            carry = prod >> 32;
+        }
+        result.normalize();
+        return result;
+    }
+
+    // Shift left by n digits (multiply by 2^(32*n))
+    BigInt shift_digits_left(std::size_t n) const {
+        if (is_zero()) return *this;
+        BigInt result;
+        result.digits_.clear();
+        result.digits_.reserve(digits_.size() + n);
+        result.is_negative_ = is_negative_;
+        for (std::size_t i = 0; i < n; ++i) {
+            result.digits_.push_back(0);
+        }
+        for (std::uint32_t d : digits_) {
+            result.digits_.push_back(d);
+        }
+        return result;
+    }
+
+    // Division helper: divides |this| by |divisor|, returns {quotient, remainder}
+    std::pair<BigInt, BigInt> div_mod_abs(const BigInt& divisor) const {
+        if (divisor.is_zero()) {
+            throw std::domain_error("Division by zero");
+        }
+
+        int cmp = compare_abs(divisor);
+        if (cmp < 0) {
+            return {BigInt(0ul), *this};
+        }
+        if (cmp == 0) {
+            return {BigInt(1ul), BigInt(0ul)};
+        }
+
+        // Binary long division
+        BigInt quotient(0ul);
+        BigInt remainder(0ul);
+        remainder.is_negative_ = false;
+
+        // Process bits from most significant to least significant
+        for (std::size_t i = digits_.size(); i > 0; --i) {
+            for (int bit = 31; bit >= 0; --bit) {
+                remainder = remainder << 1;
+                if ((digits_[i - 1] >> bit) & 1) {
+                    remainder.digits_[0] |= 1;
+                }
+
+                quotient = quotient << 1;
+                if (remainder.compare_abs(divisor) >= 0) {
+                    remainder = sub_abs(remainder, divisor);
+                    quotient.digits_[0] |= 1;
+                }
+            }
+        }
+
+        quotient.normalize();
+        remainder.normalize();
+        return {quotient, remainder};
+    }
+
+public:
+    // Constructors
+    BigInt() : is_negative_(false) { digits_.push_back(0); }
+
+    BigInt(std::int64_t value) : is_negative_(value < 0) {
+        std::uint64_t abs_val =
+            value < 0 ? static_cast<std::uint64_t>(-value) : static_cast<std::uint64_t>(value);
+        if (abs_val == 0) {
+            digits_.push_back(0);
+        } else {
+            while (abs_val > 0) {
+                digits_.push_back(static_cast<std::uint32_t>(abs_val));
+                abs_val >>= 32;
+            }
+        }
+    }
+
+    BigInt(std::uint64_t value) : is_negative_(false) {
+        if (value == 0) {
+            digits_.push_back(0);
+        } else {
+            while (value > 0) {
+                digits_.push_back(static_cast<std::uint32_t>(value));
+                value >>= 32;
+            }
+        }
+    }
+
+    BigInt(const BigInt& other) = default;
+    BigInt& operator=(const BigInt& other) = default;
+    BigInt(BigInt&& other) noexcept = default;
+    BigInt& operator=(BigInt&& other) noexcept = default;
+
+    explicit BigInt(std::string_view str) : is_negative_(false) {
+        if (str.empty()) {
+            digits_.push_back(0);
+            return;
+        }
+
+        std::size_t start = 0;
+        if (str[0] == '-') {
+            is_negative_ = true;
+            start = 1;
+        } else if (str[0] == '+') {
+            start = 1;
+        }
+
+        digits_.push_back(0);
+        for (std::size_t i = start; i < str.size(); ++i) {
+            char ch = str[i];
+            if (!std::isdigit(static_cast<unsigned char>(ch))) {
+                throw std::invalid_argument("Invalid character in BigInt string");
+            }
+            *this = mul_digit(10) + BigInt(static_cast<std::uint64_t>(ch - '0'));
+        }
+        normalize();
+    }
+
+    // Convert to string representation
+    GlobalMemory::String to_string() const {
+        if (is_zero()) return GlobalMemory::String("0");
+
+        GlobalMemory::String result;
+        BigInt temp = *this;
+        temp.is_negative_ = false;
+
+        while (!temp.is_zero()) {
+            auto [q, r] = temp.div_mod_abs(BigInt(10ul));
+            result.push_back(static_cast<char>('0' + r.digits_[0]));
+            temp = std::move(q);
+        }
+
+        if (is_negative_) result.push_back('-');
+        std::ranges::reverse(result);
+        return result;
+    }
+
+    // Comparison operators
+    std::strong_ordering operator<=>(const BigInt& other) const noexcept {
+        if (is_negative_ != other.is_negative_) {
+            return is_negative_ ? std::strong_ordering::less : std::strong_ordering::greater;
+        }
+        int cmp = compare_abs(other);
+        if (is_negative_) cmp = -cmp;
+        if (cmp < 0) return std::strong_ordering::less;
+        if (cmp > 0) return std::strong_ordering::greater;
+        return std::strong_ordering::equal;
+    }
+
+    bool operator==(const BigInt& other) const noexcept {
+        return is_negative_ == other.is_negative_ && digits_ == other.digits_;
+    }
+
+    // Unary operators
+    BigInt operator-() const {
+        BigInt result = *this;
+        if (!result.is_zero()) {
+            result.is_negative_ = !result.is_negative_;
+        }
+        return result;
+    }
+
+    BigInt operator+() const { return *this; }
+
+    BigInt abs() const {
+        BigInt result = *this;
+        result.is_negative_ = false;
+        return result;
+    }
+
+    // Arithmetic operators
+    BigInt operator+(const BigInt& other) const {
+        if (is_negative_ == other.is_negative_) {
+            BigInt result = add_abs(*this, other);
+            result.is_negative_ = is_negative_;
+            return result;
+        }
+        // Different signs: subtract smaller from larger
+        int cmp = compare_abs(other);
+        if (cmp == 0) return BigInt(0ul);
+        if (cmp > 0) {
+            BigInt result = sub_abs(*this, other);
+            result.is_negative_ = is_negative_;
+            return result;
+        } else {
+            BigInt result = sub_abs(other, *this);
+            result.is_negative_ = other.is_negative_;
+            return result;
+        }
+    }
+
+    BigInt operator-(const BigInt& other) const { return *this + (-other); }
+
+    BigInt operator*(const BigInt& other) const {
+        if (is_zero() || other.is_zero()) return BigInt(0ul);
+
+        BigInt result(0ul);
+        for (std::size_t i = 0; i < other.digits_.size(); ++i) {
+            BigInt partial = mul_digit(other.digits_[i]).shift_digits_left(i);
+            result = add_abs(result, partial);
+        }
+        result.is_negative_ = is_negative_ != other.is_negative_;
+        result.normalize();
+        return result;
+    }
+
+    BigInt operator/(const BigInt& other) const {
+        auto [q, r] = div_mod_abs(other);
+        q.is_negative_ = is_negative_ != other.is_negative_;
+        q.normalize();
+        return q;
+    }
+
+    BigInt operator%(const BigInt& other) const {
+        auto [q, r] = div_mod_abs(other);
+        r.is_negative_ = is_negative_;
+        r.normalize();
+        return r;
+    }
+
+    // Compound assignment operators
+    BigInt& operator+=(const BigInt& other) { return *this = *this + other; }
+    BigInt& operator-=(const BigInt& other) { return *this = *this - other; }
+    BigInt& operator*=(const BigInt& other) { return *this = *this * other; }
+    BigInt& operator/=(const BigInt& other) { return *this = *this / other; }
+    BigInt& operator%=(const BigInt& other) { return *this = *this % other; }
+
+    // Increment/Decrement
+    BigInt& operator++() { return *this += BigInt(1ul); }
+    BigInt operator++(int) {
+        BigInt tmp = *this;
+        ++*this;
+        return tmp;
+    }
+    BigInt& operator--() { return *this -= BigInt(1ul); }
+    BigInt operator--(int) {
+        BigInt tmp = *this;
+        --*this;
+        return tmp;
+    }
+
+    // Bitwise operators (work on two's complement representation conceptually)
+    BigInt operator<<(std::size_t shift) const {
+        if (is_zero() || shift == 0) return *this;
+
+        std::size_t digit_shift = shift / 32;
+        std::size_t bit_shift = shift % 32;
+
+        BigInt result;
+        result.digits_.clear();
+        result.digits_.reserve(digits_.size() + digit_shift + 1);
+        result.is_negative_ = is_negative_;
+
+        for (std::size_t i = 0; i < digit_shift; ++i) {
+            result.digits_.push_back(0);
+        }
+
+        std::uint32_t carry = 0;
+        for (std::size_t i = 0; i < digits_.size(); ++i) {
+            std::uint64_t val = (static_cast<std::uint64_t>(digits_[i]) << bit_shift) | carry;
+            result.digits_.push_back(static_cast<std::uint32_t>(val));
+            carry = static_cast<std::uint32_t>(val >> 32);
+        }
+        if (carry > 0) {
+            result.digits_.push_back(carry);
+        }
+        result.normalize();
+        return result;
+    }
+
+    BigInt operator>>(std::size_t shift) const {
+        if (is_zero() || shift == 0) return *this;
+
+        std::size_t digit_shift = shift / 32;
+        std::size_t bit_shift = shift % 32;
+
+        if (digit_shift >= digits_.size()) {
+            return is_negative_ ? BigInt(-1ul) : BigInt(0ul);
+        }
+
+        BigInt result;
+        result.digits_.clear();
+        result.digits_.reserve(digits_.size() - digit_shift);
+        result.is_negative_ = is_negative_;
+
+        for (std::size_t i = digit_shift; i < digits_.size(); ++i) {
+            std::uint32_t val = digits_[i] >> bit_shift;
+            if (bit_shift > 0 && i + 1 < digits_.size()) {
+                val |= digits_[i + 1] << (32 - bit_shift);
+            }
+            result.digits_.push_back(val);
+        }
+        result.normalize();
+
+        // For negative numbers, floor division semantics
+        if (is_negative_ && !result.is_zero()) {
+            // Check if any bits were shifted out
+            bool has_remainder = false;
+            for (std::size_t i = 0; i < digit_shift && !has_remainder; ++i) {
+                if (digits_[i] != 0) has_remainder = true;
+            }
+            if (!has_remainder && bit_shift > 0 && digit_shift < digits_.size()) {
+                if ((digits_[digit_shift] & ((1 << bit_shift) - 1)) != 0) {
+                    has_remainder = true;
+                }
+            }
+            if (has_remainder) {
+                result -= BigInt(1ul);
+            }
+        }
+        return result;
+    }
+
+    BigInt& operator<<=(std::size_t shift) { return *this = *this << shift; }
+    BigInt& operator>>=(std::size_t shift) { return *this = *this >> shift; }
+
+    // Bitwise AND (for non-negative numbers)
+    BigInt operator&(const BigInt& other) const {
+        // For simplicity, bitwise ops work on magnitude only for non-negative
+        if (is_negative_ || other.is_negative_) {
+            throw std::domain_error("Bitwise AND requires non-negative operands");
+        }
+
+        BigInt result;
+        result.digits_.clear();
+        std::size_t min_size = std::min(digits_.size(), other.digits_.size());
+        result.digits_.reserve(min_size);
+
+        for (std::size_t i = 0; i < min_size; ++i) {
+            result.digits_.push_back(digits_[i] & other.digits_[i]);
+        }
+        if (result.digits_.empty()) result.digits_.push_back(0);
+        result.normalize();
+        return result;
+    }
+
+    // Bitwise OR (for non-negative numbers)
+    BigInt operator|(const BigInt& other) const {
+        if (is_negative_ || other.is_negative_) {
+            throw std::domain_error("Bitwise OR requires non-negative operands");
+        }
+
+        BigInt result;
+        result.digits_.clear();
+        std::size_t max_size = std::max(digits_.size(), other.digits_.size());
+        result.digits_.reserve(max_size);
+
+        for (std::size_t i = 0; i < max_size; ++i) {
+            std::uint32_t a = i < digits_.size() ? digits_[i] : 0;
+            std::uint32_t b = i < other.digits_.size() ? other.digits_[i] : 0;
+            result.digits_.push_back(a | b);
+        }
+        result.normalize();
+        return result;
+    }
+
+    // Bitwise XOR (for non-negative numbers)
+    BigInt operator^(const BigInt& other) const {
+        if (is_negative_ || other.is_negative_) {
+            throw std::domain_error("Bitwise XOR requires non-negative operands");
+        }
+
+        BigInt result;
+        result.digits_.clear();
+        std::size_t max_size = std::max(digits_.size(), other.digits_.size());
+        result.digits_.reserve(max_size);
+
+        for (std::size_t i = 0; i < max_size; ++i) {
+            std::uint32_t a = i < digits_.size() ? digits_[i] : 0;
+            std::uint32_t b = i < other.digits_.size() ? other.digits_[i] : 0;
+            result.digits_.push_back(a ^ b);
+        }
+        if (result.digits_.empty()) result.digits_.push_back(0);
+        result.normalize();
+        return result;
+    }
+
+    // Bitwise NOT (returns -(n+1) for mathematical consistency)
+    BigInt operator~() const { return -(*this) - BigInt(1ul); }
+
+    BigInt& operator&=(const BigInt& other) { return *this = *this & other; }
+    BigInt& operator|=(const BigInt& other) { return *this = *this | other; }
+    BigInt& operator^=(const BigInt& other) { return *this = *this ^ other; }
+
+    // Utility functions
+    bool is_negative() const noexcept { return is_negative_; }
+    bool is_positive() const noexcept { return !is_negative_ && !is_zero(); }
+
+    // Get the number of bits needed to represent this number
+    std::size_t bit_length() const noexcept {
+        if (is_zero()) return 0;
+        std::size_t bits = (digits_.size() - 1) * 32;
+        std::uint32_t top = digits_.back();
+        while (top > 0) {
+            ++bits;
+            top >>= 1;
+        }
+        return bits;
+    }
+
+    // Test if a specific bit is set (0-indexed from LSB)
+    bool test_bit(std::size_t pos) const noexcept {
+        std::size_t digit_idx = pos / 32;
+        std::size_t bit_idx = pos % 32;
+        if (digit_idx >= digits_.size()) return false;
+        return (digits_[digit_idx] >> bit_idx) & 1;
+    }
+
+    // Set a specific bit
+    BigInt& set_bit(std::size_t pos) {
+        if (is_negative_) {
+            throw std::domain_error("set_bit requires non-negative number");
+        }
+        std::size_t digit_idx = pos / 32;
+        std::size_t bit_idx = pos % 32;
+        while (digits_.size() <= digit_idx) {
+            digits_.push_back(0);
+        }
+        digits_[digit_idx] |= (1u << bit_idx);
+        return *this;
+    }
+
+    // Clear a specific bit
+    BigInt& clear_bit(std::size_t pos) {
+        if (is_negative_) {
+            throw std::domain_error("clear_bit requires non-negative number");
+        }
+        std::size_t digit_idx = pos / 32;
+        std::size_t bit_idx = pos % 32;
+        if (digit_idx < digits_.size()) {
+            digits_[digit_idx] &= ~(1u << bit_idx);
+            normalize();
+        }
+        return *this;
+    }
+
+    // Power function
+    static BigInt pow(const BigInt& base, std::uint64_t exp) {
+        if (exp == 0) return BigInt(1ul);
+        BigInt result(1ul);
+        BigInt b = base;
+        while (exp > 0) {
+            if (exp & 1) result *= b;
+            b *= b;
+            exp >>= 1;
+        }
+        return result;
+    }
+
+    // GCD using binary GCD algorithm
+    static BigInt gcd(BigInt a, BigInt b) {
+        a.is_negative_ = false;
+        b.is_negative_ = false;
+
+        if (a.is_zero()) return b;
+        if (b.is_zero()) return a;
+
+        // Find common factors of 2
+        std::size_t shift = 0;
+        while (!a.test_bit(0) && !b.test_bit(0)) {
+            a >>= 1;
+            b >>= 1;
+            ++shift;
+        }
+
+        while (!a.test_bit(0)) a >>= 1;
+
+        do {
+            while (!b.test_bit(0)) b >>= 1;
+            if (a > b) std::swap(a, b);
+            b -= a;
+        } while (!b.is_zero());
+
+        return a << shift;
+    }
+
+    // Explicit conversion to built-in types (may overflow)
+    explicit operator std::int64_t() const {
+        std::int64_t result = 0;
+        for (std::size_t i = 0; i < std::min(digits_.size(), std::size_t(2)); ++i) {
+            result |= static_cast<std::int64_t>(digits_[i]) << (i * 32);
+        }
+        return is_negative_ ? -result : result;
+    }
+
+    explicit operator std::uint64_t() const {
+        if (is_negative_) throw std::domain_error("Cannot convert negative BigInt to unsigned");
+        std::uint64_t result = 0;
+        for (std::size_t i = 0; i < std::min(digits_.size(), std::size_t(2)); ++i) {
+            result |= static_cast<std::uint64_t>(digits_[i]) << (i * 32);
+        }
+        return result;
+    }
+
+    explicit operator bool() const noexcept { return !is_zero(); }
+
+    // Check if the value can fit into the given integer type and optionally write to it
+    // Returns true if the value fits, false otherwise
+    // Asserts that sign compatibility is checked by caller (negative BigInt cannot go into
+    // unsigned)
+    template <std::integral T>
+    bool fits_in(T& out) const noexcept {
+        if constexpr (std::is_unsigned_v<T>) {
+            constexpr std::size_t target_bits = sizeof(T) * 8;
+            if (is_negative_ || (bit_length() > target_bits)) return false;
+
+            // Build the value and check
+            T value = 0;
+            constexpr std::size_t digits_needed = (target_bits + 31) / 32;
+            for (std::size_t i = 0; i < std::min(digits_.size(), digits_needed); ++i) {
+                if constexpr (sizeof(T) <= 4) {
+                    value = static_cast<T>(digits_[0]);
+                } else {
+                    value |= static_cast<T>(digits_[i]) << (i * 32);
+                }
+            }
+            out = value;
+            return true;
+        } else {
+            // Signed type
+            constexpr std::size_t target_bits = sizeof(T) * 8;
+            // For signed, we need one less bit for magnitude (sign bit)
+            std::size_t magnitude_bits = bit_length();
+
+            if (is_negative_) {
+                // For negative: can represent down to -(2^(n-1))
+                // -128 for int8_t needs 7 bits of magnitude but is valid
+                // Check: magnitude <= 2^(n-1), i.e. magnitude_bits <= n-1,
+                // OR magnitude == 2^(n-1) exactly (the min value case)
+                if (magnitude_bits > target_bits - 1) {
+                    // Could still be the minimum value case
+                    if (magnitude_bits == target_bits) {
+                        // Check if it's exactly 2^(n-1): only top bit set in top digit
+                        bool is_min_value = true;
+                        for (std::size_t i = 0; i < digits_.size() - 1; ++i) {
+                            if (digits_[i] != 0) {
+                                is_min_value = false;
+                                break;
+                            }
+                        }
+                        std::uint32_t top = digits_.back();
+                        std::uint32_t expected_top_bit = 1u << ((target_bits - 1) % 32);
+                        if (top != expected_top_bit) is_min_value = false;
+                        if (!is_min_value) return false;
+                    } else {
+                        return false;
+                    }
+                }
+            } else {
+                // For positive: can represent up to 2^(n-1) - 1
+                if (magnitude_bits >= target_bits) return false;
+            }
+
+            // Build the value
+            using UnsignedT = std::make_unsigned_t<T>;
+            UnsignedT unsigned_val = 0;
+            constexpr std::size_t digits_needed = (target_bits + 31) / 32;
+            for (std::size_t i = 0; i < std::min(digits_.size(), digits_needed); ++i) {
+                if constexpr (sizeof(T) <= 4) {
+                    unsigned_val = static_cast<UnsignedT>(digits_[0]);
+                } else {
+                    unsigned_val |= static_cast<UnsignedT>(digits_[i]) << (i * 32);
+                }
+            }
+
+            if (is_negative_) {
+                out = static_cast<T>(-static_cast<T>(unsigned_val));
+            } else {
+                out = static_cast<T>(unsigned_val);
+            }
+            return true;
+        }
+    }
+
+    // Overload that just checks without writing
+    template <std::integral T>
+    bool fits_in() const noexcept {
+        T dummy;
+        return fits_in(dummy);
+    }
 };
 
 namespace ColourEscape {
