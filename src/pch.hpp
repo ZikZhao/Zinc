@@ -83,7 +83,7 @@ private:
     static constexpr bool IsCandidate = TypeInTupleV<U, std::tuple<Ts...>>;
 
 private:
-    void* ptr_;
+    std::uintptr_t ptr_;
 
 public:
     PointerVariant() noexcept = default;
@@ -91,26 +91,19 @@ public:
     template <typename T>
         requires(IsCandidate<T>)
     PointerVariant(T ptr) noexcept
-        : ptr_(
-              reinterpret_cast<void*>(
-                  reinterpret_cast<std::uintptr_t>(ptr) | IndexOfTypeInTupleV<T, Ts...>
-              )
-          ) {
+        : ptr_(reinterpret_cast<std::uintptr_t>(ptr) | IndexOfTypeInTupleV<T, Ts...>) {
         static_assert(
             alignof(T) >= sizeof...(Ts),
             "PointerVariant targets must have alignment >= sizeof...(Ts) to store the type tag."
         );
+        assert(ptr);
     }
 
     template <typename T>
         requires(IsCandidate<T>)
-    T* get_if() noexcept {
+    T get() noexcept {
         constexpr std::size_t index = IndexOfTypeInTupleV<T, Ts...>;
-        if ((reinterpret_cast<std::uintptr_t>(ptr_) & index) == index) {
-            return reinterpret_cast<T*>(reinterpret_cast<std::uintptr_t>(ptr_) & ~mask);
-        } else {
-            return nullptr;
-        }
+        return ((ptr_ & mask) == index) ? reinterpret_cast<T>(ptr_ & ~mask) : nullptr;
     }
 };
 

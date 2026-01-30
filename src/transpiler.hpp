@@ -392,7 +392,7 @@ inline void ASTPrimitiveType::transpile(
 inline void ASTFunctionType::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    eval(checker)->transpile(transpiler);
+    eval_static(checker)->transpile(transpiler);
 }
 
 inline void ASTFieldDeclaration::transpile(
@@ -424,8 +424,11 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler, TypeChecker& check
     } else if (!is_mutable_) {
         transpiler << "const ";
     }
-    get_declared_type(checker, expr_->get_term_info(checker).term.get_type())
-        ->transpile(transpiler);
+    if (type_) {
+        type_->transpile(transpiler, checker);
+    } else {
+        expr_->resolve_term(checker).term.get_type()->transpile(transpiler);
+    }
     transpiler << " " << identifier_ << " = ";
     expr_->transpile(transpiler, checker);
     transpiler << ";" << Transpiler::newline;

@@ -229,6 +229,12 @@
                 ],
                 "stopAtEntry": false,
                 "cwd": "${workspaceFolder}",
+                "environment": [
+                    {
+                        "name": "UBSAN_OPTIONS",
+                        "value": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+                    }
+                ],
                 "externalConsole": false,
                 "MIMode": "gdb",
                 "setupCommands": [
