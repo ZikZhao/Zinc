@@ -1,0 +1,220 @@
+% The document class supplies options to control rendering of some standard
+% features in the result.  The goal is for uniform style, so some attention 
+% to detail is *vital* with all fields.  Each field (i.e., text inside the
+% curly braces below, so the MEng text inside {MEng} for instance) should 
+% take into account the following:
+%
+% - author name       should be formatted as "FirstName LastName"
+%   (not "Initial LastName" for example),
+% - supervisor name   should be formatted as "Title FirstName LastName"
+%   (where Title is "Dr." or "Prof." for example),
+% - degree programme  should be "BSc", "MEng", "MSci", "MSc" or "PhD",
+% - dissertation title should be correctly capitalised (plus you can have
+%   an optional sub-title if appropriate, or leave this field blank),
+% - dissertation type should be formatted as one of the following:
+%   * for the MEng degree programme either "enterprise" or "research" to
+%     reflect the stream,
+%   * for the MSc  degree programme "$X/Y/Z$" for a project deemed to be
+%     X%, Y% and Z% of type I, II and III.
+% - year              should be formatted as a 4-digit year of submission
+%   (so 2014 rather than the academic year, say 2013/14 say).
+
+\documentclass[ oneside,% the name of the author
+                    author={Michael Wray},
+                % the degree programme: BSc, MEng, MSci or MSc. CHANGE AS APPROPRIATE
+                    degree={BSc},
+                % the dissertation    title (which cannot be blank)
+                     title={Some Structural Guidelines for CS Project Dissertations \\ With a Second Line Added to the Title},
+                % the unit you are a part of. CHANGE AS APPROPRIATE
+                    unit={COMS30045},
+                % the dissertation subtitle (which can    be blank)
+                    subtitle={And Even A Fancy Subtitle}]{dissertation}
+
+\begin{document}
+
+% =============================================================================
+
+% This section simply introduces the structural guidelines.  It can clearly
+% be deleted (or commented out) if you use the file as a template for your
+% own dissertation: everything following it is in the correct order to use 
+% as is.
+
+
+% =============================================================================
+
+% This macro creates the standard UoB title page by using information drawn
+% from the document class (meaning it is vital you select the correct degree 
+% title and so on).
+
+\maketitle
+
+% After the title page (which is a special case in that it is not numbered)
+% comes the front matter or preliminaries; this macro signals the start of
+% such content, meaning the pages are numbered with Roman numerals.
+
+\frontmatter
+
+
+%\lstlistoflistings
+
+% The following sections are part of the front matter, but are not generated
+% automatically by LaTeX; the use of \chapter* means they are not numbered.
+
+% -----------------------------------------------------------------------------
+
+\chapter*{Abstract}
+
+
+% -----------------------------------------------------------------------------
+
+
+\chapter*{Dedication and Acknowledgements}
+
+\vspace{1cm} 
+
+\noindent
+
+
+% -----------------------------------------------------------------------------
+
+% This macro creates the standard UoB declaration; on the printed hard-copy,
+% this must be physically signed by the author in the space indicated.
+
+\makedecl
+
+
+% -----------------------------------------------------------------------------
+
+% This macro creates the AI declaration; on the printed hard-copy,
+% this must be physically signed by the author in the space indicated.
+
+\makeaidecl
+
+
+
+% -----------------------------------------------------------------------------
+
+% LaTeX automatically generates a table of contents, plus associated lists 
+% of figures and tables.  These are all compulsory parts of the dissertation.
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+% -----------------------------------------------------------------------------
+
+
+
+\chapter*{Ethics Statement}
+
+    \begin{itemize}
+        \item This project did not require ethical review, as determined by my supervisor
+        \item This project fits within the scope of ethics application 0026, as reviewed by my supervisor
+        \item An ethics application for this project was reviewed and approved by the faculty research ethics committee as application.
+    \end{itemize}
+    
+% -----------------------------------------------------------------------------
+
+\chapter*{Summary of Changes}
+
+
+% -----------------------------------------------------------------------------
+
+\chapter*{Supporting Technologies}
+
+
+
+% -----------------------------------------------------------------------------
+
+\chapter*{Notation and Acronyms}
+
+
+
+
+% =============================================================================
+
+% After the front matter comes a number of chapters; under each chapter,
+% sections, subsections and even subsubsections are permissible.  The
+% pages in this part are numbered with Arabic numerals.  Note that:
+%
+% - A reference point can be marked using \label{XXX}, and then later
+%   referred to via \ref{XXX}; for example Chapter\ref{chap:context}.
+% - The chapters are presented here in one file; this can become hard
+%   to manage.  An alternative is to save the content in seprate files
+%   the use \input{XXX} to import it, which acts like the #include
+%   directive in C.
+
+\mainmatter
+
+
+\chapter{Introduction}
+\label{chap:context}
+
+
+% -----------------------------------------------------------------------------
+
+\chapter{Background}
+\label{chap:technical}
+
+
+
+
+% -----------------------------------------------------------------------------
+
+\chapter{Project Execution}
+\label{chap:execution}
+
+
+% -----------------------------------------------------------------------------
+
+\chapter{Critical Evaluation}
+\label{chap:evaluation}
+
+
+% -----------------------------------------------------------------------------
+
+\chapter{Conclusion}
+\label{chap:conclusion}
+
+
+% =============================================================================
+
+% Finally, after the main matter, the back matter is specified.  This is
+% typically populated with just the bibliography.  LaTeX deals with these
+% in one of two ways, namely
+%
+% - inline, which roughly means the author specifies entries using the 
+%   \bibitem macro and typesets them manually, or
+% - using BiBTeX, which means entries are contained in a separate file
+%   (which is essentially a databased) then inported; this is the 
+%   approach used below, with the databased being dissertation.bib.
+%
+% Either way, the each entry has a key (or identifier) which can be used
+% in the main matter to cite it, e.g., \cite{X}, \cite[Chapter 2}{Y}.
+%
+% We would recommend using BiBTeX, since it guarantees a consistent referencing style 
+% and since many sites (such as dblp) provide references in BiBTeX format. 
+% However, note that by default, BiBTeX will ignore capital letters in article titles 
+% to ensure consistency of style. This can lead to e.g. "NP-completeness" becoming
+% "np-completeness". To avoid this, make sure any capital letters you want to preserve
+% are enclosed in braces in the .bib, e.g. "{NP}-completeness".
+
+\backmatter
+
+\bibliography{dissertation}
+
+% -----------------------------------------------------------------------------
+
+% The dissertation concludes with a set of (optional) appendicies; these are 
+% the same as chapters in a sense, but once signaled as being appendicies via
+% the associated macro, LaTeX manages them appropriatly.
+
+\appendix
+
+\chapter{Appendix A: AI Prompts}
+\label{appx:ai_prompt}
+
+
+% =============================================================================
+
+\end{document}

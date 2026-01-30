@@ -1,6 +1,6 @@
 # Zinc Language Design Specification (`.zn`)
 
-Slogan: Galvanizing Systems Programming.
+Slogan: Galvanizing the C++ ecosystem.
 
 Type: Static, Strong-typed, Systems Programming Language.
 
@@ -101,6 +101,10 @@ if (user != null) {
 
 // Helpers
 let name = user?.name ?? "Anonymous"; // Nullish operator for safe access and defaults
+
+// When used with references
+let user2: &User? = get_user_ref(); // Reference to nullable User
+let user3: &? User = get_user_nullable(); // Nullable reference to User
 ```
 
 ------
@@ -117,6 +121,11 @@ Arrows (`->`) are mandatory in definitions to clearly separate parameters from r
 // Named Function
 fn add(a: int, b: int) -> int {
     return a + b;
+}
+
+// Compile-time executable function
+const fn sub(a: int, b: int) -> int {
+	return a - b;
 }
 
 // Lambda / Anonymous Function
@@ -156,7 +165,7 @@ Zinc supports single class inheritance and multiple interface implementations. I
 - **Relationships:** `extends Base`, `implements Interface`.
 - **Safety:** Assigning a derived class **value** to a base class variable (slicing) is a compile-time error. Polymorphism is only allowed via references.
 
-### Structural Type
+### Static Struct
 
 ```
 type Node = {
@@ -166,7 +175,18 @@ type Node = {
 };
 ```
 
-Structural types will be interned while classes will not.
+Structs will be interned while classes will not.
+
+### Structural Typing
+
+```
+type Data = dyn {
+	name: str;
+	age: int;
+}
+```
+
+It functions like the struct in TS, is simulated by a map with `std::any` as value.
 
 ### Lifecycle
 
