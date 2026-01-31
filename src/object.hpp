@@ -1082,14 +1082,27 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class Term {
+class Term : public MemoryManaged {
 public:
+    static Term from_const(Value* value) { return Term(value, false, false); }
+    static Term from_var(Type* type) { return Term(type, true, false); }
+    static Term from_rvalue(Type* type) { return Term(type, false, true); }
+    static Term unknown() { return Term(TypeRegistry::get_unknown(), false, false); }
+
+private:
     Object* ptr_;
+    bool is_mutable_ = false;
+    bool is_rvalue_ = false;
+
+private:
+    Term(Object* ptr, bool is_mutable, bool is_rvalue) noexcept
+        : ptr_(ptr), is_mutable_(is_mutable), is_rvalue_(is_rvalue) {
+        assert(!(is_mutable && is_rvalue_));
+    }
 
 public:
     Term() noexcept = default;
-    explicit Term(Object* ptr) noexcept : ptr_(ptr) {}
-    Type* get_type() const noexcept {
+    Type* effective_type() const noexcept {
         if (auto type = ptr_->as_type()) {
             return type;
         } else {
@@ -1097,6 +1110,8 @@ public:
         }
     }
     bool is_const() const noexcept { return ptr_->as_value() != nullptr; }
+    bool is_mutable() const noexcept { return is_mutable_; }
+    bool is_rvalue() const noexcept { return is_rvalue_; }
     Object* operator->() const noexcept { return ptr_; }
     operator bool() const noexcept { return ptr_ != nullptr; }
 };

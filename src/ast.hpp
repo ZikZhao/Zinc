@@ -37,19 +37,13 @@ class ASTFunctionDefinition;
 class ASTClassDefinition;
 class ASTTemplateDefinition;
 
-struct TermInfo {
-    Term term;
-    bool is_mutable = false;
-    bool is_rvalue = false;
-};
-
 struct Resolving {
     Object** cache_value;
 };
 
 using ScopeValue = PointerVariant<
     const ASTTypeExpression*,                     // type alias
-    TermInfo*,                                    // constant or variable
+    Term*,                                        // constant/variable/rvalue
     GlobalMemory::Vector<const ASTExpression*>*,  // function overloads
     const ASTTemplateDefinition*>;                // template definition
 
@@ -95,9 +89,7 @@ public:
     }
 
     void set_variable(std::string_view identifier, Term term, bool is_mutable) {
-        auto [_, inserted] = identifiers_.insert(
-            {identifier, GlobalMemory::alloc<TermInfo>(term, is_mutable, false)}
-        );
+        auto [_, inserted] = identifiers_.insert({identifier, new Term(term)});
         if (!inserted) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
@@ -155,14 +147,14 @@ public:
     std::expected<Object*, Resolving> lookup_static(std::string_view identifier) {
         return lookup_static_in(identifier, *current_scope_);
     }
-    TermInfo lookup_term(std::string_view identifier) {
+    Term lookup_term(std::string_view identifier) {
         return lookup_term_in(identifier, *current_scope_);
     }
     bool is_at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
 
 private:
     std::expected<Object*, Resolving> lookup_static_in(std::string_view identifier, Scope& scope);
-    TermInfo lookup_term_in(std::string_view identifier, Scope& scope);
+    Term lookup_term_in(std::string_view identifier, Scope& scope);
 };
 
 class ASTNode : public MemoryManaged {
@@ -239,17 +231,22 @@ protected:
 public:
     ASTExpression(const Location& loc) noexcept : ASTNode(loc) {}
     virtual Object* eval_static(TypeChecker& checker) const noexcept = 0;
-    virtual TermInfo resolve_term(TypeChecker& checker) const = 0;
-    void check_types(TypeChecker& checker) final { std::ignore = resolve_term(checker); }
+    virtual Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept = 0;
+    void check_types(TypeChecker& checker) final {
+        std::ignore = resolve_term(checker, nullptr, false);
+    }
 };
 
 /// A hidden type expression that does not appear in source code
 class ASTHiddenTypeExpression : public ASTTypeExpression {
 public:
     ASTHiddenTypeExpression() noexcept : ASTTypeExpression({}) {}
-    TermInfo resolve_term(TypeChecker& checker) const final {
-        assert(false);
-        std::unreachable();
+    Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept final {
+        UNREACHABLE();
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -261,7 +258,20 @@ public:
     ASTConstant(const Location& loc, std::string_view str, std::type_identity<V>)
         : ASTExpression(loc), value_(Value::from_literal<V>(str)) {}
     Value* eval_static(TypeChecker& checker) const noexcept final { return value_; }
-    TermInfo resolve_term(TypeChecker& checker) const final { return {Term(value_), false}; }
+    Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept final {
+        if (expected) {
+            try {
+                Value* typed_value = value_->resolve_to(expected);
+                return Term::from_const(typed_value);
+            } catch (UnlocatedProblem& e) {
+                e.report_at(location_);
+                return Term::unknown();
+            }
+        }
+        return Term::from_const(value_);
+    }
     void resolve_type(Type* target_type) { value_ = value_->resolve_to(target_type); }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -285,10 +295,20 @@ public:
             return TypeRegistry::get_unknown();
         }
     }
-    TermInfo resolve_term(TypeChecker& checker) const final {
-        return TermInfo{
-            checker.lookup_term(str_),
-        };
+    Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept final {
+        try {
+            Term term = checker.lookup_term(str_);
+            if (expected_const && !term.is_const()) {
+                Diagnostic::report(NotConstantExpressionError(location_));
+                return Term::unknown();
+            }
+            return term;
+        } catch (UnlocatedProblem& e) {
+            e.report_at(location_);
+            return Term::unknown();
+        }
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -308,9 +328,11 @@ public:
             return TypeRegistry::get_unknown();
         }
     }
-    TermInfo resolve_term(TypeChecker& checker) const final {
-        TermInfo expr_info = expr_->resolve_term(checker);
-        return {checker.ops_.eval_value_op(Op::opcode, expr_info.term), false};
+    Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept final {
+        Term expr_term = expr_->resolve_term(checker, expected, expected_const);
+        return checker.ops_.eval_value_op(Op::opcode, expr_term);
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -332,48 +354,54 @@ public:
             return TypeRegistry::get_unknown();
         }
     }
-    TermInfo resolve_term(TypeChecker& checker) const final {
-        TermInfo left_info = left_->resolve_term(checker);
-        TermInfo right_info = right_->resolve_term(checker);
-        return {
-            checker.ops_.eval_value_op(Op::opcode, left_info.term, right_info.term), false, true
-        };
+    Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept final {
+        Term left_term = left_->resolve_term(checker, expected, expected_const);
+        Term right_term = right_->resolve_term(checker, expected, expected_const);
+        try {
+            return checker.ops_.eval_value_op(Op::opcode, left_term, right_term);
+        } catch (UnlocatedProblem& e) {
+            e.report_at(location_);
+            return Term::unknown();
+        }
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
-template <typename InnerOp>
-class ASTBinaryOp<OperatorFunctors::OperateAndAssign<InnerOp>> final : public ASTExpression {
-private:
-    using Op = OperatorFunctors::OperateAndAssign<InnerOp>;
+// template <typename InnerOp>
+// class ASTBinaryOp<OperatorFunctors::OperateAndAssign<InnerOp>> final : public ASTExpression {
+// private:
+//     using Op = OperatorFunctors::OperateAndAssign<InnerOp>;
 
-public:
-    ASTExpression* const left_;
-    ASTExpression* const right_;
-    ASTBinaryOp(const Location& loc, ASTExpression* left, ASTExpression* right) noexcept
-        : ASTExpression(loc), left_(left), right_(right) {}
-    Object* eval_static(TypeChecker& checker) const noexcept final {
-        Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return TypeRegistry::get_unknown();
-    }
-    TermInfo resolve_term(TypeChecker& checker) const final {
-        TermInfo left_info = left_->resolve_term(checker);
-        TermInfo right_info = right_->resolve_term(checker);
-        if (!left_info.is_mutable) {
-            Diagnostic::report(ImmutableMutationError(location_));
-        }
-        if (left_info.is_rvalue) {
-            Diagnostic::report(InvalidAssignmentTargetError(location_));
-        }
-        if (!left_info.term.get_type()->assignable_from(right_info.term.get_type())) {
-            Diagnostic::report(
-                TypeMismatchError(location_, left_info.term->repr(), right_info.term->repr())
-            );
-        }
-        return {left_info.term, true, false};
-    }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
-};
+// public:
+//     ASTExpression* const left_;
+//     ASTExpression* const right_;
+//     ASTBinaryOp(const Location& loc, ASTExpression* left, ASTExpression* right) noexcept
+//         : ASTExpression(loc), left_(left), right_(right) {}
+//     Object* eval_static(TypeChecker& checker) const noexcept final {
+//         Diagnostic::report(SymbolCategoryMismatchError(location_, false));
+//         return TypeRegistry::get_unknown();
+//     }
+//     Term resolve_term(
+//         TypeChecker& checker, Type* expected, bool expected_const
+//     ) const noexcept final {
+//         Term left_term = left_->resolve_term(checker, expected, expected_const);
+//         Term right_term = right_->resolve_term(checker, expected, expected_const);
+//         if (left_term.is_rvalue()) {
+//             Diagnostic::report(InvalidAssignmentTargetError(location_));
+//         }
+//         if (!left_term.is_mutable()) {
+//             Diagnostic::report(ImmutableMutationError(location_));
+//         }
+//         if (!left_term.get_type()->assignable_from(right_term.get_type())) {
+//             Diagnostic::report(TypeMismatchError(location_, left_term->repr(),
+//             right_term->repr()));
+//         }
+//         return left_term;
+//     }
+//     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+// };
 
 class ASTFunctionCall final : public ASTExpression {
 public:
@@ -389,7 +417,9 @@ public:
         // TODO
         return {};
     }
-    TermInfo resolve_term(TypeChecker& checker) const final {
+    Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept final {
         // TODO
         return {};
     }
@@ -443,8 +473,11 @@ public:
     ASTPrimitiveType(const Location& loc, Type* type) noexcept
         : ASTTypeExpression(loc), type_(type) {}
     Type* eval_static(TypeChecker& checker) const noexcept final { return type_; }
-    TermInfo resolve_term(TypeChecker& checker) const final {
-        throw std::logic_error("Type expressions do not have result types");
+    Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept final {
+        Diagnostic::report(SymbolCategoryMismatchError(location_, true));
+        return Term::unknown();
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -488,9 +521,11 @@ public:
         }
         return TypeRegistry::get<FunctionType>(param_types, return_type);
     }
-    TermInfo resolve_term(TypeChecker& checker) const final {
-        Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {Term(TypeRegistry::get_unknown()), false, true};
+    Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept final {
+        Diagnostic::report(SymbolCategoryMismatchError(location_, true));
+        return Term::unknown();
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -508,7 +543,7 @@ public:
         if (!field_type) {
             Diagnostic::report(SymbolCategoryMismatchError(type_->location_, true));
         }
-        checker.add_variable(identifier_, Term(field_type), true);
+        checker.add_variable(identifier_, Term::from_var(field_type), true);
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -540,9 +575,11 @@ public:
         GlobalMemory::Map<std::string_view, Type*> field_types(std::from_range, std::move(rng));
         return TypeRegistry::get<RecordType>(field_types);
     }
-    TermInfo resolve_term(TypeChecker& checker) const final {
-        Diagnostic::report(SymbolCategoryMismatchError(location_, false));
-        return {Term(TypeRegistry::get_unknown()), false, true};
+    Term resolve_term(
+        TypeChecker& checker, Type* expected, bool expected_const
+    ) const noexcept final {
+        Diagnostic::report(SymbolCategoryMismatchError(location_, true));
+        return Term::unknown();
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -593,13 +630,13 @@ public:
                 Diagnostic::report(SymbolCategoryMismatchError(expr_->location_, false));
             }
             try {
-                checker.add_variable(identifier_, Term(value), is_mutable_);
+                checker.add_variable(identifier_, Term::from_const(value), is_mutable_);
             } catch (UnlocatedProblem& e) {
                 e.report_at(location_);
             }
         } else {
-            TermInfo term_info = expr_->resolve_term(checker);
-            checker.add_variable(identifier_, term_info.term, is_mutable_);
+            Term term = expr_->resolve_term(checker, nullptr, false);
+            checker.add_variable(identifier_, term, is_mutable_);
         }
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
@@ -645,12 +682,7 @@ public:
     }
     void check_types(TypeChecker& checker) final {
         checker.enter(&if_block_);
-        TermInfo cond_info = condition_->resolve_term(checker);
-        if (cond_info.term->kind_ != Kind::Boolean) {
-            Diagnostic::report(
-                TypeMismatchError(condition_->location_, "bool", cond_info.term->repr())
-            );
-        }
+        condition_->resolve_term(checker, &BooleanType::instance, false);
         for (auto& stmt : if_block_) {
             stmt->check_types(checker);
         }
@@ -717,15 +749,10 @@ public:
             initializer_->check_types(checker);
         }
         if (condition_) {
-            TermInfo cond_info = condition_->resolve_term(checker);
-            if (cond_info.term->kind_ != Kind::Boolean) {
-                Diagnostic::report(
-                    TypeMismatchError(condition_->location_, "bool", cond_info.term->repr())
-                );
-            }
+            condition_->resolve_term(checker, &BooleanType::instance, false);
         }
         if (increment_) {
-            increment_->resolve_term(checker);
+            increment_->resolve_term(checker, nullptr, false);
         }
         for (auto& stmt : body_) {
             stmt->check_types(checker);
@@ -755,9 +782,7 @@ public:
     ASTReturnStatement(const Location& loc, ASTExpression* expr = nullptr) noexcept
         : ASTNode(loc), expr_(expr) {}
     void check_types(TypeChecker& checker) final {
-        if (expr_) {
-            expr_->resolve_term(checker);
-        }
+        if (expr_) expr_->resolve_term(checker, nullptr, false);
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
@@ -823,7 +848,7 @@ public:
                 Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
                 param_type = TypeRegistry::get_unknown();
             }
-            checker.add_variable(param->identifier_, Term(param_type), false);
+            checker.add_variable(param->identifier_, Term::from_var(param_type), false);
         }
         for (auto& stmt : body_) {
             stmt->check_types(checker);
@@ -955,9 +980,7 @@ public:
             Diagnostic::report(
                 TemplateArgumentCountMismatchError(location_, parameters_.size(), arguments.size())
             );
-            return GlobalMemory::alloc<TermInfo>(
-                Term(static_cast<Object*>(TypeRegistry::get_unknown()))
-            );
+            return new Term(Term::unknown());
         }
         Scope& template_scope = Scope::create(this, *checker.get_current_scope());
         for (size_t i = 0; i < parameters_.size(); ++i) {
@@ -967,9 +990,7 @@ public:
                 Diagnostic::report(TemplateArgumentCategoryMismatchError(
                     location_, param_name, param_type != nullptr
                 ));
-                return GlobalMemory::alloc<TermInfo>(
-                    Term(static_cast<Object*>(TypeRegistry::get_unknown()))
-                );
+                return new Term(Term::unknown());
             }
             if (param_type == nullptr) {
                 // type parameter
@@ -980,9 +1001,7 @@ public:
                 Type* constraint_type = param_type->eval_static(checker)->as_type();
                 if (!constraint_type) {
                     Diagnostic::report(SymbolCategoryMismatchError(param_type->location_, true));
-                    return GlobalMemory::alloc<TermInfo>(
-                        Term(static_cast<Object*>(TypeRegistry::get_unknown()))
-                    );
+                    return new Term(Term::unknown());
                 }
                 if (!constraint_type->assignable_from(argument->cast<Value>()->get_type())) {
                     Diagnostic::report(TemplateArgumentTypeMismatchError(
@@ -991,11 +1010,11 @@ public:
                         constraint_type->repr(),
                         argument->cast<Value>()->get_type()->repr()
                     ));
-                    return GlobalMemory::alloc<TermInfo>(
-                        Term(static_cast<Object*>(TypeRegistry::get_unknown()))
-                    );
+                    return new Term(Term::unknown());
                 }
-                template_scope.set_variable(param_name, Term(argument), false);
+                template_scope.set_variable(
+                    param_name, Term::from_const(argument->cast<Value>()), false
+                );
             }
         }
         ASTNode* node = target_->as_node();
@@ -1040,12 +1059,12 @@ inline std::expected<Object*, Resolving> TypeChecker::lookup_static_in(
         record.result = type->eval_static(*this);
         std::swap(previous_scope, current_scope_);
         return record.result;
-    } else if (auto term_info = it->second.get<TermInfo*>()) {
-        if (term_info->term->as_type()) {
+    } else if (auto term = it->second.get<Term*>()) {
+        if ((*term)->as_type()) {
             // not a constant
             throw UnlocatedProblem::make<NotConstantExpressionError>();
         } else {
-            return (record.result = term_info->term->cast<Value>());
+            return (record.result = (*term)->cast<Value>());
         }
     } else if (auto func = it->second.get<GlobalMemory::Vector<const ASTExpression*>*>()) {
         Scope* previous_scope = &scope;
@@ -1064,19 +1083,19 @@ inline std::expected<Object*, Resolving> TypeChecker::lookup_static_in(
     }
 }
 
-inline TermInfo TypeChecker::lookup_term_in(std::string_view identifier, Scope& scope) {
+inline Term TypeChecker::lookup_term_in(std::string_view identifier, Scope& scope) {
     auto it = scope.identifiers_.find(identifier);
     if (it == scope.identifiers_.end()) {
         if (scope.parent_ != nullptr) {
             return lookup_term_in(identifier, *scope.parent_);
         }
         throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
-    } else if (auto term_info = it->second.get<TermInfo*>()) {
-        Type* type = term_info->term->as_type();
+    } else if (auto term = it->second.get<Term*>()) {
+        Type* type = (*term)->as_type();
         if (!type) {
-            type = term_info->term->cast<Value>()->get_type();
+            type = (*term)->cast<Value>()->get_type();
         }
-        return *term_info;
+        return *term;
     } else if (auto func = it->second.get<GlobalMemory::Vector<const ASTExpression*>*>()) {
         Scope* previous_scope = &scope;
         std::swap(previous_scope, current_scope_);
@@ -1091,7 +1110,7 @@ inline TermInfo TypeChecker::lookup_term_in(std::string_view identifier, Scope& 
             GlobalMemory::collect<ComparableSpan<Type*>>();
         IntersectionType* intersection_type = TypeRegistry::get<IntersectionType>(overload_types);
         std::swap(previous_scope, current_scope_);
-        return TermInfo{Term(intersection_type)};
+        return Term::from_var(intersection_type);
     } else if (it->second.get<const ASTTypeExpression*>()) {
         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
     } else {

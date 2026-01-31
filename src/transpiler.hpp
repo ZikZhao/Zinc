@@ -351,16 +351,16 @@ inline void ASTBinaryOp<Op>::transpile(
     transpiler << ")";
 }
 
-template <typename Op>
-inline void ASTBinaryOp<OperatorFunctors::OperateAndAssign<Op>>::transpile(
-    Transpiler& transpiler, TypeChecker& checker
-) const noexcept {
-    transpiler << "(";
-    left_->transpile(transpiler, checker);
-    transpiler << " " << OperatorCodeToString(Op::opcode) << "= ";
-    right_->transpile(transpiler, checker);
-    transpiler << ")";
-}
+// template <typename Op>
+// inline void ASTBinaryOp<OperatorFunctors::OperateAndAssign<Op>>::transpile(
+//     Transpiler& transpiler, TypeChecker& checker
+// ) const noexcept {
+//     transpiler << "(";
+//     left_->transpile(transpiler, checker);
+//     transpiler << " " << OperatorCodeToString(Op::opcode) << "= ";
+//     right_->transpile(transpiler, checker);
+//     transpiler << ")";
+// }
 
 template <typename Op>
 inline void ASTUnaryOp<Op>::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
@@ -427,7 +427,7 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler, TypeChecker& check
     if (type_) {
         type_->transpile(transpiler, checker);
     } else {
-        expr_->resolve_term(checker).term.get_type()->transpile(transpiler);
+        expr_->resolve_term(checker, nullptr, false).effective_type()->transpile(transpiler);
     }
     transpiler << " " << identifier_ << " = ";
     expr_->transpile(transpiler, checker);

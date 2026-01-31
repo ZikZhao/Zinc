@@ -447,38 +447,38 @@ public:
     }
 
     Term eval_value_op(OperatorCode opcode, Term left, Term right = {}) {
-        bool const_expr = left.is_const() && (right.ptr_ != nullptr && right.is_const());
-        Type* left_type = left.get_type();
-        Type* right_type = right.ptr_ ? right.get_type() : nullptr;
+        bool const_expr = left.is_const() && (right && right.is_const());
+        Type* left_type = left.effective_type();
+        Type* right_type = right ? right.effective_type() : nullptr;
         auto it = map_.find({opcode, left_type, right_type});
         if (it != map_.end()) {
             if (auto func_value = it->second->as_value()->cast<FunctionValue>();
                 func_value && const_expr) {
-                return Term(func_value->invoke(
+                return Term::from_const(func_value->invoke(
                     GlobalMemory::pack_array(
                         left->as_value(), right ? right->cast<Value>() : nullptr
                     )
                 ));
             } else {
                 auto func_type = it->second->as_type()->cast<FunctionType>();
-                return Term(func_type->return_type_);
+                return Term::from_rvalue(func_type->return_type_);
             }
         } else {
             if (Object* instantiated = try_instantiate(opcode, left_type, right_type)) {
                 map_.insert({{opcode, left_type, right_type}, instantiated});
                 if (auto func_value = instantiated->as_value()->cast<FunctionValue>()) {
                     if (const_expr) {
-                        return Term(func_value->invoke(
+                        return Term::from_const(func_value->invoke(
                             GlobalMemory::pack_array(
                                 left->as_value(), right ? right->cast<Value>() : nullptr
                             )
                         ));
                     } else {
-                        return Term(func_value->get_type()->return_type_);
+                        return Term::from_rvalue(func_value->get_type()->return_type_);
                     }
                 } else {
                     auto func_type = instantiated->as_type()->cast<FunctionType>();
-                    return Term(func_type->return_type_);
+                    return Term::from_rvalue(func_type->return_type_);
                 }
             }
             throw UnlocatedProblem::make<OperationNotDefinedError>(
