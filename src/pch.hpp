@@ -295,6 +295,19 @@ public:
     }
 
 public:
+    class MemoryManaged {
+    public:
+        static void* operator new(std ::size_t size) { return GlobalMemory::alloc_raw(size); }
+        static void operator delete(void* ptr, std ::size_t size) {}
+
+    protected:
+        /// Protected default constructor to prevent direct instantiation
+        MemoryManaged() = default;
+        /// Protected destructor to prevent deletion through base pointer
+        ~MemoryManaged() = default;
+    };
+
+public:
     GlobalMemory() = delete;
 };
 
@@ -798,18 +811,6 @@ class GlobalMemory::RangeCollector<GlobalMemory::String> {
         std::ranges::copy(std::forward<R>(range), std::back_inserter(result));
         return result;
     }
-};
-
-class MemoryManaged {
-public:
-    static void* operator new(std ::size_t size) { return GlobalMemory::alloc_raw(size); }
-    static void operator delete(void* ptr, std ::size_t size) {}
-
-protected:
-    /// Protected default constructor to prevent direct instantiation
-    MemoryManaged() = default;
-    /// Protected destructor to prevent deletion through base pointer
-    ~MemoryManaged() = default;
 };
 
 class BigInt {

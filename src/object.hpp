@@ -132,7 +132,7 @@ public:
     TypeRegistry() noexcept = default;
 };
 
-class Object : public MemoryManaged {
+class Object : public GlobalMemory::MemoryManaged {
 public:
     Kind kind_;
 
@@ -819,7 +819,7 @@ public:
         }
         if (target == nullptr) {
             // most suitable type inference
-            if (type_) {
+            if (type_ != &IntegerType::untyped_instance) {
                 return new IntegerValue(*this);
             } else if (value_.fits_in<std::int32_t>()) {
                 return new IntegerValue(&IntegerType::i32_instance, value_);
@@ -830,11 +830,11 @@ public:
                     value_.to_string(), "cannot fit into i64"
                 );
             }
-        } else if (type_) {
+        } else if (type_ != &IntegerType::untyped_instance) {
+            // implicit convert to the specified target type (must be wider type)
             IntegerType* int_target = target->cast<IntegerType>();
-            // convert to the specified target type
             if (type_->is_signed_ != int_target->is_signed_) {
-                throw UnlocatedProblem::make<TypeMismatchError>(type_->repr(), target->repr());
+                throw UnlocatedProblem::make<TypeMismatchError>(target->repr(), type_->repr());
             }
             if (type_->bits_ > int_target->bits_) {
                 throw UnlocatedProblem::make<OverflowError>(
@@ -844,21 +844,22 @@ public:
             }
             return new IntegerValue(int_target, value_);
         } else {
+            // convert to the specified target type
             IntegerType* int_target = target->cast<IntegerType>();
-            std::string_view error;
+            std::string_view error_type;
             if (int_target->is_signed_) {
                 switch (int_target->bits_) {
                 case 8:
-                    error = value_.fits_in<std::int8_t>() ? "" : "i8";
+                    error_type = value_.fits_in<std::int8_t>() ? "" : "i8";
                     break;
                 case 16:
-                    error = value_.fits_in<std::int16_t>() ? "" : "i16";
+                    error_type = value_.fits_in<std::int16_t>() ? "" : "i16";
                     break;
                 case 32:
-                    error = value_.fits_in<std::int32_t>() ? "" : "i32";
+                    error_type = value_.fits_in<std::int32_t>() ? "" : "i32";
                     break;
                 case 64:
-                    error = value_.fits_in<std::int64_t>() ? "" : "i64";
+                    error_type = value_.fits_in<std::int64_t>() ? "" : "i64";
                     break;
                 default:
                     UNREACHABLE();
@@ -866,25 +867,23 @@ public:
             } else {
                 switch (int_target->bits_) {
                 case 8:
-                    error = value_.fits_in<std::uint8_t>() ? "" : "u8";
+                    error_type = value_.fits_in<std::uint8_t>() ? "" : "u8";
                     break;
                 case 16:
-                    error = value_.fits_in<std::uint16_t>() ? "" : "u16";
+                    error_type = value_.fits_in<std::uint16_t>() ? "" : "u16";
                     break;
                 case 32:
-                    error = value_.fits_in<std::uint32_t>() ? "" : "u32";
+                    error_type = value_.fits_in<std::uint32_t>() ? "" : "u32";
                     break;
                 case 64:
-                    error = value_.fits_in<std::uint64_t>() ? "" : "u64";
+                    error_type = value_.fits_in<std::uint64_t>() ? "" : "u64";
                     break;
                 default:
                     UNREACHABLE();
                 }
             }
-            if (!error.empty()) {
-                throw UnlocatedProblem::make<OverflowError>(
-                    value_.to_string(), GlobalMemory::format_view("cannot fit into {}", error)
-                );
+            if (!error_type.empty()) {
+                throw UnlocatedProblem::make<OverflowError>(value_.to_string(), error_type);
             }
             return new IntegerValue(int_target, value_);
         }
@@ -1082,12 +1081,12 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class Term : public MemoryManaged {
+class Term : public GlobalMemory::MemoryManaged {
 public:
     static Term from_const(Value* value) { return Term(value, false, false); }
     static Term from_var(Type* type) { return Term(type, true, false); }
     static Term from_rvalue(Type* type) { return Term(type, false, true); }
-    static Term unknown() { return Term(TypeRegistry::get_unknown(), false, false); }
+    static Term unknown() { return Term(TypeRegistry::get_unknown()->as_value(), false, false); }
 
 private:
     Object* ptr_;

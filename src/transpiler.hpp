@@ -351,17 +351,6 @@ inline void ASTBinaryOp<Op>::transpile(
     transpiler << ")";
 }
 
-// template <typename Op>
-// inline void ASTBinaryOp<OperatorFunctors::OperateAndAssign<Op>>::transpile(
-//     Transpiler& transpiler, TypeChecker& checker
-// ) const noexcept {
-//     transpiler << "(";
-//     left_->transpile(transpiler, checker);
-//     transpiler << " " << OperatorCodeToString(Op::opcode) << "= ";
-//     right_->transpile(transpiler, checker);
-//     transpiler << ")";
-// }
-
 template <typename Op>
 inline void ASTUnaryOp<Op>::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
     /// TODO: handle prefix/postfix
