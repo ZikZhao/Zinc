@@ -106,16 +106,25 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitDeclaration_statement(
-        ZincParser::Declaration_statementContext* ctx
-    ) noexcept final {
+    antlrcpp::Any visitLetDecl(ZincParser::LetDeclContext* ctx) noexcept final {
         last_visited_ = new ASTDeclaration(
             loc(ctx),
             text(ctx->identifier_),
-            static_cast<ASTTypeExpression*>(transform(ctx->type_)),
-            static_cast<ASTValueExpression*>(transform(ctx->value_)),
+            static_cast<ASTExpression*>(transform(ctx->type_)),
+            static_cast<ASTExpression*>(transform(ctx->value_)),
             ctx->KW_MUT() != nullptr,
             false
+        );
+        return {};
+    }
+    antlrcpp::Any visitConstDecl(ZincParser::ConstDeclContext* ctx) noexcept final {
+        last_visited_ = new ASTDeclaration(
+            loc(ctx),
+            text(ctx->identifier_),
+            static_cast<ASTExpression*>(transform(ctx->type_)),
+            static_cast<ASTExpression*>(transform(ctx->value_)),
+            false,
+            true
         );
         return {};
     }
@@ -140,7 +149,7 @@ private:
         } else if (ctx->init_expr_) {
             last_visited_ = new ASTForStatement(
                 loc(ctx),
-                static_cast<ASTValueExpression*>(transform(ctx->init_expr_)),
+                static_cast<ASTExpression*>(transform(ctx->init_expr_)),
                 static_cast<ASTExpression*>(transform(ctx->condition_)),
                 static_cast<ASTExpression*>(transform(ctx->update_)),
                 transform_list(ctx->body_)
@@ -168,7 +177,7 @@ private:
     }
     antlrcpp::Any visitType_alias(ZincParser::Type_aliasContext* ctx) noexcept final {
         last_visited_ = new ASTTypeAlias(
-            loc(ctx), text(ctx->identifier_), static_cast<ASTTypeExpression*>(transform(ctx->type_))
+            loc(ctx), text(ctx->identifier_), static_cast<ASTExpression*>(transform(ctx->type_))
         );
         return {};
     }
@@ -178,8 +187,8 @@ private:
         ComparableSpan<ASTFunctionParameter*> parameters =
             transform_list<ASTFunctionParameter>(ctx->parameters_);
         std::string_view identifier = text(ctx->identifier_);
-        ASTTypeExpression* return_type =
-            static_cast<ASTTypeExpression*>(transform(ctx->return_type_));
+        ASTExplicitTypeExpr* return_type =
+            static_cast<ASTExplicitTypeExpr*>(transform(ctx->return_type_));
         ComparableSpan<ASTNode*> body = transform_list(ctx->body_);
         last_visited_ = new ASTFunctionDefinition(
             loc(ctx),
@@ -194,7 +203,9 @@ private:
     }
     antlrcpp::Any visitParameter(ZincParser::ParameterContext* ctx) noexcept final {
         last_visited_ = new ASTFunctionParameter(
-            loc(ctx), text(ctx->identifier_), static_cast<ASTTypeExpression*>(transform(ctx->type_))
+            loc(ctx),
+            text(ctx->identifier_),
+            static_cast<ASTExplicitTypeExpr*>(transform(ctx->type_))
         );
         return {};
     }
@@ -403,9 +414,15 @@ private:
     antlrcpp::Any visitCallExpr(ZincParser::CallExprContext* ctx) noexcept final {
         last_visited_ = new ASTFunctionCall(
             loc(ctx),
-            static_cast<ASTValueExpression*>(transform(ctx->func_)),
-            transform_list<ASTValueExpression>(ctx->arguments_)
+            static_cast<ASTExpression*>(transform(ctx->func_)),
+            transform_list<ASTExpression>(ctx->arguments_)
         );
+        return {};
+    }
+    antlrcpp::Any visitRefExpr(ZincParser::RefExprContext* ctx) noexcept final {
+        ASTExpression* expr = static_cast<ASTExpression*>(transform(ctx->expr_));
+        bool is_mutable = ctx->KW_MUT() != nullptr;
+        last_visited_ = new ASTReferenceExpr(loc(ctx), expr, is_mutable);
         return {};
     }
     antlrcpp::Any visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept final {
@@ -512,14 +529,16 @@ private:
     antlrcpp::Any visitFunctionType(ZincParser::FunctionTypeContext* ctx) noexcept final {
         last_visited_ = new ASTFunctionType(
             loc(ctx),
-            transform_list<ASTTypeExpression>(ctx->parameters_),
-            static_cast<ASTTypeExpression*>(transform(ctx->return_type_))
+            transform_list<ASTExplicitTypeExpr>(ctx->parameters_),
+            static_cast<ASTExplicitTypeExpr*>(transform(ctx->return_type_))
         );
         return {};
     }
     antlrcpp::Any visitField_declaration(ZincParser::Field_declarationContext* ctx) noexcept final {
         last_visited_ = new ASTFieldDeclaration(
-            loc(ctx), text(ctx->identifier_), static_cast<ASTTypeExpression*>(transform(ctx->type_))
+            loc(ctx),
+            text(ctx->identifier_),
+            static_cast<ASTExplicitTypeExpr*>(transform(ctx->type_))
         );
         return {};
     }

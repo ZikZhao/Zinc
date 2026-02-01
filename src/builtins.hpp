@@ -8,23 +8,19 @@ class StringViewType final : public ClassType {
 private:
     StringViewType() : ClassType("string_view", nullptr, {}, get_attr(), get_methods()) {}
 
-    GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> get_methods() {
-        return GlobalMemory::Map<std::string_view, OverloadedFunctionValue*>{
+    GlobalMemory::Map<std::string_view, FunctionOverloads> get_methods() {
+        return GlobalMemory::Map<std::string_view, FunctionOverloads>{
             {"init",
-             new OverloadedFunctionValue(
-                 GlobalMemory::pack_array<Object*>(new FunctionType(
-                     GlobalMemory::pack_array<Type*>(
-                         TypeRegistry::get<ArrayType>(&IntegerType::u8_instance)
-                     ),
-                     this
-                 ))
-             )},
+             {new FunctionType(
+                 GlobalMemory::pack_array<Type*>(
+                     TypeRegistry::get<ArrayType>(&IntegerType::u8_instance)
+                 ),
+                 this
+             )}},
             {"at",
-             new OverloadedFunctionValue(
-                 GlobalMemory::pack_array<Object*>(new FunctionType(
-                     GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
-                 ))
-             )}
+             {new FunctionType(
+                 GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
+             )}},
         };
     }
 
@@ -39,14 +35,12 @@ class StringType final : public ClassType {
 private:
     StringType() : ClassType("string", nullptr, {}, get_attr(), get_methods()) {}
 
-    GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> get_methods() {
-        return GlobalMemory::Map<std::string_view, OverloadedFunctionValue*>{
+    GlobalMemory::Map<std::string_view, FunctionOverloads> get_methods() {
+        return GlobalMemory::Map<std::string_view, FunctionOverloads>{
             {"at",
-             new OverloadedFunctionValue(
-                 GlobalMemory::pack_array<Object*>(new FunctionType(
-                     GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
-                 ))
-             )}
+             {new FunctionType(
+                 GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
+             )}},
         };
     }
 

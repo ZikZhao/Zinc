@@ -75,6 +75,7 @@ template <typename Target, typename... Ts>
 constexpr std::size_t IndexOfTypeInTupleV = IndexOfTypeInTuple<Target, Ts...>::value;
 
 template <typename... Ts>
+    requires(std::is_pointer_v<Ts> && ...)
 class PointerVariant {
 private:
     static constexpr std::size_t mask = std::bit_ceil(sizeof...(Ts)) - 1;
@@ -377,16 +378,16 @@ private:
 
 public:
     Map() noexcept = default;
+    Map(const Map& other) noexcept(
+        noexcept(std::declval<Vector<Key>&>() = std::declval<const Vector<Key>&>()) &&
+        noexcept(std::declval<Vector<Value>&>() = std::declval<const Vector<Value>&>())
+    ) = default;
+    Map& operator=(const Map& other) noexcept(
+        noexcept(std::declval<Vector<Key>&>() = std::declval<const Vector<Key>&>()) &&
+        noexcept(std::declval<Vector<Value>&>() = std::declval<const Vector<Value>&>())
+    ) = default;
     Map(Map&& other) noexcept = default;
     Map& operator=(Map&& other) noexcept = default;
-    Map(const Map& other) noexcept
-        requires std::is_nothrow_copy_constructible_v<Key> &&
-                     std::is_nothrow_copy_constructible_v<Value>
-    = default;
-    Map& operator=(const Map& other) noexcept
-        requires std::is_nothrow_copy_constructible_v<Key> &&
-                     std::is_nothrow_copy_constructible_v<Value>
-    = default;
 
     Map(std::initializer_list<std::pair<Key, Value>> init) {
         keys_.reserve(init.size());
@@ -611,36 +612,44 @@ private:
     template <bool IsConst>
     class IteratorImpl {
     private:
-        using KeyType = const K;
-        using MappedType = std::conditional_t<IsConst, const V, V>;
+        using KeyIterator = std::conditional_t<
+            IsConst,
+            typename Vector<K>::const_iterator,
+            typename Vector<K>::iterator>;
+        using ValueIterator = std::conditional_t<
+            IsConst,
+            typename Vector<V>::const_iterator,
+            typename Vector<V>::iterator>;
+        using KeyRef = std::conditional_t<IsConst, const K&, const K&>;
+        using ValueRef = std::conditional_t<IsConst, const V&, V&>;
 
         class Proxy {
         private:
-            const std::pair<KeyType&, MappedType&> pair_;
+            const std::pair<KeyRef, ValueRef> pair_;
 
         public:
-            Proxy(KeyType& key, MappedType& value) : pair_(key, value) {}
-            const std::pair<KeyType&, MappedType&>* operator->() { return &pair_; }
+            Proxy(KeyRef key, ValueRef value) : pair_(key, value) {}
+            const std::pair<KeyRef, ValueRef>* operator->() { return &pair_; }
         };
 
     public:
         using iterator_category = std::forward_iterator_tag;
         using difference_type = std::ptrdiff_t;
-        using value_type = std::pair<KeyType, MappedType>;
+        using value_type = std::pair<const K&, ValueRef>;
         using pointer = value_type*;
         using reference = value_type&;
 
     private:
-        KeyType* key_ptr_;
-        MappedType* value_ptr_;
+        KeyIterator key_it_;
+        ValueIterator value_it_;
 
     public:
         IteratorImpl() = default;
-        IteratorImpl(KeyType* key_ptr, MappedType* value_ptr)
-            : key_ptr_(key_ptr), value_ptr_(value_ptr) {}
+        IteratorImpl(KeyIterator key_it, ValueIterator value_it)
+            : key_it_(key_it), value_it_(value_it) {}
         IteratorImpl& operator++() {
-            ++key_ptr_;
-            ++value_ptr_;
+            ++key_it_;
+            ++value_it_;
             return *this;
         }
         IteratorImpl operator++(int) {
@@ -649,13 +658,14 @@ private:
             return temp;
         }
         bool operator==(const IteratorImpl& other) const noexcept {
-            return key_ptr_ == other.key_ptr_;
+            return key_it_ == other.key_it_;
         }
         bool operator!=(const IteratorImpl& other) const noexcept { return !(*this == other); }
-        value_type operator*() const {
-            return std::pair<KeyType, MappedType>{*key_ptr_, *value_ptr_};
-        }
-        Proxy operator->() { return Proxy(*key_ptr_, *value_ptr_); }
+        value_type operator*() const { return value_type{*key_it_, *value_it_}; }
+        Proxy operator->() { return Proxy(*key_it_, *value_it_); }
+
+        KeyIterator key_iter() const noexcept { return key_it_; }
+        ValueIterator value_iter() const noexcept { return value_it_; }
     };
 
 public:
@@ -711,40 +721,34 @@ public:
     iterator find(const K& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, C{});
         if (it == keys_.end() || C{}(key, *it) || C{}(*it, key)) {
-            return this->end();
+            return end();
         }
-        std::size_t index = std::distance(keys_.begin(), it);
-        return iterator(&keys_[index], &values_[index]);
+        return iterator(it, values_.begin() + std::distance(keys_.begin(), it));
     }
 
     const_iterator find(const K& key) const {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, C{});
         if (it == keys_.end() || C{}(key, *it) || C{}(*it, key)) {
-            return this->end();
+            return end();
         }
-        std::size_t index = std::distance(keys_.begin(), it);
-        return const_iterator(&keys_[index], &values_[index]);
+        return const_iterator(it, values_.begin() + std::distance(keys_.begin(), it));
     }
 
     std::pair<iterator, iterator> equal_range(const K& key) {
         auto lower = std::lower_bound(keys_.begin(), keys_.end(), key, C{});
         auto upper = std::upper_bound(keys_.begin(), keys_.end(), key, C{});
-        std::size_t lower_idx = std::distance(keys_.begin(), lower);
-        std::size_t upper_idx = std::distance(keys_.begin(), upper);
         return {
-            iterator(&keys_[lower_idx], &values_[lower_idx]),
-            iterator(&keys_[upper_idx], &values_[upper_idx])
+            iterator(lower, values_.begin() + std::distance(keys_.begin(), lower)),
+            iterator(upper, values_.begin() + std::distance(keys_.begin(), upper))
         };
     }
 
     std::pair<const_iterator, const_iterator> equal_range(const K& key) const {
         auto lower = std::lower_bound(keys_.begin(), keys_.end(), key, C{});
         auto upper = std::upper_bound(keys_.begin(), keys_.end(), key, C{});
-        std::size_t lower_idx = std::distance(keys_.begin(), lower);
-        std::size_t upper_idx = std::distance(keys_.begin(), upper);
         return {
-            const_iterator(&keys_[lower_idx], &values_[lower_idx]),
-            const_iterator(&keys_[upper_idx], &values_[upper_idx])
+            const_iterator(lower, values_.begin() + std::distance(keys_.begin(), lower)),
+            const_iterator(upper, values_.begin() + std::distance(keys_.begin(), upper))
         };
     }
 
@@ -759,13 +763,9 @@ public:
     }
 
     iterator erase(iterator pos) {
-        std::size_t index = pos.key_ptr_ - keys_.data();
-        keys_.erase(keys_.begin() + index);
-        values_.erase(values_.begin() + index);
-        if (index >= keys_.size()) {
-            return end();
-        }
-        return iterator(&keys_[index], &values_[index]);
+        auto key_it = keys_.erase(pos.key_iter());
+        auto value_it = values_.erase(pos.value_iter());
+        return iterator(key_it, value_it);
     }
 
     std::size_t erase(const K& key) {
@@ -784,14 +784,10 @@ public:
         values_.clear();
     }
 
-    iterator begin() noexcept { return iterator(keys_.data(), values_.data()); }
-    iterator end() noexcept {
-        return iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
-    }
-    const_iterator begin() const noexcept { return const_iterator(keys_.data(), values_.data()); }
-    const_iterator end() const noexcept {
-        return const_iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
-    }
+    iterator begin() noexcept { return iterator(keys_.begin(), values_.begin()); }
+    iterator end() noexcept { return iterator(keys_.end(), values_.end()); }
+    const_iterator begin() const noexcept { return const_iterator(keys_.begin(), values_.begin()); }
+    const_iterator end() const noexcept { return const_iterator(keys_.end(), values_.end()); }
 
     std::strong_ordering operator<=>(const MultiMap<K, V, C>& other) const noexcept {
         return std::lexicographical_compare_three_way(

@@ -105,11 +105,7 @@
         "cmake.configureArgs": [
             "-DCMAKE_TOOLCHAIN_FILE=${env:HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
             "-DVCPKG_TARGET_TRIPLET=x64-linux"
-        ],
-        // ANTLR4 扩展配置 - 使用 CMake 生成的文件
-        "antlr4.generation.mode": "external",
-        "antlr4.generation.outputDir": "${workspaceFolder}/build/antlr4_generated",
-        "antlr4.generation.importDir": "${workspaceFolder}/build/antlr4_generated"
+        ]
     },
     "extensions": {
         "recommendations": [

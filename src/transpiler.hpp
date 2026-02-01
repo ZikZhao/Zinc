@@ -277,6 +277,11 @@ inline void UnionType::transpile(Transpiler& transpiler) const noexcept {
     transpiler << ">";
 }
 
+inline void ReferenceType::transpile(Transpiler& transpiler) const noexcept {
+    referenced_type_->transpile(transpiler);
+    transpiler << "*" << (is_mutable_ ? "" : " const");
+}
+
 inline void UnknownValue::transpile(Transpiler& transpiler) const noexcept { std::unreachable(); }
 
 inline void NullValue::transpile(Transpiler& transpiler) const noexcept { transpiler << "nullptr"; }
@@ -302,10 +307,6 @@ inline void ArrayValue::transpile(Transpiler& transpiler) const noexcept {
 
 inline void InstanceValue::transpile(Transpiler& transpiler) const noexcept { std::unreachable(); }
 
-inline void OverloadedFunctionValue::transpile(Transpiler& transpiler) const noexcept {
-    std::unreachable();
-}
-
 /// ===================== Inline implementations of AST nodes =====================
 
 inline void ASTRoot::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
@@ -326,7 +327,7 @@ inline void ASTLocalBlock::transpile(Transpiler& transpiler, TypeChecker& checke
     checker.exit();
 }
 
-inline void ASTHiddenTypeExpression::transpile(
+inline void ASTHiddenTypeExpr::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
     UNREACHABLE();
@@ -381,7 +382,7 @@ inline void ASTPrimitiveType::transpile(
 inline void ASTFunctionType::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    eval_static(checker)->transpile(transpiler);
+    eval_type(checker)->transpile(transpiler);
 }
 
 inline void ASTFieldDeclaration::transpile(
@@ -400,6 +401,13 @@ inline void ASTRecordType::transpile(Transpiler& transpiler, TypeChecker& checke
     transpiler << Transpiler::dedent << "};" << Transpiler::newline;
 }
 
+inline void ASTReferenceExpr::transpile(
+    Transpiler& transpiler, TypeChecker& checker
+) const noexcept {
+    transpiler << "&" << (is_mutable_ ? "mut " : "");
+    expr_->transpile(transpiler, checker);
+}
+
 inline void ASTExpressionStatement::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
@@ -416,7 +424,7 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler, TypeChecker& check
     if (type_) {
         type_->transpile(transpiler, checker);
     } else {
-        expr_->resolve_term(checker, nullptr, false).effective_type()->transpile(transpiler);
+        expr_->eval_term(checker, nullptr, false).effective_type()->transpile(transpiler);
     }
     transpiler << " " << identifier_ << " = ";
     expr_->transpile(transpiler, checker);

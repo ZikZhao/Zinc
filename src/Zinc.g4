@@ -40,7 +40,9 @@ expr_statement: expr_ = expr OP_SEMICOLON;
 declaration_statement:
 	KW_LET identifier_ = T_IDENTIFIER KW_MUT? (
 		OP_COLON type_ = type
-	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON;
+	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON # LetDecl
+	| KW_CONST identifier_ = T_IDENTIFIER (OP_COLON type_ = type)? OP_ASSIGN value_ = expr
+		OP_SEMICOLON # ConstDecl;
 
 if_statement:
 	KW_IF OP_LPAREN condition_ = expr OP_RPAREN OP_LBRACE (
@@ -135,6 +137,7 @@ expr:
 	| func_ = identifier OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN								# CallExpr
+	| OP_REF KW_MUT? expr_ = expr				# RefExpr
 	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr;
 
 identifier: name_ = T_IDENTIFIER;
@@ -241,6 +244,7 @@ OP_BITXOR_ASSIGN: '^=';
 OP_LSHIFT_ASSIGN: '<<=';
 OP_RSHIFT_ASSIGN: '>>=';
 
+OP_REF: '&';
 OP_DOT: '.';
 OP_QUESTION: '?';
 OP_COLON: ':';

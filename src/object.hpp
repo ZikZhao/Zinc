@@ -18,6 +18,7 @@ enum class Kind : std::uint16_t {
     Instance,
     Intersection,
     Union,
+    Reference,
     Template,
 };
 
@@ -42,6 +43,7 @@ class InterfaceType;
 class ClassType;
 class IntersectionType;
 class UnionType;
+class ReferenceType;
 
 class Value;
 class UnknownValue;
@@ -55,11 +57,14 @@ class InterfaceValue;
 class ClassValue;
 class InstanceValue;
 class OverloadedFunctionValue;
+class ReferenceValue;
 
 template <typename T>
 concept TypeClass = !std::is_same_v<T, Type> && std::derived_from<T, Type>;
 template <typename V>
 concept ValueClass = !std::is_same_v<V, Value> && std::derived_from<V, Value>;
+
+using FunctionOverloads = GlobalMemory::Vector<Object*>;
 
 class TypeRegistry {
     friend class ThreadGuard;
@@ -110,8 +115,10 @@ private:
         GlobalMemory::Set<FunctionType*, TypeComparator>,
         GlobalMemory::Set<RecordType*, TypeComparator>,
         GlobalMemory::Set<IntersectionType*, TypeComparator>,
-        GlobalMemory::Set<UnionType*, TypeComparator>>
+        GlobalMemory::Set<UnionType*, TypeComparator>,
+        GlobalMemory::Set<ReferenceType*, TypeComparator>>
         cache_;
+    GlobalMemory::Vector<Type*> pending_;
     GlobalMemory::Map<std::type_index, Type*> builtin_types_;
 
 private:
@@ -273,7 +280,7 @@ public:
 
 public:
     const bool is_signed_;
-    const std::uint8_t bits_;  // 8,16,32,64 bits (or 0 for untyped integer)
+    const std::uint8_t bits_;  // 8, 16, 32, 64 bits (or 0 for untyped integer)
 
 public:
     IntegerType(bool is_signed, std::uint8_t bits) noexcept
@@ -299,7 +306,7 @@ public:
     static FloatType f64_instance;
 
 public:
-    const std::uint8_t bits_;  // 32,64 bits (or 0 for untyped float)
+    const std::uint8_t bits_;  // 32, 64 bits (or 0 for untyped float)
 
 public:
     FloatType(std::uint8_t bits) noexcept : Type(kind), bits_(bits) {
@@ -481,7 +488,7 @@ private:
     Type* const extends_;
     const ComparableSpan<Type*> implements_;
     const GlobalMemory::Map<std::string_view, Type*> attr_;
-    const GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods_;
+    const GlobalMemory::Map<std::string_view, FunctionOverloads> methods_;
 
 public:
     ClassType(
@@ -489,7 +496,7 @@ public:
         Type* extends,
         ComparableSpan<Type*> interfaces,
         GlobalMemory::Map<std::string_view, Type*> attr,
-        GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods
+        GlobalMemory::Map<std::string_view, FunctionOverloads> methods
     ) noexcept
         : Type(kind),
           identifier_(identifier),
@@ -511,7 +518,7 @@ public:
         UNREACHABLE();
     }
 
-    OverloadedFunctionValue* get_method(std::string_view name) const {
+    FunctionOverloads get_method(std::string_view name) const {
         auto it = methods_.find(name);
         if (it == methods_.end()) {
             throw UnlocatedProblem::make<AttributeError>(
@@ -704,6 +711,36 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
+class ReferenceType final : public Type {
+public:
+    static constexpr Kind kind = Kind::Reference;
+
+public:
+    Type* const referenced_type_;
+    const bool is_mutable_;
+
+public:
+    ReferenceType(Type* referenced_type, bool is_mutable) noexcept
+        : Type(kind), referenced_type_(referenced_type), is_mutable_(is_mutable) {}
+    std::string_view repr() const final {
+        return GlobalMemory::format_view(
+            "&{}{}", is_mutable_ ? "mut " : "", referenced_type_->repr()
+        );
+    }
+    bool assignable_from_impl(Type* source) const final {
+        ReferenceType* other_ref = source->as<ReferenceType>();
+        return other_ref && referenced_type_->assignable_from(other_ref->referenced_type_);
+    }
+    std::strong_ordering compare_congruent_impl(
+        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
+    ) noexcept final {
+        ReferenceType* other_ref = other->cast<ReferenceType>();
+        assumed_equal.emplace({referenced_type_, other_ref->referenced_type_});
+        return referenced_type_->compare_congruent(other_ref->referenced_type_, assumed_equal);
+    }
+    void transpile(Transpiler& transpiler) const noexcept final;
+};
+
 class Value : public Object {
 public:
     template <ValueClass V>
@@ -762,6 +799,7 @@ public:
 
 class UnknownValue final : public Value {
     friend class Object;
+    friend class Term;
 
 public:
     static constexpr Kind kind = Kind::NothingOrUnknown;
@@ -1050,43 +1088,40 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class OverloadedFunctionValue final : public Value {
+class ReferenceValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::Intersection;
+    static constexpr Kind kind = Kind::Reference;
 
 private:
-    IntersectionType* type_;
-    ComparableSpan<Object*> overloads_;  /// array of FunctionType* | FunctionValue*
+    ReferenceType* type_;
+    Value** referenced_value_;
 
 public:
-    OverloadedFunctionValue(ComparableSpan<Object*> overloads) noexcept
-        : Value(kind), overloads_(overloads) {
-        ComparableSpan<Type*> overload_types = overloads_ |
-                                               std::views::transform([](Object* obj) -> Type* {
-                                                   if (auto type = obj->as_type()) {
-                                                       return type;
-                                                   }
-                                                   return obj->cast<FunctionValue>()->get_type();
-                                               }) |
-                                               GlobalMemory::collect<ComparableSpan<Type*>>();
-        type_ = TypeRegistry::get<IntersectionType>(overload_types);
-    }
+    ReferenceValue(ReferenceType* type, Value** referenced_value) noexcept
+        : Value(kind), type_(type), referenced_value_(referenced_value) {}
     std::string_view repr() const final {
-        /// TODO:
-        return {};
+        return GlobalMemory::format_view("&{}", (*referenced_value_)->repr());
     }
-    Type* get_type() const final { return type_; }
-    OverloadedFunctionValue* resolve_to(Type* target) const final { UNREACHABLE(); }
-    void assign_from(Value* source) final { UNREACHABLE(); }
+    ReferenceType* get_type() const final { return type_; }
+    ReferenceValue* resolve_to(Type* target) const final {
+        if (target && !target->as<ReferenceType>()) {
+            throw UnlocatedProblem::make<TypeMismatchError>("reference", target->repr());
+        }
+        return new ReferenceValue(*this);
+    }
+    void assign_from(Value* source) final {
+        ReferenceValue* ref_source = source->cast<ReferenceValue>();
+        referenced_value_ = ref_source->referenced_value_;
+    }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class Term : public GlobalMemory::MemoryManaged {
 public:
     static Term from_const(Value* value) { return Term(value, false, false); }
-    static Term from_var(Type* type) { return Term(type, true, false); }
+    static Term from_var(Type* type, bool is_mutable) { return Term(type, is_mutable, false); }
     static Term from_rvalue(Type* type) { return Term(type, false, true); }
-    static Term unknown() { return Term(TypeRegistry::get_unknown()->as_value(), false, false); }
+    static Term unknown() { return Term(new UnknownValue(), false, false); }
 
 private:
     Object* ptr_;

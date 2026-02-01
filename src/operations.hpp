@@ -239,6 +239,85 @@ constexpr OperatorCode GetAssignmentEquivalent(OperatorCode opcode) {
     }
 }
 
+constexpr std::string_view GetOperatorString(OperatorCode opcode) {
+    switch (opcode) {
+    case OperatorCode::Add:
+        return "+";
+    case OperatorCode::Subtract:
+        return "-";
+    case OperatorCode::Negate:
+        return "-";
+    case OperatorCode::Multiply:
+        return "*";
+    case OperatorCode::Divide:
+        return "/";
+    case OperatorCode::Remainder:
+        return "%";
+    case OperatorCode::Increment:
+        return "++";
+    case OperatorCode::Decrement:
+        return "--";
+    case OperatorCode::Equal:
+        return "==";
+    case OperatorCode::NotEqual:
+        return "!=";
+    case OperatorCode::LessThan:
+        return "<";
+    case OperatorCode::LessEqual:
+        return "<=";
+    case OperatorCode::GreaterThan:
+        return ">";
+    case OperatorCode::GreaterEqual:
+        return ">=";
+    case OperatorCode::LogicalAnd:
+        return "&&";
+    case OperatorCode::LogicalOr:
+        return "||";
+    case OperatorCode::LogicalNot:
+        return "!";
+    case OperatorCode::BitwiseAnd:
+        return "&";
+    case OperatorCode::BitwiseOr:
+        return "|";
+    case OperatorCode::BitwiseXor:
+        return "^";
+    case OperatorCode::BitwiseNot:
+        return "~";
+    case OperatorCode::LeftShift:
+        return "<<";
+    case OperatorCode::RightShift:
+        return ">>";
+    case OperatorCode::Assign:
+        return "=";
+    case OperatorCode::AddAssign:
+        return "+=";
+    case OperatorCode::SubtractAssign:
+        return "-=";
+    case OperatorCode::MultiplyAssign:
+        return "*=";
+    case OperatorCode::DivideAssign:
+        return "/=";
+    case OperatorCode::RemainderAssign:
+        return "%=";
+    case OperatorCode::LogicalAndAssign:
+        return "&&=";
+    case OperatorCode::LogicalOrAssign:
+        return "||=";
+    case OperatorCode::BitwiseAndAssign:
+        return "&=";
+    case OperatorCode::BitwiseOrAssign:
+        return "|=";
+    case OperatorCode::BitwiseXorAssign:
+        return "^=";
+    case OperatorCode::LeftShiftAssign:
+        return "<<=";
+    case OperatorCode::RightShiftAssign:
+        return ">>=";
+    default:
+        UNREACHABLE();
+    }
+}
+
 namespace PrimitiveOperations {
 
 template <OperatorGroup G>
@@ -441,12 +520,16 @@ public:
         map_[{opcode, left_type, right_type}] = func;
     }
 
-    Object* eval_type_op(OperatorCode opcode, Object* left, Object* right = nullptr) const {
+    Type* eval_type_op(OperatorCode opcode, Type* left, Type* right = nullptr) const {
         /// TODO: implement type-level operations
         return nullptr;
     }
 
     Term eval_value_op(OperatorCode opcode, Term left, Term right = {}) {
+        if (left->kind_ == Kind::NothingOrUnknown ||
+            (right && right->kind_ == Kind::NothingOrUnknown)) {
+            return Term::unknown();
+        }
         bool const_expr = left.is_const() && (right && right.is_const());
         Type* left_type = left.effective_type();
         Type* right_type = right ? right.effective_type() : nullptr;
@@ -482,7 +565,7 @@ public:
                 }
             }
             throw UnlocatedProblem::make<OperationNotDefinedError>(
-                "", left->repr(), right ? right->repr() : ""
+                GetOperatorString(opcode), left->repr(), right ? right->repr() : ""
             );
         }
     }
