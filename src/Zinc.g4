@@ -137,7 +137,7 @@ expr:
 	| func_ = identifier OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN								# CallExpr
-	| OP_REF KW_MUT? expr_ = expr				# RefExpr
+	| OP_BITAND KW_MUT? inner_expr_ = expr		# RefExpr
 	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr;
 
 identifier: name_ = T_IDENTIFIER;
@@ -161,12 +161,13 @@ type:
 		| KW_STRING
 		| KW_BOOL
 	)													# PrimitiveType
-	| OP_LBRACKET inner_type_ = type OP_RBRACKET		# ParenType
 	| identifier_ = identifier							# IdentifierType
 	| OP_LBRACE fields_ += field_declaration* OP_RBRACE	# RecordType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
-	)? OP_RPAREN OP_ARROW return_type_ = type # FunctionType;
+	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
+	| OP_BITAND KW_MUT? inner_type_ = type			# RefType
+	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
 
 field_declaration:
 	identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_SEMICOLON;
@@ -244,7 +245,6 @@ OP_BITXOR_ASSIGN: '^=';
 OP_LSHIFT_ASSIGN: '<<=';
 OP_RSHIFT_ASSIGN: '>>=';
 
-OP_REF: '&';
 OP_DOT: '.';
 OP_QUESTION: '?';
 OP_COLON: ':';

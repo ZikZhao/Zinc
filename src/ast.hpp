@@ -462,7 +462,7 @@ private:
 
 class ASTFunctionType final : public ASTExplicitTypeExpr {
 private:
-    using Components = std::tuple<ComparableSpan<ASTExplicitTypeExpr*>, ASTExplicitTypeExpr*>;
+    using Components = std::tuple<ComparableSpan<ASTExpression*>, ASTExpression*>;
 
 public:
     std::variant<Components, FunctionType*> representation_;
@@ -470,8 +470,8 @@ public:
 public:
     ASTFunctionType(
         const Location& loc,
-        ComparableSpan<ASTExplicitTypeExpr*> parameter_types,
-        ASTExplicitTypeExpr* return_type
+        ComparableSpan<ASTExpression*> parameter_types,
+        ASTExpression* return_type
     ) noexcept
         : ASTExplicitTypeExpr(loc), representation_(Components(parameter_types, return_type)) {}
     ASTFunctionType(FunctionType* func) noexcept : ASTExplicitTypeExpr({}), representation_(func) {}
@@ -485,8 +485,7 @@ private:
         const auto& comps = std::get<Components>(representation_);
         bool any_error = false;
         ComparableSpan<Type*> param_types =
-            std::get<0>(comps) |
-            std::views::transform([&](ASTExplicitTypeExpr* param_expr) -> Type* {
+            std::get<0>(comps) | std::views::transform([&](ASTExpression* param_expr) -> Type* {
                 if (Type* param_type = param_expr->eval_type(checker)) {
                     return param_type;
                 }
@@ -498,7 +497,7 @@ private:
         if (any_error) {
             return TypeRegistry::get_unknown();
         }
-        Type* return_type = std::get<1>(comps)->eval_type(checker)->as_type();
+        Type* return_type = std::get<1>(comps)->eval_type(checker);
         if (!return_type) {
             Diagnostic::report(SymbolCategoryMismatchError(std::get<1>(comps)->location_, true));
             return TypeRegistry::get_unknown();
@@ -510,15 +509,15 @@ private:
 class ASTFieldDeclaration final : public ASTNode {
 public:
     std::string_view identifier_;
-    ASTExplicitTypeExpr* type_;
+    ASTExpression* type_;
 
 public:
     ASTFieldDeclaration(
-        const Location& loc, std::string_view identifier, ASTExplicitTypeExpr* type
+        const Location& loc, std::string_view identifier, ASTExpression* type
     ) noexcept
         : ASTNode(loc), identifier_(std::move(identifier)), type_(type) {}
     void check_types(TypeChecker& checker) final {
-        Type* field_type = type_->eval_type(checker)->as_type();
+        Type* field_type = type_->eval_type(checker);
         if (!field_type) {
             Diagnostic::report(SymbolCategoryMismatchError(type_->location_, true));
         }
@@ -542,7 +541,7 @@ private:
             fields_ |
             std::views::transform(
                 [&](ASTFieldDeclaration* decl) -> std::pair<std::string_view, Type*> {
-                    return {decl->identifier_, checker.lookup_type(decl->identifier_).get()};
+                    return {decl->identifier_, decl->type_->eval_type(checker)};
                 }
             ) |
             GlobalMemory::collect<GlobalMemory::Map<std::string_view, Type*>>();
@@ -566,7 +565,7 @@ public:
 
 private:
     Type* eval_type_impl(TypeChecker& checker, bool) const noexcept final {
-        return TypeRegistry::get<ReferenceType>(expr_->eval_type(checker)->as_type(), is_mutable_);
+        return TypeRegistry::get<ReferenceType>(expr_->eval_type(checker, false), is_mutable_);
     }
 };
 
@@ -605,7 +604,7 @@ public:
     void check_types(TypeChecker& checker) final {
         Type* declared_type = nullptr;
         if (type_) {
-            declared_type = type_->eval_type(checker)->as_type();
+            declared_type = type_->eval_type(checker);
             if (!declared_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(type_->location_, true));
             }
@@ -635,7 +634,7 @@ public:
         scope.add_type(identifier_, type_);
     }
     void check_types(TypeChecker& checker) final {
-        Type* alias_type = type_->eval_type(checker)->as_type();
+        Type* alias_type = type_->eval_type(checker);
         if (!alias_type) {
             Diagnostic::report(SymbolCategoryMismatchError(type_->location_, true));
         }
@@ -832,7 +831,7 @@ public:
     void check_types(TypeChecker& checker) final {
         checker.enter(&body_);
         for (auto& param : parameters_) {
-            Type* param_type = param->type_->eval_type(checker)->as_type();
+            Type* param_type = param->type_->eval_type(checker);
             if (!param_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
                 param_type = TypeRegistry::get_unknown();
@@ -991,7 +990,7 @@ public:
                     param_name, new ASTTemplateTypeArgument(argument->cast<Type>())
                 );
             } else {
-                Type* constraint_type = param_type->eval_type(checker)->as_type();
+                Type* constraint_type = param_type->eval_type(checker);
                 if (!constraint_type) {
                     Diagnostic::report(SymbolCategoryMismatchError(param_type->location_, true));
                     return new Term(Term::unknown());
@@ -1097,7 +1096,7 @@ inline Type* ASTFunctionSignature::eval_type_impl(TypeChecker& checker, bool) co
     bool any_error = false;
     ComparableSpan params =
         owner_->parameters_ | std::views::transform([&](const auto& param) -> Type* {
-            Type* param_type = param->type_->eval_type(checker)->as_type();
+            Type* param_type = param->type_->eval_type(checker);
             if (!param_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(param->type_->location_, true));
                 any_error = true;
@@ -1109,7 +1108,7 @@ inline Type* ASTFunctionSignature::eval_type_impl(TypeChecker& checker, bool) co
     if (any_error) {
         return TypeRegistry::get_unknown();
     }
-    Type* return_type = owner_->return_type_->eval_type(checker)->as_type();
+    Type* return_type = owner_->return_type_->eval_type(checker);
     if (!return_type) {
         Diagnostic::report(SymbolCategoryMismatchError(owner_->return_type_->location_, true));
         return TypeRegistry::get_unknown();
@@ -1171,7 +1170,7 @@ inline Type* ASTClassSignature::eval_type_impl(TypeChecker& checker, bool) const
         owner_->fields_ | std::views::transform([&](const auto& field_decl) {
             std::pair<std::string_view, Type*> result;
             result.first = field_decl->identifier_;
-            Type* field_type = field_decl->type_->eval_type(checker)->as_type();
+            Type* field_type = field_decl->type_->eval_type(checker);
             if (!field_type) {
                 Diagnostic::report(SymbolCategoryMismatchError(field_decl->type_->location_, true));
                 result.second = TypeRegistry::get_unknown();

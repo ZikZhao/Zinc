@@ -404,8 +404,8 @@ inline void ASTRecordType::transpile(Transpiler& transpiler, TypeChecker& checke
 inline void ASTReferenceExpr::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    transpiler << "&" << (is_mutable_ ? "mut " : "");
     expr_->transpile(transpiler, checker);
+    transpiler << (is_mutable_ ? "" : " const") << "*";
 }
 
 inline void ASTExpressionStatement::transpile(

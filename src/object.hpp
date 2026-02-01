@@ -189,6 +189,9 @@ protected:
     Type(Kind kind) noexcept : Object(kind, true) {}
 
 public:
+    Type* as_type() = delete;
+    Value* as_value() = delete;
+
     std::strong_ordering compare_congruent(
         Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
     ) noexcept {
@@ -792,6 +795,8 @@ protected:
     Value(Kind kind) noexcept : Object(kind, false) {}
 
 public:
+    Type* as_type() = delete;
+    Value* as_value() = delete;
     virtual Type* get_type() const = 0;
     virtual Value* resolve_to(Type* target) const = 0;
     virtual void assign_from(Value* source) = 0;

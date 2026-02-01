@@ -31,6 +31,11 @@ class Derived {
     }
 };
 
+type Node = {
+    value: i32;
+    next: &Node;
+};
+
 fn main() -> i32 {
     f(2, 3);
     g(5, 4);

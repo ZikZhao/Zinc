@@ -420,7 +420,7 @@ private:
         return {};
     }
     antlrcpp::Any visitRefExpr(ZincParser::RefExprContext* ctx) noexcept final {
-        ASTExpression* expr = static_cast<ASTExpression*>(transform(ctx->expr_));
+        ASTExpression* expr = static_cast<ASTExpression*>(transform(ctx->inner_expr_));
         bool is_mutable = ctx->KW_MUT() != nullptr;
         last_visited_ = new ASTReferenceExpr(loc(ctx), expr, is_mutable);
         return {};
@@ -513,10 +513,6 @@ private:
         }
         return {};
     }
-    antlrcpp::Any visitParenType(ZincParser::ParenTypeContext* ctx) noexcept final {
-        last_visited_ = transform(ctx->inner_type_);
-        return {};
-    }
     antlrcpp::Any visitIdentifierType(ZincParser::IdentifierTypeContext* ctx) noexcept final {
         last_visited_ = transform(ctx->identifier_);
         return {};
@@ -529,16 +525,24 @@ private:
     antlrcpp::Any visitFunctionType(ZincParser::FunctionTypeContext* ctx) noexcept final {
         last_visited_ = new ASTFunctionType(
             loc(ctx),
-            transform_list<ASTExplicitTypeExpr>(ctx->parameters_),
-            static_cast<ASTExplicitTypeExpr*>(transform(ctx->return_type_))
+            transform_list<ASTExpression>(ctx->parameters_),
+            static_cast<ASTExpression*>(transform(ctx->return_type_))
         );
+        return {};
+    }
+    antlrcpp::Any visitRefType(ZincParser::RefTypeContext* ctx) noexcept final {
+        ASTExpression* inner_type = static_cast<ASTExpression*>(transform(ctx->inner_type_));
+        bool is_mutable = ctx->KW_MUT() != nullptr;
+        last_visited_ = new ASTReferenceExpr(loc(ctx), inner_type, is_mutable);
+        return {};
+    }
+    antlrcpp::Any visitParenType(ZincParser::ParenTypeContext* ctx) noexcept final {
+        last_visited_ = transform(ctx->inner_type_);
         return {};
     }
     antlrcpp::Any visitField_declaration(ZincParser::Field_declarationContext* ctx) noexcept final {
         last_visited_ = new ASTFieldDeclaration(
-            loc(ctx),
-            text(ctx->identifier_),
-            static_cast<ASTExplicitTypeExpr*>(transform(ctx->type_))
+            loc(ctx), text(ctx->identifier_), static_cast<ASTExpression*>(transform(ctx->type_))
         );
         return {};
     }
