@@ -9,10 +9,12 @@
 
 enum class Section {
     Includes,
+    StructuralDeclarations,
     Declarations,
     Constants,
     Main,
     Implementations,
+    __len__,
 };
 
 class Buffer {
@@ -48,10 +50,20 @@ public:
         at_line_start_ = true;
     }
 
-    GlobalMemory::String& operator*() noexcept { return buffer_; }
+    const GlobalMemory::String& operator*() const noexcept { return buffer_; }
 };
 
 class Transpiler {
+public:
+    struct State {
+        GlobalMemory::Set<std::string_view> niebloids;
+        GlobalMemory::Map<RecordType*, std::size_t> structurals;
+        std::stack<
+            std::function<void(Transpiler&, TypeChecker&)>,
+            GlobalMemory::Vector<std::function<void(Transpiler&, TypeChecker&)>>>
+            structural_impls;
+    };
+
 public:
     static Transpiler& indent(Transpiler& transpiler) {
         transpiler.current_section_->indent();
@@ -68,15 +80,17 @@ public:
 
 private:
     const SourceManager::File& file_;
-    Buffer buffers_[static_cast<std::size_t>(Section::Implementations) + 1];
+    Buffer buffers_[static_cast<std::size_t>(Section::__len__)];
     std::size_t current_line_ = 0;
     Buffer* current_section_ = &buffers_[static_cast<std::size_t>(Section::Constants)];
-    std::set<std::string_view> niebloids_;
+
+public:
+    State state_;
 
 public:
     explicit Transpiler(const SourceManager::File& file) : file_(file) {}
     ~Transpiler() { assert(current_section_ == nullptr); }
-    bool should_generate_niebloid(std::string_view name) { return niebloids_.insert(name).second; }
+
     void finalize() {
         assert(current_section_ != nullptr);
         const GlobalMemory::String stem =
@@ -85,15 +99,17 @@ public:
                 .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
         std::fstream stream(GlobalMemory::format("out/{}.hpp", stem).c_str(), std::ios::out);
         stream << "#pragma once\n\n"
-               << *buffers_[static_cast<std::size_t>(Section::Includes)] << "\n"
-               << "/* ---------- Declarations ---------- */\n\n"
-               << *buffers_[static_cast<std::size_t>(Section::Declarations)] << "\n"
-               << "/* ---------- Constants ---------- */\n\n"
-               << *buffers_[static_cast<std::size_t>(Section::Constants)] << "\n"
-               << "/* ---------- Main ---------- */\n\n"
-               << *buffers_[static_cast<std::size_t>(Section::Main)] << "\n"
-               << "/* ---------- Implementations ---------- */\n\n"
-               << *buffers_[static_cast<std::size_t>(Section::Implementations)];
+               << strip_buffer(Section::Includes)
+               << "\n\n/* ---------- Structural Declarations ---------- */\n\n"
+               << strip_buffer(Section::StructuralDeclarations)
+               << "\n\n/* ---------- Declarations ---------- */\n\n"
+               << strip_buffer(Section::Declarations)
+               << "\n\n/* ---------- Constants ---------- */\n\n"
+               << strip_buffer(Section::Constants)  //
+               << "\n\n/* ---------- Main ---------- */\n\n"
+               << strip_buffer(Section::Main)  //
+               << "\n\n/* ---------- Implementations ---------- */\n\n"
+               << strip_buffer(Section::Implementations);
         current_section_ = nullptr;
     }
     Transpiler& operator[](Section section) {
@@ -106,6 +122,20 @@ public:
         return *this;
     }
     Transpiler& operator<<(Transpiler& (*manip)(Transpiler&)) { return manip(*this); }
+
+private:
+    std::string_view strip_buffer(Section section) const noexcept {
+        const GlobalMemory::String& buffer = *buffers_[static_cast<std::size_t>(section)];
+        std::size_t begin = 0;
+        std::size_t end = buffer.size();
+        while (begin < end && std::isspace(static_cast<unsigned char>(buffer[begin]))) {
+            begin++;
+        }
+        while (end > begin && std::isspace(static_cast<unsigned char>(buffer[end - 1]))) {
+            end--;
+        }
+        return std::string_view(buffer.data() + begin, end - begin);
+    }
 };
 
 inline void precompile_headers() {
@@ -243,7 +273,8 @@ inline void ArrayType::transpile(Transpiler& transpiler) const noexcept {
 }
 
 inline void RecordType::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "struct {" << Transpiler::indent << Transpiler::newline;
+    std::size_t id = transpiler.state_.structurals.at(const_cast<RecordType*>(this));
+    transpiler << "$structural_" << GlobalMemory::format_view("{}", id);
 }
 
 inline void InterfaceType::transpile(Transpiler& transpiler) const noexcept {
@@ -393,12 +424,28 @@ inline void ASTFieldDeclaration::transpile(
 }
 
 inline void ASTRecordType::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    transpiler << "struct {" << Transpiler::indent << Transpiler::newline;
-    for (const auto& field : fields_) {
-        field->transpile(transpiler, checker);
-        transpiler << Transpiler::newline;
+    RecordType* record_type = static_cast<RecordType*>(eval_type(checker));
+    auto [it, inserted] = transpiler.state_.structurals.insert({record_type, 0});
+    if (inserted) {
+        it->second = transpiler.state_.structurals.size();
     }
-    transpiler << Transpiler::dedent << "};" << Transpiler::newline;
+    GlobalMemory::String struct_name = GlobalMemory::format("$structural_{}", it->second);
+    transpiler << struct_name;
+    if (inserted) {
+        transpiler.state_.structural_impls.push(
+            [this, id = it->second](Transpiler& transpiler, TypeChecker& checker) {
+                GlobalMemory::String struct_name = GlobalMemory::format("$structural_{}", id);
+                transpiler[Section::StructuralDeclarations] << "struct " << struct_name << ";";
+                transpiler[Section::Declarations] << "struct " << struct_name << " {"
+                                                  << Transpiler::indent << Transpiler::newline;
+                for (const auto& field : fields_) {
+                    field->transpile(transpiler, checker);
+                    transpiler << Transpiler::newline;
+                }
+                transpiler << Transpiler::dedent << "};" << Transpiler::newline;
+            }
+        );
+    }
 }
 
 inline void ASTReferenceExpr::transpile(
@@ -435,6 +482,12 @@ inline void ASTTypeAlias::transpile(Transpiler& transpiler, TypeChecker& checker
     transpiler[Section::Declarations] << "using " << identifier_ << " = ";
     type_->transpile(transpiler, checker);
     transpiler << ";" << Transpiler::newline;
+    while (!transpiler.state_.structural_impls.empty()) {
+        std::function<void(Transpiler&, TypeChecker&)> func =
+            std::move(transpiler.state_.structural_impls.top());
+        transpiler.state_.structural_impls.pop();
+        func(transpiler, checker);
+    }
 }
 
 inline void ASTIfStatement::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
@@ -523,7 +576,7 @@ inline void ASTFunctionDefinition::transpile(
         }
         transpiler << ");" << Transpiler::newline;
 
-        if (is_static_ && transpiler.should_generate_niebloid(identifier_)) {
+        if (is_static_ && transpiler.state_.niebloids.insert(identifier_).second) {
             transpiler[Section::Constants] << "constexpr auto " << identifier_
                                            << " = [](auto&&... args) { return $" << identifier_
                                            << "(std::forward<decltype(args)>(args)...); };"

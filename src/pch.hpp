@@ -554,30 +554,26 @@ public:
     }
     Set(std::initializer_list<Key> init) : Set(std::from_range, init) {}
 
-    std::pair<iterator, bool> emplace(Key&& key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it != keys_.end() && *it == key) {
-            return {it, false};
-        }
-        return {keys_.emplace(it, std::move(key)), true};
-    }
-    std::size_t size() const noexcept { return keys_.size(); }
     typename Vector<Key>::iterator begin() noexcept { return keys_.begin(); }
     typename Vector<Key>::const_iterator begin() const noexcept { return keys_.begin(); }
     typename Vector<Key>::iterator end() noexcept { return keys_.end(); }
     typename Vector<Key>::const_iterator end() const noexcept { return keys_.end(); }
-    std::strong_ordering operator<=>(const Set<Key, Comp>& other) const noexcept {
-        return std::lexicographical_compare_three_way(
-            this->begin(), this->end(), other.begin(), other.end()
-        );
-    }
-    bool operator==(const Set<Key, Comp>& other) const noexcept {
-        return std::equal(this->begin(), this->end(), other.begin(), other.end());
-    }
-    bool contains(const Key& key) const {
+
+    bool empty() const noexcept { return keys_.empty(); }
+    std::size_t size() const noexcept { return keys_.size(); }
+
+    std::pair<iterator, bool> insert(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        return it != keys_.end() && *it == key;
+        if (it != keys_.end() && *it == key) {
+            return {it, false};
+        }
+        return {keys_.emplace(it, key), true};
     }
+    std::pair<iterator, bool> emplace(auto&&... args) {
+        Key key = Key(std::forward<decltype(args)>(args)...);
+        return this->insert(std::move(key));
+    }
+
     iterator find(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || *it != key) {
@@ -592,6 +588,20 @@ public:
         }
         return it;
     }
+    bool contains(const Key& key) const {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
+        return it != keys_.end() && *it == key;
+    }
+
+    std::strong_ordering operator<=>(const Set<Key, Comp>& other) const noexcept {
+        return std::lexicographical_compare_three_way(
+            this->begin(), this->end(), other.begin(), other.end()
+        );
+    }
+    bool operator==(const Set<Key, Comp>& other) const noexcept {
+        return std::equal(this->begin(), this->end(), other.begin(), other.end());
+    }
+    
     bool is_superset_of(const Set<Key, Comp>& other) const noexcept {
         return std::includes(this->begin(), this->end(), other.begin(), other.end(), Comp{});
     }
@@ -620,7 +630,7 @@ private:
             IsConst,
             typename Vector<V>::const_iterator,
             typename Vector<V>::iterator>;
-        using KeyRef = std::conditional_t<IsConst, const K&, const K&>;
+        using KeyRef = const K&;
         using ValueRef = std::conditional_t<IsConst, const V&, V&>;
 
         class Proxy {

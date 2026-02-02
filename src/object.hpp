@@ -204,7 +204,7 @@ public:
         if (assumed_equal.contains({this, other})) {
             return std::strong_ordering::equal;
         }
-        assumed_equal.emplace({this, other});
+        assumed_equal.insert({this, other});
         return compare_congruent_impl(other, assumed_equal);
     }
 
@@ -365,13 +365,13 @@ public:
             return parameters_.size() <=> other_func->parameters_.size();
         }
         for (std::size_t i = 0; i < parameters_.size(); ++i) {
-            assumed_equal.emplace({parameters_[i], other_func->parameters_[i]});
+            assumed_equal.insert({parameters_[i], other_func->parameters_[i]});
             auto cmp = parameters_[i]->compare_congruent(other_func->parameters_[i], assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
             }
         }
-        assumed_equal.emplace({return_type_, other_func->return_type_});
+        assumed_equal.insert({return_type_, other_func->return_type_});
         return return_type_->compare_congruent(other_func->return_type_, assumed_equal);
     }
     void transpile(Transpiler& transpiler) const noexcept final;
@@ -401,7 +401,7 @@ public:
         if (size_ != other_array->size_) {
             return size_ <=> other_array->size_;
         }
-        assumed_equal.emplace({element_type_, other_array->element_type_});
+        assumed_equal.insert({element_type_, other_array->element_type_});
         return element_type_->compare_congruent(other_array->element_type_, assumed_equal);
     }
     void transpile(Transpiler& transpiler) const noexcept final;
@@ -451,7 +451,7 @@ public:
             if (it1->first != it2->first) {
                 return it1->first <=> it2->first;
             }
-            assumed_equal.emplace({it1->second, it2->second});
+            assumed_equal.insert({it1->second, it2->second});
             auto cmp = it1->second->compare_congruent(it2->second, assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
@@ -617,7 +617,7 @@ public:
             return types_.size() <=> other_intersection->types_.size();
         }
         for (std::size_t i = 0; i < types_.size(); ++i) {
-            assumed_equal.emplace({types_[i], other_intersection->types_[i]});
+            assumed_equal.insert({types_[i], other_intersection->types_[i]});
             auto cmp = types_[i]->compare_congruent(other_intersection->types_[i], assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
@@ -702,7 +702,7 @@ public:
             return types_.size() <=> other_union->types_.size();
         }
         for (std::size_t i = 0; i < types_.size(); ++i) {
-            assumed_equal.emplace({types_[i], other_union->types_[i]});
+            assumed_equal.insert({types_[i], other_union->types_[i]});
             auto cmp = types_[i]->compare_congruent(other_union->types_[i], assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
@@ -738,7 +738,7 @@ public:
         Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
     ) noexcept final {
         ReferenceType* other_ref = other->cast<ReferenceType>();
-        assumed_equal.emplace({referenced_type_, other_ref->referenced_type_});
+        assumed_equal.insert({referenced_type_, other_ref->referenced_type_});
         return referenced_type_->compare_congruent(other_ref->referenced_type_, assumed_equal);
     }
     void transpile(Transpiler& transpiler) const noexcept final;
