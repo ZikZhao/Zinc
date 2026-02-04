@@ -73,7 +73,7 @@ private:
     struct TypeComparator {
         template <TypeClass T>
         constexpr bool operator()(T* a, T* b) const noexcept {
-            GlobalMemory::Set<std::pair<Type*, Type*>> assumed_equal;
+            GlobalMemory::Set<std::pair<const Type*, const Type*>> assumed_equal;
             return a->compare_congruent(b, assumed_equal) == std::strong_ordering::less;
         }
     };
@@ -149,32 +149,45 @@ private:
 public:
     Object(Kind kind, bool is_type) noexcept : kind_(kind), is_type_(is_type) {}
 
-    Type* as_type();
+    Type* dyn_type();
 
-    Value* as_value();
+    Value* dyn_value();
 
     template <TypeClass T>
-    T* as() {
-        return is_type_ && kind_ == T::kind ? static_cast<T*>(this) : nullptr;
+    auto dyn_cast(this auto& self) {
+        using ResultType = std::
+            conditional_t<std::is_const_v<std::remove_reference_t<decltype(self)>>, const T*, T*>;
+        return static_cast<ResultType>(self.is_type_ && self.kind_ == T::kind ? &self : nullptr);
     }
 
     template <ValueClass V>
-    V* as() {
-        return !is_type_ && kind_ == V::kind ? static_cast<V*>(this) : nullptr;
+    auto dyn_cast(this auto& self) {
+        using ResultType = std::
+            conditional_t<std::is_const_v<std::remove_reference_t<decltype(self)>>, const V*, V*>;
+        return !self.is_type_ && self.kind_ == V::kind ? static_cast<ResultType>(&self) : nullptr;
     }
 
     template <typename T>
-    T* cast() {
+    auto cast(this auto& self) {
+        using ResultType = std::
+            conditional_t<std::is_const_v<std::remove_reference_t<decltype(self)>>, const T*, T*>;
+        using SelfType = std::remove_cvref_t<decltype(self)>;
         if constexpr (std::is_same_v<T, Value>) {
-            assert(!is_type_);
-            return static_cast<T*>(this);
+            assert(!self.is_type_);
         } else if constexpr (std::is_same_v<T, Type>) {
-            assert(is_type_);
-            return static_cast<T*>(this);
+            assert(self.is_type_);
         } else {
-            assert(kind_ == T::kind && ((as_type() != nullptr) == TypeClass<T>));
-            return static_cast<T*>(this);
+            if constexpr (std::is_same_v<SelfType, Object>) {
+                assert(self.kind_ == T::kind && ((self.dyn_type() != nullptr) == TypeClass<T>));
+            } else {
+                static_assert(std::is_same_v<SelfType, Type> || std::is_same_v<SelfType, Value>);
+                assert(
+                    self.kind_ == T::kind &&
+                    (std::is_same_v<SelfType, Type> || TypeClass<SelfType>) == TypeClass<T>
+                );
+            }
         }
+        return static_cast<ResultType>(&self);
     }
 
     virtual ~Object() = default;
@@ -189,12 +202,12 @@ protected:
     Type(Kind kind) noexcept : Object(kind, true) {}
 
 public:
-    Type* as_type() = delete;
-    Value* as_value() = delete;
+    Type* dyn_type() = delete;
+    Value* dyn_value() = delete;
 
     std::strong_ordering compare_congruent(
-        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
-    ) noexcept {
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept {
         if (this == other) {
             return std::strong_ordering::equal;
         }
@@ -208,17 +221,17 @@ public:
         return compare_congruent_impl(other, assumed_equal);
     }
 
-    bool assignable_from(Type* source) const {
+    bool assignable_from(const Type* source) const {
         assert(!(this == source) || assignable_from_impl(source));
         return this == source || assignable_from_impl(source);
     }
 
 protected:
-    virtual bool assignable_from_impl(Type* source) const = 0;
+    virtual bool assignable_from_impl(const Type* source) const = 0;
 
     virtual std::strong_ordering compare_congruent_impl(
-        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
-    ) noexcept {
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept {
         // Default implementation for primitive types
         UNREACHABLE();
     };
@@ -237,7 +250,7 @@ private:
 
 public:
     std::string_view repr() const final { return "unknown"; }
-    bool assignable_from_impl(Type* source) const final { return true; }
+    bool assignable_from_impl(const Type* source) const final { return true; }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -249,7 +262,7 @@ public:
 public:
     AnyType() noexcept : Type(kind) {}
     std::string_view repr() const final { return "any"; }
-    bool assignable_from_impl(Type* source) const final { return true; }
+    bool assignable_from_impl(const Type* source) const final { return true; }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -261,7 +274,7 @@ public:
 public:
     NullType() noexcept : Type(kind) {}
     std::string_view repr() const final { return "null"; }
-    bool assignable_from_impl(Type* source) const final {
+    bool assignable_from_impl(const Type* source) const final {
         /// No variable can have null type except null literal
         std::unreachable();
     }
@@ -282,8 +295,8 @@ public:
     static IntegerType u64_instance;
 
 public:
-    const bool is_signed_;
-    const std::uint8_t bits_;  // 8, 16, 32, 64 bits (or 0 for untyped integer)
+    bool is_signed_;
+    std::uint8_t bits_;  // 8, 16, 32, 64 bits (or 0 for untyped integer)
 
 public:
     IntegerType(bool is_signed, std::uint8_t bits) noexcept
@@ -293,8 +306,8 @@ public:
     std::string_view repr() const final {
         return GlobalMemory::format_view("{}{}", is_signed_ ? "i" : "u", bits_);
     }
-    bool assignable_from_impl(Type* source) const final {
-        IntegerType* other_int = source->as<IntegerType>();
+    bool assignable_from_impl(const Type* source) const final {
+        const IntegerType* other_int = source->dyn_cast<IntegerType>();
         return other_int && (other_int->bits_ == 0 || (this->is_signed_ == other_int->is_signed_ &&
                                                        this->bits_ >= other_int->bits_));
     }
@@ -309,15 +322,15 @@ public:
     static FloatType f64_instance;
 
 public:
-    const std::uint8_t bits_;  // 32, 64 bits (or 0 for untyped float)
+    std::uint8_t bits_;  // 32, 64 bits (or 0 for untyped float)
 
 public:
     FloatType(std::uint8_t bits) noexcept : Type(kind), bits_(bits) {
         assert(bits == 0 || bits == 32 || bits == 64);
     }
     std::string_view repr() const final { return GlobalMemory::format_view("f{}", bits_); }
-    bool assignable_from_impl(Type* source) const final {
-        FloatType* other_float = source->as<FloatType>();
+    bool assignable_from_impl(const Type* source) const final {
+        const FloatType* other_float = source->dyn_cast<FloatType>();
         return other_float && (other_float->bits_ == 0 || this->bits_ >= other_float->bits_);
     }
     void transpile(Transpiler& transpiler) const noexcept final;
@@ -331,8 +344,8 @@ public:
 public:
     BooleanType() noexcept : Type(kind) {}
     std::string_view repr() const final { return "bool"; }
-    bool assignable_from_impl(Type* source) const final {
-        return source->as<BooleanType>() != nullptr;
+    bool assignable_from_impl(const Type* source) const final {
+        return source->dyn_cast<BooleanType>() != nullptr;
     }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -342,8 +355,8 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
-    const ComparableSpan<Type*> parameters_;
-    Type* const return_type_;
+    ComparableSpan<Type*> parameters_;
+    Type* return_type_;
 
 public:
     FunctionType(ComparableSpan<Type*> parameters, Type* return_type) noexcept
@@ -356,11 +369,11 @@ public:
         return GlobalMemory::format_view("({}) => {}", params_repr, return_type_->repr());
     }
 
-    bool assignable_from_impl(Type* source) const final;
+    bool assignable_from_impl(const Type* source) const final;
     std::strong_ordering compare_congruent_impl(
-        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
-    ) noexcept final {
-        FunctionType* other_func = other->cast<FunctionType>();
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const FunctionType* other_func = other->cast<FunctionType>();
         if (parameters_.size() != other_func->parameters_.size()) {
             return parameters_.size() <=> other_func->parameters_.size();
         }
@@ -382,22 +395,22 @@ public:
     static constexpr Kind kind = Kind::Array;
 
 public:
-    Type* const element_type_;
+    Type* element_type_;
     std::size_t size_ = 0;  // 0 means dynamic size
 
     ArrayType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view("{}[]", element_type_->repr());
     }
-    bool assignable_from_impl(Type* source) const final {
-        ArrayType* other_array = source->as<ArrayType>();
+    bool assignable_from_impl(const Type* source) const final {
+        const ArrayType* other_array = source->dyn_cast<ArrayType>();
         return other_array && element_type_->assignable_from(other_array->element_type_) &&
                (size_ == 0 || size_ == other_array->size_);
     }
     std::strong_ordering compare_congruent_impl(
-        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
-    ) noexcept final {
-        ArrayType* other_array = other->cast<ArrayType>();
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const ArrayType* other_array = other->cast<ArrayType>();
         if (size_ != other_array->size_) {
             return size_ <=> other_array->size_;
         }
@@ -423,10 +436,10 @@ public:
         return {};
     }
 
-    bool assignable_from_impl(Type* source) const final {
+    bool assignable_from_impl(const Type* source) const final {
         // (a,b,c) is assignable to (a,b)
         // i.e., source must have at least all fields of this
-        RecordType* other_record = source->as<RecordType>();
+        const RecordType* other_record = source->dyn_cast<RecordType>();
         if (other_record == nullptr) {
             return false;
         }
@@ -439,9 +452,9 @@ public:
         return true;
     }
     std::strong_ordering compare_congruent_impl(
-        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
-    ) noexcept final {
-        RecordType* other_record = other->cast<RecordType>();
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const RecordType* other_record = other->cast<RecordType>();
         if (fields_.size() != other_record->fields_.size()) {
             return fields_.size() <=> other_record->fields_.size();
         }
@@ -475,7 +488,7 @@ public:
         // TODO
         return {};
     }
-    bool assignable_from_impl(Type* source) const final {
+    bool assignable_from_impl(const Type* source) const final {
         // TODO
         return false;
     }
@@ -487,11 +500,11 @@ public:
     static constexpr Kind kind = Kind::Instance;
 
 private:
-    const std::string_view identifier_;
-    Type* const extends_;
-    const ComparableSpan<Type*> implements_;
-    const GlobalMemory::Map<std::string_view, Type*> attr_;
-    const GlobalMemory::Map<std::string_view, FunctionOverloads> methods_;
+    std::string_view identifier_;
+    Type* extends_;
+    ComparableSpan<Type*> implements_;
+    GlobalMemory::Map<std::string_view, Type*> attr_;
+    GlobalMemory::Map<std::string_view, FunctionOverloads> methods_;
 
 public:
     ClassType(
@@ -512,11 +525,11 @@ public:
         return GlobalMemory::format_view("class {}", identifier_);
     }
 
-    bool assignable_from_impl(Type* other) const final { return false; }
+    bool assignable_from_impl(const Type* other) const final { return false; }
 
     std::strong_ordering compare_congruent_impl(
-        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
-    ) noexcept final {
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
         // ClassType is not interned, so this function is never called
         UNREACHABLE();
     }
@@ -551,7 +564,7 @@ private:
     static ComparableSpan<Type*> flatten(ComparableSpan<Type*> unflattened_types) {
         std::size_t size = 0;
         for (Type* type : unflattened_types) {
-            if (IntersectionType* intersection_type = type->as<IntersectionType>()) {
+            if (IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
                 size += intersection_type->types_.size();
             } else {
                 size++;
@@ -560,7 +573,7 @@ private:
         ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
         std::size_t index = 0;
         for (Type* type : unflattened_types) {
-            if (IntersectionType* intersection_type = type->as<IntersectionType>()) {
+            if (IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
                 for (Type* inner_type : intersection_type->types_) {
                     buffer[index++] = inner_type;
                 }
@@ -576,7 +589,7 @@ private:
     }
 
 public:
-    const ComparableSpan<Type*> types_;
+    ComparableSpan<Type*> types_;
 
 public:
     IntersectionType(auto&&... unflattened_types) noexcept
@@ -587,10 +600,10 @@ public:
         return {};
     }
 
-    bool assignable_from_impl(Type* source) const final {
+    bool assignable_from_impl(const Type* source) const final {
         // (a & b & c) is assignable to (a & b)
         // i.e., source supports at least all the function overloads of this
-        if (IntersectionType* other_intersection = source->as<IntersectionType>()) {
+        if (const IntersectionType* other_intersection = source->dyn_cast<IntersectionType>()) {
             for (const auto& type : types_) {
                 bool found = false;
                 for (const auto& other_type : other_intersection->types_) {
@@ -610,9 +623,9 @@ public:
     }
 
     std::strong_ordering compare_congruent_impl(
-        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
-    ) noexcept final {
-        IntersectionType* other_intersection = other->cast<IntersectionType>();
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const IntersectionType* other_intersection = other->cast<IntersectionType>();
         if (types_.size() != other_intersection->types_.size()) {
             return types_.size() <=> other_intersection->types_.size();
         }
@@ -637,7 +650,7 @@ private:
     static ComparableSpan<Type*> flatten(ComparableSpan<Type*> unflattened_types) {
         std::size_t size = 0;
         for (Type* type : unflattened_types) {
-            if (UnionType* union_type = type->as<UnionType>()) {
+            if (UnionType* union_type = type->dyn_cast<UnionType>()) {
                 size += union_type->types_.size();
             } else {
                 size++;
@@ -646,7 +659,7 @@ private:
         ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
         std::size_t index = 0;
         for (Type* type : unflattened_types) {
-            if (UnionType* union_type = type->as<UnionType>()) {
+            if (UnionType* union_type = type->dyn_cast<UnionType>()) {
                 for (Type* inner_type : union_type->types_) {
                     buffer[index++] = inner_type;
                 }
@@ -662,7 +675,7 @@ private:
     }
 
 public:
-    const ComparableSpan<Type*> types_;
+    ComparableSpan<Type*> types_;
 
 public:
     UnionType(auto&&... unflattened_types) noexcept
@@ -673,10 +686,10 @@ public:
         return {};
     }
 
-    bool assignable_from_impl(Type* source) const final {
+    bool assignable_from_impl(const Type* source) const final {
         // (a | b) is assignable to (a | b | c)
         // i.e., source must be assignable to at least one of the types in this
-        if (UnionType* other_union = source->as<UnionType>()) {
+        if (const UnionType* other_union = source->dyn_cast<UnionType>()) {
             for (const auto& type : other_union->types_) {
                 bool found = false;
                 for (const auto& other_type : types_) {
@@ -695,9 +708,9 @@ public:
     }
 
     std::strong_ordering compare_congruent_impl(
-        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
-    ) noexcept final {
-        UnionType* other_union = other->cast<UnionType>();
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const UnionType* other_union = other->cast<UnionType>();
         if (types_.size() != other_union->types_.size()) {
             return types_.size() <=> other_union->types_.size();
         }
@@ -719,25 +732,25 @@ public:
     static constexpr Kind kind = Kind::Reference;
 
 public:
-    Type* const referenced_type_;
-    const bool is_mutable_;
+    const Type* referenced_type_;
+    bool is_mutable_;
 
 public:
-    ReferenceType(Type* referenced_type, bool is_mutable) noexcept
+    ReferenceType(const Type* referenced_type, bool is_mutable) noexcept
         : Type(kind), referenced_type_(referenced_type), is_mutable_(is_mutable) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view(
             "&{}{}", is_mutable_ ? "mut " : "", referenced_type_->repr()
         );
     }
-    bool assignable_from_impl(Type* source) const final {
-        ReferenceType* other_ref = source->as<ReferenceType>();
+    bool assignable_from_impl(const Type* source) const final {
+        const ReferenceType* other_ref = source->dyn_cast<ReferenceType>();
         return other_ref && referenced_type_->assignable_from(other_ref->referenced_type_);
     }
     std::strong_ordering compare_congruent_impl(
-        Type* other, GlobalMemory::Set<std::pair<Type*, Type*>>& assumed_equal
-    ) noexcept final {
-        ReferenceType* other_ref = other->cast<ReferenceType>();
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const ReferenceType* other_ref = other->cast<ReferenceType>();
         assumed_equal.insert({referenced_type_, other_ref->referenced_type_});
         return referenced_type_->compare_congruent(other_ref->referenced_type_, assumed_equal);
     }
@@ -795,8 +808,8 @@ protected:
     Value(Kind kind) noexcept : Object(kind, false) {}
 
 public:
-    Type* as_type() = delete;
-    Value* as_value() = delete;
+    Type* dyn_type() = delete;
+    Value* dyn_value() = delete;
     virtual Type* get_type() const = 0;
     virtual Value* resolve_to(Type* target) const = 0;
     virtual void assign_from(Value* source) = 0;
@@ -857,7 +870,7 @@ public:
     }
     IntegerType* get_type() const final { return type_; }
     IntegerValue* resolve_to(Type* target) const final {
-        if (target && !target->as<IntegerType>()) {
+        if (target && !target->dyn_cast<IntegerType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("integer", target->repr());
         }
         if (target == nullptr) {
@@ -955,7 +968,7 @@ public:
     std::string_view repr() const final { return GlobalMemory::format_view("{}", value_); }
     FloatType* get_type() const final { return type_; }
     FloatValue* resolve_to(Type* target) const final {
-        if (target && !target->as<FloatType>()) {
+        if (target && !target->dyn_cast<FloatType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("float", target->repr());
         }
         if (target == nullptr) {
@@ -1109,7 +1122,7 @@ public:
     }
     ReferenceType* get_type() const final { return type_; }
     ReferenceValue* resolve_to(Type* target) const final {
-        if (target && !target->as<ReferenceType>()) {
+        if (target && !target->dyn_cast<ReferenceType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("reference", target->repr());
         }
         return new ReferenceValue(*this);
@@ -1142,25 +1155,25 @@ private:
 public:
     Term() noexcept = default;
     Type* effective_type() const noexcept {
-        if (auto type = ptr_->as_type()) {
+        if (auto type = ptr_->dyn_type()) {
             return type;
         } else {
-            return ptr_->as_value()->get_type();
+            return ptr_->dyn_value()->get_type();
         }
     }
-    bool is_const() const noexcept { return ptr_->as_value() != nullptr; }
+    bool is_const() const noexcept { return ptr_->dyn_value() != nullptr; }
     bool is_mutable() const noexcept { return is_mutable_; }
     bool is_rvalue() const noexcept { return is_rvalue_; }
     Object* operator->() const noexcept { return ptr_; }
     operator bool() const noexcept { return ptr_ != nullptr; }
 };
 
-inline Type* Object::as_type() {
+inline Type* Object::dyn_type() {
     if (!is_type_ && kind_ == Kind::NothingOrUnknown) return &UnknownType::instance;
     return is_type_ ? static_cast<Type*>(this) : nullptr;
 }
 
-inline Value* Object::as_value() {
+inline Value* Object::dyn_value() {
     if (is_type_ && kind_ == Kind::NothingOrUnknown) return new UnknownValue();
     return !is_type_ ? static_cast<Value*>(this) : nullptr;
 }
@@ -1191,10 +1204,10 @@ inline FloatType FloatType::f64_instance = FloatType(64);
 
 inline BooleanType BooleanType::instance;
 
-inline bool FunctionType::assignable_from_impl(Type* source) const {
+inline bool FunctionType::assignable_from_impl(const Type* source) const {
     // (Base) => Derived is assignable to (Derived) => Base
     // i.e., parameters are contravariant, return type is covariant
-    if (FunctionType* func_other = source->as<FunctionType>()) {
+    if (const FunctionType* func_other = source->dyn_cast<FunctionType>()) {
         if (parameters_.size() != func_other->parameters_.size()) {
             return false;
         }
@@ -1204,8 +1217,8 @@ inline bool FunctionType::assignable_from_impl(Type* source) const {
             }
         }
         return return_type_->assignable_from(func_other->return_type_);
-    } else if (IntersectionType* intersection_other = source->as<IntersectionType>()) {
-        for (Type* member_type : intersection_other->types_) {
+    } else if (const IntersectionType* intersection_other = source->dyn_cast<IntersectionType>()) {
+        for (const Type* member_type : intersection_other->types_) {
             if (this->assignable_from(member_type)) {
                 return true;
             }

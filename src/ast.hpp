@@ -1005,7 +1005,7 @@ public:
         for (size_t i = 0; i < parameters_.size(); ++i) {
             const auto& [param_name, param_type] = parameters_[i];
             Object* argument = arguments[i];
-            if ((param_type == nullptr) != (argument->as_type() != nullptr)) {
+            if ((param_type == nullptr) != (argument->dyn_type() != nullptr)) {
                 Diagnostic::report(TemplateArgumentCategoryMismatchError(
                     location_, param_name, param_type != nullptr
                 ));
@@ -1082,7 +1082,7 @@ inline Term TypeChecker::lookup_term_in(std::string_view identifier, Scope& scop
         }
         throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
     } else if (auto term = it->second.get<Term*>()) {
-        Type* type = (*term)->as_type();
+        Type* type = (*term)->dyn_type();
         if (!type) {
             type = (*term)->cast<Value>()->get_type();
         }
@@ -1092,7 +1092,7 @@ inline Term TypeChecker::lookup_term_in(std::string_view identifier, Scope& scop
         ComparableSpan<Type*> overload_types =
             *func | std::views::transform([this](const ASTFunctionSignature* expr) -> Type* {
                 Term term = expr->eval_term(*this);
-                if (auto type = term->as_type()) {
+                if (auto type = term->dyn_type()) {
                     return type->cast<FunctionType>();
                 }
                 return term->cast<FunctionValue>()->get_type();

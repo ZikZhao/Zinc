@@ -535,32 +535,31 @@ public:
         Type* right_type = right ? right.effective_type() : nullptr;
         auto it = map_.find({opcode, left_type, right_type});
         if (it != map_.end()) {
-            if (auto func_value = it->second->as_value()->cast<FunctionValue>();
-                func_value && const_expr) {
+            if (auto func_value = it->second->dyn_cast<FunctionValue>(); func_value && const_expr) {
                 return Term::from_const(func_value->invoke(
                     GlobalMemory::pack_array(
-                        left->as_value(), right ? right->cast<Value>() : nullptr
+                        left->cast<Value>(), right ? right->cast<Value>() : nullptr
                     )
                 ));
             } else {
-                auto func_type = it->second->as_type()->cast<FunctionType>();
+                auto func_type = it->second->dyn_cast<FunctionType>();
                 return Term::from_rvalue(func_type->return_type_);
             }
         } else {
             if (Object* instantiated = try_instantiate(opcode, left_type, right_type)) {
                 map_.insert({{opcode, left_type, right_type}, instantiated});
-                if (auto func_value = instantiated->as_value()->cast<FunctionValue>()) {
+                if (auto func_value = instantiated->dyn_cast<FunctionValue>()) {
                     if (const_expr) {
                         return Term::from_const(func_value->invoke(
                             GlobalMemory::pack_array(
-                                left->as_value(), right ? right->cast<Value>() : nullptr
+                                left->cast<Value>(), right ? right->cast<Value>() : nullptr
                             )
                         ));
                     } else {
                         return Term::from_rvalue(func_value->get_type()->return_type_);
                     }
                 } else {
-                    auto func_type = instantiated->as_type()->cast<FunctionType>();
+                    auto func_type = instantiated->dyn_cast<FunctionType>();
                     return Term::from_rvalue(func_type->return_type_);
                 }
             }
