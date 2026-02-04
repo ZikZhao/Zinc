@@ -36,6 +36,13 @@ type Node = {
     next: &Node;
 };
 
+type AnotherNode = {
+    value: i32;
+    next: &Node;
+};
+
+fn h(n: Node) -> AnotherNode {}
+
 fn main() -> i32 {
     f(2, 3);
     g(5, 4);

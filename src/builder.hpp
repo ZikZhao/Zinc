@@ -187,8 +187,7 @@ private:
         ComparableSpan<ASTFunctionParameter*> parameters =
             transform_list<ASTFunctionParameter>(ctx->parameters_);
         std::string_view identifier = text(ctx->identifier_);
-        ASTExplicitTypeExpr* return_type =
-            static_cast<ASTExplicitTypeExpr*>(transform(ctx->return_type_));
+        ASTExpression* return_type = static_cast<ASTExpression*>(transform(ctx->return_type_));
         ComparableSpan<ASTNode*> body = transform_list(ctx->body_);
         last_visited_ = new ASTFunctionDefinition(
             loc(ctx),
@@ -203,9 +202,7 @@ private:
     }
     antlrcpp::Any visitParameter(ZincParser::ParameterContext* ctx) noexcept final {
         last_visited_ = new ASTFunctionParameter(
-            loc(ctx),
-            text(ctx->identifier_),
-            static_cast<ASTExplicitTypeExpr*>(transform(ctx->type_))
+            loc(ctx), text(ctx->identifier_), static_cast<ASTExpression*>(transform(ctx->type_))
         );
         return {};
     }

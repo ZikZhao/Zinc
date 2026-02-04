@@ -240,6 +240,11 @@
                         "ignoreFailures": true
                     },
                     {
+                        "description": "Set to show derived types",
+                        "text": "set print object on",
+                        "ignoreFailures": true
+                    },
+                    {
                         "description": "Skip all functions starting with __ubsan",
                         "text": "skip -rfu ^__ubsan",
                         "ignoreFailures": true

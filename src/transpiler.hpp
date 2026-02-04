@@ -413,7 +413,9 @@ inline void ASTPrimitiveType::transpile(
 inline void ASTFunctionType::transpile(
     Transpiler& transpiler, TypeChecker& checker
 ) const noexcept {
-    eval_type(checker)->transpile(transpiler);
+    TypeResolution func_type;
+    eval_type(checker, func_type);
+    func_type->transpile(transpiler);
 }
 
 inline void ASTFieldDeclaration::transpile(
@@ -424,8 +426,10 @@ inline void ASTFieldDeclaration::transpile(
 }
 
 inline void ASTRecordType::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
-    RecordType* record_type = static_cast<RecordType*>(eval_type(checker));
-    auto [it, inserted] = transpiler.state_.structurals.insert({record_type, 0});
+    TypeResolution record_type;
+    eval_type(checker, record_type);
+    auto [it, inserted] =
+        transpiler.state_.structurals.insert({static_cast<RecordType*>(record_type.get()), 0});
     if (inserted) {
         it->second = transpiler.state_.structurals.size();
     }
@@ -435,7 +439,7 @@ inline void ASTRecordType::transpile(Transpiler& transpiler, TypeChecker& checke
         transpiler.state_.structural_impls.push(
             [this, id = it->second](Transpiler& transpiler, TypeChecker& checker) {
                 GlobalMemory::String struct_name = GlobalMemory::format("$structural_{}", id);
-                transpiler[Section::StructuralDeclarations] << "struct " << struct_name << ";";
+                transpiler[Section::StructuralDeclarations] << "struct " << struct_name << ";\n";
                 transpiler[Section::Declarations] << "struct " << struct_name << " {"
                                                   << Transpiler::indent << Transpiler::newline;
                 for (const auto& field : fields_) {

@@ -85,8 +85,8 @@ public:
     template <TypeClass T>
     static T* get(auto&&... args) noexcept {
         using Primitives = std::tuple<AnyType, NullType, IntegerType, FloatType, BooleanType>;
-        using OtherInternals =
-            std::tuple<FunctionType, RecordType, IntersectionType, UnionType, ClassType>;
+        using OtherInternals = std::
+            tuple<FunctionType, RecordType, IntersectionType, UnionType, ClassType, ReferenceType>;
         if constexpr (TypeInTupleV<T, Primitives>) {
             static_assert(false);
         } else if constexpr (std::is_same_v<T, ClassType>) {
@@ -118,8 +118,8 @@ private:
         GlobalMemory::Set<UnionType*, TypeComparator>,
         GlobalMemory::Set<ReferenceType*, TypeComparator>>
         cache_;
-    GlobalMemory::Vector<Type*> pending_;
     GlobalMemory::Map<std::type_index, Type*> builtin_types_;
+    GlobalMemory::MultiMap<Type*, Type*> pending_;
 
 private:
     template <TypeClass T>
