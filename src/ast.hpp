@@ -117,6 +117,7 @@ public:
     }
 };
 
+/// TODO: poison references that are interned out
 class TypeChecker final {
 private:
     Scope* current_scope_;
@@ -462,10 +463,10 @@ using ASTRightShiftAssignOp = ASTBinaryOp<OperatorFunctors::RightShiftAssign>;
 
 class ASTPrimitiveType final : public ASTExplicitTypeExpr {
 public:
-    Type* type_;
+    const Type* type_;
 
 public:
-    ASTPrimitiveType(const Location& loc, Type* type) noexcept
+    ASTPrimitiveType(const Location& loc, const Type* type) noexcept
         : ASTExplicitTypeExpr(loc), type_(type) {}
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 
@@ -585,9 +586,10 @@ public:
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         TypeResolution expr_type;
-        expr_->eval_type(checker, expr_type);
-        assert(expr_type.is_valid());
-        out = TypeResolution(TypeRegistry::get<ReferenceType>(expr_type.get(), is_mutable_));
+        expr_->eval_type(checker, expr_type, false);
+        out = TypeResolution(
+            TypeRegistry::get<ReferenceType>(expr_type.get(), is_mutable_, expr_type.is_complete())
+        );
     }
 };
 
@@ -1092,7 +1094,8 @@ inline Term TypeChecker::lookup_term_in(std::string_view identifier, Scope& scop
                 return overload_term->cast<FunctionValue>()->get_type();
             }) |
             GlobalMemory::collect<ComparableSpan<const Type*>>();
-        IntersectionType* intersection_type = TypeRegistry::get<IntersectionType>(overload_types);
+        const IntersectionType* intersection_type =
+            TypeRegistry::get<IntersectionType>(overload_types);
         current_scope_ = previous_scope;
         return Term(intersection_type, Term::Category::Var);
     } else if (it->second.get<const ASTExpression*>()) {

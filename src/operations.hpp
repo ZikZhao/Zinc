@@ -572,8 +572,7 @@ public:
     }
 
     Term eval_value_op(OperatorCode opcode, Term left, Term right = {}) {
-        if (left->kind_ == Kind::NothingOrUnknown ||
-            (right && right->kind_ == Kind::NothingOrUnknown)) {
+        if (left->kind_ == Kind::Unknown || (right && right->kind_ == Kind::Unknown)) {
             return Term::unknown();
         } else if ((left->kind_ == Kind::Integer || left->kind_ == Kind::Float ||
                     left->kind_ == Kind::Boolean) &&
@@ -629,7 +628,7 @@ private:
     Term eval_primitive_op(OperatorCode opcode, Term left, Term right) const {
         const Type* left_type = left.effective_type();
         Kind left_kind = left->kind_;
-        Kind right_kind = right ? right->kind_ : Kind::NothingOrUnknown;
+        Kind right_kind = right ? right->kind_ : Kind::Unknown;
         bool comptime = left.is_comptime() && (right ? right.is_comptime() : true);
         if (comptime) {
             Value* left_value = left.comp_var();
