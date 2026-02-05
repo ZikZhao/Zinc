@@ -60,11 +60,68 @@ class OverloadedFunctionValue;
 class ReferenceValue;
 
 template <typename T>
-concept TypeClass = !std::is_same_v<T, Type> && std::derived_from<T, Type>;
+concept TypeClass = std::derived_from<T, Type> && !std::is_abstract_v<T>;
 template <typename V>
-concept ValueClass = !std::is_same_v<V, Value> && std::derived_from<V, Value>;
+concept ValueClass = std::derived_from<V, Value> && !std::is_abstract_v<V>;
 
 using FunctionOverloads = GlobalMemory::Vector<Object*>;
+
+class TypeDependencyGraph {
+private:
+    struct Edge {
+        const Type* parent;
+        std::reference_wrapper<const Type*> child;
+    };
+
+private:
+    GlobalMemory::Vector<Edge> edges_;
+
+public:
+    bool check_dependency(const Type* parent, std::reference_wrapper<const Type*> child) noexcept {
+        if (!is_readable(child)) {
+            add_dependency(parent, child);
+            return false;
+        }
+        return true;
+    }
+
+private:
+    void add_dependency(const Type* parent, std::reference_wrapper<const Type*> child) noexcept {
+        edges_.push_back({parent, child});
+    }
+
+    bool is_readable(const Type* type) const noexcept {
+        for (const Edge& edge : edges_) {
+            if (edge.child.get() == type) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
+class TypeResolution final {
+private:
+    std::uintptr_t ptr_;
+
+public:
+    TypeResolution() noexcept = default;
+    TypeResolution(const Type* type) noexcept : ptr_(reinterpret_cast<std::uintptr_t>(type)) {}
+    template <TypeClass T>
+    TypeResolution(std::type_identity<T>) noexcept
+        : ptr_(
+              reinterpret_cast<std::uintptr_t>(GlobalMemory::alloc_raw(sizeof(T), alignof(T))) | 1
+          ) {}
+    const Type* get() const noexcept {
+        return reinterpret_cast<const Type*>(ptr_ & ~std::uintptr_t(1));
+    }
+    const Type* operator->() const noexcept {
+        assert(is_complete());
+        return reinterpret_cast<const Type*>(ptr_);
+    }
+    bool is_complete() const noexcept { return (ptr_ & 1) == 0; }
+    bool is_valid() const noexcept { return (get() != nullptr) && is_complete(); }
+};
 
 class TypeRegistry {
     friend class ThreadGuard;
@@ -83,16 +140,16 @@ private:
 
 public:
     template <TypeClass T>
+        requires(
+            !TypeInTupleV<T, std::tuple<AnyType, NullType, IntegerType, FloatType, BooleanType>>
+        )
     static T* get(auto&&... args) noexcept {
-        using Primitives = std::tuple<AnyType, NullType, IntegerType, FloatType, BooleanType>;
-        using OtherInternals = std::
+        using Composites = std::
             tuple<FunctionType, RecordType, IntersectionType, UnionType, ClassType, ReferenceType>;
-        if constexpr (TypeInTupleV<T, Primitives>) {
-            static_assert(false);
-        } else if constexpr (std::is_same_v<T, ClassType>) {
+        if constexpr (std::is_same_v<T, ClassType>) {
             // classes with same definition are distinct types
             return new T(std::forward<decltype(args)>(args)...);
-        } else if constexpr (TypeInTupleV<T, OtherInternals>) {
+        } else if constexpr (TypeInTupleV<T, Composites>) {
             return instance->get_cached<T>(std::forward<decltype(args)>(args)...);
         } else {
             // builtin singleton types, e.g. StringType
@@ -108,7 +165,7 @@ public:
         }
     }
 
-    static Type* get_unknown() noexcept;
+    static const Type* get_unknown() noexcept;
 
 private:
     std::tuple<
@@ -117,15 +174,15 @@ private:
         GlobalMemory::Set<IntersectionType*, TypeComparator>,
         GlobalMemory::Set<UnionType*, TypeComparator>,
         GlobalMemory::Set<ReferenceType*, TypeComparator>>
-        cache_;
+        types_;
     GlobalMemory::Map<std::type_index, Type*> builtin_types_;
-    GlobalMemory::MultiMap<Type*, Type*> pending_;
+    TypeDependencyGraph graph_;
 
 private:
     template <TypeClass T>
     T* get_cached(auto&&... args) noexcept {
         GlobalMemory::Set<T*, TypeComparator>& type_set =
-            std::get<GlobalMemory::Set<T*, TypeComparator>>(cache_);
+            std::get<GlobalMemory::Set<T*, TypeComparator>>(types_);
         T new_type(std::forward<decltype(args)>(args)...);
         if (auto it = type_set.find(&new_type); it != type_set.end()) {
             return *it;
@@ -139,6 +196,63 @@ public:
     TypeRegistry() noexcept = default;
 };
 
+class Term : public GlobalMemory::MemoryManaged {
+public:
+    enum class Category {
+        CompConst,   // a compile-time constant value -> const Value*
+        CompVar,     // a compile-time variable -> Value*
+        CompRValue,  // a compile-time temporary value -> const Value*
+        Immutable,   // a runtime constant value -> const Type*
+        Var,         // a runtime variable -> const Type*
+        RValue,      // a runtime temporary value -> const Type*
+    };
+
+public:
+    static Term unknown() noexcept;
+
+private:
+    union {
+        const Object* ptr_;
+        Value* value_;
+    };
+    Category category_;
+
+public:
+    Term(const auto* type, Category category) noexcept : ptr_(type), category_(category) {
+        if constexpr (std::derived_from<std::remove_cvref_t<decltype(*type)>, Type>) {
+            assert(
+                category == Category::Immutable || category == Category::Var ||
+                category == Category::RValue
+            );
+        } else {
+            assert(category == Category::CompConst || category == Category::CompRValue);
+        }
+    }
+    Term(Value* value, Category category) noexcept : value_(value), category_(category) {
+        assert(
+            category == Category::CompConst || category == Category::CompVar ||
+            category == Category::CompRValue
+        );
+    }
+
+public:
+    Term() noexcept = default;
+    const Type* effective_type() const noexcept;
+    bool is_comptime() const noexcept {
+        return category_ == Category::CompConst || category_ == Category::CompVar ||
+               category_ == Category::CompRValue;
+    }
+    bool is_mutable() const noexcept {
+        return category_ == Category::CompVar || category_ == Category::Var;
+    }
+    const Object* operator->() const noexcept { return ptr_; }
+    Value* comp_var() const noexcept {
+        assert(category_ == Category::CompVar);
+        return value_;
+    }
+    operator bool() const noexcept { return ptr_ != nullptr; }
+};
+
 class Object : public GlobalMemory::MemoryManaged {
 public:
     Kind kind_;
@@ -149,9 +263,25 @@ private:
 public:
     Object(Kind kind, bool is_type) noexcept : kind_(kind), is_type_(is_type) {}
 
-    Type* dyn_type();
+    auto dyn_type(this auto& self)
+        requires std::same_as<std::remove_cvref_t<decltype(self)>, Object>
+    {
+        using ResultType = std::conditional_t<
+            std::is_const_v<std::remove_reference_t<decltype(self)>>,
+            const Type*,
+            Type*>;
+        return self.is_type_ ? static_cast<ResultType>(&self) : nullptr;
+    };
 
-    Value* dyn_value();
+    auto dyn_value(this auto& self)
+        requires std::same_as<std::remove_cvref_t<decltype(self)>, Object>
+    {
+        using ResultType = std::conditional_t<
+            std::is_const_v<std::remove_reference_t<decltype(self)>>,
+            const Value*,
+            Value*>;
+        return !self.is_type_ ? static_cast<ResultType>(&self) : nullptr;
+    };
 
     template <TypeClass T>
     auto dyn_cast(this auto& self) {
@@ -227,17 +357,27 @@ public:
     }
 
 protected:
-    virtual bool assignable_from_impl(const Type* source) const = 0;
+    virtual bool can_intern(TypeDependencyGraph& graph) noexcept = 0;
 
     virtual std::strong_ordering compare_congruent_impl(
         const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
-    ) const noexcept {
-        // Default implementation for primitive types
-        UNREACHABLE();
-    };
+    ) const noexcept = 0;
+
+    virtual bool assignable_from_impl(const Type* source) const = 0;
 };
 
-class UnknownType final : public Type {
+class PrimitiveType : public Type {
+protected:
+    PrimitiveType(Kind kind) noexcept : Type(kind) {}
+    bool can_intern(TypeDependencyGraph& graph) noexcept final { return true; }
+    std::strong_ordering compare_congruent_impl(
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        UNREACHABLE();
+    }
+};
+
+class UnknownType final : public PrimitiveType {
     friend class Object;
     friend class TypeRegistry;
 
@@ -246,7 +386,7 @@ public:
     static UnknownType instance;
 
 private:
-    UnknownType() noexcept : Type(kind) {}
+    UnknownType() noexcept : PrimitiveType(kind) {}
 
 public:
     std::string_view repr() const final { return "unknown"; }
@@ -254,25 +394,25 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class AnyType final : public Type {
+class AnyType final : public PrimitiveType {
 public:
     static constexpr Kind kind = Kind::Any;
     static AnyType instance;
 
 public:
-    AnyType() noexcept : Type(kind) {}
+    AnyType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "any"; }
     bool assignable_from_impl(const Type* source) const final { return true; }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class NullType final : public Type {
+class NullType final : public PrimitiveType {
 public:
     static constexpr Kind kind = Kind::Null;
     static NullType instance;
 
 public:
-    NullType() noexcept : Type(kind) {}
+    NullType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "null"; }
     bool assignable_from_impl(const Type* source) const final {
         /// No variable can have null type except null literal
@@ -281,7 +421,7 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class IntegerType final : public Type {
+class IntegerType final : public PrimitiveType {
 public:
     static constexpr Kind kind = Kind::Integer;
     static IntegerType untyped_instance;
@@ -300,7 +440,7 @@ public:
 
 public:
     IntegerType(bool is_signed, std::uint8_t bits) noexcept
-        : Type(kind), is_signed_(is_signed), bits_(bits) {
+        : PrimitiveType(kind), is_signed_(is_signed), bits_(bits) {
         assert(bits == 0 || bits == 8 || bits == 16 || bits == 32 || bits == 64);
     }
     std::string_view repr() const final {
@@ -314,7 +454,7 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class FloatType final : public Type {
+class FloatType final : public PrimitiveType {
 public:
     static constexpr Kind kind = Kind::Float;
     static FloatType untyped_instance;
@@ -325,7 +465,7 @@ public:
     std::uint8_t bits_;  // 32, 64 bits (or 0 for untyped float)
 
 public:
-    FloatType(std::uint8_t bits) noexcept : Type(kind), bits_(bits) {
+    FloatType(std::uint8_t bits) noexcept : PrimitiveType(kind), bits_(bits) {
         assert(bits == 0 || bits == 32 || bits == 64);
     }
     std::string_view repr() const final { return GlobalMemory::format_view("f{}", bits_); }
@@ -336,13 +476,13 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class BooleanType final : public Type {
+class BooleanType final : public PrimitiveType {
 public:
     static constexpr Kind kind = Kind::Boolean;
     static BooleanType instance;
 
 public:
-    BooleanType() noexcept : Type(kind) {}
+    BooleanType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "bool"; }
     bool assignable_from_impl(const Type* source) const final {
         return source->dyn_cast<BooleanType>() != nullptr;
@@ -355,21 +495,32 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
-    ComparableSpan<Type*> parameters_;
-    Type* return_type_;
+    ComparableSpan<const Type*> parameters_;
+    const Type* return_type_;
 
 public:
-    FunctionType(ComparableSpan<Type*> parameters, Type* return_type) noexcept
+    FunctionType(ComparableSpan<const Type*> parameters, const Type* return_type) noexcept
         : Type(kind), parameters_(parameters), return_type_(return_type) {}
 
     std::string_view repr() const final {
         GlobalMemory::String params_repr =
-            parameters_ | std::views::transform([](Type* type) { return type->repr(); }) |
+            parameters_ | std::views::transform([](const Type* type) { return type->repr(); }) |
             std::views::join_with(", "sv) | GlobalMemory::collect<GlobalMemory::String>();
         return GlobalMemory::format_view("({}) => {}", params_repr, return_type_->repr());
     }
 
-    bool assignable_from_impl(const Type* source) const final;
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        for (const Type* param_type : parameters_) {
+            if (!graph.check_dependency(this, param_type)) {
+                return false;
+            }
+        }
+        if (!graph.check_dependency(this, return_type_)) {
+            return false;
+        }
+        return true;
+    }
+
     std::strong_ordering compare_congruent_impl(
         const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
@@ -387,6 +538,9 @@ public:
         assumed_equal.insert({return_type_, other_func->return_type_});
         return return_type_->compare_congruent(other_func->return_type_, assumed_equal);
     }
+
+    bool assignable_from_impl(const Type* source) const final;
+
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -395,18 +549,20 @@ public:
     static constexpr Kind kind = Kind::Array;
 
 public:
-    Type* element_type_;
+    const Type* element_type_;
     std::size_t size_ = 0;  // 0 means dynamic size
 
-    ArrayType(Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
+public:
+    ArrayType(const Type* element_type) noexcept : Type(kind), element_type_(element_type) {}
+
     std::string_view repr() const final {
         return GlobalMemory::format_view("{}[]", element_type_->repr());
     }
-    bool assignable_from_impl(const Type* source) const final {
-        const ArrayType* other_array = source->dyn_cast<ArrayType>();
-        return other_array && element_type_->assignable_from(other_array->element_type_) &&
-               (size_ == 0 || size_ == other_array->size_);
+
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        return graph.check_dependency(this, element_type_);
     }
+
     std::strong_ordering compare_congruent_impl(
         const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
@@ -417,6 +573,13 @@ public:
         assumed_equal.insert({element_type_, other_array->element_type_});
         return element_type_->compare_congruent(other_array->element_type_, assumed_equal);
     }
+
+    bool assignable_from_impl(const Type* source) const final {
+        const ArrayType* other_array = source->dyn_cast<ArrayType>();
+        return other_array && element_type_->assignable_from(other_array->element_type_) &&
+               (size_ == 0 || size_ == other_array->size_);
+    }
+
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -425,10 +588,10 @@ public:
     static constexpr Kind kind = Kind::Record;
 
 private:
-    GlobalMemory::Map<std::string_view, Type*> fields_;
+    GlobalMemory::Map<std::string_view, const Type*> fields_;
 
 public:
-    RecordType(GlobalMemory::Map<std::string_view, Type*> fields) noexcept
+    RecordType(GlobalMemory::Map<std::string_view, const Type*> fields) noexcept
         : Type(kind), fields_(std::move(fields)) {}
 
     std::string_view repr() const final {
@@ -436,21 +599,15 @@ public:
         return {};
     }
 
-    bool assignable_from_impl(const Type* source) const final {
-        // (a,b,c) is assignable to (a,b)
-        // i.e., source must have at least all fields of this
-        const RecordType* other_record = source->dyn_cast<RecordType>();
-        if (other_record == nullptr) {
-            return false;
-        }
-        for (const auto& [name, type] : fields_) {
-            auto it = other_record->fields_.find(name);
-            if (it == other_record->fields_.end() || !(*it).second->assignable_from(type)) {
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        for (auto it : fields_) {
+            if (!graph.check_dependency(this, it.second)) {
                 return false;
             }
         }
         return true;
     }
+
     std::strong_ordering compare_congruent_impl(
         const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
@@ -472,6 +629,23 @@ public:
         }
         return std::strong_ordering::equal;
     }
+
+    bool assignable_from_impl(const Type* source) const final {
+        // (a,b,c) is assignable to (a,b)
+        // i.e., source must have at least all fields of this
+        const RecordType* other_record = source->dyn_cast<RecordType>();
+        if (other_record == nullptr) {
+            return false;
+        }
+        for (const auto& [name, type] : fields_) {
+            auto it = other_record->fields_.find(name);
+            if (it == other_record->fields_.end() || !(*it).second->assignable_from(type)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -484,14 +658,29 @@ private:
 
 public:
     InterfaceType() noexcept : Type(kind) {}
+
     std::string_view repr() const override {
-        // TODO
+        /// TODO:
         return {};
     }
+
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        /// TODO:
+        return true;
+    }
+
+    std::strong_ordering compare_congruent_impl(
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        /// TODO:
+        return std::strong_ordering::equal;
+    }
+
     bool assignable_from_impl(const Type* source) const final {
-        // TODO
+        /// TODO:
         return false;
     }
+
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -501,17 +690,17 @@ public:
 
 private:
     std::string_view identifier_;
-    Type* extends_;
-    ComparableSpan<Type*> implements_;
-    GlobalMemory::Map<std::string_view, Type*> attr_;
+    const Type* extends_;
+    ComparableSpan<const Type*> implements_;
+    GlobalMemory::Map<std::string_view, const Type*> attr_;
     GlobalMemory::Map<std::string_view, FunctionOverloads> methods_;
 
 public:
     ClassType(
         std::string_view identifier,
-        Type* extends,
-        ComparableSpan<Type*> interfaces,
-        GlobalMemory::Map<std::string_view, Type*> attr,
+        const Type* extends,
+        ComparableSpan<const Type*> interfaces,
+        GlobalMemory::Map<std::string_view, const Type*> attr,
         GlobalMemory::Map<std::string_view, FunctionOverloads> methods
     ) noexcept
         : Type(kind),
@@ -525,14 +714,15 @@ public:
         return GlobalMemory::format_view("class {}", identifier_);
     }
 
-    bool assignable_from_impl(const Type* other) const final { return false; }
+    bool can_intern(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
 
     std::strong_ordering compare_congruent_impl(
         const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
-        // ClassType is not interned, so this function is never called
         UNREACHABLE();
     }
+
+    bool assignable_from_impl(const Type* other) const final { return false; }
 
     FunctionOverloads get_method(std::string_view name) const {
         auto it = methods_.find(name);
@@ -544,7 +734,7 @@ public:
         return it->second;
     }
 
-    Type* get_attr(std::string_view name) const {
+    const Type* get_attr(std::string_view name) const {
         auto it = attr_.find(name);
         if (it == attr_.end()) {
             throw UnlocatedProblem::make<AttributeError>(
@@ -553,6 +743,7 @@ public:
         }
         return it->second;
     }
+
     void transpile(Transpiler& transpiler) const noexcept override;
 };
 
@@ -561,20 +752,20 @@ public:
     static constexpr Kind kind = Kind::Intersection;
 
 private:
-    static ComparableSpan<Type*> flatten(ComparableSpan<Type*> unflattened_types) {
+    static ComparableSpan<const Type*> flatten(ComparableSpan<const Type*> unflattened_types) {
         std::size_t size = 0;
-        for (Type* type : unflattened_types) {
-            if (IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
+        for (const Type* type : unflattened_types) {
+            if (const IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
                 size += intersection_type->types_.size();
             } else {
                 size++;
             }
         }
-        ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
+        ComparableSpan<const Type*> buffer = GlobalMemory::alloc_array<const Type*>(size);
         std::size_t index = 0;
-        for (Type* type : unflattened_types) {
-            if (IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
-                for (Type* inner_type : intersection_type->types_) {
+        for (const Type* type : unflattened_types) {
+            if (const IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
+                for (const Type* inner_type : intersection_type->types_) {
                     buffer[index++] = inner_type;
                 }
             } else {
@@ -583,21 +774,47 @@ private:
         }
         return buffer;
     }
-    static ComparableSpan<Type*> flatten(Type* left, Type* right) {
-        Type* types[] = {left, right};
-        return flatten(ComparableSpan<Type*>(types));
+    static ComparableSpan<const Type*> flatten(const Type* left, const Type* right) {
+        const Type* types[] = {left, right};
+        return flatten(ComparableSpan<const Type*>(types));
     }
 
 public:
-    ComparableSpan<Type*> types_;
+    ComparableSpan<const Type*> types_;
 
 public:
     IntersectionType(auto&&... unflattened_types) noexcept
         : Type(kind), types_{flatten(unflattened_types...)} {}
 
     std::string_view repr() const final {
-        // TODO
+        /// TODO:
         return {};
+    }
+
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        for (const Type* type : types_) {
+            if (!graph.check_dependency(this, type)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::strong_ordering compare_congruent_impl(
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const IntersectionType* other_intersection = other->cast<IntersectionType>();
+        if (types_.size() != other_intersection->types_.size()) {
+            return types_.size() <=> other_intersection->types_.size();
+        }
+        for (std::size_t i = 0; i < types_.size(); ++i) {
+            assumed_equal.insert({types_[i], other_intersection->types_[i]});
+            auto cmp = types_[i]->compare_congruent(other_intersection->types_[i], assumed_equal);
+            if (cmp != std::strong_ordering::equal) {
+                return cmp;
+            }
+        }
+        return std::strong_ordering::equal;
     }
 
     bool assignable_from_impl(const Type* source) const final {
@@ -622,23 +839,6 @@ public:
         }
     }
 
-    std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
-    ) const noexcept final {
-        const IntersectionType* other_intersection = other->cast<IntersectionType>();
-        if (types_.size() != other_intersection->types_.size()) {
-            return types_.size() <=> other_intersection->types_.size();
-        }
-        for (std::size_t i = 0; i < types_.size(); ++i) {
-            assumed_equal.insert({types_[i], other_intersection->types_[i]});
-            auto cmp = types_[i]->compare_congruent(other_intersection->types_[i], assumed_equal);
-            if (cmp != std::strong_ordering::equal) {
-                return cmp;
-            }
-        }
-        return std::strong_ordering::equal;
-    }
-
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -647,20 +847,20 @@ public:
     static constexpr Kind kind = Kind::Union;
 
 private:
-    static ComparableSpan<Type*> flatten(ComparableSpan<Type*> unflattened_types) {
+    static ComparableSpan<const Type*> flatten(ComparableSpan<const Type*> unflattened_types) {
         std::size_t size = 0;
-        for (Type* type : unflattened_types) {
-            if (UnionType* union_type = type->dyn_cast<UnionType>()) {
+        for (const Type* type : unflattened_types) {
+            if (const UnionType* union_type = type->dyn_cast<UnionType>()) {
                 size += union_type->types_.size();
             } else {
                 size++;
             }
         }
-        ComparableSpan<Type*> buffer = GlobalMemory::alloc_array<Type*>(size);
+        ComparableSpan<const Type*> buffer = GlobalMemory::alloc_array<const Type*>(size);
         std::size_t index = 0;
-        for (Type* type : unflattened_types) {
-            if (UnionType* union_type = type->dyn_cast<UnionType>()) {
-                for (Type* inner_type : union_type->types_) {
+        for (const Type* type : unflattened_types) {
+            if (const UnionType* union_type = type->dyn_cast<UnionType>()) {
+                for (const Type* inner_type : union_type->types_) {
                     buffer[index++] = inner_type;
                 }
             } else {
@@ -669,13 +869,13 @@ private:
         }
         return buffer;
     }
-    static ComparableSpan<Type*> flatten(Type* left, Type* right) {
-        Type* types[] = {left, right};
-        return flatten(ComparableSpan<Type*>(types));
+    static ComparableSpan<const Type*> flatten(const Type* left, const Type* right) {
+        const Type* types[] = {left, right};
+        return flatten(ComparableSpan<const Type*>(types));
     }
 
 public:
-    ComparableSpan<Type*> types_;
+    ComparableSpan<const Type*> types_;
 
 public:
     UnionType(auto&&... unflattened_types) noexcept
@@ -684,6 +884,32 @@ public:
     std::string_view repr() const final {
         // TODO
         return {};
+    }
+
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        for (const Type* type : types_) {
+            if (!graph.check_dependency(this, type)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::strong_ordering compare_congruent_impl(
+        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const UnionType* other_union = other->cast<UnionType>();
+        if (types_.size() != other_union->types_.size()) {
+            return types_.size() <=> other_union->types_.size();
+        }
+        for (std::size_t i = 0; i < types_.size(); ++i) {
+            assumed_equal.insert({types_[i], other_union->types_[i]});
+            auto cmp = types_[i]->compare_congruent(other_union->types_[i], assumed_equal);
+            if (cmp != std::strong_ordering::equal) {
+                return cmp;
+            }
+        }
+        return std::strong_ordering::equal;
     }
 
     bool assignable_from_impl(const Type* source) const final {
@@ -707,23 +933,6 @@ public:
         return false;
     }
 
-    std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
-    ) const noexcept final {
-        const UnionType* other_union = other->cast<UnionType>();
-        if (types_.size() != other_union->types_.size()) {
-            return types_.size() <=> other_union->types_.size();
-        }
-        for (std::size_t i = 0; i < types_.size(); ++i) {
-            assumed_equal.insert({types_[i], other_union->types_[i]});
-            auto cmp = types_[i]->compare_congruent(other_union->types_[i], assumed_equal);
-            if (cmp != std::strong_ordering::equal) {
-                return cmp;
-            }
-        }
-        return std::strong_ordering::equal;
-    }
-
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -738,15 +947,17 @@ public:
 public:
     ReferenceType(const Type* referenced_type, bool is_mutable) noexcept
         : Type(kind), referenced_type_(referenced_type), is_mutable_(is_mutable) {}
+
     std::string_view repr() const final {
         return GlobalMemory::format_view(
             "&{}{}", is_mutable_ ? "mut " : "", referenced_type_->repr()
         );
     }
-    bool assignable_from_impl(const Type* source) const final {
-        const ReferenceType* other_ref = source->dyn_cast<ReferenceType>();
-        return other_ref && referenced_type_->assignable_from(other_ref->referenced_type_);
+
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        return graph.check_dependency(this, referenced_type_);
     }
+
     std::strong_ordering compare_congruent_impl(
         const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
@@ -754,6 +965,12 @@ public:
         assumed_equal.insert({referenced_type_, other_ref->referenced_type_});
         return referenced_type_->compare_congruent(other_ref->referenced_type_, assumed_equal);
     }
+
+    bool assignable_from_impl(const Type* source) const final {
+        const ReferenceType* other_ref = source->dyn_cast<ReferenceType>();
+        return other_ref && referenced_type_->assignable_from(other_ref->referenced_type_);
+    }
+
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -810,8 +1027,9 @@ protected:
 public:
     Type* dyn_type() = delete;
     Value* dyn_value() = delete;
-    virtual Type* get_type() const = 0;
-    virtual Value* resolve_to(Type* target) const = 0;
+    virtual const Type* get_type() const noexcept = 0;
+    virtual Value* clone() const noexcept = 0;
+    virtual Value* resolve_to(const Type* target) const = 0;
     virtual void assign_from(Value* source) = 0;
 };
 
@@ -825,8 +1043,9 @@ public:
 private:
     UnknownValue() noexcept : Value(kind) {}
     std::string_view repr() const final { return "unknown"; }
-    UnknownType* get_type() const final { return &UnknownType::instance; }
-    UnknownValue* resolve_to(Type* target) const final { return new UnknownValue(); }
+    UnknownType* get_type() const noexcept final { return &UnknownType::instance; }
+    UnknownValue* clone() const noexcept final { return new UnknownValue(*this); }
+    UnknownValue* resolve_to(const Type* target) const noexcept final { return new UnknownValue(); }
     void assign_from(Value* source) final { UNREACHABLE(); }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -838,8 +1057,9 @@ public:
 public:
     NullValue() noexcept : Value(kind) {}
     std::string_view repr() const final { return "null"; }
-    NullType* get_type() const final { return &NullType::instance; }
-    NullValue* resolve_to(Type* target) const final {
+    const NullType* get_type() const noexcept final { return &NullType::instance; }
+    NullValue* clone() const noexcept final { return new NullValue(*this); }
+    NullValue* resolve_to(const Type* target) const final {
         assert(target);
         if (target->kind_ != Kind::Null) {
             throw UnlocatedProblem::make<TypeMismatchError>("null", target->repr());
@@ -855,21 +1075,22 @@ public:
     static constexpr Kind kind = Kind::Integer;
 
 public:
-    IntegerType* const type_;  // nullptr for integer literals without a specific type
+    const IntegerType* const type_;  // nullptr for integer literals without a specific type
     BigInt value_;
 
 public:
     explicit IntegerValue(std::string_view value) noexcept
         : Value(kind), type_(&IntegerType::untyped_instance), value_(value) {}
-    IntegerValue(IntegerType* type, BigInt value) noexcept
+    IntegerValue(const IntegerType* type, BigInt value) noexcept
         : Value(kind), type_(type), value_(std::move(value)) {
         assert(type && type != &IntegerType::untyped_instance);
     }
     std::string_view repr() const final {
         return GlobalMemory::format_view("{}", value_.to_string());
     }
-    IntegerType* get_type() const final { return type_; }
-    IntegerValue* resolve_to(Type* target) const final {
+    const IntegerType* get_type() const noexcept final { return type_; }
+    IntegerValue* clone() const noexcept final { return new IntegerValue(*this); }
+    IntegerValue* resolve_to(const Type* target) const final {
         if (target && !target->dyn_cast<IntegerType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("integer", target->repr());
         }
@@ -888,7 +1109,7 @@ public:
             }
         } else if (type_ != &IntegerType::untyped_instance) {
             // implicit convert to the specified target type (must be wider type)
-            IntegerType* int_target = target->cast<IntegerType>();
+            const IntegerType* int_target = target->cast<IntegerType>();
             if (type_->is_signed_ != int_target->is_signed_) {
                 throw UnlocatedProblem::make<TypeMismatchError>(target->repr(), type_->repr());
             }
@@ -901,7 +1122,7 @@ public:
             return new IntegerValue(int_target, value_);
         } else {
             // convert to the specified target type
-            IntegerType* int_target = target->cast<IntegerType>();
+            const IntegerType* int_target = target->cast<IntegerType>();
             std::string_view error_type;
             if (int_target->is_signed_) {
                 switch (int_target->bits_) {
@@ -956,18 +1177,20 @@ public:
     static constexpr Kind kind = Kind::Float;
 
 public:
-    FloatType* const type_;
+    const FloatType* const type_;
     double value_;
 
 public:
     explicit FloatValue(double value) noexcept
         : Value(kind), type_(&FloatType::untyped_instance), value_(value) {}
-    FloatValue(FloatType* type, double value) noexcept : Value(kind), type_(type), value_(value) {
+    FloatValue(const FloatType* type, double value) noexcept
+        : Value(kind), type_(type), value_(value) {
         assert(type && type != &FloatType::untyped_instance);
     }
     std::string_view repr() const final { return GlobalMemory::format_view("{}", value_); }
-    FloatType* get_type() const final { return type_; }
-    FloatValue* resolve_to(Type* target) const final {
+    const FloatType* get_type() const noexcept final { return type_; }
+    FloatValue* clone() const noexcept final { return new FloatValue(*this); }
+    FloatValue* resolve_to(const Type* target) const final {
         if (target && !target->dyn_cast<FloatType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("float", target->repr());
         }
@@ -978,7 +1201,7 @@ public:
             // default to double
             return new FloatValue(&FloatType::f64_instance, value_);
         } else if (type_) {
-            FloatType* float_target = target->cast<FloatType>();
+            const FloatType* float_target = target->cast<FloatType>();
             if (type_ == float_target) {
                 return new FloatValue(*this);
             } else if (type_) {
@@ -986,7 +1209,7 @@ public:
             }
             return new FloatValue(float_target, value_);
         } else {
-            FloatType* float_target = target->cast<FloatType>();
+            const FloatType* float_target = target->cast<FloatType>();
             return new FloatValue(float_target, value_);
         }
     }
@@ -1006,9 +1229,10 @@ public:
 
 public:
     BooleanValue(bool value) noexcept : Value(kind), value_(value) {}
-    std::string_view repr() const final { return this->value_ ? "true" : "false"; }
-    BooleanType* get_type() const final { return &BooleanType::instance; }
-    BooleanValue* resolve_to(Type* target) const final {
+    std::string_view repr() const noexcept final { return this->value_ ? "true" : "false"; }
+    const BooleanType* get_type() const noexcept final { return &BooleanType::instance; }
+    BooleanValue* clone() const noexcept final { return new BooleanValue(*this); }
+    BooleanValue* resolve_to(const Type* target) const final {
         if (target && target->kind_ != Kind::Boolean) {
             throw UnlocatedProblem::make<TypeMismatchError>("boolean", target->repr());
         }
@@ -1026,20 +1250,21 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
-    FunctionType* type_;
-    std::function<Value*(ComparableSpan<Value*>)> callback_;
+    const FunctionType* type_;
+    std::function<Term(ComparableSpan<Term>)> callback_;
 
 public:
-    FunctionValue(FunctionType* type, decltype(callback_) invoke) noexcept
+    FunctionValue(const FunctionType* type, decltype(callback_) invoke) noexcept
         : Value(kind), type_(type), callback_(std::move(invoke)) {}
 
     std::string_view repr() const final {
         return GlobalMemory::format_view("<function at {:p}>", static_cast<const void*>(this));
     }
-    FunctionType* get_type() const final { return type_; }
-    FunctionValue* resolve_to(Type* target) const final { UNREACHABLE(); }
+    const FunctionType* get_type() const noexcept final { return type_; }
+    FunctionValue* clone() const noexcept final { UNREACHABLE(); }
+    FunctionValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
     void assign_from(Value* source) final { UNREACHABLE(); }
-    Value* invoke(ComparableSpan<Value*> args) const { return callback_(args); }
+    Term invoke(ComparableSpan<Term> args) const { return callback_(args); }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
@@ -1048,7 +1273,7 @@ public:
     static constexpr Kind kind = Kind::Array;
 
 public:
-    ArrayType* type_;
+    const ArrayType* type_;
     union {
         GlobalMemory::Vector<Value*> elements_;
         std::string_view string_;
@@ -1061,12 +1286,29 @@ public:
         : Value(kind),
           type_(TypeRegistry::get<ArrayType>(&IntegerType::u8_instance)),
           string_(string) {}
-    ~ArrayValue() {}
-    std::string_view repr() const final {
+    ~ArrayValue() noexcept {
+        if (type_->element_type_ == &IntegerType::u8_instance) {
+            // string literal, no need to delete elements
+        } else {
+            std::destroy_at(&elements_);
+        }
+    };
+    std::string_view repr() const noexcept final {
         return GlobalMemory::format_view("[{}]", type_->element_type_->repr());
     }
-    ArrayType* get_type() const final { return type_; }
-    ArrayValue* resolve_to(Type* target) const final {
+    const ArrayType* get_type() const noexcept final { return type_; }
+    ArrayValue* clone() const noexcept final {
+        if (type_) {
+            GlobalMemory::Vector<Value*> cloned_elements;
+            for (Value* element : elements_) {
+                cloned_elements.push_back(element->clone());
+            }
+            return new ArrayValue(std::move(cloned_elements));
+        } else {
+            return new ArrayValue(string_);
+        }
+    }
+    ArrayValue* resolve_to(const Type* target) const noexcept final {
         /// TODO: implement
         return nullptr;
     }
@@ -1082,17 +1324,24 @@ public:
     static constexpr Kind kind = Kind::Instance;
 
 public:
-    ClassType* cls_;
+    const ClassType* cls_;
     GlobalMemory::Map<std::string_view, Value*> attributes_;
 
 public:
-    InstanceValue(ClassType* cls, decltype(attributes_) attributes) noexcept
+    InstanceValue(const ClassType* cls, decltype(attributes_) attributes) noexcept
         : Value(kind), cls_(cls), attributes_(std::move(attributes)) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view("<instance of {}>", cls_->repr());
     }
-    ClassType* get_type() const final { return cls_; }
-    InstanceValue* resolve_to(Type* target) const final {
+    const ClassType* get_type() const noexcept final { return cls_; }
+    InstanceValue* clone() const noexcept final {
+        GlobalMemory::Map<std::string_view, Value*> cloned_attributes;
+        for (const auto& [name, value] : attributes_) {
+            cloned_attributes.insert({name, value->clone()});
+        }
+        return new InstanceValue(cls_, std::move(cloned_attributes));
+    }
+    InstanceValue* resolve_to(const Type* target) const final {
         if (target && target != cls_) {
             throw UnlocatedProblem::make<TypeMismatchError>("instance", target->repr());
         }
@@ -1111,17 +1360,18 @@ public:
     static constexpr Kind kind = Kind::Reference;
 
 private:
-    ReferenceType* type_;
+    const ReferenceType* type_;
     Value** referenced_value_;
 
 public:
-    ReferenceValue(ReferenceType* type, Value** referenced_value) noexcept
+    ReferenceValue(const ReferenceType* type, Value** referenced_value) noexcept
         : Value(kind), type_(type), referenced_value_(referenced_value) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view("&{}", (*referenced_value_)->repr());
     }
-    ReferenceType* get_type() const final { return type_; }
-    ReferenceValue* resolve_to(Type* target) const final {
+    const ReferenceType* get_type() const noexcept final { return type_; }
+    ReferenceValue* clone() const noexcept final { return new ReferenceValue(*this); }
+    ReferenceValue* resolve_to(const Type* target) const final {
         if (target && !target->dyn_cast<ReferenceType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("reference", target->repr());
         }
@@ -1134,53 +1384,19 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class Term : public GlobalMemory::MemoryManaged {
-public:
-    static Term from_const(Value* value) { return Term(value, false, false); }
-    static Term from_var(Type* type, bool is_mutable) { return Term(type, is_mutable, false); }
-    static Term from_rvalue(Type* type) { return Term(type, false, true); }
-    static Term unknown() { return Term(new UnknownValue(), false, false); }
-
-private:
-    Object* ptr_;
-    bool is_mutable_ = false;
-    bool is_rvalue_ = false;
-
-private:
-    Term(Object* ptr, bool is_mutable, bool is_rvalue) noexcept
-        : ptr_(ptr), is_mutable_(is_mutable), is_rvalue_(is_rvalue) {
-        assert(!(is_mutable && is_rvalue_));
-    }
-
-public:
-    Term() noexcept = default;
-    Type* effective_type() const noexcept {
-        if (auto type = ptr_->dyn_type()) {
-            return type;
-        } else {
-            return ptr_->dyn_value()->get_type();
-        }
-    }
-    bool is_const() const noexcept { return ptr_->dyn_value() != nullptr; }
-    bool is_mutable() const noexcept { return is_mutable_; }
-    bool is_rvalue() const noexcept { return is_rvalue_; }
-    Object* operator->() const noexcept { return ptr_; }
-    operator bool() const noexcept { return ptr_ != nullptr; }
-};
-
-inline Type* Object::dyn_type() {
-    if (!is_type_ && kind_ == Kind::NothingOrUnknown) return &UnknownType::instance;
-    return is_type_ ? static_cast<Type*>(this) : nullptr;
-}
-
-inline Value* Object::dyn_value() {
-    if (is_type_ && kind_ == Kind::NothingOrUnknown) return new UnknownValue();
-    return !is_type_ ? static_cast<Value*>(this) : nullptr;
-}
-
 inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
 
-inline Type* TypeRegistry::get_unknown() noexcept { return &UnknownType::instance; }
+inline const Type* TypeRegistry::get_unknown() noexcept { return &UnknownType::instance; }
+
+inline Term Term::unknown() noexcept { return Term(new UnknownValue(), Term::Category::Immutable); }
+
+inline const Type* Term::effective_type() const noexcept {
+    if (auto type = ptr_->dyn_type()) {
+        return type;
+    } else {
+        return ptr_->cast<Value>()->get_type();
+    }
+}
 
 inline UnknownType UnknownType::instance;
 

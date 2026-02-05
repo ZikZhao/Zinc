@@ -242,6 +242,7 @@ private:
     class RangeCollector<ComparableSpan<E>> {
         template <std::ranges::input_range R>
         friend ComparableSpan<E> operator|(R&& range, RangeCollector) {
+            static_assert(std::is_same_v<std::ranges::range_value_t<R>, E>);
             if constexpr (std::ranges::sized_range<R>) {
                 ComparableSpan span = alloc_array<E>(std::ranges::size(range));
                 std::uninitialized_copy(
@@ -601,7 +602,7 @@ public:
     bool operator==(const Set<Key, Comp>& other) const noexcept {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
-    
+
     bool is_superset_of(const Set<Key, Comp>& other) const noexcept {
         return std::includes(this->begin(), this->end(), other.begin(), other.end(), Comp{});
     }

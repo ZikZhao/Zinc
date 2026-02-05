@@ -318,6 +318,26 @@ constexpr std::string_view GetOperatorString(OperatorCode opcode) {
     }
 }
 
+class TermSpec {
+public:
+    std::uintptr_t ptr_;
+
+public:
+    TermSpec(Term term) noexcept
+        : ptr_(
+              reinterpret_cast<std::uintptr_t>(term.effective_type()) |
+              static_cast<std::uintptr_t>(term.is_mutable())
+          ) {
+        static_assert(alignof(Type) >= 8);
+        assert(term.effective_type() != nullptr);
+    }
+    operator bool() const noexcept { return ptr_ != 0; }
+    operator const Type*() const noexcept {
+        return reinterpret_cast<const Type*>(ptr_ & ~std::uintptr_t(1));
+    }
+    bool is_mutable() const noexcept { return (ptr_ & 1) != 0; }
+};
+
 namespace PrimitiveOperations {
 
 template <OperatorGroup G>
@@ -409,19 +429,13 @@ auto apply_op(OperatorCode opcode, auto value) {
 
 inline Value* integer_op(OperatorCode opcode, Value* left, Value* right) {
     IntegerValue* left_int = left->cast<IntegerValue>();
-    IntegerValue* right_int = right ? right->cast<IntegerValue>() : nullptr;
-    bool extended = left_int->type_->bits_ > 32 || (right && right_int->type_->bits_ > 32);
+    IntegerValue* right_int = right->cast<IntegerValue>();
+    bool extended = left_int->type_->bits_ > 32 || right_int->type_->bits_ > 32;
     switch (GetOperatorGroup(opcode)) {
     case OperatorGroup::Arithmetic:
         return new IntegerValue(
             extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
             apply_op<OperatorGroup::Arithmetic>(opcode, left_int->value_, right_int->value_)
-        );
-    case OperatorGroup::UnaryArithmetic:
-        assert(right == nullptr);
-        return new IntegerValue(
-            extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
-            apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_int->value_)
         );
     case OperatorGroup::Comparison:
         return new BooleanValue(
@@ -432,8 +446,21 @@ inline Value* integer_op(OperatorCode opcode, Value* left, Value* right) {
             extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
             apply_op<OperatorGroup::Bitwise>(opcode, left_int->value_, right_int->value_)
         );
+    default:
+        UNREACHABLE();
+    }
+}
+
+inline Value* integer_op(OperatorCode opcode, Value* left) {
+    IntegerValue* left_int = left->cast<IntegerValue>();
+    bool extended = left_int->type_->bits_ > 32;
+    switch (GetOperatorGroup(opcode)) {
+    case OperatorGroup::UnaryArithmetic:
+        return new IntegerValue(
+            extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
+            apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_int->value_)
+        );
     case OperatorGroup::UnaryBitwise:
-        assert(right == nullptr);
         return new IntegerValue(
             extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
             apply_op<OperatorGroup::UnaryBitwise>(opcode, left_int->value_)
@@ -445,18 +472,12 @@ inline Value* integer_op(OperatorCode opcode, Value* left, Value* right) {
 
 inline Value* float_op(OperatorCode opcode, Value* left, Value* right) {
     FloatValue* left_float = left->cast<FloatValue>();
-    FloatValue* right_float = right ? right->cast<FloatValue>() : nullptr;
+    FloatValue* right_float = right->cast<FloatValue>();
     switch (GetOperatorGroup(opcode)) {
     case OperatorGroup::Arithmetic:
         return new FloatValue(
             left_float->type_->bits_ > 32 ? &FloatType::f64_instance : &FloatType::f32_instance,
             apply_op<OperatorGroup::Arithmetic>(opcode, left_float->value_, right_float->value_)
-        );
-    case OperatorGroup::UnaryArithmetic:
-        assert(right == nullptr);
-        return new FloatValue(
-            left_float->type_->bits_ > 32 ? &FloatType::f64_instance : &FloatType::f32_instance,
-            apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_float->value_)
         );
     case OperatorGroup::Comparison:
         return new BooleanValue(
@@ -467,17 +488,38 @@ inline Value* float_op(OperatorCode opcode, Value* left, Value* right) {
     }
 }
 
-inline BooleanValue* boolean_op(
-    OperatorCode opcode, BooleanValue* left, BooleanValue* right = nullptr
-) {
+inline Value* float_op(OperatorCode opcode, Value* left) {
+    FloatValue* left_float = left->cast<FloatValue>();
+    switch (GetOperatorGroup(opcode)) {
+    case OperatorGroup::UnaryArithmetic:
+        return new FloatValue(
+            left_float->type_->bits_ > 32 ? &FloatType::f64_instance : &FloatType::f32_instance,
+            apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_float->value_)
+        );
+    default:
+        UNREACHABLE();
+    }
+}
+
+inline BooleanValue* boolean_op(OperatorCode opcode, Value* left, Value* right) {
+    /// TODO: support equality comparison between booleans
+    BooleanValue* left_bool = left->cast<BooleanValue>();
+    BooleanValue* right_bool = right->cast<BooleanValue>();
     switch (GetOperatorGroup(opcode)) {
     case OperatorGroup::Logical:
         return new BooleanValue(
-            apply_op<OperatorGroup::Logical>(opcode, left->value_, right->value_)
+            apply_op<OperatorGroup::Logical>(opcode, left_bool->value_, right_bool->value_)
         );
+    default:
+        UNREACHABLE();
+    }
+}
+
+inline BooleanValue* boolean_op(OperatorCode opcode, Value* left) {
+    BooleanValue* left_bool = left->cast<BooleanValue>();
+    switch (GetOperatorGroup(opcode)) {
     case OperatorGroup::UnaryLogical:
-        assert(right == nullptr);
-        return new BooleanValue(apply_op<OperatorGroup::UnaryLogical>(opcode, left->value_));
+        return new BooleanValue(apply_op<OperatorGroup::UnaryLogical>(opcode, left_bool->value_));
     default:
         UNREACHABLE();
     }
@@ -512,15 +554,19 @@ inline Value* assignment_op(OperatorCode opcode, Value* left, Value* right) {
 
 class OperationHandler final {
 private:
-    GlobalMemory::Map<std::tuple<OperatorCode, Type*, Type*>, Object*> map_;
-    GlobalMemory::MultiMap<OperatorCode, Object* (*)(Type*, Type*)> templates_;
+    GlobalMemory::Map<std::tuple<OperatorCode, const Type*, const Type*>, const Object*> map_;
+    GlobalMemory::MultiMap<OperatorCode, const Object* (*)(const Type*, const Type*)> templates_;
 
 public:
-    void register_custom_op(OperatorCode opcode, Type* left_type, Type* right_type, Object* func) {
+    void register_custom_op(
+        OperatorCode opcode, const Type* left_type, const Type* right_type, const Object* func
+    ) {
         map_[{opcode, left_type, right_type}] = func;
     }
 
-    Type* eval_type_op(OperatorCode opcode, Type* left, Type* right = nullptr) const {
+    const Type* eval_type_op(
+        OperatorCode opcode, const Type* left, const Type* right = nullptr
+    ) const {
         /// TODO: implement type-level operations
         return nullptr;
     }
@@ -529,38 +575,36 @@ public:
         if (left->kind_ == Kind::NothingOrUnknown ||
             (right && right->kind_ == Kind::NothingOrUnknown)) {
             return Term::unknown();
+        } else if ((left->kind_ == Kind::Integer || left->kind_ == Kind::Float ||
+                    left->kind_ == Kind::Boolean) &&
+                   (right ? (right->kind_ == Kind::Integer || right->kind_ == Kind::Float ||
+                             right->kind_ == Kind::Boolean)
+                          : true)) {
+            return eval_primitive_op(opcode, left, right);
         }
-        bool const_expr = left.is_const() && (right && right.is_const());
-        Type* left_type = left.effective_type();
-        Type* right_type = right ? right.effective_type() : nullptr;
+        bool comptime = left.is_comptime() && (right && right.is_comptime());
+        const Type* left_type = left.effective_type();
+        const Type* right_type = right ? right.effective_type() : nullptr;
         auto it = map_.find({opcode, left_type, right_type});
         if (it != map_.end()) {
-            if (auto func_value = it->second->dyn_cast<FunctionValue>(); func_value && const_expr) {
-                return Term::from_const(func_value->invoke(
-                    GlobalMemory::pack_array(
-                        left->cast<Value>(), right ? right->cast<Value>() : nullptr
-                    )
-                ));
+            if (auto func_value = it->second->dyn_cast<FunctionValue>(); func_value && comptime) {
+                return func_value->invoke(GlobalMemory::pack_array(left, right));
             } else {
-                auto func_type = it->second->dyn_cast<FunctionType>();
-                return Term::from_rvalue(func_type->return_type_);
+                auto func_type = it->second->cast<FunctionType>();
+                return Term(func_type->return_type_, Term::Category::RValue);
             }
         } else {
-            if (Object* instantiated = try_instantiate(opcode, left_type, right_type)) {
+            if (const Object* instantiated = try_instantiate(opcode, left_type, right_type)) {
                 map_.insert({{opcode, left_type, right_type}, instantiated});
                 if (auto func_value = instantiated->dyn_cast<FunctionValue>()) {
-                    if (const_expr) {
-                        return Term::from_const(func_value->invoke(
-                            GlobalMemory::pack_array(
-                                left->cast<Value>(), right ? right->cast<Value>() : nullptr
-                            )
-                        ));
+                    if (comptime) {
+                        return func_value->invoke(GlobalMemory::pack_array(left, right));
                     } else {
-                        return Term::from_rvalue(func_value->get_type()->return_type_);
+                        return Term(func_value->get_type()->return_type_, Term::Category::RValue);
                     }
                 } else {
-                    auto func_type = instantiated->dyn_cast<FunctionType>();
-                    return Term::from_rvalue(func_type->return_type_);
+                    auto func_type = instantiated->cast<FunctionType>();
+                    return Term(func_type->return_type_, Term::Category::RValue);
                 }
             }
             throw UnlocatedProblem::make<OperationNotDefinedError>(
@@ -570,19 +614,11 @@ public:
     }
 
 private:
-    Object* try_instantiate(OperatorCode opcode, Type* left_type, Type* right_type) const {
-        auto is_primitive = [](Type* type) {
-            Kind kind = type->kind_;
-            return kind == Kind::Integer || kind == Kind::Float || kind == Kind::Boolean;
-        };
-        if (is_primitive(left_type) && (right_type == nullptr || is_primitive(right_type))) {
-            return try_primitive_instantiate(opcode, left_type, right_type);
-        }
-
+    const Object* try_instantiate(OperatorCode opcode, const Type* left, const Type* right) const {
         // User-defined operator templates
         auto range = templates_.equal_range(opcode);
         for (auto it = range.first; it != range.second; ++it) {
-            Object* func_obj = it->second(left_type, right_type);
+            const Object* func_obj = it->second(left, right);
             if (func_obj != nullptr) {
                 return func_obj;
             }
@@ -590,124 +626,150 @@ private:
         return nullptr;
     }
 
-    Object* try_primitive_instantiate(
-        OperatorCode opcode, Type* left_type, Type* right_type
-    ) const {
-        OperatorGroup op_group = GetOperatorGroup(opcode);
-        Kind left_kind = left_type->kind_;
-        Kind right_kind = right_type ? right_type->kind_ : Kind::NothingOrUnknown;
-        switch (op_group) {
-        case OperatorGroup::Arithmetic:
-        case OperatorGroup::Comparison:
-            if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                return new FunctionValue(
-                    TypeRegistry::get<FunctionType>(
-                        GlobalMemory::pack_array(left_type, right_type), left_type
-                    ),
-                    [opcode](ComparableSpan<Value*> args) {
-                        return PrimitiveOperations::integer_op(
-                            opcode, args[0]->cast<IntegerValue>(), args[1]->cast<IntegerValue>()
-                        );
-                    }
-                );
-            } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
-                return new FunctionValue(
-                    TypeRegistry::get<FunctionType>(
-                        GlobalMemory::pack_array(left_type, right_type), left_type
-                    ),
-                    [opcode](ComparableSpan<Value*> args) {
-                        return PrimitiveOperations::float_op(
-                            opcode, args[0]->cast<FloatValue>(), args[1]->cast<FloatValue>()
-                        );
-                    }
-                );
-            }
-            break;
-        case OperatorGroup::UnaryArithmetic:
-            if (left_kind == Kind::Integer) {
-                return new FunctionValue(
-                    TypeRegistry::get<FunctionType>(GlobalMemory::pack_array(left_type), left_type),
-                    [opcode](ComparableSpan<Value*> args) {
-                        return PrimitiveOperations::integer_op(
-                            opcode, args[0]->cast<IntegerValue>(), nullptr
-                        );
-                    }
-                );
-            } else if (left_kind == Kind::Float) {
-                return new FunctionValue(
-                    TypeRegistry::get<FunctionType>(GlobalMemory::pack_array(left_type), left_type),
-                    [opcode](ComparableSpan<Value*> args) {
-                        return PrimitiveOperations::float_op(
-                            opcode, args[0]->cast<FloatValue>(), nullptr
-                        );
-                    }
-                );
-            }
-            break;
-        case OperatorGroup::Logical:
-            if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
-                return new FunctionValue(
-                    TypeRegistry::get<FunctionType>(
-                        GlobalMemory::pack_array(left_type, right_type), left_type
-                    ),
-                    [opcode](ComparableSpan<Value*> args) {
-                        return PrimitiveOperations::boolean_op(
-                            opcode, args[0]->cast<BooleanValue>(), args[1]->cast<BooleanValue>()
-                        );
-                    }
-                );
-            }
-            break;
-        case OperatorGroup::UnaryLogical:
-            if (left_kind == Kind::Boolean) {
-                return new FunctionValue(
-                    TypeRegistry::get<FunctionType>(GlobalMemory::pack_array(left_type), left_type),
-                    [opcode](ComparableSpan<Value*> args) {
-                        return PrimitiveOperations::boolean_op(
-                            opcode, args[0]->cast<BooleanValue>(), nullptr
-                        );
-                    }
-                );
-            }
-            break;
-        case OperatorGroup::Bitwise:
-            if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                return new FunctionValue(
-                    TypeRegistry::get<FunctionType>(
-                        GlobalMemory::pack_array(left_type, right_type), left_type
-                    ),
-                    [opcode](ComparableSpan<Value*> args) {
-                        return PrimitiveOperations::integer_op(
-                            opcode, args[0]->cast<IntegerValue>(), args[1]->cast<IntegerValue>()
-                        );
-                    }
-                );
-            }
-            break;
-        case OperatorGroup::UnaryBitwise:
-            if (left_kind == Kind::Integer) {
-                return new FunctionValue(
-                    TypeRegistry::get<FunctionType>(GlobalMemory::pack_array(left_type), left_type),
-                    [opcode](ComparableSpan<Value*> args) {
-                        return PrimitiveOperations::integer_op(
-                            opcode, args[0]->cast<IntegerValue>(), nullptr
-                        );
-                    }
-                );
-            }
-            break;
-        case OperatorGroup::Assignment:
-            return new FunctionValue(
-                TypeRegistry::get<FunctionType>(
-                    GlobalMemory::pack_array(left_type, right_type), left_type
-                ),
-                [opcode](ComparableSpan<Value*> args) {
-                    // Assignment operations do not produce new values
-                    return args[0];
+    Term eval_primitive_op(OperatorCode opcode, Term left, Term right) const {
+        const Type* left_type = left.effective_type();
+        Kind left_kind = left->kind_;
+        Kind right_kind = right ? right->kind_ : Kind::NothingOrUnknown;
+        bool comptime = left.is_comptime() && (right ? right.is_comptime() : true);
+        if (comptime) {
+            Value* left_value = left.comp_var();
+            Value* right_value = right ? right.comp_var() : nullptr;
+            switch (GetOperatorGroup(opcode)) {
+            case OperatorGroup::Arithmetic:
+                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
+                    return Term(
+                        PrimitiveOperations::integer_op(opcode, left_value, right_value),
+                        Term::Category::CompRValue
+                    );
+                } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
+                    return Term(
+                        PrimitiveOperations::float_op(opcode, left_value, right_value),
+                        Term::Category::CompRValue
+                    );
                 }
-            );
+                break;
+            case OperatorGroup::UnaryArithmetic:
+                assert(!right);
+                if (left_kind == Kind::Integer) {
+                    return Term(
+                        PrimitiveOperations::integer_op(opcode, left_value),
+                        Term::Category::CompRValue
+                    );
+                } else if (left_kind == Kind::Float) {
+                    return Term(
+                        PrimitiveOperations::float_op(opcode, left_value),
+                        Term::Category::CompRValue
+                    );
+                }
+                break;
+            case OperatorGroup::Comparison:
+                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
+                    return Term(
+                        PrimitiveOperations::integer_op(opcode, left_value, right_value),
+                        Term::Category::CompRValue
+                    );
+                } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
+                    return Term(
+                        PrimitiveOperations::float_op(opcode, left_value, right_value),
+                        Term::Category::CompRValue
+                    );
+                }
+                break;
+            case OperatorGroup::Logical:
+                if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
+                    return Term(
+                        PrimitiveOperations::boolean_op(opcode, left_value, right_value),
+                        Term::Category::CompRValue
+                    );
+                }
+                break;
+            case OperatorGroup::UnaryLogical:
+                assert(!right);
+                if (left_kind == Kind::Boolean) {
+                    return Term(
+                        PrimitiveOperations::boolean_op(opcode, left_value),
+                        Term::Category::CompRValue
+                    );
+                }
+                break;
+            case OperatorGroup::Bitwise:
+                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
+                    return Term(
+                        PrimitiveOperations::integer_op(opcode, left_value, right_value),
+                        Term::Category::CompRValue
+                    );
+                }
+                break;
+            case OperatorGroup::UnaryBitwise:
+                if (left_kind == Kind::Integer) {
+                    return Term(
+                        PrimitiveOperations::integer_op(opcode, left_value),
+                        Term::Category::CompRValue
+                    );
+                }
+                break;
+            case OperatorGroup::Assignment:
+                /// TODO:
+                if (!left.is_mutable()) break;
+                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
+                    (left_kind == Kind::Float && right_kind == Kind::Float) ||
+                    (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
+                    return Term(left_type, Term::Category::RValue);
+                }
+                break;
+            }
+        } else {
+            switch (GetOperatorGroup(opcode)) {
+            case OperatorGroup::Arithmetic:
+                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
+                    (left_kind == Kind::Float && right_kind == Kind::Float)) {
+                    return Term(left_type, Term::Category::RValue);
+                }
+                break;
+            case OperatorGroup::UnaryArithmetic:
+                if (left_kind == Kind::Integer || left_kind == Kind::Float) {
+                    return Term(left_type, Term::Category::RValue);
+                }
+                break;
+            case OperatorGroup::Comparison:
+                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
+                    (left_kind == Kind::Float && right_kind == Kind::Float)) {
+                    return Term(&BooleanType::instance, Term::Category::RValue);
+                }
+                break;
+            case OperatorGroup::Logical:
+                if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
+                    return Term(&BooleanType::instance, Term::Category::RValue);
+                }
+                break;
+            case OperatorGroup::UnaryLogical:
+                if (left_kind == Kind::Boolean) {
+                    return Term(&BooleanType::instance, Term::Category::RValue);
+                }
+                break;
+            case OperatorGroup::Bitwise:
+                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
+                    return Term(left_type, Term::Category::RValue);
+                }
+                break;
+            case OperatorGroup::UnaryBitwise:
+                if (left_kind == Kind::Integer) {
+                    return Term(left_type, Term::Category::RValue);
+                }
+                break;
+            case OperatorGroup::Assignment:
+                /// TODO:
+                if (!left.is_mutable()) break;
+                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
+                    (left_kind == Kind::Float && right_kind == Kind::Float) ||
+                    (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
+                    return Term(left_type, Term::Category::RValue);
+                }
+                break;
+            }
         }
-        return nullptr;
+        /// TODO: throw error
+        return Term::unknown();
     }
 };
 

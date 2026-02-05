@@ -57,7 +57,7 @@ class Transpiler {
 public:
     struct State {
         GlobalMemory::Set<std::string_view> niebloids;
-        GlobalMemory::Map<RecordType*, std::size_t> structurals;
+        GlobalMemory::Map<const RecordType*, std::size_t> structurals;
         std::stack<
             std::function<void(Transpiler&, TypeChecker&)>,
             GlobalMemory::Vector<std::function<void(Transpiler&, TypeChecker&)>>>
@@ -258,7 +258,7 @@ inline void FunctionType::transpile(Transpiler& transpiler) const noexcept {
     return_type_->transpile(transpiler);
     transpiler << "(";
     const char* sep = "";
-    for (Type* param_type : parameters_) {
+    for (const Type* param_type : parameters_) {
         transpiler << sep;
         param_type->transpile(transpiler);
         sep = ", ";
@@ -289,7 +289,7 @@ inline void ClassType::transpile(Transpiler& transpiler) const noexcept {
 inline void IntersectionType::transpile(Transpiler& transpiler) const noexcept {
     transpiler << "$PolyFunction<";
     const char* sep = "";
-    for (Type* sub_type : types_) {
+    for (const Type* sub_type : types_) {
         transpiler << sep;
         sub_type->transpile(transpiler);
         sep = ", ";
@@ -300,7 +300,7 @@ inline void IntersectionType::transpile(Transpiler& transpiler) const noexcept {
 inline void UnionType::transpile(Transpiler& transpiler) const noexcept {
     transpiler << "std::variant<";
     const char* sep = "";
-    for (Type* sub_type : types_) {
+    for (const Type* sub_type : types_) {
         transpiler << sep;
         sub_type->transpile(transpiler);
         sep = ", ";
@@ -428,8 +428,9 @@ inline void ASTFieldDeclaration::transpile(
 inline void ASTRecordType::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
     TypeResolution record_type;
     eval_type(checker, record_type);
-    auto [it, inserted] =
-        transpiler.state_.structurals.insert({static_cast<RecordType*>(record_type.get()), 0});
+    auto [it, inserted] = transpiler.state_.structurals.insert(
+        {static_cast<const RecordType*>(record_type.get()), 0}
+    );
     if (inserted) {
         it->second = transpiler.state_.structurals.size();
     }

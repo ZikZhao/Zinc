@@ -12,20 +12,23 @@ private:
         return GlobalMemory::Map<std::string_view, FunctionOverloads>{
             {"init",
              {new FunctionType(
-                 GlobalMemory::pack_array<Type*>(
+                 GlobalMemory::pack_array<const Type*>(
                      TypeRegistry::get<ArrayType>(&IntegerType::u8_instance)
                  ),
                  this
              )}},
             {"at",
              {new FunctionType(
-                 GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
+                 GlobalMemory::pack_array<const Type*>(&IntegerType::u64_instance),
+                 &AnyType::instance
              )}},
         };
     }
 
-    GlobalMemory::Map<std::string_view, Type*> get_attr() {
-        return GlobalMemory::Map<std::string_view, Type*>{{"length_", &IntegerType::u64_instance}};
+    GlobalMemory::Map<std::string_view, const Type*> get_attr() {
+        return GlobalMemory::Map<std::string_view, const Type*>{
+            {"length_", &IntegerType::u64_instance}
+        };
     }
 };
 
@@ -39,12 +42,15 @@ private:
         return GlobalMemory::Map<std::string_view, FunctionOverloads>{
             {"at",
              {new FunctionType(
-                 GlobalMemory::pack_array<Type*>(&IntegerType::u64_instance), &AnyType::instance
+                 GlobalMemory::pack_array<const Type*>(&IntegerType::u64_instance),
+                 &AnyType::instance
              )}},
         };
     }
 
-    GlobalMemory::Map<std::string_view, Type*> get_attr() {
-        return GlobalMemory::Map<std::string_view, Type*>{{"length_", &IntegerType::u64_instance}};
+    GlobalMemory::Map<std::string_view, const Type*> get_attr() {
+        return GlobalMemory::Map<std::string_view, const Type*>{
+            {"length_", &IntegerType::u64_instance}
+        };
     }
 };
