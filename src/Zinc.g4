@@ -284,3 +284,7 @@ T_BOOL: 'true' | 'false';
 T_IDENTIFIER: [a-zA-Z_][a-zA-Z0-9_]*;
 
 WHITESPACE: [ \t\n\r\f]+ -> skip;
+
+LINE_COMMENT: '//' ~[\r\n]* -> channel(HIDDEN);
+
+BLOCK_COMMENT: '/*' .*? '*/' -> channel(HIDDEN);

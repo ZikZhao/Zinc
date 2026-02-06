@@ -20,7 +20,7 @@ template <typename Op>
 class ASTBinaryOp;
 class ASTFunctionCall;
 class ASTPrimitiveType;
-class ASTRecordType;
+class ASTStructType;
 class ASTDeclaration;
 class ASTFieldDeclaration;
 class ASTTypeAlias;
@@ -517,7 +517,7 @@ private:
         TypeResolution return_type;
         std::get<1>(comps)->eval_type(checker, return_type);
         assert(return_type.is_valid());
-        out = TypeRegistry::get<FunctionType>(param_types, return_type.get());
+        TypeRegistry::get_at<FunctionType>(out, param_types, return_type.get());
     }
 };
 
@@ -540,12 +540,12 @@ public:
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 };
 
-class ASTRecordType final : public ASTExplicitTypeExpr {
+class ASTStructType final : public ASTExplicitTypeExpr {
 public:
     ComparableSpan<ASTFieldDeclaration*> fields_;
 
 public:
-    ASTRecordType(const Location& loc, ComparableSpan<ASTFieldDeclaration*> fields) noexcept
+    ASTStructType(const Location& loc, ComparableSpan<ASTFieldDeclaration*> fields) noexcept
         : ASTExplicitTypeExpr(loc), fields_(fields) {}
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 
@@ -563,7 +563,7 @@ private:
                 }
             ) |
             GlobalMemory::collect<GlobalMemory::Map<std::string_view, const Type*>>();
-        out = TypeRegistry::get<RecordType>(field_map);
+        TypeRegistry::get_at<RecordType>(out, field_map);
     }
 };
 
@@ -578,18 +578,24 @@ public:
     Term eval_term(
         TypeChecker& checker, const Type* expected, bool expected_comptime
     ) const noexcept final {
-        // TODO
+        /// TODO:
         return {};
     }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+        out = std::type_identity<ReferenceType>();
         TypeResolution expr_type;
         expr_->eval_type(checker, expr_type, false);
-        out = TypeResolution(
-            TypeRegistry::get<ReferenceType>(expr_type.get(), is_mutable_, expr_type.is_complete())
-        );
+        // out = TypeResolution(
+        //     TypeRegistry::get<ReferenceType>(expr_type.get(), is_mutable_,
+        //     expr_type.is_complete())
+        // );
+        if (!expr_type.is_complete()) {
+            TypeRegistry::indicate_unreadable_ref(out.get(), expr_type.get());
+        }
+        out.construct<ReferenceType>(expr_type.get(), is_mutable_);
     }
 };
 
@@ -655,11 +661,7 @@ public:
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
         scope.add_type(identifier_, type_);
     }
-    void check_types(TypeChecker& checker) final {
-        TypeResolution alias_type;
-        type_->eval_type(checker, alias_type);
-        assert(alias_type.is_valid());
-    }
+    void check_types(TypeChecker& checker) final { checker.lookup_type(identifier_); }
     ASTNode* as_node() noexcept final { return this; }
     std::string_view get_template_name() const noexcept final { return identifier_; }
     void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;

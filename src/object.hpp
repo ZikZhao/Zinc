@@ -139,6 +139,15 @@ public:
         : ptr_(
               reinterpret_cast<std::uintptr_t>(GlobalMemory::alloc_raw(sizeof(T), alignof(T))) | 1
           ) {}
+    template <TypeClass T>
+    T* construct(auto&&... args) noexcept {
+        assert(get() && !is_complete());
+        std::construct_at(
+            reinterpret_cast<T*>(ptr_ & ~std::uintptr_t(1)), std::forward<decltype(args)>(args)...
+        );
+        ptr_ &= ~std::uintptr_t(1);
+        return reinterpret_cast<T*>(ptr_);
+    }
     const Type* get() const noexcept {
         return reinterpret_cast<const Type*>(ptr_ & ~std::uintptr_t(1));
     }
@@ -171,26 +180,37 @@ public:
         requires(
             !TypeInTupleV<T, std::tuple<AnyType, NullType, IntegerType, FloatType, BooleanType>>
         )
-    static const T* get(auto&&... args) noexcept {
+    static void get_at(TypeResolution& out, auto&&... args) noexcept {
         using Composites = std::
             tuple<FunctionType, RecordType, IntersectionType, UnionType, ClassType, ReferenceType>;
         if constexpr (std::is_same_v<T, ClassType>) {
             // classes with same definition are distinct types
-            return new T(std::forward<decltype(args)>(args)...);
+            out = new T(std::forward<decltype(args)>(args)...);
         } else if constexpr (TypeInTupleV<T, Composites>) {
-            return instance->get_interned<T>(std::forward<decltype(args)>(args)...);
+            instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
         } else {
             // builtin singleton types, e.g. StringType
             std::type_index type_index = std::type_index(typeid(T));
             auto it = instance->builtin_types_.find(type_index);
             if (it != instance->builtin_types_.end()) {
-                return static_cast<T*>(it->second);
+                out = static_cast<T*>(it->second);
             } else {
                 T* type = new T(std::forward<decltype(args)>(args)...);
                 instance->builtin_types_.insert({type_index, type});
-                return type;
+                out = type;
             }
         }
+    }
+
+    template <typename T>
+    static const T* get(auto&&... args) noexcept {
+        TypeResolution out = std::type_identity<T>();
+        get_at<T>(out, std::forward<decltype(args)>(args)...);
+        return static_cast<const T*>(out.get());
+    }
+
+    static void indicate_unreadable_ref(const Type* parent, const Type* child) noexcept {
+        instance->graph_.add_dependency(parent, child);
     }
 
     static bool is_valid(const Type* type) noexcept { return instance->graph_.is_dependent(type); }
@@ -210,16 +230,14 @@ private:
 
 private:
     template <TypeClass T>
-    T* get_interned(auto&&... args) noexcept {
+    void get_interned(TypeResolution& out, auto&&... args) noexcept {
         GlobalMemory::Set<T*, TypeComparator>& type_pool =
             std::get<GlobalMemory::Set<T*, TypeComparator>>(types_);
-        T* type = new T(std::forward<decltype(args)>(args)...);
+        T* type = out.construct<T>(std::forward<decltype(args)>(args)...);
         if (type->can_intern(graph_)) {
             // type->self_intern();
             auto [it, _] = type_pool.insert(type);
-            return *it;
-        } else {
-            return type;
+            out = *it;
         }
     }
 
@@ -413,7 +431,7 @@ protected:
     std::strong_ordering compare_congruent_impl(
         const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
-        UNREACHABLE();
+        return this <=> other;
     }
 };
 
@@ -569,7 +587,6 @@ public:
             return parameters_.size() <=> other_func->parameters_.size();
         }
         for (std::size_t i = 0; i < parameters_.size(); ++i) {
-            assumed_equal.insert({parameters_[i], other_func->parameters_[i]});
             auto cmp = parameters_[i]->compare_congruent(other_func->parameters_[i], assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
@@ -610,7 +627,6 @@ public:
         if (size_ != other_array->size_) {
             return size_ <=> other_array->size_;
         }
-        assumed_equal.insert({element_type_, other_array->element_type_});
         return element_type_->compare_congruent(other_array->element_type_, assumed_equal);
     }
 
@@ -661,7 +677,6 @@ public:
             if (it1->first != it2->first) {
                 return it1->first <=> it2->first;
             }
-            assumed_equal.insert({it1->second, it2->second});
             auto cmp = it1->second->compare_congruent(it2->second, assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
@@ -983,15 +998,10 @@ public:
 public:
     const Type* referenced_type_;
     bool is_mutable_;
-    bool is_readable_;
 
 public:
-    ReferenceType(const Type* referenced_type, bool is_mutable, bool is_readable) noexcept
-        : Type(kind),
-          referenced_type_(referenced_type),
-          is_mutable_(is_mutable),
-          is_readable_(is_readable) {}
-
+    ReferenceType(const Type* referenced_type, bool is_mutable) noexcept
+        : Type(kind), referenced_type_(referenced_type), is_mutable_(is_mutable) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view(
             "&{}{}", is_mutable_ ? "mut " : "", referenced_type_->repr()
@@ -999,17 +1009,13 @@ public:
     }
 
     bool can_intern_impl(TypeDependencyGraph& graph) noexcept final {
-        if (!is_readable_) {
-            graph.add_dependency(this, referenced_type_);
-        }
-        return is_readable_;
+        return graph.is_dependent(this);
     }
 
     std::strong_ordering compare_congruent_impl(
         const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const ReferenceType* other_ref = other->cast<ReferenceType>();
-        assumed_equal.insert({referenced_type_, other_ref->referenced_type_});
         return referenced_type_->compare_congruent(other_ref->referenced_type_, assumed_equal);
     }
 

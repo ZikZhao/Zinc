@@ -425,7 +425,7 @@ inline void ASTFieldDeclaration::transpile(
     transpiler << " " << identifier_ << ";";
 }
 
-inline void ASTRecordType::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
+inline void ASTStructType::transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept {
     TypeResolution record_type;
     eval_type(checker, record_type);
     auto [it, inserted] = transpiler.state_.structurals.insert(

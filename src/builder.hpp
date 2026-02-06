@@ -516,7 +516,7 @@ private:
     }
     antlrcpp::Any visitRecordType(ZincParser::RecordTypeContext* ctx) noexcept final {
         last_visited_ =
-            new ASTRecordType(loc(ctx), transform_list<ASTFieldDeclaration>(ctx->fields_));
+            new ASTStructType(loc(ctx), transform_list<ASTFieldDeclaration>(ctx->fields_));
         return {};
     }
     antlrcpp::Any visitFunctionType(ZincParser::FunctionTypeContext* ctx) noexcept final {

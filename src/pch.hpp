@@ -428,7 +428,7 @@ public:
     constexpr std::size_t size() const noexcept { return keys_.size(); }
     std::pair<iterator, bool> insert(std::pair<Key, Value> pair) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), pair.first, Comp{});
-        if (it != keys_.end() && *it == pair.first) {
+        if (it != keys_.end() && !Comp{}(pair.first, *it)) {
             return {
                 iterator(
                     &keys_[std::distance(keys_.begin(), it)],
@@ -444,7 +444,7 @@ public:
     }
     Value remove(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it != keys_.end() && *it == key) {
+        if (it != keys_.end() && !Comp{}(key, *it)) {
             std::size_t index = std::distance(keys_.begin(), it);
             keys_.erase(it);
             Value value = std::move(values_[index]);
@@ -456,7 +456,7 @@ public:
     }
     iterator find(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || *it != key) {
+        if (it == keys_.end() || Comp{}(key, *it)) {
             return this->end();
         }
         std::size_t index = std::distance(keys_.begin(), it);
@@ -464,7 +464,7 @@ public:
     }
     const_iterator find(const Key& key) const {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || *it != key) {
+        if (it == keys_.end() || Comp{}(key, *it)) {
             return this->end();
         }
         std::size_t index = std::distance(keys_.begin(), it);
@@ -472,11 +472,11 @@ public:
     }
     bool contains(const Key& key) const {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        return it != keys_.end() && *it == key;
+        return it != keys_.end() && !Comp{}(key, *it);
     }
     Value& at(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || *it != key) {
+        if (it == keys_.end() || Comp{}(key, *it)) {
             throw std::out_of_range("Key not found in GlobalMemory::Map");
         }
         std::size_t index = std::distance(keys_.begin(), it);
@@ -484,7 +484,7 @@ public:
     }
     const Value& at(const Key& key) const {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || *it != key) {
+        if (it == keys_.end() || Comp{}(key, *it)) {
             throw std::out_of_range("Key not found in GlobalMemory::Map");
         }
         std::size_t index = std::distance(keys_.begin(), it);
@@ -492,7 +492,7 @@ public:
     }
     Value& operator[](const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || *it != key) {
+        if (it == keys_.end() || Comp{}(key, *it)) {
             std::size_t index = std::distance(keys_.begin(), it);
             keys_.insert(it, key);
             values_.insert(values_.begin() + index, Value{});
@@ -565,7 +565,7 @@ public:
 
     std::pair<iterator, bool> insert(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it != keys_.end() && *it == key) {
+        if (it != keys_.end() && !Comp{}(key, *it)) {
             return {it, false};
         }
         return {keys_.emplace(it, key), true};
@@ -577,21 +577,21 @@ public:
 
     iterator find(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || *it != key) {
+        if (it == keys_.end() || Comp{}(key, *it)) {
             return end();
         }
         return it;
     }
     const_iterator find(const Key& key) const {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || *it != key) {
+        if (it == keys_.end() || Comp{}(key, *it)) {
             return this->end();
         }
         return it;
     }
     bool contains(const Key& key) const {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        return it != keys_.end() && *it == key;
+        return it != keys_.end() && !Comp{}(key, *it);
     }
 
     std::strong_ordering operator<=>(const Set<Key, Comp>& other) const noexcept {
