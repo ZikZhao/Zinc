@@ -116,6 +116,8 @@ public:
         return std::ranges::any_of(edges_, [&](const Edge& edge) { return edge.parent == type; });
     }
 
+    std::size_t size() const noexcept { return edges_.size(); }
+
 private:
     bool is_readable(const Type* type) const noexcept {
         for (const Edge& edge : edges_) {
@@ -209,13 +211,15 @@ public:
         return static_cast<const T*>(out.get());
     }
 
+    static const Type* get_unknown() noexcept;
+
     static void indicate_unreadable_ref(const Type* parent, const Type* child) noexcept {
         instance->graph_.add_dependency(parent, child);
     }
 
-    static bool is_valid(const Type* type) noexcept { return instance->graph_.is_dependent(type); }
-
-    static const Type* get_unknown() noexcept;
+    static bool is_type_circular(const Type* type) noexcept {
+        return instance->circular_types_.contains(type);
+    }
 
 private:
     std::tuple<
@@ -227,6 +231,7 @@ private:
         types_;
     GlobalMemory::Map<std::type_index, Type*> builtin_types_;
     TypeDependencyGraph graph_;
+    GlobalMemory::Set<const Type*> circular_types_;
 
 private:
     template <TypeClass T>
@@ -234,7 +239,11 @@ private:
         GlobalMemory::Set<T*, TypeComparator>& type_pool =
             std::get<GlobalMemory::Set<T*, TypeComparator>>(types_);
         T* type = out.construct<T>(std::forward<decltype(args)>(args)...);
+        std::size_t graph_size_before = graph_.size();
         if (type->can_intern(graph_)) {
+            if (graph_.size() < graph_size_before) {
+                circular_types_.insert(type);
+            }
             // type->self_intern();
             auto [it, _] = type_pool.insert(type);
             out = *it;

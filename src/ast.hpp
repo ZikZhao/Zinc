@@ -158,7 +158,7 @@ public:
     virtual ~ASTNode() noexcept = default;
     virtual void collect_symbols(Scope& scope, OperationHandler& ops) {}
     virtual void check_types(TypeChecker& checker) {}
-    virtual void transpile(Transpiler& transpiler, TypeChecker& checker) const = 0;
+    virtual void transpile(Transpiler& transpiler) const { UNREACHABLE(); };
 };
 
 class ASTTemplateTarget {
@@ -182,7 +182,7 @@ public:
             child->check_types(checker);
         }
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTLocalBlock final : public ASTNode {
@@ -203,7 +203,7 @@ public:
         }
         checker.exit();
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTExpression : public ASTNode {
@@ -248,7 +248,7 @@ public:
 class ASTHiddenTypeExpr : public ASTExplicitTypeExpr {
 public:
     ASTHiddenTypeExpr() noexcept : ASTExplicitTypeExpr({}) {}
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTConstant final : public ASTExpression {
@@ -274,7 +274,7 @@ public:
         return Term(value_, Term::Category::CompRValue);
     }
     void resolve_type(const Type* target_type) { value_ = value_->resolve_to(target_type); }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 
 private:
     void eval_type_impl(
@@ -307,7 +307,7 @@ public:
             return Term::unknown();
         }
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 
 private:
     void eval_type_impl(
@@ -339,7 +339,7 @@ public:
         Term expr_term = expr_->eval_term(checker, expected, expected_comptime);
         return checker.ops_.eval_value_op(Op::opcode, expr_term);
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
@@ -376,7 +376,7 @@ public:
             return Term::unknown();
         }
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
@@ -411,7 +411,7 @@ public:
         // TODO
         return {};
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
@@ -468,7 +468,7 @@ public:
 public:
     ASTPrimitiveType(const Location& loc, const Type* type) noexcept
         : ASTExplicitTypeExpr(loc), type_(type) {}
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
@@ -491,7 +491,7 @@ public:
     ) noexcept
         : ASTExplicitTypeExpr(loc), representation_(Components(parameter_types, return_type)) {}
     ASTFunctionType(FunctionType* func) noexcept : ASTExplicitTypeExpr({}), representation_(func) {}
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
@@ -537,7 +537,7 @@ public:
         assert(field_type.is_valid());
         checker.add_variable(identifier_, Term(field_type.get(), Term::Category::Var));
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTStructType final : public ASTExplicitTypeExpr {
@@ -547,7 +547,7 @@ public:
 public:
     ASTStructType(const Location& loc, ComparableSpan<ASTFieldDeclaration*> fields) noexcept
         : ASTExplicitTypeExpr(loc), fields_(fields) {}
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
@@ -581,7 +581,7 @@ public:
         /// TODO:
         return {};
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
@@ -605,7 +605,7 @@ public:
     ASTExpressionStatement(const Location& loc, ASTExpression* expr) noexcept
         : ASTNode(loc), expr_(expr) {}
     void check_types(TypeChecker& checker) final { expr_->check_types(checker); }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTDeclaration final : public ASTNode {
@@ -647,7 +647,7 @@ public:
             e.report_at(location_);
         }
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTTypeAlias final : public ASTNode, public ASTTemplateTarget {
@@ -664,7 +664,7 @@ public:
     void check_types(TypeChecker& checker) final { checker.lookup_type(identifier_); }
     ASTNode* as_node() noexcept final { return this; }
     std::string_view get_template_name() const noexcept final { return identifier_; }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTIfStatement final : public ASTNode {
@@ -706,7 +706,7 @@ public:
             checker.exit();
         }
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTForStatement final : public ASTNode {
@@ -770,21 +770,21 @@ public:
         }
         checker.exit();
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTContinueStatement final : public ASTNode {
 public:
     ASTContinueStatement(const Location& loc) noexcept : ASTNode(loc) {}
     ~ASTContinueStatement() noexcept final = default;
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTBreakStatement final : public ASTNode {
 public:
     ASTBreakStatement(const Location& loc) noexcept : ASTNode(loc) {}
     ~ASTBreakStatement() noexcept final = default;
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTReturnStatement final : public ASTNode {
@@ -795,7 +795,7 @@ public:
     void check_types(TypeChecker& checker) final {
         if (expr_) expr_->eval_term(checker, nullptr, false);
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTFunctionParameter final : public ASTNode {
@@ -806,7 +806,7 @@ public:
         const Location& loc, std::string_view identifier, ASTExpression* type
     ) noexcept
         : ASTNode(loc), identifier_(identifier), type_(type) {}
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTFunctionSignature final {
@@ -864,7 +864,7 @@ public:
         }
         checker.exit();
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTClassSignature final : public ASTHiddenTypeExpr {
@@ -935,7 +935,7 @@ public:
         }
         checker.exit();  // static scope
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTNamespaceDefinition final : public ASTNode {
@@ -959,7 +959,7 @@ public:
         }
         checker.exit();
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 class ASTTemplateTypeArgument final : public ASTHiddenTypeExpr {
@@ -1037,7 +1037,7 @@ public:
         checker.exit();
         return template_scope[target_->get_template_name()];
     }
-    void transpile(Transpiler& transpiler, TypeChecker& checker) const noexcept final;
+    void transpile(Transpiler& transpiler) const noexcept final;
 };
 
 // ===================== Inline implementations =====================
