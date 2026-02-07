@@ -81,10 +81,11 @@ class Transpiler {
 public:
     struct State {
         GlobalMemory::Set<std::string_view> niebloids;
+        GlobalMemory::Map<const Type*, std::string_view> renames;
         GlobalMemory::Map<const StructType*, std::size_t> structurals;
         GlobalMemory::Set<const ASTExpression*> types_visited;
-        std::stack<const ASTStructType*, GlobalMemory::Vector<const ASTStructType*>>
-            structural_defs;
+        // std::stack<const ASTStructType*, GlobalMemory::Vector<const ASTStructType*>>
+        //     structural_defs;
     };
 
 private:
@@ -268,25 +269,13 @@ inline void FunctionType::transpile(Transpiler& transpiler) const noexcept {
     transpiler << ")>";
 }
 
-inline void ArrayType::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "std::vector<";
-    element_type_->transpile(transpiler);
-    transpiler << ">";
-}
+inline void ArrayType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
 
-inline void StructType::transpile(Transpiler& transpiler) const noexcept {
-    std::size_t id = transpiler.state_.structurals.at(const_cast<StructType*>(this));
-    transpiler << "$structural_" << GlobalMemory::format_view("{}", id);
-}
+inline void StructType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
 
-inline void InterfaceType::transpile(Transpiler& transpiler) const noexcept {
-    /// TODO:
-    // transpiler << identifier_;
-}
+inline void InterfaceType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
 
-inline void ClassType::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << identifier_;
-}
+inline void ClassType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
 
 inline void IntersectionType::transpile(Transpiler& transpiler) const noexcept {
     transpiler << "$PolyFunction<";
@@ -345,7 +334,7 @@ inline void InstanceValue::transpile(Transpiler& transpiler) const noexcept { UN
 inline void ASTRoot::transpile(Transpiler& transpiler) const noexcept {
     transpiler[Section::Includes] << "#include \"pch.hpp\"" << SectionWriter::newline;
     for (const auto& child : statements_) {
-        transpiler << child << SectionWriter::newline;
+        transpiler[Section::Main] << child << SectionWriter::newline;
     }
 }
 
@@ -365,7 +354,14 @@ inline void ASTConstant::transpile(Transpiler& transpiler) const noexcept {
     value_->transpile(transpiler);
 }
 
-inline void ASTIdentifier::transpile(Transpiler& transpiler) const noexcept { transpiler << str_; }
+inline void ASTIdentifier::transpile(Transpiler& transpiler) const noexcept {
+    TypeResolution type = transpiler.checker().lookup_type(str_);
+    if (transpiler.state_.renames.contains(type.get())) {
+        transpiler << transpiler.state_.renames.at(type.get());
+    } else {
+        transpiler << str_;
+    }
+}
 
 template <typename Op>
 inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler) const noexcept {
@@ -413,27 +409,40 @@ inline void ASTStructType::transpile(Transpiler& transpiler) const noexcept {
         it->second = transpiler.state_.structurals.size();
     }
     GlobalMemory::String struct_name = GlobalMemory::format("$structural_{}", it->second);
+    transpiler << struct_name;
+
+    // Insert structural definition if not defined yet
     if (inserted) {
         transpiler[Section::StructuralDeclarations] << "struct " << struct_name << ";\n";
-        transpiler.state_.structural_defs.push(this);
+        SectionWriter def_writer = transpiler[Section::Main];
+        def_writer << "struct " << struct_name << " {" << SectionWriter::indent
+                   << SectionWriter::newline;
+        transpiler.state_.renames[struct_type.get()] = struct_name;
+        for (const auto& field : fields_) {
+            def_writer << field << SectionWriter::newline;
+        }
+        transpiler.state_.renames.erase(struct_type.get());
+        def_writer << SectionWriter::dedent << "};" << SectionWriter::newline
+                   << SectionWriter::newline;
     }
-    transpiler << struct_name;
 }
 
-inline void ASTStructType::transpile_definition(Transpiler& transpiler) const noexcept {
-    TypeResolution struct_type;
-    eval_type(transpiler.checker(), struct_type);
-    GlobalMemory::String struct_name = GlobalMemory::format(
-        "$structural_{}",
-        transpiler.state_.structurals.at(static_cast<const StructType*>(struct_type.get()))
-    );
-    SectionWriter writer = transpiler[Section::Main];
-    writer << "struct " << struct_name << " {" << SectionWriter::indent << SectionWriter::newline;
-    for (const auto& field : fields_) {
-        writer << field << SectionWriter::newline;
-    }
-    writer << SectionWriter::dedent << "};" << SectionWriter::newline;
-}
+// inline void ASTStructType::transpile_definition(Transpiler& transpiler) const noexcept {
+//     TypeResolution struct_type;
+//     eval_type(transpiler.checker(), struct_type);
+//     GlobalMemory::String struct_name = GlobalMemory::format(
+//         "$structural_{}",
+//         transpiler.state_.structurals.at(static_cast<const StructType*>(struct_type.get()))
+//     );
+//     SectionWriter writer = transpiler[Section::Main];
+//     writer << "struct " << struct_name << " {" << SectionWriter::indent <<
+//     SectionWriter::newline; transpiler.state_.renames[struct_type.get()] = struct_name; for
+//     (const auto& field : fields_) {
+//         writer << field << SectionWriter::newline;
+//     }
+//     transpiler.state_.renames.erase(struct_type.get());
+//     writer << SectionWriter::dedent << "};" << SectionWriter::newline;
+// }
 
 inline void ASTReferenceExpr::transpile(Transpiler& transpiler) const noexcept {
     transpiler << expr_ << (is_mutable_ ? "" : " const") << "*";
@@ -459,11 +468,11 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler) const noexcept {
 
 inline void ASTTypeAlias::transpile(Transpiler& transpiler) const noexcept {
     transpiler << "using " << identifier_ << " = " << type_ << ";" << SectionWriter::newline;
-    while (!transpiler.state_.structural_defs.empty()) {
-        const ASTStructType* ast_struct = transpiler.state_.structural_defs.top();
-        transpiler.state_.structural_defs.pop();
-        ast_struct->transpile_definition(transpiler);
-    }
+    // while (!transpiler.state_.structural_defs.empty()) {
+    //     const ASTStructType* ast_struct = transpiler.state_.structural_defs.top();
+    //     transpiler.state_.structural_defs.pop();
+    //     ast_struct->transpile_definition(transpiler);
+    // }
 }
 
 inline void ASTIfStatement::transpile(Transpiler& transpiler) const noexcept {

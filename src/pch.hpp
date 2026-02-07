@@ -364,12 +364,15 @@ private:
             return std::pair<KeyType, MappedType>{*key_ptr_, *value_ptr_};
         }
         Proxy operator->() { return Proxy(*key_ptr_, *value_ptr_); }
+
+        KeyType* key_ptr() const noexcept { return key_ptr_; }
     };
 
 public:
     using key_type = Key;
     using mapped_type = Value;
     using value_type = std::pair<const Key, Value>;
+    using size_type = std::size_t;
     using iterator = IteratorImpl<false>;
     using const_iterator = IteratorImpl<true>;
 
@@ -442,17 +445,28 @@ public:
         values_.insert(values_.begin() + index, std::move(pair.second));
         return {iterator(&keys_[index], &values_[index]), true};
     }
-    Value remove(const Key& key) {
+    template <typename... Args>
+    std::pair<iterator, bool> emplace(Args&&... args) {
+        return insert(std::pair<Key, Value>(std::forward<Args>(args)...));
+    }
+    iterator erase(iterator pos) {
+        size_type index = pos.key_ptr() - keys_.data();
+        keys_.erase(keys_.begin() + index);
+        values_.erase(values_.begin() + index);
+        if (index < keys_.size()) {
+            return iterator(&keys_[index], &values_[index]);
+        }
+        return end();
+    }
+    size_type erase(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it != keys_.end() && !Comp{}(key, *it)) {
-            std::size_t index = std::distance(keys_.begin(), it);
+            size_type index = std::distance(keys_.begin(), it);
             keys_.erase(it);
-            Value value = std::move(values_[index]);
             values_.erase(values_.begin() + index);
-            return value;
-        } else {
-            throw std::out_of_range("Key not found in GlobalMemory::Map");
+            return 1;
         }
+        return 0;
     }
     iterator find(const Key& key) {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});

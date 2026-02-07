@@ -498,7 +498,9 @@ private:
             last_visited_ = new ASTPrimitiveType(loc(ctx), &FloatType::f64_instance);
             break;
         case ZincParser::KW_STRING:
-            /// TODO:
+            /// TODO: write a new class to do
+            /// TODO: current implementation leads to memory violation (TypeRegistry::get needs to
+            /// be called on main thread)
             last_visited_ = new ASTPrimitiveType(loc(ctx), TypeRegistry::get<StringType>());
             break;
         case ZincParser::KW_BOOL:
