@@ -156,7 +156,7 @@ private:
             );
         } else {
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -285,7 +285,7 @@ private:
             break;
         default:
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -301,7 +301,7 @@ private:
             break;
         default:
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -323,7 +323,7 @@ private:
             break;
         default:
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -339,7 +339,7 @@ private:
             break;
         default:
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -355,7 +355,7 @@ private:
             break;
         default:
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -376,7 +376,7 @@ private:
             break;
         default:
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -400,7 +400,7 @@ private:
             break;
         default:
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -458,7 +458,7 @@ private:
             break;
         default:
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -506,7 +506,7 @@ private:
             break;
         default:
             assert(false);
-            std::unreachable();
+            UNREACHABLE();
         }
         return {};
     }
@@ -514,7 +514,7 @@ private:
         last_visited_ = transform(ctx->identifier_);
         return {};
     }
-    antlrcpp::Any visitRecordType(ZincParser::RecordTypeContext* ctx) noexcept final {
+    antlrcpp::Any visitStructType(ZincParser::StructTypeContext* ctx) noexcept final {
         last_visited_ =
             new ASTStructType(loc(ctx), transform_list<ASTFieldDeclaration>(ctx->fields_));
         return {};

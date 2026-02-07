@@ -848,6 +848,6 @@ constexpr std::string_view OperatorCodeToString(OperatorCode opcode) {
         return ">>=";
     default:
         assert(false && "Unknown operator code");
-        std::unreachable();
+        UNREACHABLE();
     }
 }

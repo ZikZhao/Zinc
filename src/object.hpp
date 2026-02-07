@@ -12,7 +12,7 @@ enum class Kind : std::uint16_t {
     Boolean,
     Function,
     Array,
-    Record,
+    Struct,
     Interface,
     Instance,
     Intersection,
@@ -37,7 +37,7 @@ class BooleanType;
 class FunctionType;
 class ArrayType;
 class StructType;
-class RecordType;
+class StructType;
 class InterfaceType;
 class ClassType;
 class IntersectionType;
@@ -184,7 +184,7 @@ public:
         )
     static void get_at(TypeResolution& out, auto&&... args) noexcept {
         using Composites = std::
-            tuple<FunctionType, RecordType, IntersectionType, UnionType, ClassType, ReferenceType>;
+            tuple<FunctionType, StructType, IntersectionType, UnionType, ClassType, ReferenceType>;
         if constexpr (std::is_same_v<T, ClassType>) {
             // classes with same definition are distinct types
             out = new T(std::forward<decltype(args)>(args)...);
@@ -224,7 +224,7 @@ public:
 private:
     std::tuple<
         GlobalMemory::Set<FunctionType*, TypeComparator>,
-        GlobalMemory::Set<RecordType*, TypeComparator>,
+        GlobalMemory::Set<StructType*, TypeComparator>,
         GlobalMemory::Set<IntersectionType*, TypeComparator>,
         GlobalMemory::Set<UnionType*, TypeComparator>,
         GlobalMemory::Set<ReferenceType*, TypeComparator>>
@@ -483,7 +483,7 @@ public:
     std::string_view repr() const final { return "null"; }
     bool assignable_from_impl(const Type* source) const final {
         /// No variable can have null type except null literal
-        std::unreachable();
+        UNREACHABLE();
     }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -648,15 +648,15 @@ public:
     void transpile(Transpiler& transpiler) const noexcept final;
 };
 
-class RecordType : public Type {
+class StructType : public Type {
 public:
-    static constexpr Kind kind = Kind::Record;
+    static constexpr Kind kind = Kind::Struct;
 
 private:
     GlobalMemory::Map<std::string_view, const Type*> fields_;
 
 public:
-    RecordType(GlobalMemory::Map<std::string_view, const Type*> fields) noexcept
+    StructType(GlobalMemory::Map<std::string_view, const Type*> fields) noexcept
         : Type(kind), fields_(std::move(fields)) {}
 
     std::string_view repr() const final {
@@ -676,13 +676,13 @@ public:
     std::strong_ordering compare_congruent_impl(
         const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
-        const RecordType* other_record = other->cast<RecordType>();
-        if (fields_.size() != other_record->fields_.size()) {
-            return fields_.size() <=> other_record->fields_.size();
+        const StructType* other_struct = other->cast<StructType>();
+        if (fields_.size() != other_struct->fields_.size()) {
+            return fields_.size() <=> other_struct->fields_.size();
         }
         auto it1 = fields_.begin();
-        auto it2 = other_record->fields_.begin();
-        for (; it1 != fields_.end() && it2 != other_record->fields_.end(); ++it1, ++it2) {
+        auto it2 = other_struct->fields_.begin();
+        for (; it1 != fields_.end() && it2 != other_struct->fields_.end(); ++it1, ++it2) {
             if (it1->first != it2->first) {
                 return it1->first <=> it2->first;
             }
@@ -697,13 +697,13 @@ public:
     bool assignable_from_impl(const Type* source) const final {
         // (a,b,c) is assignable to (a,b)
         // i.e., source must have at least all fields of this
-        const RecordType* other_record = source->dyn_cast<RecordType>();
-        if (other_record == nullptr) {
+        const StructType* other_struct = source->dyn_cast<StructType>();
+        if (other_struct == nullptr) {
             return false;
         }
         for (const auto& [name, type] : fields_) {
-            auto it = other_record->fields_.find(name);
-            if (it == other_record->fields_.end() || !(*it).second->assignable_from(type)) {
+            auto it = other_struct->fields_.find(name);
+            if (it == other_struct->fields_.end() || !(*it).second->assignable_from(type)) {
                 return false;
             }
         }

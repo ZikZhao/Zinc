@@ -10,9 +10,8 @@
 enum class Section {
     Includes,
     StructuralDeclarations,
-    Declarations,
-    Constants,
     Main,
+    Implementation,
     __len__,
 };
 
@@ -82,12 +81,10 @@ class Transpiler {
 public:
     struct State {
         GlobalMemory::Set<std::string_view> niebloids;
-        GlobalMemory::Map<const RecordType*, std::size_t> structurals;
+        GlobalMemory::Map<const StructType*, std::size_t> structurals;
         GlobalMemory::Set<const ASTExpression*> types_visited;
-        std::stack<
-            std::function<void(Transpiler&)>,
-            GlobalMemory::Vector<std::function<void(Transpiler&)>>>
-            structural_impls;
+        std::stack<const ASTStructType*, GlobalMemory::Vector<const ASTStructType*>>
+            structural_defs;
     };
 
 private:
@@ -117,15 +114,13 @@ public:
                 .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
         std::fstream stream(GlobalMemory::format("out/{}.hpp", stem).c_str(), std::ios::out);
         stream << "#pragma once\n\n"
-               << strip_buffer(Section::Includes)
+               << strip_section(Section::Includes)
                << "\n\n/* ---------- Structural Declarations ---------- */\n\n"
-               << strip_buffer(Section::StructuralDeclarations)
-               << "\n\n/* ---------- Declarations ---------- */\n\n"
-               << strip_buffer(Section::Declarations)
-               << "\n\n/* ---------- Constants ---------- */\n\n"
-               << strip_buffer(Section::Constants)  //
+               << strip_section(Section::StructuralDeclarations)
                << "\n\n/* ---------- Main ---------- */\n\n"
-               << strip_buffer(Section::Main);
+               << strip_section(Section::Main)
+               << "\n\n/* ---------- Implementation ---------- */\n\n"
+               << strip_section(Section::Implementation);
     }
 
     SectionWriter operator[](Section section) {
@@ -137,7 +132,7 @@ public:
     }
 
 private:
-    std::string_view strip_buffer(Section section) const noexcept {
+    std::string_view strip_section(Section section) const noexcept {
         const GlobalMemory::String& buffer = sections_[static_cast<std::size_t>(section)];
         std::size_t begin = 0;
         std::size_t end = buffer.size();
@@ -279,8 +274,8 @@ inline void ArrayType::transpile(Transpiler& transpiler) const noexcept {
     transpiler << ">";
 }
 
-inline void RecordType::transpile(Transpiler& transpiler) const noexcept {
-    std::size_t id = transpiler.state_.structurals.at(const_cast<RecordType*>(this));
+inline void StructType::transpile(Transpiler& transpiler) const noexcept {
+    std::size_t id = transpiler.state_.structurals.at(const_cast<StructType*>(this));
     transpiler << "$structural_" << GlobalMemory::format_view("{}", id);
 }
 
@@ -350,8 +345,7 @@ inline void InstanceValue::transpile(Transpiler& transpiler) const noexcept { UN
 inline void ASTRoot::transpile(Transpiler& transpiler) const noexcept {
     transpiler[Section::Includes] << "#include \"pch.hpp\"" << SectionWriter::newline;
     for (const auto& child : statements_) {
-        transpiler[Section::Constants];
-        child->transpile(transpiler);
+        transpiler << child << SectionWriter::newline;
     }
 }
 
@@ -410,29 +404,35 @@ inline void ASTFieldDeclaration::transpile(Transpiler& transpiler) const noexcep
 }
 
 inline void ASTStructType::transpile(Transpiler& transpiler) const noexcept {
-    TypeResolution record_type;
-    eval_type(transpiler.checker(), record_type);
+    TypeResolution struct_type;
+    eval_type(transpiler.checker(), struct_type);
     auto [it, inserted] = transpiler.state_.structurals.insert(
-        {static_cast<const RecordType*>(record_type.get()), 0}
+        {static_cast<const StructType*>(struct_type.get()), 0}
     );
     if (inserted) {
         it->second = transpiler.state_.structurals.size();
     }
     GlobalMemory::String struct_name = GlobalMemory::format("$structural_{}", it->second);
-    transpiler << struct_name;
     if (inserted) {
-        transpiler.state_.structural_impls.push([this, id = it->second](Transpiler& transpiler) {
-            GlobalMemory::String struct_name = GlobalMemory::format("$structural_{}", id);
-            transpiler[Section::StructuralDeclarations] << "struct " << struct_name << ";\n";
-            SectionWriter writer = transpiler[Section::Main];
-            writer << "struct " << struct_name << " {" << SectionWriter::indent
-                   << SectionWriter::newline;
-            for (const auto& field : fields_) {
-                writer << field << SectionWriter::newline;
-            }
-            writer << SectionWriter::dedent << "};" << SectionWriter::newline;
-        });
+        transpiler[Section::StructuralDeclarations] << "struct " << struct_name << ";\n";
+        transpiler.state_.structural_defs.push(this);
     }
+    transpiler << struct_name;
+}
+
+inline void ASTStructType::transpile_definition(Transpiler& transpiler) const noexcept {
+    TypeResolution struct_type;
+    eval_type(transpiler.checker(), struct_type);
+    GlobalMemory::String struct_name = GlobalMemory::format(
+        "$structural_{}",
+        transpiler.state_.structurals.at(static_cast<const StructType*>(struct_type.get()))
+    );
+    SectionWriter writer = transpiler[Section::Main];
+    writer << "struct " << struct_name << " {" << SectionWriter::indent << SectionWriter::newline;
+    for (const auto& field : fields_) {
+        writer << field << SectionWriter::newline;
+    }
+    writer << SectionWriter::dedent << "};" << SectionWriter::newline;
 }
 
 inline void ASTReferenceExpr::transpile(Transpiler& transpiler) const noexcept {
@@ -458,12 +458,11 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler) const noexcept {
 }
 
 inline void ASTTypeAlias::transpile(Transpiler& transpiler) const noexcept {
-    transpiler[Section::Declarations] << "using " << identifier_ << " = " << type_ << ";"
-                                      << SectionWriter::newline;
-    while (!transpiler.state_.structural_impls.empty()) {
-        std::function<void(Transpiler&)> func = std::move(transpiler.state_.structural_impls.top());
-        transpiler.state_.structural_impls.pop();
-        func(transpiler);
+    transpiler << "using " << identifier_ << " = " << type_ << ";" << SectionWriter::newline;
+    while (!transpiler.state_.structural_defs.empty()) {
+        const ASTStructType* ast_struct = transpiler.state_.structural_defs.top();
+        transpiler.state_.structural_defs.pop();
+        ast_struct->transpile_definition(transpiler);
     }
 }
 
@@ -522,46 +521,46 @@ inline void ASTFunctionDefinition::transpile(Transpiler& transpiler) const noexc
     bool will_mangle = !is_main && is_static_;
 
     if (!is_main) {
-        SectionWriter writer = transpiler[Section::Declarations];
-        writer << return_type_ << (will_mangle ? " $" : " ") << identifier_ << "(";
+        transpiler << return_type_ << (will_mangle ? " $" : " ") << identifier_ << "(";
         const char* sep = "";
         for (const auto& param : parameters_) {
-            writer << sep << param;
+            transpiler << sep << param;
             sep = ", ";
         }
-        writer << ");" << SectionWriter::newline;
+        transpiler << ");" << SectionWriter::newline;
 
         if (is_static_ && transpiler.state_.niebloids.insert(identifier_).second) {
-            transpiler[Section::Constants] << "constexpr auto " << identifier_
-                                           << " = [](auto&&... args) { return $" << identifier_
-                                           << "(std::forward<decltype(args)>(args)...); };"
-                                           << SectionWriter::newline;
+            transpiler << "constexpr auto " << identifier_ << " = [](auto&&... args) { return $"
+                       << identifier_ << "(std::forward<decltype(args)>(args)...); };"
+                       << SectionWriter::newline;
         }
     }
 
+    SectionWriter def_writer = transpiler[Section::Implementation];
     if (is_main) {
-        transpiler << "// NOLINTNEXTLINE(misc-definitions-in-headers)" << SectionWriter::newline;
+        def_writer << "// NOLINTNEXTLINE(misc-definitions-in-headers)" << SectionWriter::newline;
     } else {
-        transpiler << "inline ";
+        def_writer << "inline ";
     }
-    transpiler << return_type_ << " " << (will_mangle ? "$" : "") << identifier_ << "(";
+
+    def_writer << return_type_ << " " << (will_mangle ? "$" : "") << identifier_ << "(";
     const char* sep = "";
     for (const auto& param : parameters_) {
-        transpiler << sep << param;
+        def_writer << sep << param;
         sep = ", ";
     }
-    transpiler << ") {" << SectionWriter::indent << SectionWriter::newline;
+    def_writer << ") {" << SectionWriter::indent << SectionWriter::newline;
     transpiler.checker().enter(&body_);
     for (const auto& stmt : body_) {
-        stmt->transpile(transpiler);
+        def_writer << stmt;
     }
-    transpiler << SectionWriter::dedent << "}" << SectionWriter::newline;
+    def_writer << SectionWriter::dedent << "}" << SectionWriter::newline << SectionWriter::newline;
     transpiler.checker().exit();
 }
 
 inline void ASTClassDefinition::transpile(Transpiler& transpiler) const noexcept {
-    transpiler[Section::Declarations] << "struct " << identifier_ << " {" << SectionWriter::indent
-                                      << SectionWriter::newline;
+    transpiler << "struct " << identifier_ << " {" << SectionWriter::indent
+               << SectionWriter::newline;
 
     transpiler.checker().enter(this);
     transpiler.checker().enter(&identifier_);
@@ -586,8 +585,8 @@ inline void ASTClassDefinition::transpile(Transpiler& transpiler) const noexcept
 }
 
 inline void ASTNamespaceDefinition::transpile(Transpiler& transpiler) const noexcept {
-    transpiler[Section::Declarations] << "namespace " << identifier_ << " {"
-                                      << SectionWriter::indent << SectionWriter::newline;
+    transpiler << "namespace " << identifier_ << " {" << SectionWriter::indent
+               << SectionWriter::newline;
     transpiler.checker().enter(this);
     for (const auto& item : items_) {
         item->transpile(transpiler);

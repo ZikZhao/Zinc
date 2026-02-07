@@ -162,7 +162,7 @@ type:
 		| KW_BOOL
 	)													# PrimitiveType
 	| identifier_ = identifier							# IdentifierType
-	| OP_LBRACE fields_ += field_declaration* OP_RBRACE	# RecordType
+	| OP_LBRACE fields_ += field_declaration* OP_RBRACE	# StructType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType

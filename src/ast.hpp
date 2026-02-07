@@ -548,10 +548,11 @@ public:
     ASTStructType(const Location& loc, ComparableSpan<ASTFieldDeclaration*> fields) noexcept
         : ASTExplicitTypeExpr(loc), fields_(fields) {}
     void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile_definition(Transpiler& transpiler) const noexcept;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
-        out = std::type_identity<RecordType>();
+        out = std::type_identity<StructType>();
         GlobalMemory::Map<std::string_view, const Type*> field_map =
             fields_ |
             std::views::transform(
@@ -563,7 +564,7 @@ private:
                 }
             ) |
             GlobalMemory::collect<GlobalMemory::Map<std::string_view, const Type*>>();
-        TypeRegistry::get_at<RecordType>(out, field_map);
+        TypeRegistry::get_at<StructType>(out, field_map);
     }
 };
 
