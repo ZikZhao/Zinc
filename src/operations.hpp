@@ -554,7 +554,7 @@ inline Value* assignment_op(OperatorCode opcode, Value* left, Value* right) {
 
 class OperationHandler final {
 private:
-    GlobalMemory::Map<std::tuple<OperatorCode, const Type*, const Type*>, const Object*> map_;
+    GlobalMemory::FlatMap<std::tuple<OperatorCode, const Type*, const Type*>, const Object*> map_;
     GlobalMemory::MultiMap<OperatorCode, const Object* (*)(const Type*, const Type*)> templates_;
 
 public:

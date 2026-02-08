@@ -30,10 +30,10 @@ public:
 };
 
 using MapTestTypes = ::testing::Types<
-    GlobalMemory::Map<int, int>,
-    GlobalMemory::Map<std::string, std::string>,
-    GlobalMemory::Map<int, ComparableUniquePtr<int>>,
-    GlobalMemory::Map<std::string, int>>;
+    GlobalMemory::FlatMap<int, int>,
+    GlobalMemory::FlatMap<std::string, std::string>,
+    GlobalMemory::FlatMap<int, ComparableUniquePtr<int>>,
+    GlobalMemory::FlatMap<std::string, int>>;
 
 TYPED_TEST_SUITE(FlatMapTest, MapTestTypes);
 
@@ -56,9 +56,9 @@ TYPED_TEST(FlatMapTest, EdgeCases) { this->test_edge_cases(); }
 TYPED_TEST(FlatMapTest, FuzzyTest) { this->fuzz_test(10000); }
 
 using SetTestTypes = ::testing::Types<
-    GlobalMemory::Set<int>,
-    GlobalMemory::Set<std::string>,
-    GlobalMemory::Set<ComparableUniquePtr<int>>>;
+    GlobalMemory::FlatSet<int>,
+    GlobalMemory::FlatSet<std::string>,
+    GlobalMemory::FlatSet<ComparableUniquePtr<int>>>;
 
 TYPED_TEST_SUITE(FlatSetTest, SetTestTypes);
 

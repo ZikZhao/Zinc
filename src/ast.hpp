@@ -56,8 +56,8 @@ public:
 
 private:
     Scope* parent_ = nullptr;
-    GlobalMemory::Map<std::string_view, ScopeValue> identifiers_;
-    GlobalMemory::Map<const void*, Scope*> children_;
+    GlobalMemory::FlatMap<std::string_view, ScopeValue> identifiers_;
+    GlobalMemory::FlatMap<const void*, Scope*> children_;
 
 public:
     std::string_view prefix_;
@@ -122,7 +122,7 @@ class TypeChecker final {
 private:
     Scope* current_scope_;
     GlobalMemory::Map<std::pair<const Scope*, std::string_view>, TypeResolution> id_cache_;
-    GlobalMemory::Map<std::pair<const Scope*, const ASTExpression*>, Type*> ptr_cache_;
+    GlobalMemory::FlatMap<std::pair<const Scope*, const ASTExpression*>, Type*> ptr_cache_;
 
 public:
     OperationHandler& ops_;
@@ -219,6 +219,7 @@ public:
         //     return cached;
         // }
         eval_type_impl(checker, out, require_complete);
+        assert(require_complete ? out.is_complete() : true);
     }
     virtual Term eval_term(
         TypeChecker& checker, const Type* expected, bool expected_const
@@ -345,7 +346,6 @@ private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         TypeResolution expr_result;
         expr_->eval_type(checker, expr_result);
-        assert(expr_result.is_valid());
         try {
             out = TypeResolution(checker.ops_.eval_type_op(Op::opcode, expr_result.get()));
         } catch (UnlocatedProblem& e) {
@@ -382,10 +382,8 @@ private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         TypeResolution left_result;
         left_->eval_type(checker, left_result);
-        assert(left_result.is_valid());
         TypeResolution right_result;
         right_->eval_type(checker, right_result);
-        assert(right_result.is_valid());
         try {
             out = checker.ops_.eval_type_op(Op::opcode, left_result.get(), right_result.get());
         } catch (UnlocatedProblem& e) {
@@ -506,7 +504,6 @@ private:
             std::views::transform([&](ASTExpression* param_expr) -> const Type* {
                 TypeResolution param_type;
                 param_expr->eval_type(checker, param_type);
-                assert(param_type.is_valid());
                 return param_type.get();
             }) |
             GlobalMemory::collect<ComparableSpan<const Type*>>();
@@ -516,7 +513,6 @@ private:
         }
         TypeResolution return_type;
         std::get<1>(comps)->eval_type(checker, return_type);
-        assert(return_type.is_valid());
         TypeRegistry::get_at<FunctionType>(out, param_types, return_type.get());
     }
 };
@@ -534,7 +530,6 @@ public:
     void check_types(TypeChecker& checker) final {
         TypeResolution field_type;
         type_->eval_type(checker, field_type);
-        assert(field_type.is_valid());
         checker.add_variable(identifier_, Term(field_type.get(), Term::Category::Var));
     }
     void transpile(Transpiler& transpiler) const noexcept final;
@@ -553,17 +548,16 @@ public:
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         out = std::type_identity<StructType>();
-        GlobalMemory::Map<std::string_view, const Type*> field_map =
+        GlobalMemory::FlatMap<std::string_view, const Type*> field_map =
             fields_ |
             std::views::transform(
                 [&](ASTFieldDeclaration* decl) -> std::pair<std::string_view, const Type*> {
                     TypeResolution field_type;
                     decl->type_->eval_type(checker, field_type);
-                    assert(field_type.is_valid());
                     return {decl->identifier_, field_type.get()};
                 }
             ) |
-            GlobalMemory::collect<GlobalMemory::Map<std::string_view, const Type*>>();
+            GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, const Type*>>();
         TypeRegistry::get_at<StructType>(out, field_map);
     }
 };
@@ -589,14 +583,10 @@ private:
         out = std::type_identity<ReferenceType>();
         TypeResolution expr_type;
         expr_->eval_type(checker, expr_type, false);
-        // out = TypeResolution(
-        //     TypeRegistry::get<ReferenceType>(expr_type.get(), is_mutable_,
-        //     expr_type.is_complete())
-        // );
         if (!expr_type.is_complete()) {
             TypeRegistry::indicate_unreadable_ref(out.get(), expr_type.get());
         }
-        out.construct<ReferenceType>(expr_type.get(), is_mutable_);
+        TypeRegistry::get_at<ReferenceType>(out, expr_type.get(), is_mutable_);
     }
 };
 
@@ -636,7 +626,6 @@ public:
         TypeResolution declared_type;
         if (type_) {
             type_->eval_type(checker, declared_type);
-            assert(declared_type.is_valid());
         }
         Term term = expr_->eval_term(checker, declared_type.get(), is_constant_);
         if (!is_constant_) {
@@ -857,7 +846,6 @@ public:
         for (auto& param : parameters_) {
             TypeResolution param_type;
             param->type_->eval_type(checker, param_type);
-            assert(param_type.is_valid());
             checker.add_variable(param->identifier_, Term(param_type.get(), Term::Category::Var));
         }
         for (auto& stmt : body_) {
@@ -1016,7 +1004,6 @@ public:
             } else {
                 TypeResolution constraint_type;
                 param_type->eval_type(checker, constraint_type);
-                assert(constraint_type.is_valid());
                 if (!constraint_type->assignable_from(argument->cast<Value>()->get_type())) {
                     Diagnostic::report(TemplateArgumentTypeMismatchError(
                         location_,
@@ -1060,7 +1047,6 @@ inline TypeResolution TypeChecker::lookup_type_in(std::string_view identifier, S
     } else if (auto type = it_id->second.get<const ASTExpression*>()) {
         Scope* previous_scope = std::exchange(current_scope_, &scope);
         type->eval_type(*this, it_cache->second);
-        assert(it_cache->second.is_valid());
         current_scope_ = previous_scope;
         return it_cache->second;
     } else if (it_id->second.get<Term*>()) {
@@ -1124,7 +1110,6 @@ inline Term ASTFunctionSignature::eval_term(TypeChecker& checker) const noexcept
                             std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
                                 TypeResolution param_type;
                                 param->type_->eval_type(checker, param_type);
-                                assert(param_type.is_valid());
                                 return param_type.get();
                             }) |
                             GlobalMemory::collect<ComparableSpan<const Type*>>();
@@ -1133,7 +1118,6 @@ inline Term ASTFunctionSignature::eval_term(TypeChecker& checker) const noexcept
     }
     TypeResolution return_type;
     owner_->return_type_->eval_type(checker, return_type);
-    assert(return_type.is_valid());
     /// TODO: handle constexpr functions
     return Term(
         TypeRegistry::get<FunctionType>(params, return_type.get()), Term::Category::Immutable
@@ -1192,13 +1176,13 @@ inline void ASTClassSignature::eval_type_impl(
     // Collect attributes
     checker.enter(this);
     checker.enter(&owner_->identifier_);
-    GlobalMemory::Map<std::string_view, const Type*> attrs =
+    GlobalMemory::FlatMap<std::string_view, const Type*> attrs =
         owner_->fields_ | std::views::transform([&](const auto& field_decl) {
             std::pair<std::string_view, const Type*> result;
             result.first = field_decl->identifier_;
             TypeResolution field_type;
             field_decl->type_->eval_type(checker, field_type);
-            if (!field_type.is_valid()) {
+            if (!field_type.is_complete()) {
                 Diagnostic::report(SymbolCategoryMismatchError(field_decl->type_->location_, true));
                 result.second = TypeRegistry::get_unknown();
             } else {
@@ -1206,7 +1190,7 @@ inline void ASTClassSignature::eval_type_impl(
             }
             return result;
         }) |
-        GlobalMemory::collect<GlobalMemory::Map<std::string_view, const Type*>>();
+        GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, const Type*>>();
     // Collect methods
     GlobalMemory::Vector non_static_functions =
         owner_->functions_ |
@@ -1218,7 +1202,7 @@ inline void ASTClassSignature::eval_type_impl(
     std::ranges::unique(non_static_functions, [](const auto& a, const auto& b) {
         return a->identifier_ == b->identifier_;
     });
-    GlobalMemory::Map<std::string_view, FunctionOverloads> methods =
+    GlobalMemory::FlatMap<std::string_view, FunctionOverloads> methods =
         non_static_functions |
         std::views::transform(
             [&](
@@ -1233,7 +1217,7 @@ inline void ASTClassSignature::eval_type_impl(
                 return {func_def->identifier_, {}};  /// TODO:
             }
         ) |
-        GlobalMemory::collect<GlobalMemory::Map<std::string_view, FunctionOverloads>>();
+        GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, FunctionOverloads>>();
     checker.exit();
     checker.exit();
     out = TypeRegistry::get<ClassType>(

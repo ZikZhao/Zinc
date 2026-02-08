@@ -227,6 +227,10 @@
                 "cwd": "${workspaceFolder}",
                 "environment": [
                     {
+                        "name": "ASAN_OPTIONS",
+                        "value": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+                    },
+                    {
                         "name": "UBSAN_OPTIONS",
                         "value": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
                     }

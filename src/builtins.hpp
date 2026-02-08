@@ -8,8 +8,8 @@ class StringViewType final : public ClassType {
 private:
     StringViewType() : ClassType("string_view", nullptr, {}, get_attr(), get_methods()) {}
 
-    GlobalMemory::Map<std::string_view, FunctionOverloads> get_methods() {
-        return GlobalMemory::Map<std::string_view, FunctionOverloads>{
+    GlobalMemory::FlatMap<std::string_view, FunctionOverloads> get_methods() {
+        return GlobalMemory::FlatMap<std::string_view, FunctionOverloads>{
             {"init",
              {new FunctionType(
                  GlobalMemory::pack_array<const Type*>(
@@ -25,8 +25,8 @@ private:
         };
     }
 
-    GlobalMemory::Map<std::string_view, const Type*> get_attr() {
-        return GlobalMemory::Map<std::string_view, const Type*>{
+    GlobalMemory::FlatMap<std::string_view, const Type*> get_attr() {
+        return GlobalMemory::FlatMap<std::string_view, const Type*>{
             {"length_", &IntegerType::u64_instance}
         };
     }
@@ -38,8 +38,8 @@ class StringType final : public ClassType {
 private:
     StringType() : ClassType("string", nullptr, {}, get_attr(), get_methods()) {}
 
-    GlobalMemory::Map<std::string_view, FunctionOverloads> get_methods() {
-        return GlobalMemory::Map<std::string_view, FunctionOverloads>{
+    GlobalMemory::FlatMap<std::string_view, FunctionOverloads> get_methods() {
+        return GlobalMemory::FlatMap<std::string_view, FunctionOverloads>{
             {"at",
              {new FunctionType(
                  GlobalMemory::pack_array<const Type*>(&IntegerType::u64_instance),
@@ -48,8 +48,8 @@ private:
         };
     }
 
-    GlobalMemory::Map<std::string_view, const Type*> get_attr() {
-        return GlobalMemory::Map<std::string_view, const Type*>{
+    GlobalMemory::FlatMap<std::string_view, const Type*> get_attr() {
+        return GlobalMemory::FlatMap<std::string_view, const Type*>{
             {"length_", &IntegerType::u64_instance}
         };
     }

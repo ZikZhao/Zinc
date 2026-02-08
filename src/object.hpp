@@ -70,58 +70,71 @@ private:
     struct Edge {
         const Type* parent;
         const Type* child;
+        const Type** action;
     };
 
 private:
     GlobalMemory::Vector<Edge> edges_;
+    GlobalMemory::Vector<Edge> removed_;
 
 public:
-    bool check_dependency(const Type* parent, const Type* child) noexcept {
+    /// Checks if the child type is readable. If not, adds a dependency edge and returns false.
+    bool check_dependency(const Type* parent, const Type*& child) noexcept {
         if (!is_readable(child)) {
-            edges_.push_back({parent, child});
+            edges_.push_back({parent, child, &child});
             return false;
         }
         return true;
     }
 
     bool check_cycle(const Type* target) noexcept {
-        auto remove_dep =
-            [](this auto& self, GlobalMemory::Vector<Edge>& edges, const Type* child) -> void {
-            GlobalMemory::Vector<Edge> removed_edges;
-            for (Edge& edge : edges) {
+        assert(removed_.empty());
+        auto remove_dep = [](this auto& self,
+                             GlobalMemory::Vector<Edge>& edges,
+                             GlobalMemory::Vector<Edge>& removed,
+                             const Type* child) -> void {
+            GlobalMemory::Vector<Edge> local_removed;
+            for (auto it = edges.begin(); it != edges.end(); it++) {
+                Edge& edge = *it;
                 if (edge.child == child) {
-                    removed_edges.push_back(edge);
+                    local_removed.push_back(edge);
                     std::swap(edge, edges.back());
                     edges.pop_back();
+                    if (it == edges.end()) {
+                        break;
+                    }
                 }
             }
-            for (const Edge& removed : removed_edges) {
+            for (const Edge& removed_edge : local_removed) {
                 // All dependencies are satisfied, so we can safely mark the child as readable
                 if (!std::ranges::any_of(edges, [&](const Edge& edge) {
-                        return edge.parent == removed.parent;
+                        return edge.parent == removed_edge.parent;
                     })) {
-                    self(edges, removed.parent);
+                    self(edges, removed, removed_edge.parent);
                 }
             }
+            removed.insert(removed.end(), local_removed.begin(), local_removed.end());
         };
-        remove_dep(edges_, target);
+        remove_dep(edges_, removed_, target);
         return edges_.empty();
     }
 
-    void add_dependency(const Type* parent, const Type* child) noexcept {
-        edges_.push_back({parent, child});
+    void add_ref_dependency(const Type* parent, const Type* child) noexcept {
+        edges_.push_back({parent, child, nullptr});
     }
 
-    bool is_dependent(const Type* type) const noexcept {
-        return std::ranges::any_of(edges_, [&](const Edge& edge) { return edge.parent == type; });
+    bool is_dependent(const Type* parent) const noexcept {
+        return std::ranges::any_of(edges_, [&](const Edge& edge) { return edge.parent == parent; });
     }
 
     std::size_t size() const noexcept { return edges_.size(); }
 
+    auto& removed() noexcept { return removed_; }
+
 private:
     bool is_readable(const Type* type) const noexcept {
         for (const Edge& edge : edges_) {
-            if (edge.child == type) {
+            if (edge.parent == type) {
                 return false;
             }
         }
@@ -130,17 +143,38 @@ private:
 };
 
 class TypeResolution final {
+    friend class TypeRegistry;
+
 private:
     std::uintptr_t ptr_;
 
 public:
-    TypeResolution() noexcept = default;
+    TypeResolution() noexcept : ptr_(0) {};
+
     TypeResolution(const Type* type) noexcept : ptr_(reinterpret_cast<std::uintptr_t>(type)) {}
+
     template <TypeClass T>
     TypeResolution(std::type_identity<T>) noexcept
         : ptr_(
               reinterpret_cast<std::uintptr_t>(GlobalMemory::alloc_raw(sizeof(T), alignof(T))) | 1
           ) {}
+    template <TypeClass T>
+    TypeResolution& operator=(std::type_identity<T>) noexcept {
+        ptr_ = reinterpret_cast<std::uintptr_t>(GlobalMemory::alloc_raw(sizeof(T), alignof(T))) | 1;
+        return *this;
+    }
+
+    const Type* get() const noexcept {
+        return reinterpret_cast<const Type*>(ptr_ & ~std::uintptr_t(1));
+    }
+
+    const Type* operator->() const noexcept {
+        return reinterpret_cast<const Type*>(ptr_ & ~std::uintptr_t(1));
+    }
+
+    bool is_complete() const noexcept { return (ptr_ & 1) == 0; }
+
+private:
     template <TypeClass T>
     T* construct(auto&&... args) noexcept {
         assert(get() && !is_complete());
@@ -150,16 +184,6 @@ public:
         ptr_ &= ~std::uintptr_t(1);
         return reinterpret_cast<T*>(ptr_);
     }
-    const Type* get() const noexcept {
-        return reinterpret_cast<const Type*>(ptr_ & ~std::uintptr_t(1));
-    }
-    const Type* operator->() const noexcept {
-        assert(is_complete());
-        return reinterpret_cast<const Type*>(ptr_);
-    }
-    bool is_complete() const noexcept { return (ptr_ & 1) == 0; }
-    bool is_valid() const noexcept { return (get() != nullptr) && is_complete(); }
-    void mark_as_incomplete() noexcept { ptr_ |= 1; }
 };
 
 class TypeRegistry {
@@ -169,7 +193,7 @@ private:
     struct TypeComparator {
         template <TypeClass T>
         constexpr bool operator()(T* a, T* b) const noexcept {
-            GlobalMemory::Set<std::pair<const Type*, const Type*>> assumed_equal;
+            GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
             return a->compare_congruent(b, assumed_equal) == std::strong_ordering::less;
         }
     };
@@ -214,7 +238,7 @@ public:
     static const Type* get_unknown() noexcept;
 
     static void indicate_unreadable_ref(const Type* parent, const Type* child) noexcept {
-        instance->graph_.add_dependency(parent, child);
+        instance->graph_.add_ref_dependency(parent, child);
     }
 
     static bool is_type_circular(const Type* type) noexcept {
@@ -223,32 +247,34 @@ public:
 
 private:
     std::tuple<
-        GlobalMemory::Set<FunctionType*, TypeComparator>,
-        GlobalMemory::Set<StructType*, TypeComparator>,
-        GlobalMemory::Set<IntersectionType*, TypeComparator>,
-        GlobalMemory::Set<UnionType*, TypeComparator>,
-        GlobalMemory::Set<ReferenceType*, TypeComparator>>
+        GlobalMemory::FlatSet<FunctionType*, TypeComparator>,
+        GlobalMemory::FlatSet<StructType*, TypeComparator>,
+        GlobalMemory::FlatSet<IntersectionType*, TypeComparator>,
+        GlobalMemory::FlatSet<UnionType*, TypeComparator>,
+        GlobalMemory::FlatSet<ReferenceType*, TypeComparator>>
         types_;
-    GlobalMemory::Map<std::type_index, Type*> builtin_types_;
+    GlobalMemory::FlatMap<std::type_index, Type*> builtin_types_;
     TypeDependencyGraph graph_;
-    GlobalMemory::Set<const Type*> circular_types_;
+    GlobalMemory::FlatSet<const Type*> circular_types_;
 
 private:
     template <TypeClass T>
     void get_interned(TypeResolution& out, auto&&... args) noexcept {
-        GlobalMemory::Set<T*, TypeComparator>& type_pool =
-            std::get<GlobalMemory::Set<T*, TypeComparator>>(types_);
+        GlobalMemory::FlatSet<T*, TypeComparator>& type_pool =
+            std::get<GlobalMemory::FlatSet<T*, TypeComparator>>(types_);
         T* type = out.construct<T>(std::forward<decltype(args)>(args)...);
         std::size_t graph_size_before = graph_.size();
         if (type->can_intern(graph_)) {
             if (graph_.size() < graph_size_before) {
                 circular_types_.insert(type);
             }
-            // type->self_intern();
+            intern_single_type(type);
             auto [it, _] = type_pool.insert(type);
             out = *it;
         }
     }
+
+    void intern_single_type(const Type* type) noexcept;
 
 public:
     TypeRegistry() noexcept = default;
@@ -401,7 +427,7 @@ public:
     };
 
     std::strong_ordering compare_congruent(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept {
         if (this == other) {
             return std::strong_ordering::equal;
@@ -422,7 +448,7 @@ public:
     }
 
     virtual std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept = 0;
 
 protected:
@@ -438,7 +464,7 @@ protected:
     bool can_intern_impl(TypeDependencyGraph& graph) noexcept final { return true; }
 
     std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         return this <=> other;
     }
@@ -577,19 +603,20 @@ public:
     }
 
     bool can_intern_impl(TypeDependencyGraph& graph) noexcept final {
-        for (const Type* param_type : parameters_) {
+        bool has_unreadable_child = false;
+        for (const Type*& param_type : parameters_) {
             if (!graph.check_dependency(this, param_type)) {
-                return false;
+                has_unreadable_child = true;
             }
         }
         if (!graph.check_dependency(this, return_type_)) {
-            return false;
+            has_unreadable_child = true;
         }
-        return true;
+        return !has_unreadable_child;
     }
 
     std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const FunctionType* other_func = other->cast<FunctionType>();
         if (parameters_.size() != other_func->parameters_.size()) {
@@ -630,7 +657,7 @@ public:
     }
 
     std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const ArrayType* other_array = other->cast<ArrayType>();
         if (size_ != other_array->size_) {
@@ -653,10 +680,10 @@ public:
     static constexpr Kind kind = Kind::Struct;
 
 private:
-    GlobalMemory::Map<std::string_view, const Type*> fields_;
+    GlobalMemory::FlatMap<std::string_view, const Type*> fields_;
 
 public:
-    StructType(GlobalMemory::Map<std::string_view, const Type*> fields) noexcept
+    StructType(GlobalMemory::FlatMap<std::string_view, const Type*> fields) noexcept
         : Type(kind), fields_(std::move(fields)) {}
 
     std::string_view repr() const final {
@@ -665,16 +692,17 @@ public:
     }
 
     bool can_intern_impl(TypeDependencyGraph& graph) noexcept final {
-        for (auto it : fields_) {
-            if (!graph.check_dependency(this, it.second)) {
-                return false;
+        bool has_unreadable_child = false;
+        for (auto field : fields_) {
+            if (!graph.check_dependency(this, field.second)) {
+                has_unreadable_child = true;
             }
         }
-        return true;
+        return !has_unreadable_child;
     }
 
     std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const StructType* other_struct = other->cast<StructType>();
         if (fields_.size() != other_struct->fields_.size()) {
@@ -718,7 +746,7 @@ public:
     static constexpr Kind kind = Kind::Interface;
 
 private:
-    GlobalMemory::Map<std::string_view, OverloadedFunctionValue*> methods_;
+    GlobalMemory::FlatMap<std::string_view, OverloadedFunctionValue*> methods_;
 
 public:
     InterfaceType() noexcept : Type(kind) {}
@@ -734,7 +762,7 @@ public:
     }
 
     std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         /// TODO:
         return std::strong_ordering::equal;
@@ -756,16 +784,16 @@ private:
     std::string_view identifier_;
     const Type* extends_;
     ComparableSpan<const Type*> implements_;
-    GlobalMemory::Map<std::string_view, const Type*> attr_;
-    GlobalMemory::Map<std::string_view, FunctionOverloads> methods_;
+    GlobalMemory::FlatMap<std::string_view, const Type*> attr_;
+    GlobalMemory::FlatMap<std::string_view, FunctionOverloads> methods_;
 
 public:
     ClassType(
         std::string_view identifier,
         const Type* extends,
         ComparableSpan<const Type*> interfaces,
-        GlobalMemory::Map<std::string_view, const Type*> attr,
-        GlobalMemory::Map<std::string_view, FunctionOverloads> methods
+        GlobalMemory::FlatMap<std::string_view, const Type*> attr,
+        GlobalMemory::FlatMap<std::string_view, FunctionOverloads> methods
     ) noexcept
         : Type(kind),
           identifier_(identifier),
@@ -781,7 +809,7 @@ public:
     bool can_intern_impl(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
 
     std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         UNREACHABLE();
     }
@@ -856,7 +884,7 @@ public:
     }
 
     bool can_intern_impl(TypeDependencyGraph& graph) noexcept final {
-        for (const Type* type : types_) {
+        for (const Type*& type : types_) {
             if (!graph.check_dependency(this, type)) {
                 return false;
             }
@@ -865,7 +893,7 @@ public:
     }
 
     std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const IntersectionType* other_intersection = other->cast<IntersectionType>();
         if (types_.size() != other_intersection->types_.size()) {
@@ -951,7 +979,7 @@ public:
     }
 
     bool can_intern_impl(TypeDependencyGraph& graph) noexcept final {
-        for (const Type* type : types_) {
+        for (const Type*& type : types_) {
             if (!graph.check_dependency(this, type)) {
                 return false;
             }
@@ -960,7 +988,7 @@ public:
     }
 
     std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const UnionType* other_union = other->cast<UnionType>();
         if (types_.size() != other_union->types_.size()) {
@@ -1018,11 +1046,11 @@ public:
     }
 
     bool can_intern_impl(TypeDependencyGraph& graph) noexcept final {
-        return graph.is_dependent(this);
+        return !graph.is_dependent(this) && graph.check_dependency(this, referenced_type_);
     }
 
     std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::Set<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const ReferenceType* other_ref = other->cast<ReferenceType>();
         return referenced_type_->compare_congruent(other_ref->referenced_type_, assumed_equal);
@@ -1387,7 +1415,7 @@ public:
 
 public:
     const ClassType* cls_;
-    GlobalMemory::Map<std::string_view, Value*> attributes_;
+    GlobalMemory::FlatMap<std::string_view, Value*> attributes_;
 
 public:
     InstanceValue(const ClassType* cls, decltype(attributes_) attributes) noexcept
@@ -1397,7 +1425,7 @@ public:
     }
     const ClassType* get_type() const noexcept final { return cls_; }
     InstanceValue* clone() const noexcept final {
-        GlobalMemory::Map<std::string_view, Value*> cloned_attributes;
+        GlobalMemory::FlatMap<std::string_view, Value*> cloned_attributes;
         for (const auto& [name, value] : attributes_) {
             cloned_attributes.insert({name, value->clone()});
         }
@@ -1449,6 +1477,29 @@ public:
 inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
 
 inline const Type* TypeRegistry::get_unknown() noexcept { return &UnknownType::instance; }
+
+inline void TypeRegistry::intern_single_type(const Type* type) noexcept {
+    std::optional<ReferenceType*> replacing_type;
+    for (const auto& edge : graph_.removed()) {
+        if (auto ref_type = edge.child->dyn_cast<ReferenceType>()) {
+            const Type* target = ref_type->referenced_type_;
+            GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
+            if (type->compare_congruent(target, assumed_equal) == std::strong_ordering::equal) {
+                // type is congruent to part of itself
+                if (!replacing_type) {
+                    replacing_type = new ReferenceType(type, ref_type->is_mutable_);
+                }
+                *edge.action = *replacing_type;
+            }
+        }
+    }
+    if (replacing_type) {
+        std::get<GlobalMemory::FlatSet<ReferenceType*, TypeComparator>>(types_).insert(
+            *replacing_type
+        );
+    }
+    graph_.removed().clear();
+}
 
 inline Term Term::unknown() noexcept { return Term(new UnknownValue(), Term::Category::Immutable); }
 

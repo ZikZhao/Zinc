@@ -6,7 +6,7 @@
 static void BM_FlatMap_Insert(benchmark::State& state) {
     for (auto _ : state) {
         state.PauseTiming();
-        GlobalMemory::Map<int, int> fm;
+        GlobalMemory::FlatMap<int, int> fm;
         state.ResumeTiming();
 
         for (int i = 0; i < state.range(0); ++i) {
@@ -30,7 +30,7 @@ static void BM_StdMap_Insert(benchmark::State& state) {
 }
 
 static void BM_FlatMap_Lookup(benchmark::State& state) {
-    GlobalMemory::Map<int, int> fm;
+    GlobalMemory::FlatMap<int, int> fm;
     const std::int64_t size = state.range(0);
     for (int i = 0; i < size; ++i) {
         fm.insert({i, i});

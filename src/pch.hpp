@@ -178,15 +178,18 @@ public:
     template <typename T>
     using Vector = std::vector<T, Allocator<T>>;
 
+    template <typename K, typename V, typename C = std::less<K>>
+    using Map = std::map<K, V, C, Allocator<std::pair<const K, V>>>;
+
     using String = std::basic_string<char, std::char_traits<char>, Allocator<char>>;
 
     /// Flat map implementation in SoA style
     template <typename K, typename V, typename C = std::less<K>>
-    class Map;
+    class FlatMap;
 
     /// Flat set implementation
     template <typename K, typename C = std::less<K>>
-    class Set;
+    class FlatSet;
 
     /// Multi-map implementation in SoA style
     template <typename K, typename V, typename C = std::less<K>>
@@ -314,37 +317,34 @@ public:
 };
 
 template <typename Key, typename Value, typename Comp>
-class GlobalMemory::Map {
+class GlobalMemory::FlatMap {
 private:
     template <bool IsConst>
     class IteratorImpl {
     private:
-        using KeyType = const Key;
-        using MappedType = std::conditional_t<IsConst, const Value, Value>;
+        using key_type = const Key;
+        using mapped_type = std::conditional_t<IsConst, const Value, Value>;
 
-        class Proxy {
-        private:
-            const std::pair<KeyType&, MappedType&> pair_;
-
-        public:
-            Proxy(KeyType& key, MappedType& value) : pair_(key, value) {}
-            const std::pair<KeyType&, MappedType&>* operator->() { return &pair_; }
+        struct Proxy {
+            key_type& first;
+            mapped_type& second;
+            Proxy* operator->() { return this; }
         };
 
     public:
         using iterator_category = std::forward_iterator_tag;
         using difference_type = std::ptrdiff_t;
-        using value_type = std::pair<KeyType, MappedType>;
-        using pointer = value_type*;
-        using reference = value_type&;
+        using value_type = std::pair<key_type, mapped_type>;
+        using pointer = Proxy;
+        using reference = Proxy;
 
     private:
-        KeyType* key_ptr_;
-        MappedType* value_ptr_;
+        key_type* key_ptr_;
+        mapped_type* value_ptr_;
 
     public:
         IteratorImpl() = default;
-        IteratorImpl(KeyType* key_ptr, MappedType* value_ptr)
+        IteratorImpl(key_type* key_ptr, mapped_type* value_ptr)
             : key_ptr_(key_ptr), value_ptr_(value_ptr) {}
         IteratorImpl& operator++() {
             ++key_ptr_;
@@ -360,12 +360,9 @@ private:
             return key_ptr_ == other.key_ptr_;
         }
         bool operator!=(const IteratorImpl& other) const noexcept { return !(*this == other); }
-        value_type operator*() const {
-            return std::pair<KeyType, MappedType>{*key_ptr_, *value_ptr_};
-        }
-        Proxy operator->() { return Proxy(*key_ptr_, *value_ptr_); }
-
-        KeyType* key_ptr() const noexcept { return key_ptr_; }
+        reference operator*() { return Proxy(*key_ptr_, *value_ptr_); }
+        pointer operator->() { return Proxy(*key_ptr_, *value_ptr_); }
+        key_type* key_ptr() const noexcept { return key_ptr_; }
     };
 
 public:
@@ -381,19 +378,19 @@ private:
     Vector<Value> values_;
 
 public:
-    Map() noexcept = default;
-    Map(const Map& other) noexcept(
+    FlatMap() noexcept = default;
+    FlatMap(const FlatMap& other) noexcept(
         noexcept(std::declval<Vector<Key>&>() = std::declval<const Vector<Key>&>()) &&
         noexcept(std::declval<Vector<Value>&>() = std::declval<const Vector<Value>&>())
     ) = default;
-    Map& operator=(const Map& other) noexcept(
+    FlatMap& operator=(const FlatMap& other) noexcept(
         noexcept(std::declval<Vector<Key>&>() = std::declval<const Vector<Key>&>()) &&
         noexcept(std::declval<Vector<Value>&>() = std::declval<const Vector<Value>&>())
     ) = default;
-    Map(Map&& other) noexcept = default;
-    Map& operator=(Map&& other) noexcept = default;
+    FlatMap(FlatMap&& other) noexcept = default;
+    FlatMap& operator=(FlatMap&& other) noexcept = default;
 
-    Map(std::initializer_list<std::pair<Key, Value>> init) {
+    FlatMap(std::initializer_list<std::pair<Key, Value>> init) {
         keys_.reserve(init.size());
         values_.reserve(init.size());
         for (const auto& pair : init) {
@@ -402,7 +399,7 @@ public:
     }
 
     template <std::ranges::input_range R>
-    Map(std::from_range_t, R&& range) {
+    FlatMap(std::from_range_t, R&& range) {
         Vector<Key> unsorted_keys;
         Vector<Value> unsorted_values;
         if constexpr (std::ranges::sized_range<R>) {
@@ -524,18 +521,18 @@ public:
     const_iterator end() const noexcept {
         return const_iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
     }
-    std::strong_ordering operator<=>(const Map<Key, Value, Comp>& other) const noexcept {
+    std::strong_ordering operator<=>(const FlatMap<Key, Value, Comp>& other) const noexcept {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
     }
-    bool operator==(const Map<Key, Value, Comp>& other) const noexcept {
+    bool operator==(const FlatMap<Key, Value, Comp>& other) const noexcept {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
 };
 
 template <typename Key, typename Comp>
-class GlobalMemory::Set {
+class GlobalMemory::FlatSet {
 public:
     using key_type = Key;
     using value_type = Key;
@@ -546,16 +543,16 @@ private:
     Vector<Key> keys_;
 
 public:
-    Set() noexcept = default;
-    Set(Set&& other) noexcept = default;
-    Set& operator=(Set&& other) noexcept = default;
-    Set(const Set& other) noexcept
+    FlatSet() noexcept = default;
+    FlatSet(FlatSet&& other) noexcept = default;
+    FlatSet& operator=(FlatSet&& other) noexcept = default;
+    FlatSet(const FlatSet& other) noexcept
         requires std::is_nothrow_copy_constructible_v<Key>
     = default;
-    Set& operator=(const Set& other) noexcept
+    FlatSet& operator=(const FlatSet& other) noexcept
         requires std::is_nothrow_copy_constructible_v<Key>
     = default;
-    Set(std::from_range_t, auto&& range) {
+    FlatSet(std::from_range_t, auto&& range) {
         Vector<Key> unsorted_keys;
         if constexpr (std::ranges::sized_range<decltype(range)>) {
             unsorted_keys.reserve(std::ranges::size(range));
@@ -567,7 +564,7 @@ public:
         auto last = std::unique(unsorted_keys.begin(), unsorted_keys.end());
         keys_.assign(unsorted_keys.begin(), last);
     }
-    Set(std::initializer_list<Key> init) : Set(std::from_range, init) {}
+    FlatSet(std::initializer_list<Key> init) : FlatSet(std::from_range, init) {}
 
     typename Vector<Key>::iterator begin() noexcept { return keys_.begin(); }
     typename Vector<Key>::const_iterator begin() const noexcept { return keys_.begin(); }
@@ -608,25 +605,25 @@ public:
         return it != keys_.end() && !Comp{}(key, *it);
     }
 
-    std::strong_ordering operator<=>(const Set<Key, Comp>& other) const noexcept {
+    std::strong_ordering operator<=>(const FlatSet<Key, Comp>& other) const noexcept {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
     }
-    bool operator==(const Set<Key, Comp>& other) const noexcept {
+    bool operator==(const FlatSet<Key, Comp>& other) const noexcept {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
 
-    bool is_superset_of(const Set<Key, Comp>& other) const noexcept {
+    bool is_superset_of(const FlatSet<Key, Comp>& other) const noexcept {
         return std::includes(this->begin(), this->end(), other.begin(), other.end(), Comp{});
     }
-    bool is_proper_superset_of(const Set<Key, Comp>& other) const noexcept {
+    bool is_proper_superset_of(const FlatSet<Key, Comp>& other) const noexcept {
         return this->size() > other.size() && is_superset_of(other);
     }
-    bool is_subset_of(const Set<Key, Comp>& other) const noexcept {
+    bool is_subset_of(const FlatSet<Key, Comp>& other) const noexcept {
         return other.is_superset_of(*this);
     }
-    bool is_proper_subset_of(const Set<Key, Comp>& other) const noexcept {
+    bool is_proper_subset_of(const FlatSet<Key, Comp>& other) const noexcept {
         return this->size() < other.size() && is_subset_of(other);
     }
 };

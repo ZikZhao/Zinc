@@ -80,10 +80,10 @@ class Transpiler {
 
 public:
     struct State {
-        GlobalMemory::Set<std::string_view> niebloids;
-        GlobalMemory::Map<const Type*, std::string_view> renames;
-        GlobalMemory::Map<const StructType*, std::size_t> structurals;
-        GlobalMemory::Set<const ASTExpression*> types_visited;
+        GlobalMemory::FlatSet<std::string_view> niebloids;
+        GlobalMemory::FlatMap<const Type*, std::string_view> renames;
+        GlobalMemory::FlatMap<const StructType*, std::size_t> structurals;
+        GlobalMemory::FlatSet<const ASTExpression*> types_visited;
         // std::stack<const ASTStructType*, GlobalMemory::Vector<const ASTStructType*>>
         //     structural_defs;
     };
