@@ -31,7 +31,9 @@ class Derived {
     }
 }; */
 
-/*type Node = {
+
+/*
+type Node = {
     value: i32;
     next: &Node;
 };
@@ -39,7 +41,7 @@ class Derived {
 type AnotherNode = {
     value: i32;
     next: &AnotherNode;
-};*/
+};
 
 type A = {
     a: &B;
@@ -48,8 +50,26 @@ type A = {
 type B = {
     a: &A;
 };
+*/
 
-// fn h(n: Node) -> AnotherNode {}
+type A = {
+    b: &B;
+};
+
+type B = {
+    c: &C;
+    d: &D;
+};
+
+type C = {
+    a: &A;
+};
+
+type D = {
+    a: &A;
+};
+
+fn h(n: A) -> B {}
 
 fn main() -> i32 {
     // f(2, 3);

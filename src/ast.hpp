@@ -117,38 +117,50 @@ public:
     }
 };
 
-/// TODO: poison references that are interned out
 class TypeChecker final {
 private:
     Scope* current_scope_;
     GlobalMemory::Map<std::pair<const Scope*, std::string_view>, TypeResolution> id_cache_;
-    GlobalMemory::FlatMap<std::pair<const Scope*, const ASTExpression*>, Type*> ptr_cache_;
+    // GlobalMemory::FlatMap<std::pair<const Scope*, const ASTExpression*>, Type*> ptr_cache_;
 
 public:
     OperationHandler& ops_;
 
 public:
     TypeChecker(Scope& root, OperationHandler& ops) noexcept : current_scope_(&root), ops_(ops) {}
+
     void add_variable(std::string_view identifier, Term term) {
         current_scope_->set_variable(identifier, term);
     }
+
     void enter(const void* child) noexcept { current_scope_ = current_scope_->children_.at(child); }
+
     void exit() noexcept { current_scope_ = current_scope_->parent_; }
+
     Scope* get_current_scope() noexcept { return current_scope_; }
+
     TypeResolution lookup_type(std::string_view identifier) {
         return lookup_type_in(identifier, *current_scope_);
     }
+
     Term lookup_term(std::string_view identifier) {
         return lookup_term_in(identifier, *current_scope_);
     }
-    Type*& query_type(const ASTExpression* expr) noexcept {
-        return ptr_cache_[{current_scope_, expr}];
-    }
+
     bool is_at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
+
+    void require_definition(Transpiler& transpiler, std::string_view identifier) const noexcept {
+        require_definition_in(transpiler, identifier, *current_scope_);
+    }
 
 private:
     TypeResolution lookup_type_in(std::string_view identifier, Scope& scope);
+
     Term lookup_term_in(std::string_view identifier, Scope& scope);
+
+    void require_definition_in(
+        Transpiler& transpiler, std::string_view identifier, Scope& scope
+    ) const noexcept;
 };
 
 class ASTNode : public GlobalMemory::MemoryManaged {
@@ -219,7 +231,7 @@ public:
         //     return cached;
         // }
         eval_type_impl(checker, out, require_complete);
-        assert(require_complete ? out.is_complete() : true);
+        assert(require_complete ? out.is_sized() : true);
     }
     virtual Term eval_term(
         TypeChecker& checker, const Type* expected, bool expected_const
@@ -315,7 +327,7 @@ private:
         TypeChecker& checker, TypeResolution& out, bool require_complete
     ) const noexcept final {
         TypeResolution result = checker.lookup_type(str_);
-        if (!result.is_complete()) {
+        if (!result.is_sized()) {
             if (require_complete) {
                 Diagnostic::report(CircularTypeDependencyError(location_));
                 out = TypeRegistry::get_unknown();
@@ -543,7 +555,6 @@ public:
     ASTStructType(const Location& loc, ComparableSpan<ASTFieldDeclaration*> fields) noexcept
         : ASTExplicitTypeExpr(loc), fields_(fields) {}
     void transpile(Transpiler& transpiler) const noexcept final;
-    void transpile_definition(Transpiler& transpiler) const noexcept;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
@@ -583,8 +594,8 @@ private:
         out = std::type_identity<ReferenceType>();
         TypeResolution expr_type;
         expr_->eval_type(checker, expr_type, false);
-        if (!expr_type.is_complete()) {
-            TypeRegistry::indicate_unreadable_ref(out.get(), expr_type.get());
+        if (!expr_type.is_sized()) {
+            TypeRegistry::add_ref_dependency(out.get(), expr_type.get());
         }
         TypeRegistry::get_at<ReferenceType>(out, expr_type.get(), is_mutable_);
     }
@@ -1032,23 +1043,30 @@ public:
 
 inline TypeResolution TypeChecker::lookup_type_in(std::string_view identifier, Scope& scope) {
     // Check cache
-    auto [it_cache, inserted] = id_cache_.insert({std::pair{&scope, identifier}, TypeResolution()});
+    auto [it_id_cache, inserted] =
+        id_cache_.insert({std::pair{&scope, identifier}, TypeResolution()});
     if (!inserted) {
-        return it_cache->second;
+        return it_id_cache->second;
     }
     // Cache miss; resolve
     auto it_id = scope.identifiers_.find(identifier);
     if (it_id == scope.identifiers_.end()) {
         if (scope.parent_ != nullptr) {
-            it_cache->second = lookup_type_in(identifier, *scope.parent_);
-            return it_cache->second;
+            it_id_cache->second = lookup_type_in(identifier, *scope.parent_);
+            return it_id_cache->second;
         }
         throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
     } else if (auto type = it_id->second.get<const ASTExpression*>()) {
         Scope* previous_scope = std::exchange(current_scope_, &scope);
-        type->eval_type(*this, it_cache->second);
+        type->eval_type(*this, it_id_cache->second);
         current_scope_ = previous_scope;
-        return it_cache->second;
+        if (TypeRegistry::is_type_incomplete(it_id_cache->second.get())) {
+            const Type* incomplete_type = it_id_cache->second.get();
+            id_cache_.erase(it_id_cache);
+            return incomplete_type;
+        } else {
+            return it_id_cache->second;
+        }
     } else if (it_id->second.get<Term*>()) {
         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(false);
     } else if (it_id->second.get<GlobalMemory::Vector<const ASTFunctionSignature*>*>()) {
@@ -1092,6 +1110,21 @@ inline Term TypeChecker::lookup_term_in(std::string_view identifier, Scope& scop
     } else {
         /// TODO: template instantiation
         assert(false);
+    }
+}
+
+inline void TypeChecker::require_definition_in(
+    Transpiler& transpiler, std::string_view identifier, Scope& scope
+) const noexcept {
+    auto it = scope.identifiers_.find(identifier);
+    if (it == scope.identifiers_.end()) {
+        if (scope.parent_ != nullptr) {
+            require_definition_in(transpiler, identifier, *scope.parent_);
+        }
+    } else {
+        auto type = it->second.get<const ASTExpression*>();
+        /// TODO: output dependency in correct scope
+        type->transpile(transpiler);
     }
 }
 
@@ -1139,7 +1172,7 @@ inline void ASTClassSignature::eval_type_impl(
             e.report_at(owner_->location_);
             return TypeRegistry::get_unknown();
         }
-        if (!result.is_complete()) {
+        if (!result.is_sized()) {
             Diagnostic::report(CircularTypeDependencyError(owner_->location_));
             return TypeRegistry::get_unknown();
         }
@@ -1161,7 +1194,7 @@ inline void ASTClassSignature::eval_type_impl(
                 e.report_at(owner_->location_);
                 return TypeRegistry::get_unknown();
             }
-            if (!result.is_complete()) {
+            if (!result.is_sized()) {
                 Diagnostic::report(CircularTypeDependencyError(owner_->location_));
                 return TypeRegistry::get_unknown();
             }
@@ -1182,7 +1215,7 @@ inline void ASTClassSignature::eval_type_impl(
             result.first = field_decl->identifier_;
             TypeResolution field_type;
             field_decl->type_->eval_type(checker, field_type);
-            if (!field_type.is_complete()) {
+            if (!field_type.is_sized()) {
                 Diagnostic::report(SymbolCategoryMismatchError(field_decl->type_->location_, true));
                 result.second = TypeRegistry::get_unknown();
             } else {
@@ -1210,7 +1243,7 @@ inline void ASTClassSignature::eval_type_impl(
             ) -> std::pair<std::string_view, FunctionOverloads> {
                 TypeResolution result;
                 result = checker.lookup_type(func_def->identifier_);
-                if (!result.is_complete()) {
+                if (!result.is_sized()) {
                     Diagnostic::report(CircularTypeDependencyError(func_def->location_));
                     return {func_def->identifier_, {}};
                 }

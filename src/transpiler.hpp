@@ -7,11 +7,14 @@
 #include "runtime-str.hpp"
 #include "source.hpp"
 
+/// TODO: put is_type_context in transpiler.state
+
 enum class Section {
     Includes,
     StructuralDeclarations,
     Main,
     Implementation,
+    Void,
     __len__,
 };
 
@@ -80,12 +83,10 @@ class Transpiler {
 
 public:
     struct State {
+        bool mangle_structural_identifiers = false;
         GlobalMemory::FlatSet<std::string_view> niebloids;
-        GlobalMemory::FlatMap<const Type*, std::string_view> renames;
         GlobalMemory::FlatMap<const StructType*, std::size_t> structurals;
         GlobalMemory::FlatSet<const ASTExpression*> types_visited;
-        // std::stack<const ASTStructType*, GlobalMemory::Vector<const ASTStructType*>>
-        //     structural_defs;
     };
 
 private:
@@ -121,7 +122,7 @@ public:
                << "\n\n/* ---------- Main ---------- */\n\n"
                << strip_section(Section::Main)
                << "\n\n/* ---------- Implementation ---------- */\n\n"
-               << strip_section(Section::Implementation);
+               << strip_section(Section::Implementation) << "\n";
     }
 
     SectionWriter operator[](Section section) {
@@ -355,9 +356,20 @@ inline void ASTConstant::transpile(Transpiler& transpiler) const noexcept {
 }
 
 inline void ASTIdentifier::transpile(Transpiler& transpiler) const noexcept {
+    if (!transpiler.state_.mangle_structural_identifiers) {
+        transpiler << str_;
+        return;
+    }
+
     TypeResolution type = transpiler.checker().lookup_type(str_);
-    if (transpiler.state_.renames.contains(type.get())) {
-        transpiler << transpiler.state_.renames.at(type.get());
+    {
+        SectionWriter void_writer = transpiler[Section::Void];
+        transpiler.checker().require_definition(transpiler, str_);
+    }
+    if (type->dyn_cast<StructType>()) {
+        transpiler << GlobalMemory::format_view(
+            "$structural_{}", transpiler.state_.structurals.at(type.get()->cast<StructType>())
+        );
     } else {
         transpiler << str_;
     }
@@ -417,32 +429,15 @@ inline void ASTStructType::transpile(Transpiler& transpiler) const noexcept {
         SectionWriter def_writer = transpiler[Section::Main];
         def_writer << "struct " << struct_name << " {" << SectionWriter::indent
                    << SectionWriter::newline;
-        transpiler.state_.renames[struct_type.get()] = struct_name;
+        bool prev_state = std::exchange(transpiler.state_.mangle_structural_identifiers, true);
         for (const auto& field : fields_) {
             def_writer << field << SectionWriter::newline;
         }
-        transpiler.state_.renames.erase(struct_type.get());
+        transpiler.state_.mangle_structural_identifiers = prev_state;
         def_writer << SectionWriter::dedent << "};" << SectionWriter::newline
                    << SectionWriter::newline;
     }
 }
-
-// inline void ASTStructType::transpile_definition(Transpiler& transpiler) const noexcept {
-//     TypeResolution struct_type;
-//     eval_type(transpiler.checker(), struct_type);
-//     GlobalMemory::String struct_name = GlobalMemory::format(
-//         "$structural_{}",
-//         transpiler.state_.structurals.at(static_cast<const StructType*>(struct_type.get()))
-//     );
-//     SectionWriter writer = transpiler[Section::Main];
-//     writer << "struct " << struct_name << " {" << SectionWriter::indent <<
-//     SectionWriter::newline; transpiler.state_.renames[struct_type.get()] = struct_name; for
-//     (const auto& field : fields_) {
-//         writer << field << SectionWriter::newline;
-//     }
-//     transpiler.state_.renames.erase(struct_type.get());
-//     writer << SectionWriter::dedent << "};" << SectionWriter::newline;
-// }
 
 inline void ASTReferenceExpr::transpile(Transpiler& transpiler) const noexcept {
     transpiler << expr_ << (is_mutable_ ? "" : " const") << "*";

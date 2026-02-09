@@ -199,6 +199,11 @@ public:
         return monotonic()->allocate(size, align);
     }
 
+    template <typename T>
+    static T* alloc_raw(std::type_identity<T>) {
+        return static_cast<T*>(alloc_raw(sizeof(T), alignof(T)));
+    }
+
     template <typename T, typename... Args>
     static constexpr T* alloc(Args&&... args) {
         void* ptr = monotonic()->allocate(sizeof(T), alignof(T));
@@ -302,8 +307,8 @@ public:
 public:
     class MemoryManaged {
     public:
-        static void* operator new(std ::size_t size) { return GlobalMemory::alloc_raw(size); }
-        static void operator delete(void* ptr, std ::size_t size) {}
+        static void* operator new(std::size_t size) { return GlobalMemory::alloc_raw(size); }
+        static void operator delete(void* ptr, std::size_t size) {}
 
     protected:
         /// Protected default constructor to prevent direct instantiation
