@@ -1,48 +1,33 @@
 cmake_minimum_required(VERSION 3.20)
 project(Zinc)
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Generate compile_commands.json for better IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/src)
-set(TEST_DIR ${CMAKE_SOURCE_DIR}/test)
-
-# Set build type if not specified
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Debug)
-endif()
-
-# Compiler flags
-set(CMAKE_CXX_FLAGS_DEBUG "-g3 -O0 -fsanitize=undefined,address -fno-omit-frame-pointer")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wno-unused-parameter -Wno-missing-field-initializers")
-
-# Linker flags for debug build
-set(CMAKE_EXE_LINKER_FLAGS_DEBUG "-fsanitize=undefined,address")
-
-# Find required packages
-find_package(antlr4-runtime CONFIG REQUIRED)
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
-# Set ANTLR4 JAR location
+set(TEST_DIR ${CMAKE_SOURCE_DIR}/tests)
 set(ANTLR4_JAR_LOCATION ${CMAKE_SOURCE_DIR}/tools/antlr-tool.jar)
-
-# Set output directory
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out)
-
-# Include directories
-include_directories(${SOURCE_DIR})
-include_directories(${CMAKE_BINARY_DIR})
-
-# Set output directory for ANTLR4 generated files
 set(ANTLR4_OUTPUT_DIR ${CMAKE_BINARY_DIR}/antlr4_generated)
 
-# ANTLR4 generated file names
+find_package(antlr4-runtime CONFIG REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(GTest CONFIG REQUIRED)
+find_package(benchmark CONFIG REQUIRED)
+
+add_compile_options(-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wno-unused-parameter -Wno-missing-field-initializers)
+
+
+if(CMAKE_BUILD_TYPE MATCHES "Debug")
+    message(STATUS "Configuring Debug build with Sanitizers...")
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+else()
+    message(STATUS "Configuring Release build...")
+    add_compile_options(-DNDEBUG)
+endif()
+
+# ANTLR4 source generation
 set(ANTLR4_GENERATED_SRC
     ${ANTLR4_OUTPUT_DIR}/ZincLexer.cpp
     ${ANTLR4_OUTPUT_DIR}/ZincParser.cpp
@@ -52,7 +37,6 @@ set(ANTLR4_GENERATED_SRC
     ${ANTLR4_OUTPUT_DIR}/ZincVisitor.cpp
 )
 
-# Generate ANTLR4 parser and lexer using custom command
 add_custom_command(
     OUTPUT ${ANTLR4_GENERATED_SRC}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${ANTLR4_OUTPUT_DIR}
@@ -67,10 +51,16 @@ add_custom_command(
     VERBATIM
 )
 
-# Embedded resource generation
+
+add_library(antlr4_generated_lib STATIC ${ANTLR4_GENERATED_SRC})
+target_link_libraries(antlr4_generated_lib PUBLIC antlr4_static)
+target_include_directories(antlr4_generated_lib SYSTEM PUBLIC ${ANTLR4_OUTPUT_DIR})
+target_compile_options(antlr4_generated_lib PRIVATE -w)
+
+# Runtime embedding generation
 set(RUNTIME_HPP_SRC "${SOURCE_DIR}/runtime.hpp")
-set(CONVERTER_PY    "${CMAKE_SOURCE_DIR}/tools/runtime-converter.py")
-set(RUNTIME_HPP_STR   "${CMAKE_BINARY_DIR}/runtime-str.hpp")
+set(CONVERTER_PY "${CMAKE_SOURCE_DIR}/tools/runtime-converter.py")
+set(RUNTIME_HPP_STR "${CMAKE_BINARY_DIR}/runtime-str.hpp")
 
 add_custom_command(
     OUTPUT ${RUNTIME_HPP_STR}
@@ -80,81 +70,73 @@ add_custom_command(
     VERBATIM
 )
 
-# Precompiled header setup
+# Precompiled header
 set(PCH_HEADER ${SOURCE_DIR}/pch.hpp)
 
-# Source files
+# Main executable
 set(SRC_MAIN ${SOURCE_DIR}/main.cpp)
 file(GLOB SRC_HEADERS ${SOURCE_DIR}/*.hpp)
 
-# Create a library for ANTLR generated code to suppress warnings
-add_library(antlr4_generated_lib STATIC ${ANTLR4_GENERATED_SRC})
-target_link_libraries(antlr4_generated_lib PUBLIC antlr4_static)
-# Mark ANTLR generated code includes as SYSTEM to suppress warnings
-target_include_directories(antlr4_generated_lib SYSTEM PUBLIC ${ANTLR4_OUTPUT_DIR})
-# Disable warnings for ANTLR generated code
-target_compile_options(antlr4_generated_lib PRIVATE -w)
-
-# Create executable
 add_executable(zinc ${SRC_MAIN} ${RUNTIME_HPP_STR})
-
-# Link ANTLR4 generated library and runtime
 target_link_libraries(zinc PRIVATE antlr4_generated_lib)
-target_include_directories(zinc PRIVATE ${ANTLR4_OUTPUT_DIR})
-
-# Set precompiled header
+target_include_directories(zinc PRIVATE ${SOURCE_DIR} ${CMAKE_BINARY_DIR})
 target_precompile_headers(zinc PRIVATE ${PCH_HEADER})
 
-# Set target properties
 set_target_properties(zinc PROPERTIES
     OUTPUT_NAME zinc
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# Custom target for clean (equivalent to make clean)
-add_custom_target(clean-all
-    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/out
-    COMMENT "Cleaning all build artifacts"
-)
+# Google Test
+enable_testing()
+file(GLOB TEST_SOURCES ${TEST_DIR}/*_test.cpp)
 
-# Symlink compile_commands.json to a fixed location
-if (CMAKE_EXPORT_COMPILE_COMMANDS)
-    set(BUILD_ROOT "${CMAKE_SOURCE_DIR}/build")
-    file(MAKE_DIRECTORY "${BUILD_ROOT}")
-    get_filename_component(REAL_BINARY_DIR "${CMAKE_BINARY_DIR}" ABSOLUTE)
-    get_filename_component(REAL_BUILD_ROOT "${BUILD_ROOT}" ABSOLUTE)
+if(TEST_SOURCES)
+    add_executable(unit_tests 
+        ${TEST_SOURCES}
+        ${SRC_HEADERS}
+        ${RUNTIME_HPP_STR}
+    )
     
-    if (NOT "${REAL_BINARY_DIR}" STREQUAL "${REAL_BUILD_ROOT}")
-        file(CREATE_LINK 
-            "${CMAKE_BINARY_DIR}/compile_commands.json" 
-            "${BUILD_ROOT}/compile_commands.json" 
-            SYMBOLIC
-        )
-        message(STATUS "Symlinked compile_commands.json to ${BUILD_ROOT}")
-    endif()
+    target_link_libraries(unit_tests PRIVATE GTest::gtest_main antlr4_generated_lib)
+    target_include_directories(unit_tests PRIVATE ${SOURCE_DIR} ${CMAKE_BINARY_DIR} ${ANTLR4_OUTPUT_DIR})
+    target_precompile_headers(unit_tests PRIVATE ${PCH_HEADER})
+    target_compile_options(unit_tests PRIVATE -fno-access-control)
+
+    set_target_properties(unit_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+
+    include(GoogleTest)
+    gtest_discover_tests(unit_tests)
+    message(STATUS "Unit tests configured: ${TEST_SOURCES}")
 endif()
 
-# Unit tests
-enable_testing()
+# Benchmarks
+file(GLOB BENCH_SOURCES ${TEST_DIR}/*_bench.cpp)
 
-find_package(GTest CONFIG REQUIRED)
-find_package(benchmark CONFIG REQUIRED)
+if(BENCH_SOURCES)
+    add_executable(benchmarks
+        ${BENCH_SOURCES}
+        ${SRC_HEADERS}
+        ${RUNTIME_HPP_STR}
+    )
+    
+    target_link_libraries(benchmarks PRIVATE benchmark::benchmark antlr4_generated_lib)
+    target_include_directories(benchmarks PRIVATE ${SOURCE_DIR} ${CMAKE_BINARY_DIR} ${ANTLR4_OUTPUT_DIR})
+    target_precompile_headers(benchmarks PRIVATE ${PCH_HEADER})
+    
+    set_target_properties(benchmarks PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    
+    message(STATUS "Benchmarks configured: ${BENCH_SOURCES}")
+endif()
 
-add_executable(unit_tests
-    ${TEST_DIR}/test_main.cpp
-    ${SRC_HEADERS}
+
+
+# Clean target to remove all build artifacts
+add_custom_target(clean-all
+    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/bin
+    COMMENT "Cleaning all build artifacts"
 )
-add_executable(benchmarks
-    ${TEST_DIR}/bench_main.cpp
-    ${SRC_HEADERS}
-)
-
-target_link_libraries(unit_tests PRIVATE GTest::gtest_main antlr4_generated_lib antlr4_static)
-target_link_libraries(benchmarks PRIVATE benchmark::benchmark antlr4_generated_lib antlr4_static)
-target_include_directories(unit_tests PRIVATE ${ANTLR4_OUTPUT_DIR})
-target_include_directories(benchmarks PRIVATE ${ANTLR4_OUTPUT_DIR})
-target_precompile_headers(unit_tests PRIVATE ${PCH_HEADER})
-target_precompile_headers(benchmarks PRIVATE ${PCH_HEADER})
-
-include(GoogleTest)
-gtest_discover_tests(unit_tests)

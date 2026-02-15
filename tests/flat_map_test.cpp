@@ -1,4 +1,3 @@
-#pragma once
 #include <map>
 #include <random>
 #include <type_traits>
@@ -17,7 +16,7 @@ enum class MapOperation {
     Contains,
     Find,
     LowerBound,
-    _Size,
+    __size__,
 };
 
 template <typename Impl>
@@ -651,7 +650,7 @@ protected:
 
         for (int i = 0; i < iterations; ++i) {
             MapOperation op = static_cast<MapOperation>(
-                std::uniform_int_distribution<int>(0, static_cast<int>(MapOperation::_Size) - 1)(
+                std::uniform_int_distribution<int>(0, static_cast<int>(MapOperation::__size__) - 1)(
                     gen
                 )
             );
@@ -768,7 +767,7 @@ protected:
                 }
                 break;
 
-            case MapOperation::_Size:
+            case MapOperation::__size__:
                 assert(false);
                 break;
             }
@@ -777,3 +776,40 @@ protected:
         }
     }
 };
+
+template <typename T>
+class ComparableUniquePtr : public std::unique_ptr<T> {
+public:
+    using std::unique_ptr<T>::unique_ptr;
+    using std::unique_ptr<T>::operator=;
+    std::strong_ordering operator<=>(const ComparableUniquePtr& other) const {
+        return *this->get() <=> *other.get();
+    }
+    bool operator==(const ComparableUniquePtr& other) const { return *this->get() == *other.get(); }
+};
+
+using MapTestTypes = ::testing::Types<
+    GlobalMemory::FlatMap<int, int>,
+    GlobalMemory::FlatMap<std::string, std::string>,
+    GlobalMemory::FlatMap<int, ComparableUniquePtr<int>>,
+    GlobalMemory::FlatMap<std::string, int>>;
+
+TYPED_TEST_SUITE(FlatMapTest, MapTestTypes);
+
+TYPED_TEST(FlatMapTest, InsertBasic) { this->test_insert_basic(); }
+TYPED_TEST(FlatMapTest, InsertOrAssign) { this->test_insert_or_assign(); }
+TYPED_TEST(FlatMapTest, TryEmplace) { this->test_try_emplace(); }
+TYPED_TEST(FlatMapTest, AccessOperator) { this->test_access_operator(); }
+TYPED_TEST(FlatMapTest, AtMethod) { this->test_at_method(); }
+TYPED_TEST(FlatMapTest, EraseByKey) { this->test_erase_by_key(); }
+TYPED_TEST(FlatMapTest, EraseByIterator) { this->test_erase_by_iterator(); }
+TYPED_TEST(FlatMapTest, Clear) { this->test_clear(); }
+TYPED_TEST(FlatMapTest, Contains) { this->test_contains(); }
+TYPED_TEST(FlatMapTest, Find) { this->test_find(); }
+TYPED_TEST(FlatMapTest, LowerBound) { this->test_lower_bound(); }
+TYPED_TEST(FlatMapTest, UpperBound) { this->test_upper_bound(); }
+TYPED_TEST(FlatMapTest, SizeAndEmpty) { this->test_size_and_empty(); }
+TYPED_TEST(FlatMapTest, IteratorTraversal) { this->test_iterator_traversal(); }
+TYPED_TEST(FlatMapTest, EdgeCases) { this->test_edge_cases(); }
+
+TYPED_TEST(FlatMapTest, FuzzyTest) { this->fuzz_test(10000); }

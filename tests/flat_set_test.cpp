@@ -1,4 +1,3 @@
-#pragma once
 #include <random>
 #include <set>
 #include <type_traits>
@@ -633,3 +632,36 @@ protected:
         }
     }
 };
+
+template <typename T>
+class ComparableUniquePtr : public std::unique_ptr<T> {
+public:
+    using std::unique_ptr<T>::unique_ptr;
+    using std::unique_ptr<T>::operator=;
+    std::strong_ordering operator<=>(const ComparableUniquePtr& other) const {
+        return *this->get() <=> *other.get();
+    }
+    bool operator==(const ComparableUniquePtr& other) const { return *this->get() == *other.get(); }
+};
+
+using SetTestTypes = ::testing::Types<
+    GlobalMemory::FlatSet<int>,
+    GlobalMemory::FlatSet<std::string>/*,
+    GlobalMemory::FlatSet<ComparableUniquePtr<int>>*/>;
+
+TYPED_TEST_SUITE(FlatSetTest, SetTestTypes);
+
+TYPED_TEST(FlatSetTest, InsertBasic) { this->test_insert_basic(); }
+TYPED_TEST(FlatSetTest, Emplace) { this->test_emplace(); }
+TYPED_TEST(FlatSetTest, EraseByKey) { this->test_erase_by_key(); }
+TYPED_TEST(FlatSetTest, EraseByIterator) { this->test_erase_by_iterator(); }
+TYPED_TEST(FlatSetTest, Clear) { this->test_clear(); }
+TYPED_TEST(FlatSetTest, Contains) { this->test_contains(); }
+TYPED_TEST(FlatSetTest, Find) { this->test_find(); }
+TYPED_TEST(FlatSetTest, LowerBound) { this->test_lower_bound(); }
+TYPED_TEST(FlatSetTest, UpperBound) { this->test_upper_bound(); }
+TYPED_TEST(FlatSetTest, SizeAndEmpty) { this->test_size_and_empty(); }
+TYPED_TEST(FlatSetTest, IteratorTraversal) { this->test_iterator_traversal(); }
+TYPED_TEST(FlatSetTest, EdgeCases) { this->test_edge_cases(); }
+
+TYPED_TEST(FlatSetTest, FuzzyTest) { this->fuzz_test(10000); }

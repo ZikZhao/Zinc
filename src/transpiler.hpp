@@ -463,11 +463,6 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler) const noexcept {
 
 inline void ASTTypeAlias::transpile(Transpiler& transpiler) const noexcept {
     transpiler << "using " << identifier_ << " = " << type_ << ";" << SectionWriter::newline;
-    // while (!transpiler.state_.structural_defs.empty()) {
-    //     const ASTStructType* ast_struct = transpiler.state_.structural_defs.top();
-    //     transpiler.state_.structural_defs.pop();
-    //     ast_struct->transpile_definition(transpiler);
-    // }
 }
 
 inline void ASTIfStatement::transpile(Transpiler& transpiler) const noexcept {

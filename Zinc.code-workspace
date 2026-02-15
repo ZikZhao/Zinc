@@ -87,7 +87,7 @@
         "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
         "C_Cpp.default.includePath": [
             "${workspaceFolder}/**",
-            "${workspaceFolder}/build/out",
+            "${workspaceFolder}/build/bin",
             "${workspaceFolder}/build/antlr4_generated",
             "${env:HOME}/vcpkg/installed/x64-linux/include",
             "${env:HOME}/vcpkg/installed/x64-linux/include/antlr4-runtime"
@@ -105,7 +105,24 @@
         "cmake.configureArgs": [
             "-DCMAKE_TOOLCHAIN_FILE=${env:HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
             "-DVCPKG_TARGET_TRIPLET=x64-linux"
-        ]
+        ],
+        "cmake.copyCompileCommands": "${workspaceFolder}/build/compile_commands.json",
+        "testMate.cpp.debug.configTemplate": {
+            "type": "cppdbg",
+            "MIMode": "gdb",
+            "program": "${exec}",
+            "args": "${args}",
+            "cwd": "${workspaceFolder}",
+            "env": "${envObj}",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        "testMate.cpp.test.executables": "${workspaceFolder}/build/debug/**/*{test,Test}*"
     },
     "extensions": {
         "recommendations": [
@@ -117,80 +134,85 @@
         "version": "2.0.0",
         "tasks": [
             {
-                "label": "CMake Configure Debug",
+                "label": "Configure (Debug)",
                 "type": "shell",
                 "command": "cmake",
                 "args": [
-                    "-B",
-                    "build",
                     "-S",
                     ".",
-                    "-DCMAKE_BUILD_TYPE=Debug",
-                    "-DCMAKE_TOOLCHAIN_FILE=${env:HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
-                    "-DVCPKG_TARGET_TRIPLET=x64-linux"
-                ],
-                "group": "build",
-                "presentation": {
-                    "reveal": "always",
-                    "panel": "shared"
-                }
-            },
-            {
-                "label": "Build Interpreter",
-                "type": "shell",
-                "command": "cmake",
-                "args": [
-                    "--build",
-                    "build",
-                    "--target",
-                    "zinc",
-                    "-j",
-                    "${env:NUMBER_OF_PROCESSORS}"
+                    "-B",
+                    "build/debug",
+                    "--preset",
+                    "debug"
                 ],
                 "group": {
                     "kind": "build",
                     "isDefault": true
                 },
-                "dependsOn": "CMake Configure Debug",
-                "problemMatcher": [
-                    "$gcc"
-                ]
+                "problemMatcher": "$gcc"
             },
             {
-                "label": "Build Unit Tests",
+                "label": "Configure (Release)",
+                "type": "shell",
+                "command": "cmake",
+                "args": [
+                    "-S",
+                    ".",
+                    "-B",
+                    "build/release",
+                    "--preset",
+                    "release"
+                ],
+                "group": {
+                    "kind": "build",
+                    "isDefault": false
+                },
+                "problemMatcher": "$gcc"
+            },
+            {
+                "label": "Build Main (Debug)",
                 "type": "shell",
                 "command": "cmake",
                 "args": [
                     "--build",
-                    "build",
+                    "--preset",
+                    "debug",
                     "--target",
-                    "unit_tests",
-                    "-j",
-                    "${env:NUMBER_OF_PROCESSORS}"
+                    "zinc"
                 ],
                 "group": "build",
-                "dependsOn": "CMake Configure Debug",
-                "problemMatcher": [
-                    "$gcc"
-                ]
+                "problemMatcher": "$gcc",
+                "dependsOn": "Configure (Debug)"
             },
             {
-                "label": "CMake Configure Release",
+                "label": "Build Main (Release)",
                 "type": "shell",
                 "command": "cmake",
                 "args": [
-                    "-B",
-                    "build-release",
-                    "-S",
-                    ".",
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DCMAKE_TOOLCHAIN_FILE=${env:HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
-                    "-DVCPKG_TARGET_TRIPLET=x64-linux"
+                    "--build",
+                    "--preset",
+                    "release",
+                    "--target",
+                    "zinc"
                 ],
-                "presentation": {
-                    "reveal": "always",
-                    "panel": "shared"
-                }
+                "group": "build",
+                "problemMatcher": "$gcc",
+                "dependsOn": "Configure (Release)"
+            },
+            {
+                "label": "Build UnitTests",
+                "type": "shell",
+                "command": "cmake",
+                "args": [
+                    "--build",
+                    "--preset",
+                    "debug",
+                    "--target",
+                    "unit_tests"
+                ],
+                "group": "build",
+                "problemMatcher": "$gcc",
+                "dependsOn": "Configure (Debug)"
             },
             {
                 "label": "Build Benchmarks",
@@ -198,28 +220,25 @@
                 "command": "cmake",
                 "args": [
                     "--build",
-                    "build-release",
+                    "--preset",
+                    "release",
                     "--target",
-                    "benchmarks",
-                    "-j",
-                    "${env:NUMBER_OF_PROCESSORS}"
+                    "benchmarks"
                 ],
                 "group": "build",
-                "dependsOn": "CMake Configure Release",
-                "problemMatcher": [
-                    "$gcc"
-                ]
-            }
+                "problemMatcher": "$gcc",
+                "dependsOn": "Configure (Release)"
+            },
         ]
     },
     "launch": {
         "version": "0.2.0",
         "configurations": [
             {
-                "name": "Debug Transpiler",
+                "name": "Main: Debug",
                 "type": "cppdbg",
                 "request": "launch",
-                "program": "${workspaceFolder}/build/out/zinc",
+                "program": "${workspaceFolder}/build/debug/bin/zinc",
                 "args": [
                     "${workspaceFolder}/test.zn"
                 ],
@@ -242,95 +261,46 @@
                         "description": "Enable pretty-printing for gdb",
                         "text": "-enable-pretty-printing",
                         "ignoreFailures": true
+                    }
+                ],
+                "preLaunchTask": "Build Main (Debug)"
+            },
+            {
+                "name": "Main: Release",
+                "type": "cppdbg",
+                "request": "launch",
+                "program": "${workspaceFolder}/build/release/bin/zinc",
+                "args": [
+                    "${workspaceFolder}/test.zn"
+                ],
+                "stopAtEntry": false,
+                "cwd": "${workspaceFolder}",
+                "environment": [
+                    {
+                        "name": "ASAN_OPTIONS",
+                        "value": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
                     },
                     {
-                        "description": "Set to show derived types",
-                        "text": "set print object on",
-                        "ignoreFailures": true
-                    },
+                        "name": "UBSAN_OPTIONS",
+                        "value": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+                    }
+                ],
+                "externalConsole": false,
+                "MIMode": "gdb",
+                "setupCommands": [
                     {
-                        "description": "Skip all functions starting with __ubsan",
-                        "text": "skip -rfu ^__ubsan",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip all functions starting with __asan",
-                        "text": "skip -rfu ^__asan",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip all functions starting with __sanitizer",
-                        "text": "skip -rfu ^__sanitizer",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip all functions starting with _Sanitizer",
-                        "text": "skip -rfu ^_Sanitizer",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip libsanitizer directory completely",
-                        "text": "skip -rfi .*/libsanitizer/.*",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip ubsan_handlers",
-                        "text": "skip -rfu .*ubsan_handle.*",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip __cxa_* functions",
-                        "text": "skip -rfu ^__cxa_",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip __gnu_cxx internals",
-                        "text": "skip -rfu ^__gnu_cxx::.*",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip std::__throw_* functions",
-                        "text": "skip -rfu ^std::__throw_",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip std::__detail internals",
-                        "text": "skip -rfu ^std::__detail::.*",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip all /usr/include/c++ files",
-                        "text": "skip -rfi ^/usr/include/c\\+\\+/.*",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip all /usr/lib files",
-                        "text": "skip -rfi ^/usr/lib/.*",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip std namespace internals",
-                        "text": "skip -rfu ^std::_.*",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Skip operator new/delete",
-                        "text": "skip -rfu ^operator (new|delete)",
-                        "ignoreFailures": true
-                    },
-                    {
-                        "description": "Set step-mode to skip unavailable sources",
-                        "text": "set step-mode off",
+                        "description": "Enable pretty-printing for gdb",
+                        "text": "-enable-pretty-printing",
                         "ignoreFailures": true
                     }
                 ],
-                "preLaunchTask": "Build Interpreter"
+                "preLaunchTask": "Build Main (Release)"
             },
             {
                 "name": "Unit Tests",
                 "type": "cppdbg",
                 "request": "launch",
-                "program": "${workspaceFolder}/build/out/unit_tests",
+                "program": "${workspaceFolder}/build/debug/bin/unit_tests",
                 "args": [],
                 "stopAtEntry": false,
                 "cwd": "${workspaceFolder}",
@@ -343,13 +313,13 @@
                         "ignoreFailures": true
                     }
                 ],
-                "preLaunchTask": "Build Unit Tests"
+                "preLaunchTask": "Build UnitTests"
             },
             {
                 "name": "Benchmarks",
                 "type": "cppdbg",
                 "request": "launch",
-                "program": "${workspaceFolder}/build-release/out/benchmarks",
+                "program": "${workspaceFolder}/build/release/bin/benchmarks",
                 "args": [],
                 "stopAtEntry": false,
                 "cwd": "${workspaceFolder}",

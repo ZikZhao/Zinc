@@ -87,28 +87,41 @@ public:
     }
 
     GlobalMemory::Vector<Edge> extract_cycles(const Type* target) noexcept {
-        GlobalMemory::Vector<Edge>& edges = edges_;
-        GlobalMemory::Vector<Edge> active_edges;
-        auto remove_dep = [&](this auto& self, const Type* child) -> void {
-            auto pivot = std::partition(edges.begin(), edges.end(), [&](const auto& edge) {
+        std::span<Edge> span = edges_;
+        auto span_pivot = [&](this auto&& self,
+                              const Type* child,
+                              std::span<Edge> subspan) -> decltype(subspan)::iterator {
+            auto pivot = std::partition(subspan.begin(), subspan.end(), [&](const auto& edge) {
                 return edge.child != child;
             });
-            auto removed_it = active_edges.insert(active_edges.end(), pivot, edges.end());
-            edges.erase(pivot, edges.end());
-            for (const Edge& removed_edge : std::ranges::subrange(removed_it, active_edges.end())) {
+            for (const Edge& active_edge : std::ranges::subrange(pivot, subspan.end())) {
                 // All dependencies are satisfied, so we can safely mark the child as complete
-                if (!std::ranges::any_of(edges, [&](const Edge& edge) {
-                        return edge.parent == removed_edge.parent;
+                if (std::ranges::none_of(std::span(subspan.begin(), pivot), [&](const Edge& edge) {
+                        return edge.parent == active_edge.parent;
                     })) {
-                    self(removed_edge.parent);
+                    pivot = self(active_edge.parent, std::span(subspan.begin(), pivot));
                 }
             }
-        };
-        remove_dep(target);
-        return active_edges;
+            return pivot;
+        }(target, span);
+
+        std::ptrdiff_t remaining_size = std::distance(span.begin(), span_pivot);
+        auto pivot = std::next(edges_.begin(), remaining_size);
+        if (std::ranges::any_of(std::span(edges_.begin(), pivot), [&](const Edge& edge) {
+                return edge.parent == target;
+            })) {
+            return {};
+        } else {
+            GlobalMemory::Vector<Edge> active_graph(pivot, edges_.end());
+            edges_.erase(pivot, edges_.end());
+            return active_graph;
+        }
     }
 
     void add_ref_dependency(const Type* parent, const Type* child) noexcept {
+        assert(std::ranges::none_of(edges_, [&](const Edge& edge) {
+            return edge.parent == parent && edge.child == child;
+        }));
         edges_.push_back({parent, child, nullptr});
     }
 
@@ -191,8 +204,14 @@ public:
             !TypeInTupleV<T, std::tuple<AnyType, NullType, IntegerType, FloatType, BooleanType>>
         )
     static void get_at(TypeResolution& out, auto&&... args) noexcept {
-        using Composites = std::
-            tuple<FunctionType, StructType, IntersectionType, UnionType, ClassType, ReferenceType>;
+        using Composites = std::tuple<
+            FunctionType,
+            ArrayType,
+            StructType,
+            IntersectionType,
+            UnionType,
+            ClassType,
+            ReferenceType>;
         if constexpr (std::is_same_v<T, ClassType>) {
             // classes with same definition are distinct types
             out = new T(std::forward<decltype(args)>(args)...);
@@ -213,6 +232,9 @@ public:
     }
 
     template <typename T>
+        requires(
+            !TypeInTupleV<T, std::tuple<AnyType, NullType, IntegerType, FloatType, BooleanType>>
+        )
     static const T* get(auto&&... args) noexcept {
         TypeResolution out = std::type_identity<T>();
         get_at<T>(out, std::forward<decltype(args)>(args)...);
@@ -233,6 +255,7 @@ private:
     TypeDependencyGraph graph_;
     std::tuple<
         TypeSet<FunctionType>,
+        TypeSet<ArrayType>,
         TypeSet<StructType>,
         TypeSet<IntersectionType>,
         TypeSet<UnionType>,
@@ -245,15 +268,14 @@ private:
     template <TypeClass T>
     void get_interned(TypeResolution& out, auto&&... args) noexcept {
         T* type = out.construct<T>(std::forward<decltype(args)>(args)...);
-        bool can_intern = type->can_intern(graph_);
-        GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges;
-
-        if (!can_intern) {
-            active_edges = graph_.extract_cycles(type);
-            can_intern = !active_edges.empty();
-        }
-        if (can_intern) {
-            out = active_edges.empty() ? type : simplify_recursive_type(active_edges, type);
+        if (type->can_intern(graph_)) {
+            auto [it, _] = std::get<TypeSet<T>>(types_).insert(type);
+            out = *it;
+        } else {
+            auto active_edges = graph_.extract_cycles(type);
+            if (!active_edges.empty()) {
+                out = simplify_recursive_type(active_edges, type);
+            }
         }
     }
 
@@ -417,10 +439,10 @@ public:
         if (kind_ != other->kind_) {
             return kind_ <=> other->kind_;
         }
-        if (assumed_equal.contains({this, other})) {
+        if (assumed_equal.contains(std::minmax(this, other))) {
             return std::strong_ordering::equal;
         }
-        assumed_equal.insert({this, other});
+        assumed_equal.insert(std::minmax(this, other));
         return compare_congruent_impl(other, assumed_equal);
     }
 
@@ -661,7 +683,7 @@ class StructType : public Type {
 public:
     static constexpr Kind kind = Kind::Struct;
 
-private:
+public:
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_;
 
 public:
@@ -1043,6 +1065,9 @@ protected:
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const ReferenceType* other_ref = other->cast<ReferenceType>();
+        if (is_mutable_ != other_ref->is_mutable_) {
+            return is_mutable_ <=> other_ref->is_mutable_;
+        }
         return referenced_type_->compare_congruent(other_ref->referenced_type_, assumed_equal);
     }
 
@@ -1513,45 +1538,27 @@ inline std::pair<const Type*, bool> TypeRegistry::dispatch_pool(const Type* type
 inline const Type* TypeRegistry::simplify_recursive_type(
     GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges, const Type* type
 ) noexcept {
-    // Vertical congruence: if type is congruent to part of itself, replace that part with a
-    // reference to the whole type
-    std::optional<ReferenceType*> self_ref;
-    for (const auto& edge : active_edges) {
-        if (auto ref_type = edge.child->dyn_cast<ReferenceType>()) {
-            const Type* target = ref_type->referenced_type_;
-            GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
-            if (type->compare_congruent(target, assumed_equal) == std::strong_ordering::equal) {
-                if (!self_ref) {
-                    self_ref = new ReferenceType(type, ref_type->is_mutable_);
-                }
-                *edge.action = *self_ref;
-            }
-        }
-    }
-
-    // Horizontal congruence: if any descendant is congruent to its sibling, replace it with the
-    // descendant
-    GlobalMemory::Vector<const Type*> unique_types;
-    auto merge_equivalent_siblings = [&](this auto& self, const Type* parent) -> void {
-        GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
-        GlobalMemory::FlatSet<const Type*, TypeComparator> siblings;
-        auto pivot =
-            std::partition(active_edges.begin(), active_edges.end(), [&](const auto& edge) {
-                return edge.parent != parent;
-            });
-        for (auto& edge : std::ranges::subrange(pivot, active_edges.end())) {
-            auto [it, inserted] = siblings.insert(edge.child);
+    GlobalMemory::FlatSet<const Type*, TypeComparator> unique_types;
+    GlobalMemory::FlatSet<const Type*> visited_types{type};
+    std::ignore = [&](this auto&& self,
+                      const Type* child,
+                      std::span<TypeDependencyGraph::Edge> subspan) -> decltype(subspan)::iterator {
+        auto pivot = std::partition(subspan.begin(), subspan.end(), [&](const auto& edge) {
+            return edge.child != child;
+        });
+        auto [it, inserted] = unique_types.insert(child);
+        for (const auto& edge : std::ranges::subrange(pivot, subspan.end())) {
             if (!inserted) {
                 *edge.action = *it;
             }
+            if (visited_types.contains(edge.parent)) {
+                continue;
+            }
+            visited_types.insert(edge.parent);
+            pivot = self(edge.parent, std::span(subspan.begin(), pivot));
         }
-        active_edges.erase(pivot, active_edges.end());
-        for (const Type* sibling : siblings) {
-            self(sibling);
-        }
-        unique_types.insert(unique_types.end(), siblings.begin(), siblings.end());
-    };
-    merge_equivalent_siblings(type);
+        return pivot;
+    }(type, active_edges);
 
     // Intern the type and its unique descendants
     auto [interned_type, inserted] = dispatch_pool(type);

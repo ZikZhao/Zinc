@@ -40,7 +40,7 @@ flowchart LR
     LO --> Transpiler
 ```
 
-#### 3. ==Language Comparison==
+#### 3. Language Comparison
 
 | **Feature**           | **Zinc**                                                     | **C++ (C++20/23)**                                           | **Rust**                                                     | **Zig**                                                  |
 | --------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------- |
@@ -62,7 +62,7 @@ flowchart LR
 
 - **Unified AST for Semantic Disambiguation:**
 
-   ==Zinc allows for limited compile-time type manipulation, similar to C++. This capability, however, introduces syntactic ambiguities where type operations and value expressions overlap. For instance, array[1] could be interpreted as:==
+   Zinc allows for limited compile-time type manipulation, similar to C++. This capability, however, introduces syntactic ambiguities where type operations and value expressions overlap. For instance, `array[1]` could be interpreted as:
 
   - Type Declaration: An array of type `array` with size 1.
   - Indexing Operation: Accessing the second element of variable `array`.
@@ -81,7 +81,7 @@ flowchart LR
 
   For the transpilation phase, I adopted a strict name mangling scheme using the "\$" symbol to decorate runtime artifacts and hidden static function overloads. Since "\$" is syntactically invalid in user-defined variables within my language but is supported in identifiers by most major C++ compilers (GCC, Clang, MSVC extensions), this creates a guaranteed collision-free namespace. This strategy effectively isolates transpiler-generated constructs from user code without requiring complex renaming algorithms or lookup tables, ensuring that the generated C++ code remains both robust and readable.
 
-- ==**Type Inference for Untyped Literals**==
+- **Type Inference for Untyped Literals**
 
   Literals in Zinc initially possess unspecified types. For instance, the literal 1 is recognized simply as an integer without an inherent signedness or bit-width. The transpiler resolves these into concrete types based on three rules:
 
@@ -93,9 +93,31 @@ flowchart LR
 
   `let a: i8[3] = [1, 20000, 3];`
 
-- ==**Recursive Check-Mode for Declarations**==
+- **Recursive Check-Mode for Declarations**
 
   If a declaration explicitly specifies a target type, the assignment proceeds by recursively entering the expression in Check-Mode. This forces the expression tree to adopt the expected type, triggering an error if a node cannot be converted (e.g., due to range overflow or prohibited implicit conversions). For example, in `let a: i8[3] = [1, 2, 3]`, the array node propagates the i8 requirement to its three child nodes, ensuring each element validates itself against the i8 constraints.
+  
+- ==**Recursive Type Interning & Canonicalization**==
+  
+  To support immutable recursive types efficiently, I implemented a comprehensive interning strategy based on structural graph minimization. This system addresses the challenge of cyclic dependencies through a multi-stage resolution process:
+  
+  1. **Split-Phase Construction:** Reference types are stored as direct `Type*` pointers rather than double indirections to support both identifiers and raw type expressions. To facilitate this, type construction is strictly separated into **Allocation** and **Initialization** phases. A type address is available in the cache immediately after allocation, allowing recursive references to point to the address of a type that is currently being constructed, regardless of its initialization state.
+  2. **Completeness vs. Sizedness:** The system distinguishes between a type being **Sized** (having a known memory layout, e.g., a pointer is 8 bytes) and **Complete** (having all descendants fully initialized). For example, in `type A = { a: &A; }`, the field `&A` is *sized* but *incomplete* until `A` closes the cycle. This distinction is critical for the precise timing for interning: only *complete* subgraphs are eligible for the global pool.
+  3. **Dependency-Driven Resolution:** While acyclic (tree-structured) types are interned immediately via standard co-inductive comparison, recursive types utilize a **dependency graph**. An incomplete type registers dependencies on its incomplete children. The type is marked as *complete* only when all dependencies are resolved or when the dependency chain forms a cycle back to itself (closing the loop), at which point it triggers the interning process.
+  4. **Two-Phase Interning (Canonicalization):** Interning occurs in two stages to minimize the state machine represented by the type graph:
+    - **Self-Interning (Local Canonicalization):** This phase performs graph minimization on the newly constructed type tree before it touches the global pool. It enforces **Vertical Congruence** (collapsing isomorphic linear chains, e.g., merging `A` and `B` in `type A = { a: &B }; type B = { a: &A };`) and **Horizontal Congruence** (merging identical sibling branches, e.g., merging `C` and `D` in `type A = { b: &B; }; type B = { c: &C; d: &D; }; type C = { a: &A; }; type D = { a: &A; };`). This ensures that structurally identical recursive types are reduced to a single canonical instance.
+    - **Global Interning:** Once locally minimized, the entire connected component (the type and its dependencies) is promoted to the global registry. This is an **atomic "all-or-nothing" operation**: either the top-level type matches an existing global instance (in which case the entire new graph is discarded to prevent partial dangling references), or the whole graph is interned as a new entry.
+  5. **Transient Cache Management:** To prevent the type cache from holding dangling references to discarded temporary types (e.g., intermediate nodes `b1` and `b2` created during the resolution of `type A = { b1: &B; b2: &B; };`), the system implements a **cache invalidation policy**. If a type expression evaluates to an incomplete type, that entry is removed rather than reused. This forces a re-evaluation which, guaranteed by Horizontal Congruence, will eventually merge distinct allocation addresses into a single canonical instance upon completion, ensuring memory safety without complex invalidation sets.
+
+- ==**Structural-to-Nominal Mapping & Implicit Dependency Reordering**==
+
+  Since C++ relies on nominal typing (classes/structs) unlike Zinc's structural type system, the transpiler synthesizes stable nominal definitions (e.g., `struct $structural_1`) for every unique structural shape encountered. A key challenge was handling recursive types: my initial approach relied on fragile forward declarations because the generated struct body referenced external type aliases. The refined strategy decouples the struct definition from its aliases by internally canonicalizing recursive identifiers, enabling a consistent definition-before-use emission order for both recursive and non-recursive types.
+
+  Remarkably, this ordering is achieved without an explicit topological sort algorithm. Instead, it emerges naturally from an on-demand generation model using Cursor proxies. Output tokens are buffered in scoped Cursor instances rather than being written directly to the stream. For a declaration like `type A = B`, the transpiler initializes a cursor for the alias statement "using A = ...". When traversing B, if the structural type `$structural_n` is undefined, a nested cursor is instantiated on the stack to generate its definition. Since the nested cursor completes and flushes its content to the underlying stream before the parent cursor finalizes the alias declaration, the dependency (the struct definition) is guaranteed to appear in the output strictly before its usage, effectively leveraging the transpiler's call stack to enforce topological correctness.
+
+- ==**Error Recovery & Error Cascading Prevention**==
+
+  To enhance diagnostic utility, the type system implements a robust error recovery mechanism. Instead of aborting upon the first semantic failure, the compiler reports the error and injects a sentinel `UnknownType` or `UnknownValue` (depending on the context) as results. These sentinels are designed to silently propagate through upstream operations: any expression interacting with an 'Unknown' operand evaluates to 'Unknown' without emitting further diagnostics. This strategy effectively suppresses cascading false positives (spurious errors) stemming from the initial fault, while preserving the compiler's ability to continue analyzing independent code sections and report multiple genuine errors in a single pass.
 
 #### 5. Development Checkpoints (Milestones)
 
@@ -129,14 +151,14 @@ The development is structured into granular phases to ensure stability before in
 
   To support storing "Overloaded Function Sets" as first-class citizens—a feature lacking in C++—I implemented PolyFunction. It utilizes advanced template metaprogramming to perform type erasure while maintaining dispatch capabilities, bridging the semantic gap between Zinc and C++.
 
-- ==**Transition to Arbitrary-Precision Integers (BigInt)**==
+- **Transition to Arbitrary-Precision Integers (BigInt)**
 
   I have overhauled the internal representation of integer values, moving from a tagged union of int64, uint64, and string_view to a unified BigInt implementation. This provides infinite precision for compile-time evaluation; users can now write complex integer expressions as long as the final result fits within the target container. This transition eliminates the overhead of repeatedly tag-checking during integer processing and removes concerns regarding intermediate overflows during constant folding.
 
 #### 7. Next Steps
 
-1. ==~~(Done) Template definition and explicit instantiation~~==
-2. ==~~(Done) Refactor operator system~~==
+1. ==~~(Done) Type interning system capable for recursive types~~==
+2. ==~~(Done) Type definition transpiling reordered~~==
 3. Built-in types (by declaration file)
 4. Mutability
 5. Borrow checker (lexical and statement-level lifetimes)

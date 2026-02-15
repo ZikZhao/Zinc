@@ -41,7 +41,7 @@ type Node = {
 type AnotherNode = {
     value: i32;
     next: &AnotherNode;
-};
+};*/
 
 type A = {
     a: &B;
@@ -50,8 +50,8 @@ type A = {
 type B = {
     a: &A;
 };
-*/
 
+/*
 type A = {
     b: &B;
 };
@@ -70,6 +70,7 @@ type D = {
 };
 
 fn h(n: A) -> B {}
+*/
 
 fn main() -> i32 {
     // f(2, 3);

@@ -117,13 +117,17 @@ IncludeCategories:
     Priority:        1
     SortPriority:    0
     CaseSensitive:   false
-  - Regex:           '^"pch\.hpp"$'
-    Priority:        1
-    SortPriority:    1
-    CaseSensitive:   false
   - Regex:           '^<.*\.(h|hpp|hxx|hh)>'
+    Priority:        1
+    SortPriority:    0
+    CaseSensitive:   false
+  - Regex:           'gtest\/gtest\.h'
     Priority:        2
     SortPriority:    0
+    CaseSensitive:   false
+  - Regex:           '^"pch\.hpp"$'
+    Priority:        2
+    SortPriority:    1
     CaseSensitive:   false
   - Regex:           '.*'
     Priority:        3
