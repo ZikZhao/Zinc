@@ -258,11 +258,13 @@
                 "MIMode": "gdb",
                 "setupCommands": [
                     {
-                        "description": "Enable pretty-printing for gdb",
                         "text": "-enable-pretty-printing",
-                        "ignoreFailures": true
+                    },
+                    {
+                        "text": "source ${workspaceFolder}/tools/printer.py",
                     }
                 ],
+                "visualizerFile": "${workspaceFolder}/Zinc.natvis",
                 "preLaunchTask": "Build Main (Debug)"
             },
             {
@@ -289,11 +291,13 @@
                 "MIMode": "gdb",
                 "setupCommands": [
                     {
-                        "description": "Enable pretty-printing for gdb",
                         "text": "-enable-pretty-printing",
-                        "ignoreFailures": true
+                    },
+                    {
+                        "text": "source ${workspaceFolder}/tools/printer.py",
                     }
                 ],
+                "visualizerFile": "${workspaceFolder}/Zinc.natvis",
                 "preLaunchTask": "Build Main (Release)"
             },
             {
@@ -308,11 +312,13 @@
                 "MIMode": "gdb",
                 "setupCommands": [
                     {
-                        "description": "Enable pretty-printing for gdb",
-                        "text": "-enable-pretty-printing",
-                        "ignoreFailures": true
+                        "text": "-enable-pretty-printing"
+                    },
+                    {
+                        "text": "source ${workspaceFolder}/tools/printer.py",
                     }
                 ],
+                "visualizerFile": "${workspaceFolder}/Zinc.natvis",
                 "preLaunchTask": "Build UnitTests"
             },
             {
@@ -327,11 +333,13 @@
                 "MIMode": "gdb",
                 "setupCommands": [
                     {
-                        "description": "Enable pretty-printing for gdb",
                         "text": "-enable-pretty-printing",
-                        "ignoreFailures": true
+                    },
+                    {
+                        "text": "source ${workspaceFolder}/tools/printer.py",
                     }
                 ],
+                "visualizerFile": "${workspaceFolder}/Zinc.natvis",
                 "preLaunchTask": "Build Benchmarks"
             }
         ]

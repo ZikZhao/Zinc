@@ -88,6 +88,7 @@ public:
 
     GlobalMemory::Vector<Edge> extract_cycles(const Type* target) noexcept {
         std::span<Edge> span = edges_;
+        GlobalMemory::FlatSet<const Type*> visited{target};
         auto span_pivot = [&](this auto&& self,
                               const Type* child,
                               std::span<Edge> subspan) -> decltype(subspan)::iterator {
@@ -95,27 +96,24 @@ public:
                 return edge.child != child;
             });
             for (const Edge& active_edge : std::ranges::subrange(pivot, subspan.end())) {
-                // All dependencies are satisfied, so we can safely mark the child as complete
-                if (std::ranges::none_of(std::span(subspan.begin(), pivot), [&](const Edge& edge) {
-                        return edge.parent == active_edge.parent;
-                    })) {
+                if (visited.insert(active_edge.parent).second) {
                     pivot = self(active_edge.parent, std::span(subspan.begin(), pivot));
                 }
             }
             return pivot;
         }(target, span);
 
+        for (const Edge& edge : std::ranges::subrange(span.begin(), span_pivot)) {
+            if (visited.contains(edge.parent)) {
+                return {};
+            }
+        }
+
         std::ptrdiff_t remaining_size = std::distance(span.begin(), span_pivot);
         auto pivot = std::next(edges_.begin(), remaining_size);
-        if (std::ranges::any_of(std::span(edges_.begin(), pivot), [&](const Edge& edge) {
-                return edge.parent == target;
-            })) {
-            return {};
-        } else {
-            GlobalMemory::Vector<Edge> active_graph(pivot, edges_.end());
-            edges_.erase(pivot, edges_.end());
-            return active_graph;
-        }
+        GlobalMemory::Vector<Edge> active_graph(pivot, edges_.end());
+        edges_.erase(pivot, edges_.end());
+        return active_graph;
     }
 
     void add_ref_dependency(const Type* parent, const Type* child) noexcept {
@@ -166,16 +164,21 @@ public:
         return *this;
     }
 
+    template <std::derived_from<Type> T>
+    operator const T*() const noexcept {
+        return static_cast<const T*>(reinterpret_cast<const Type*>(ptr_ & ~flag));
+    }
+
     const Type* get() const noexcept { return reinterpret_cast<const Type*>(ptr_ & ~flag); }
 
-    const Type* operator->() const noexcept { return reinterpret_cast<const Type*>(ptr_ & ~flag); }
+    const Type* operator->() const noexcept { return get(); }
 
     bool is_sized() const noexcept { return (ptr_ & flag) == 0; }
 
 private:
     template <TypeClass T>
     T* construct(auto&&... args) noexcept {
-        assert(get() && !is_sized());
+        assert(ptr_ && !is_sized());
         std::construct_at(
             reinterpret_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...
         );
@@ -238,7 +241,7 @@ public:
     static const T* get(auto&&... args) noexcept {
         TypeResolution out = std::type_identity<T>();
         get_at<T>(out, std::forward<decltype(args)>(args)...);
-        return static_cast<const T*>(out.get());
+        return static_cast<const T*>(out);
     }
 
     static const Type* get_unknown() noexcept;
@@ -306,20 +309,21 @@ public:
 private:
     union {
         const Object* ptr_;
-        Value* value_;
+        const Type* type_;
+        const Value* value_;
+        Value* mvalue_;
     };
     Category category_;
 
 public:
-    Term(const auto* type, Category category) noexcept : ptr_(type), category_(category) {
-        if constexpr (std::derived_from<std::remove_cvref_t<decltype(*type)>, Type>) {
-            assert(
-                category == Category::Immutable || category == Category::Var ||
-                category == Category::RValue
-            );
-        } else {
-            assert(category == Category::CompConst || category == Category::CompRValue);
-        }
+    Term(const Type* type, Category category) noexcept : type_(type), category_(category) {
+        assert(
+            category == Category::Immutable || category == Category::Var ||
+            category == Category::RValue
+        );
+    }
+    Term(const Value* value, Category category) noexcept : value_(value), category_(category) {
+        assert(category == Category::CompConst || category == Category::CompRValue);
     }
     Term(Value* value, Category category) noexcept : value_(value), category_(category) {
         assert(
@@ -341,9 +345,9 @@ public:
     const Object* operator->() const noexcept { return ptr_; }
     Value* comp_var() const noexcept {
         assert(category_ == Category::CompVar);
-        return value_;
+        return mvalue_;
     }
-    operator bool() const noexcept { return ptr_ != nullptr; }
+    operator bool() const noexcept { return type_ != nullptr; }
 };
 
 class Object : public GlobalMemory::MemoryManaged {

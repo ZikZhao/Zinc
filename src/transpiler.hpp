@@ -368,7 +368,7 @@ inline void ASTIdentifier::transpile(Transpiler& transpiler) const noexcept {
     }
     if (type->dyn_cast<StructType>()) {
         transpiler << GlobalMemory::format_view(
-            "$structural_{}", transpiler.state_.structurals.at(type.get()->cast<StructType>())
+            "$structural_{}", transpiler.state_.structurals.at(type->cast<StructType>())
         );
     } else {
         transpiler << str_;
@@ -415,7 +415,7 @@ inline void ASTStructType::transpile(Transpiler& transpiler) const noexcept {
     TypeResolution struct_type;
     eval_type(transpiler.checker(), struct_type);
     auto [it, inserted] = transpiler.state_.structurals.insert(
-        {static_cast<const StructType*>(struct_type.get()), 0}
+        {static_cast<const StructType*>(struct_type), 0}
     );
     if (inserted) {
         it->second = transpiler.state_.structurals.size();

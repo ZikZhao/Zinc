@@ -359,7 +359,7 @@ private:
         TypeResolution expr_result;
         expr_->eval_type(checker, expr_result);
         try {
-            out = TypeResolution(checker.ops_.eval_type_op(Op::opcode, expr_result.get()));
+            out = TypeResolution(checker.ops_.eval_type_op(Op::opcode, expr_result));
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
             out = TypeRegistry::get_unknown();
@@ -397,7 +397,7 @@ private:
         TypeResolution right_result;
         right_->eval_type(checker, right_result);
         try {
-            out = checker.ops_.eval_type_op(Op::opcode, left_result.get(), right_result.get());
+            out = checker.ops_.eval_type_op(Op::opcode, left_result, right_result);
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
             out = TypeRegistry::get_unknown();
@@ -516,7 +516,7 @@ private:
             std::views::transform([&](ASTExpression* param_expr) -> const Type* {
                 TypeResolution param_type;
                 param_expr->eval_type(checker, param_type);
-                return param_type.get();
+                return param_type;
             }) |
             GlobalMemory::collect<ComparableSpan<const Type*>>();
         if (any_error) {
@@ -525,7 +525,7 @@ private:
         }
         TypeResolution return_type;
         std::get<1>(comps)->eval_type(checker, return_type);
-        TypeRegistry::get_at<FunctionType>(out, param_types, return_type.get());
+        TypeRegistry::get_at<FunctionType>(out, param_types, return_type);
     }
 };
 
@@ -542,7 +542,7 @@ public:
     void check_types(TypeChecker& checker) final {
         TypeResolution field_type;
         type_->eval_type(checker, field_type);
-        checker.add_variable(identifier_, Term(field_type.get(), Term::Category::Var));
+        checker.add_variable(identifier_, Term(field_type, Term::Category::Var));
     }
     void transpile(Transpiler& transpiler) const noexcept final;
 };
@@ -565,7 +565,7 @@ private:
                 [&](ASTFieldDeclaration* decl) -> std::pair<std::string_view, const Type*> {
                     TypeResolution field_type;
                     decl->type_->eval_type(checker, field_type);
-                    return {decl->identifier_, field_type.get()};
+                    return {decl->identifier_, field_type};
                 }
             ) |
             GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, const Type*>>();
@@ -595,9 +595,9 @@ private:
         TypeResolution expr_type;
         expr_->eval_type(checker, expr_type, false);
         if (!expr_type.is_sized()) {
-            TypeRegistry::add_ref_dependency(out.get(), expr_type.get());
+            TypeRegistry::add_ref_dependency(out, expr_type);
         }
-        TypeRegistry::get_at<ReferenceType>(out, expr_type.get(), is_mutable_);
+        TypeRegistry::get_at<ReferenceType>(out, expr_type, is_mutable_);
     }
 };
 
@@ -638,7 +638,7 @@ public:
         if (type_) {
             type_->eval_type(checker, declared_type);
         }
-        Term term = expr_->eval_term(checker, declared_type.get(), is_constant_);
+        Term term = expr_->eval_term(checker, declared_type, is_constant_);
         if (!is_constant_) {
             term = Term(term.effective_type(), Term::Category::Var);
         }
@@ -857,7 +857,7 @@ public:
         for (auto& param : parameters_) {
             TypeResolution param_type;
             param->type_->eval_type(checker, param_type);
-            checker.add_variable(param->identifier_, Term(param_type.get(), Term::Category::Var));
+            checker.add_variable(param->identifier_, Term(param_type, Term::Category::Var));
         }
         for (auto& stmt : body_) {
             stmt->check_types(checker);
@@ -1060,8 +1060,8 @@ inline TypeResolution TypeChecker::lookup_type_in(std::string_view identifier, S
         Scope* previous_scope = std::exchange(current_scope_, &scope);
         type->eval_type(*this, it_id_cache->second);
         current_scope_ = previous_scope;
-        if (TypeRegistry::is_type_incomplete(it_id_cache->second.get())) {
-            const Type* incomplete_type = it_id_cache->second.get();
+        if (TypeRegistry::is_type_incomplete(it_id_cache->second)) {
+            const Type* incomplete_type = it_id_cache->second;
             id_cache_.erase(it_id_cache);
             return incomplete_type;
         } else {
@@ -1143,7 +1143,7 @@ inline Term ASTFunctionSignature::eval_term(TypeChecker& checker) const noexcept
                             std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
                                 TypeResolution param_type;
                                 param->type_->eval_type(checker, param_type);
-                                return param_type.get();
+                                return param_type;
                             }) |
                             GlobalMemory::collect<ComparableSpan<const Type*>>();
     if (any_error) {
@@ -1152,9 +1152,7 @@ inline Term ASTFunctionSignature::eval_term(TypeChecker& checker) const noexcept
     TypeResolution return_type;
     owner_->return_type_->eval_type(checker, return_type);
     /// TODO: handle constexpr functions
-    return Term(
-        TypeRegistry::get<FunctionType>(params, return_type.get()), Term::Category::Immutable
-    );
+    return Term(TypeRegistry::get<FunctionType>(params, return_type), Term::Category::Immutable);
 }
 
 inline void ASTClassSignature::eval_type_impl(
@@ -1176,7 +1174,7 @@ inline void ASTClassSignature::eval_type_impl(
             Diagnostic::report(CircularTypeDependencyError(owner_->location_));
             return TypeRegistry::get_unknown();
         }
-        const Type* type = result.get();
+        const Type* type = result;
         if (type->kind_ != Kind::Instance) {
             Diagnostic::report(TypeMismatchError(owner_->location_, "class", type->repr()));
             return TypeRegistry::get_unknown();
@@ -1198,7 +1196,7 @@ inline void ASTClassSignature::eval_type_impl(
                 Diagnostic::report(CircularTypeDependencyError(owner_->location_));
                 return TypeRegistry::get_unknown();
             }
-            const Type* type = result.get();
+            const Type* type = result;
             if (type->kind_ != Kind::Interface) {
                 Diagnostic::report(TypeMismatchError(owner_->location_, "interface", type->repr()));
                 return TypeRegistry::get_unknown();
@@ -1219,7 +1217,7 @@ inline void ASTClassSignature::eval_type_impl(
                 Diagnostic::report(SymbolCategoryMismatchError(field_decl->type_->location_, true));
                 result.second = TypeRegistry::get_unknown();
             } else {
-                result.second = field_type.get();
+                result.second = field_type;
             }
             return result;
         }) |
