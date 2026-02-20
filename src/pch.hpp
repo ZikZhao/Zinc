@@ -102,7 +102,7 @@ public:
 
     template <typename T>
         requires(IsCandidate<T>)
-    T get() noexcept {
+    T get() const noexcept {
         constexpr std::size_t index = IndexOfTypeInTupleV<T, Ts...>;
         return ((ptr_ & mask) == index) ? reinterpret_cast<T>(ptr_ & ~mask) : nullptr;
     }
@@ -305,16 +305,9 @@ public:
     }
 
 public:
-    class MemoryManaged {
-    public:
+    struct MemoryManaged {
         static void* operator new(std::size_t size) { return GlobalMemory::alloc_raw(size); }
         static void operator delete(void* ptr, std::size_t size) {}
-
-    protected:
-        /// Protected default constructor to prevent direct instantiation
-        MemoryManaged() = default;
-        /// Protected destructor to prevent deletion through base pointer
-        ~MemoryManaged() = default;
     };
 
 public:

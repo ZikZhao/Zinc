@@ -18,64 +18,97 @@ enum class Section {
     __len__,
 };
 
-class SectionWriter {
+class BufferTree {
 public:
-    static SectionWriter& indent(SectionWriter& writer) {
-        writer.indent_level_++;
-        return writer;
-    }
-
-    static SectionWriter& dedent(SectionWriter& writer) {
-        if (writer.indent_level_ > 0) {
-            writer.indent_level_--;
-        }
-        return writer;
-    }
-
-    static SectionWriter& newline(SectionWriter& writer) {
-        writer.buffer_ += "\n";
-        writer.at_line_start_ = true;
-        return writer;
-    }
+    struct Node : public GlobalMemory::MemoryManaged {
+        GlobalMemory::String content;
+        GlobalMemory::Vector<Node*> children;
+        const void* scope;
+        Node* parent;
+    };
 
 private:
-    Transpiler& transpiler_;
-    SectionWriter* previous_;
-    GlobalMemory::String& target_;
-    GlobalMemory::String buffer_;
-    std::size_t indent_level_ = 0;
-    bool at_line_start_ = true;
+    Node* root_;
+    GlobalMemory::FlatMap<const void*, Node*> scope_map_;
 
 public:
-    SectionWriter(Transpiler& transpiler, GlobalMemory::String& target) noexcept;
+    BufferTree() noexcept : root_{new Node{.scope = nullptr, .parent = nullptr}} {}
 
-    ~SectionWriter() noexcept;
+    Node& root() noexcept { return *root_; }
+    const Node& root() const noexcept { return *root_; }
 
-    SectionWriter& operator<<(std::string_view token) noexcept {
-        if (at_line_start_) {
-            for (std::size_t i = 0; i < indent_level_; ++i) {
-                buffer_ += "    ";
+    void add(const void* scope, Node* node) noexcept {
+        assert(scope != nullptr);
+        scope_map_.insert({scope, node});
+    }
+
+    Node& find(const Scope* scope) noexcept {
+        auto get_path = [](this auto&& self, const Scope* current) -> std::generator<const void*> {
+            if (current->parent()) {
+                for (const void* step : self(current->parent())) {
+                    co_yield step;
+                }
             }
-            at_line_start_ = false;
+            co_yield current;
+        };
+        Node* current = root_;
+        for (const void* step : get_path(scope)) {
+            auto it = scope_map_.find(step);
+            if (it == scope_map_.end()) {
+                Node* new_node = new Node{.scope = step, .parent = current};
+                scope_map_.insert({step, new_node});
+                current = new_node;
+            } else {
+                current = it->second;
+            }
         }
-        buffer_ += token;
+        return *current;
+    }
+};
+
+class Cursor {
+private:
+    using Node = BufferTree::Node;
+
+private:
+    BufferTree& tree_;
+    Node* target_;
+
+public:
+    explicit Cursor(BufferTree& tree) noexcept
+        : tree_(tree), target_(new Node{.scope = nullptr, .parent = &tree.root()}) {}
+
+    Cursor(BufferTree& tree, Node& target) noexcept : tree_(tree), target_(&target) {}
+
+    Cursor(const Cursor& other) noexcept
+        : tree_(other.tree_),
+          target_(new Node{.scope = other.target_->scope, .parent = other.target_->parent}) {}
+
+    ~Cursor() noexcept { commit(); }
+
+    Cursor& operator<<(auto&& args) noexcept {
+        std::format_to(
+            std::back_inserter(target_->content), "{}", std::forward<decltype(args)>(args)
+        );
         return *this;
     }
 
-    SectionWriter& operator<<(auto* right)
-        requires requires {
-            std::declval<decltype(right)>()->transpile(std::declval<Transpiler&>());
+    Cursor& commit() noexcept {
+        if (target_->parent) {
+            target_->parent->children.push_back(target_);
+            target_ = new Node{.scope = nullptr, .parent = target_->parent};
         }
-    {
-        right->transpile(transpiler_);
         return *this;
     }
 
-    SectionWriter& operator<<(SectionWriter& (*manip)(SectionWriter&)) noexcept {
-        return manip(*this);
+    Cursor open_child(const void* scope) noexcept {
+        target_->scope = scope;
+        Node* new_child = new Node{.scope = nullptr, .parent = target_};
+        tree_.add(scope, target_);
+        return Cursor(tree_, *new_child);
     }
 
-    Transpiler& transpiler() const noexcept { return transpiler_; }
+    void clear() noexcept { target_->content.clear(); }
 };
 
 class Transpiler {
@@ -91,9 +124,7 @@ public:
 
 private:
     const SourceManager::File& file_;
-    GlobalMemory::String sections_[static_cast<std::size_t>(Section::__len__)];
-    std::optional<SectionWriter> default_writer_;
-    SectionWriter* current_;
+    std::array<BufferTree, static_cast<std::size_t>(Section::__len__)> sections_;
     TypeChecker& checker_;
 
 public:
@@ -101,50 +132,62 @@ public:
 
 public:
     Transpiler(const SourceManager::File& file, TypeChecker& checker)
-        : file_(file),
-          default_writer_({*this, sections_[static_cast<std::size_t>(Section::Main)]}),
-          current_(&*default_writer_),
-          checker_(checker) {}
+        : file_(file), checker_(checker) {}
+
+    Cursor root() noexcept { return Cursor(sections_[static_cast<std::size_t>(Section::Main)]); }
+
+    Cursor section(Section section) noexcept {
+        return Cursor(sections_[static_cast<std::size_t>(section)]);
+    }
+
+    void require_definition(std::string_view identifier) noexcept {
+        auto [scope, symbol] = checker_.lookup(identifier);
+        assert(scope != nullptr && symbol != nullptr);
+        BufferTree& main = sections_[static_cast<std::size_t>(Section::Main)];
+        Cursor cursor(main, main.find(scope));
+        symbol->get<const ASTExpression*>()->transpile(*this, cursor);
+        cursor.clear();
+    }
 
     TypeChecker& checker() noexcept { return checker_; }
 
-    void finalize() {
-        default_writer_.reset();
+    void flush() {
         const GlobalMemory::String stem =
             (std::filesystem::path("out") / file_.path)
                 .stem()
                 .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
         std::fstream stream(GlobalMemory::format("out/{}.hpp", stem).c_str(), std::ios::out);
-        stream << "#pragma once\n\n"
-               << strip_section(Section::Includes)
-               << "\n\n/* ---------- Structural Declarations ---------- */\n\n"
-               << strip_section(Section::StructuralDeclarations)
-               << "\n\n/* ---------- Main ---------- */\n\n"
-               << strip_section(Section::Main)
-               << "\n\n/* ---------- Implementation ---------- */\n\n"
-               << strip_section(Section::Implementation) << "\n";
-    }
-
-    SectionWriter operator[](Section section) {
-        return SectionWriter(*this, sections_[static_cast<std::size_t>(section)]);
-    }
-
-    SectionWriter& operator<<(auto&& right) {
-        return (*current_) << std::forward<decltype(right)>(right);
+        stream << "#pragma once\n\n";
+        output(stream, Section::Includes);
+        stream << "\n\n/* ---------- Structural Declarations ---------- */\n\n";
+        output(stream, Section::StructuralDeclarations);
+        stream << "\n\n/* ---------- Main ---------- */\n\n";
+        output(stream, Section::Main);
+        stream << "\n\n/* ---------- Implementation ---------- */\n\n";
+        output(stream, Section::Implementation);
+        stream << "\n";
     }
 
 private:
-    std::string_view strip_section(Section section) const noexcept {
-        const GlobalMemory::String& buffer = sections_[static_cast<std::size_t>(section)];
-        std::size_t begin = 0;
-        std::size_t end = buffer.size();
-        while (begin < end && std::isspace(static_cast<unsigned char>(buffer[begin]))) {
-            begin++;
+    void output(std::ostream& os, Section section) const noexcept {
+        const BufferTree& tree = sections_[static_cast<std::size_t>(section)];
+        const char* sep = "";
+        for (const BufferTree::Node* child : tree.root().children) {
+            os << sep;
+            output(os, *child, 0);
+            sep = "\n\n";
         }
-        while (end > begin && std::isspace(static_cast<unsigned char>(buffer[end - 1]))) {
-            end--;
+    }
+
+    void output(std::ostream& os, const BufferTree::Node& node, std::size_t indent) const noexcept {
+        for (std::size_t i = 0; i < indent; i++) {
+            os << "    ";
         }
-        return std::string_view(buffer.data() + begin, end - begin);
+        os << node.content;
+        for (const BufferTree::Node* child : node.children) {
+            os << "\n";
+            output(os, *child, indent + 1);
+        }
     }
 };
 
@@ -184,8 +227,10 @@ inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checke
     }
 
     Transpiler transpiler(sources[0], checker);
-    root->transpile(transpiler);
-    transpiler.finalize();
+    Cursor cursor = transpiler.root();
+    root->transpile(transpiler, cursor);
+    cursor.commit();
+    transpiler.flush();
     Diagnostic::message(
         GlobalMemory::format_view("Transformed {} modules to './out'", sources.files.size())
     );
@@ -213,393 +258,427 @@ inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checke
 
 /// ===================== Inline implementations of Objects =====================
 
-inline void UnknownType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
+inline void UnknownType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
 
-inline void AnyType::transpile(Transpiler& transpiler) const noexcept { transpiler << "std::any"; }
+inline void AnyType::transpile(Cursor& cursor) const noexcept { cursor << "std::any"; }
 
-inline void NullType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
+inline void NullType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
 
-inline void IntegerType::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "std::";
+inline void IntegerType::transpile(Cursor& cursor) const noexcept {
+    cursor << "std::";
     if (is_signed_) {
-        transpiler << "int";
+        cursor << "int";
     } else {
-        transpiler << "uint";
+        cursor << "uint";
     }
     switch (bits_) {
     case 8:
-        transpiler << "8_t";
+        cursor << "8_t";
         break;
     case 16:
-        transpiler << "16_t";
+        cursor << "16_t";
         break;
     case 32:
-        transpiler << "32_t";
+        cursor << "32_t";
         break;
     case 64:
-        transpiler << "64_t";
+        cursor << "64_t";
         break;
     default:
         UNREACHABLE();
     }
 }
 
-inline void FloatType::transpile(Transpiler& transpiler) const noexcept {
+inline void FloatType::transpile(Cursor& cursor) const noexcept {
     switch (bits_) {
     case 32:
-        transpiler << "float";
+        cursor << "float";
         break;
     case 64:
-        transpiler << "double";
+        cursor << "double";
         break;
     }
 }
 
-inline void BooleanType::transpile(Transpiler& transpiler) const noexcept { transpiler << "bool"; }
+inline void BooleanType::transpile(Cursor& cursor) const noexcept { cursor << "bool"; }
 
-inline void FunctionType::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "std::function<";
-    return_type_->transpile(transpiler);
-    transpiler << "(";
+inline void FunctionType::transpile(Cursor& cursor) const noexcept {
+    cursor << "std::function<";
+    return_type_->transpile(cursor);
+    cursor << "(";
     const char* sep = "";
     for (const Type* param_type : parameters_) {
-        transpiler << sep;
-        param_type->transpile(transpiler);
+        cursor << sep;
+        param_type->transpile(cursor);
         sep = ", ";
     }
-    transpiler << ")>";
+    cursor << ")>";
 }
 
-inline void ArrayType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
+inline void ArrayType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
 
-inline void StructType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
+inline void StructType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
 
-inline void InterfaceType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
+inline void InterfaceType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
 
-inline void ClassType::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
+inline void ClassType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
 
-inline void IntersectionType::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "$PolyFunction<";
+inline void IntersectionType::transpile(Cursor& cursor) const noexcept {
+    cursor << "$PolyFunction<";
     const char* sep = "";
     for (const Type* sub_type : types_) {
-        transpiler << sep;
-        sub_type->transpile(transpiler);
+        cursor << sep;
+        sub_type->transpile(cursor);
         sep = ", ";
     }
-    transpiler << ">";
+    cursor << ">";
 }
 
-inline void UnionType::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "std::variant<";
+inline void UnionType::transpile(Cursor& cursor) const noexcept {
+    cursor << "std::variant<";
     const char* sep = "";
     for (const Type* sub_type : types_) {
-        transpiler << sep;
-        sub_type->transpile(transpiler);
+        cursor << sep;
+        sub_type->transpile(cursor);
         sep = ", ";
     }
-    transpiler << ">";
+    cursor << ">";
 }
 
-inline void ReferenceType::transpile(Transpiler& transpiler) const noexcept {
-    referenced_type_->transpile(transpiler);
-    transpiler << "*" << (is_mutable_ ? "" : " const");
+inline void ReferenceType::transpile(Cursor& cursor) const noexcept {
+    referenced_type_->transpile(cursor);
+    cursor << "*" << (is_mutable_ ? "" : " const");
 }
 
-inline void UnknownValue::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
+inline void UnknownValue::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
 
-inline void NullValue::transpile(Transpiler& transpiler) const noexcept { transpiler << "nullptr"; }
+inline void NullValue::transpile(Cursor& cursor) const noexcept { cursor << "nullptr"; }
 
-inline void IntegerValue::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << GlobalMemory::format_view("{}", value_.to_string());
+inline void IntegerValue::transpile(Cursor& cursor) const noexcept {
+    cursor << GlobalMemory::format_view("{}", value_.to_string());
 }
 
-inline void FloatValue::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << GlobalMemory::format_view("0x{:a}", value_);
+inline void FloatValue::transpile(Cursor& cursor) const noexcept {
+    cursor << GlobalMemory::format_view("0x{:a}", value_);
 }
 
-inline void BooleanValue::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << (value_ ? "true" : "false");
+inline void BooleanValue::transpile(Cursor& cursor) const noexcept {
+    cursor << (value_ ? "true" : "false");
 }
 
-inline void FunctionValue::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
+inline void FunctionValue::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
 
-inline void ArrayValue::transpile(Transpiler& transpiler) const noexcept {
+inline void ArrayValue::transpile(Cursor& cursor) const noexcept {
     /// TODO:
     return;
 }
 
-inline void InstanceValue::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
+inline void InstanceValue::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
 
 /// ===================== Inline implementations of AST nodes =====================
 
-inline void ASTRoot::transpile(Transpiler& transpiler) const noexcept {
-    transpiler[Section::Includes] << "#include \"pch.hpp\"" << SectionWriter::newline;
+inline void ASTRoot::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    transpiler.section(Section::Includes) << "#include \"pch.hpp\"";
     for (const auto& child : statements_) {
-        transpiler[Section::Main] << child << SectionWriter::newline;
+        child->transpile(transpiler, cursor);
+        cursor.commit();
     }
 }
 
-inline void ASTLocalBlock::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << SectionWriter::newline << "{" << SectionWriter::indent << SectionWriter::newline;
+inline void ASTLocalBlock::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor.commit() << "{";
     transpiler.checker().enter(this);
+    Cursor local_cursor = cursor.open_child(this);
     for (const auto& stmt : statements_) {
-        stmt->transpile(transpiler);
+        stmt->transpile(transpiler, local_cursor);
+        local_cursor.commit();
     }
-    transpiler << SectionWriter::dedent << "}" << SectionWriter::newline;
     transpiler.checker().exit();
+    cursor << "}";
 }
 
-inline void ASTHiddenTypeExpr::transpile(Transpiler& transpiler) const noexcept { UNREACHABLE(); }
-
-inline void ASTConstant::transpile(Transpiler& transpiler) const noexcept {
-    value_->transpile(transpiler);
+inline void ASTHiddenTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    UNREACHABLE();
 }
 
-inline void ASTIdentifier::transpile(Transpiler& transpiler) const noexcept {
+inline void ASTConstant::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    value_->transpile(cursor);
+}
+
+inline void ASTIdentifier::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     if (!transpiler.state_.mangle_structural_identifiers) {
-        transpiler << str_;
+        cursor << str_;
         return;
     }
 
     TypeResolution type = transpiler.checker().lookup_type(str_);
     {
-        SectionWriter void_writer = transpiler[Section::Void];
-        transpiler.checker().require_definition(transpiler, str_);
+        // SectionWriter void_writer = transpiler[Section::Void];
+        transpiler.require_definition(str_);
     }
     if (type->dyn_cast<StructType>()) {
-        transpiler << GlobalMemory::format_view(
+        cursor << GlobalMemory::format_view(
             "$structural_{}", transpiler.state_.structurals.at(type->cast<StructType>())
         );
     } else {
-        transpiler << str_;
+        cursor << str_;
     }
 }
 
 template <typename Op>
-inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "(" << left_ << " " << OperatorCodeToString(Op::opcode) << " " << right_ << ")";
+inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << "(";
+    left_->transpile(transpiler, cursor);
+    cursor << " " << OperatorCodeToString(Op::opcode) << " ";
+    right_->transpile(transpiler, cursor);
+    cursor << ")";
 }
 
 template <typename Op>
-inline void ASTUnaryOp<Op>::transpile(Transpiler& transpiler) const noexcept {
+inline void ASTUnaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     /// TODO: handle prefix/postfix
-    transpiler << "(" << OperatorCodeToString(Op::opcode) << expr_ << ")";
+    cursor << "(" << OperatorCodeToString(Op::opcode);
+    expr_->transpile(transpiler, cursor);
+    cursor << ")";
 }
 
-inline void ASTFunctionCall::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << function_ << "(";
+inline void ASTFunctionCall::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    function_->transpile(transpiler, cursor);
+    cursor << "(";
     const char* sep = "";
     for (const auto& arg : arguments_) {
-        transpiler << sep;
-        arg->transpile(transpiler);
+        cursor << sep;
+        arg->transpile(transpiler, cursor);
         sep = ", ";
     }
-    transpiler << ")";
+    cursor << ")";
 }
 
-inline void ASTPrimitiveType::transpile(Transpiler& transpiler) const noexcept {
-    type_->transpile(transpiler);
+inline void ASTPrimitiveType::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    type_->transpile(cursor);
 }
 
-inline void ASTFunctionType::transpile(Transpiler& transpiler) const noexcept {
+inline void ASTFunctionType::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     TypeResolution func_type;
     eval_type(transpiler.checker(), func_type);
-    func_type->transpile(transpiler);
+    func_type->transpile(cursor);
 }
 
-inline void ASTFieldDeclaration::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << type_ << " " << identifier_ << ";";
+inline void ASTFieldDeclaration::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    type_->transpile(transpiler, cursor);
+    cursor << " " << identifier_ << ";";
 }
 
-inline void ASTStructType::transpile(Transpiler& transpiler) const noexcept {
+inline void ASTStructType::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     TypeResolution struct_type;
     eval_type(transpiler.checker(), struct_type);
-    auto [it, inserted] = transpiler.state_.structurals.insert(
-        {static_cast<const StructType*>(struct_type), 0}
-    );
+    auto [it, inserted] =
+        transpiler.state_.structurals.insert({static_cast<const StructType*>(struct_type), 0});
     if (inserted) {
         it->second = transpiler.state_.structurals.size();
     }
     GlobalMemory::String struct_name = GlobalMemory::format("$structural_{}", it->second);
-    transpiler << struct_name;
+    cursor << struct_name;
 
     // Insert structural definition if not defined yet
     if (inserted) {
-        transpiler[Section::StructuralDeclarations] << "struct " << struct_name << ";\n";
-        SectionWriter def_writer = transpiler[Section::Main];
-        def_writer << "struct " << struct_name << " {" << SectionWriter::indent
-                   << SectionWriter::newline;
+        transpiler.section(Section::StructuralDeclarations) << "struct " << struct_name << ";\n";
+        Cursor def_cursor = cursor;
+        def_cursor << "struct " << struct_name << " {";
         bool prev_state = std::exchange(transpiler.state_.mangle_structural_identifiers, true);
         for (const auto& field : fields_) {
-            def_writer << field << SectionWriter::newline;
+            Cursor field_cursor = def_cursor.open_child(field);
+            field->transpile(transpiler, field_cursor);
         }
         transpiler.state_.mangle_structural_identifiers = prev_state;
-        def_writer << SectionWriter::dedent << "};" << SectionWriter::newline
-                   << SectionWriter::newline;
+        def_cursor.commit() << "};";
     }
 }
 
-inline void ASTReferenceExpr::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << expr_ << (is_mutable_ ? "" : " const") << "*";
+inline void ASTReferenceExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    expr_->transpile(transpiler, cursor);
+    cursor << (is_mutable_ ? "" : " const") << "*";
 }
 
-inline void ASTExpressionStatement::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << expr_ << ";" << SectionWriter::newline;
+inline void ASTExpressionStatement::transpile(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    expr_->transpile(transpiler, cursor);
+    cursor << ";";
 }
 
-inline void ASTDeclaration::transpile(Transpiler& transpiler) const noexcept {
+inline void ASTDeclaration::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     if (is_constant_) {
-        transpiler << "constexpr ";
+        cursor << "constexpr ";
     } else if (!is_mutable_) {
-        transpiler << "const ";
+        cursor << "const ";
     }
     if (type_) {
-        transpiler << type_;
+        type_->transpile(transpiler, cursor);
     } else {
-        transpiler << expr_->eval_term(transpiler.checker(), nullptr, false).effective_type();
+        expr_->eval_term(transpiler.checker(), nullptr, false).effective_type()->transpile(cursor);
     }
-    transpiler << " " << identifier_ << " = " << expr_ << ";" << SectionWriter::newline;
+    cursor << " " << identifier_ << " = ";
+    expr_->transpile(transpiler, cursor);
+    cursor << ";";
 }
 
-inline void ASTTypeAlias::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "using " << identifier_ << " = " << type_ << ";" << SectionWriter::newline;
+inline void ASTTypeAlias::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << "using " << identifier_ << " = ";
+    type_->transpile(transpiler, cursor);
+    cursor << ";";
 }
 
-inline void ASTIfStatement::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "if (" << condition_ << ") {" << SectionWriter::indent << SectionWriter::newline;
+inline void ASTIfStatement::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << "if (";
+    condition_->transpile(transpiler, cursor);
+    cursor << ") {";
     transpiler.checker().enter(&if_block_);
+    Cursor then_cursor = cursor.open_child(this);
     for (const auto& stmt : if_block_) {
-        stmt->transpile(transpiler);
+        stmt->transpile(transpiler, then_cursor);
+        then_cursor.commit();
     }
+    then_cursor.commit();
     transpiler.checker().exit();
-    transpiler << SectionWriter::dedent << "}" << SectionWriter::newline;
+    cursor << "}";
     if (!else_block_.empty()) {
-        transpiler << "else {" << SectionWriter::indent << SectionWriter::newline;
+        cursor << "else {";
         transpiler.checker().enter(&else_block_);
+        Cursor else_cursor = cursor.open_child(this);
         for (const auto& stmt : else_block_) {
-            stmt->transpile(transpiler);
+            stmt->transpile(transpiler, else_cursor);
         }
         transpiler.checker().exit();
-        transpiler << SectionWriter::dedent << "}" << SectionWriter::newline;
+        else_cursor.commit();
+        cursor << "}";
     }
 }
 
-inline void ASTForStatement::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "for (" << initializer_ << "; " << condition_ << "; " << increment_ << ") {"
-               << SectionWriter::indent << SectionWriter::newline;
+inline void ASTForStatement::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << "for (";
+    initializer_->transpile(transpiler, cursor);
+    cursor << "; ";
+    condition_->transpile(transpiler, cursor);
+    cursor << "; ";
+    increment_->transpile(transpiler, cursor);
+    cursor << ") {";
     transpiler.checker().enter(&body_);
+    Cursor local_cursor = cursor.open_child(this);
     for (const auto& stmt : body_) {
-        stmt->transpile(transpiler);
+        stmt->transpile(transpiler, local_cursor);
+        local_cursor.commit();
     }
     transpiler.checker().exit();
-    transpiler << SectionWriter::dedent << "}" << SectionWriter::newline;
+    cursor << "}";
 }
 
-inline void ASTBreakStatement::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "break;" << SectionWriter::newline;
+inline void ASTBreakStatement::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << "break;";
 }
 
-inline void ASTContinueStatement::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "continue;" << SectionWriter::newline;
+inline void ASTContinueStatement::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << "continue;";
 }
 
-inline void ASTReturnStatement::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "return";
+inline void ASTReturnStatement::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << "return";
     if (expr_) {
-        transpiler << " " << expr_;
+        cursor << " ";
+        expr_->transpile(transpiler, cursor);
     }
-    transpiler << ";" << SectionWriter::newline;
+    cursor << ";";
 }
 
-inline void ASTFunctionParameter::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << type_ << " " << identifier_;
+inline void ASTFunctionParameter::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    type_->transpile(transpiler, cursor);
+    cursor << " " << identifier_;
 }
 
-inline void ASTFunctionDefinition::transpile(Transpiler& transpiler) const noexcept {
+inline void ASTFunctionDefinition::transpile(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
     bool is_main = transpiler.checker().is_at_top_level() && identifier_ == "main";
     bool will_mangle = !is_main && is_static_;
 
     if (!is_main) {
-        transpiler << return_type_ << (will_mangle ? " $" : " ") << identifier_ << "(";
+        return_type_->transpile(transpiler, cursor);
+        cursor << (will_mangle ? " $" : " ") << identifier_ << "(";
         const char* sep = "";
         for (const auto& param : parameters_) {
-            transpiler << sep << param;
+            param->transpile(transpiler, cursor);
+            cursor << sep;
             sep = ", ";
         }
-        transpiler << ");" << SectionWriter::newline;
+        cursor << ");";
 
         if (is_static_ && transpiler.state_.niebloids.insert(identifier_).second) {
-            transpiler << "constexpr auto " << identifier_ << " = [](auto&&... args) { return $"
-                       << identifier_ << "(std::forward<decltype(args)>(args)...); };"
-                       << SectionWriter::newline;
+            cursor << "constexpr auto " << identifier_ << " = [](auto&&... args) { return $"
+                   << identifier_ << "(std::forward<decltype(args)>(args)...); };";
         }
     }
 
-    SectionWriter def_writer = transpiler[Section::Implementation];
+    Cursor def_cursor = transpiler.section(Section::Implementation);
     if (is_main) {
-        def_writer << "// NOLINTNEXTLINE(misc-definitions-in-headers)" << SectionWriter::newline;
+        def_cursor << "// NOLINTNEXTLINE(misc-definitions-in-headers)";
+        def_cursor.commit();
     } else {
-        def_writer << "inline ";
+        def_cursor << "inline ";
     }
 
-    def_writer << return_type_ << " " << (will_mangle ? "$" : "") << identifier_ << "(";
+    return_type_->transpile(transpiler, def_cursor);
+    def_cursor << " " << (will_mangle ? "$" : "") << identifier_ << "(";
     const char* sep = "";
     for (const auto& param : parameters_) {
-        def_writer << sep << param;
+        param->transpile(transpiler, def_cursor);
+        def_cursor << sep;
         sep = ", ";
     }
-    def_writer << ") {" << SectionWriter::indent << SectionWriter::newline;
+    def_cursor << ") {";
     transpiler.checker().enter(&body_);
+    Cursor local_def_cursor = def_cursor.open_child(&body_);
     for (const auto& stmt : body_) {
-        def_writer << stmt;
+        stmt->transpile(transpiler, local_def_cursor);
     }
-    def_writer << SectionWriter::dedent << "}" << SectionWriter::newline << SectionWriter::newline;
+    def_cursor << "}";
     transpiler.checker().exit();
 }
 
-inline void ASTClassDefinition::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "struct " << identifier_ << " {" << SectionWriter::indent
-               << SectionWriter::newline;
+inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << "struct " << identifier_ << " {";
 
     transpiler.checker().enter(this);
     transpiler.checker().enter(&identifier_);
+    Cursor local_cursor = cursor.open_child(this);
     for (const auto& field : fields_) {
-        field->transpile(transpiler);
-        transpiler << SectionWriter::newline;
+        field->transpile(transpiler, local_cursor);
+        local_cursor.commit();
     }
     transpiler.checker().exit();
     for (const auto& func : functions_) {
         if (!func->is_static_) {
             transpiler.checker().enter(&identifier_);
         }
-        func->transpile(transpiler);
-        transpiler << SectionWriter::newline;
+        func->transpile(transpiler, local_cursor);
+        local_cursor.commit();
         if (!func->is_static_) {
             transpiler.checker().exit();
         }
     }
     transpiler.checker().exit();
 
-    transpiler << SectionWriter::dedent << "};" << SectionWriter::newline;
+    cursor << "};";
 }
 
-inline void ASTNamespaceDefinition::transpile(Transpiler& transpiler) const noexcept {
-    transpiler << "namespace " << identifier_ << " {" << SectionWriter::indent
-               << SectionWriter::newline;
+inline void ASTNamespaceDefinition::transpile(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    cursor << "namespace " << identifier_ << " {";
     transpiler.checker().enter(this);
+    Cursor local_cursor = cursor.open_child(this);
     for (const auto& item : items_) {
-        item->transpile(transpiler);
+        item->transpile(transpiler, local_cursor);
+        local_cursor.commit();
     }
     transpiler.checker().exit();
-}
-
-inline SectionWriter::SectionWriter(Transpiler& transpiler, GlobalMemory::String& target) noexcept
-    : transpiler_(transpiler), target_(target) {
-    previous_ = std::exchange(transpiler.current_, this);
-    buffer_.reserve(256);
-}
-
-inline SectionWriter::~SectionWriter() noexcept {
-    target_ += buffer_;
-    transpiler_.current_ = previous_;
 }

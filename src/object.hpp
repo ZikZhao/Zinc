@@ -22,6 +22,7 @@ enum class Kind : std::uint16_t {
 };
 
 class Transpiler;
+class Cursor;
 
 class TypeRegistry;
 
@@ -421,7 +422,7 @@ public:
 
     virtual std::string_view repr() const = 0;
 
-    virtual void transpile(Transpiler& transpiler) const noexcept = 0;
+    virtual void transpile(Cursor& cursor) const noexcept = 0;
 };
 
 class Type : public Object {
@@ -490,7 +491,7 @@ private:
 public:
     std::string_view repr() const final { return "unknown"; }
     bool assignable_from_impl(const Type* source) const final { return true; }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class AnyType final : public PrimitiveType {
@@ -502,7 +503,7 @@ public:
     AnyType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "any"; }
     bool assignable_from_impl(const Type* source) const final { return true; }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class NullType final : public PrimitiveType {
@@ -517,7 +518,7 @@ public:
         /// No variable can have null type except null literal
         UNREACHABLE();
     }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class IntegerType final : public PrimitiveType {
@@ -550,7 +551,7 @@ public:
         return other_int && (other_int->bits_ == 0 || (this->is_signed_ == other_int->is_signed_ &&
                                                        this->bits_ >= other_int->bits_));
     }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class FloatType final : public PrimitiveType {
@@ -572,7 +573,7 @@ public:
         const FloatType* other_float = source->dyn_cast<FloatType>();
         return other_float && (other_float->bits_ == 0 || this->bits_ >= other_float->bits_);
     }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class BooleanType final : public PrimitiveType {
@@ -586,7 +587,7 @@ public:
     bool assignable_from_impl(const Type* source) const final {
         return source->dyn_cast<BooleanType>() != nullptr;
     }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class FunctionType final : public Type {
@@ -621,7 +622,7 @@ public:
         return !has_incomplete_child;
     }
 
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 
 protected:
     std::strong_ordering compare_congruent_impl(
@@ -663,7 +664,7 @@ public:
         return graph.check_dependency(this, element_type_);
     }
 
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 
 protected:
     std::strong_ordering compare_congruent_impl(
@@ -709,7 +710,7 @@ public:
         return !has_incomplete_child;
     }
 
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 
 protected:
     std::strong_ordering compare_congruent_impl(
@@ -770,7 +771,7 @@ public:
         return true;
     }
 
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 
 protected:
     std::strong_ordering compare_congruent_impl(
@@ -838,7 +839,7 @@ public:
         return it->second;
     }
 
-    void transpile(Transpiler& transpiler) const noexcept override;
+    void transpile(Cursor& cursor) const noexcept override;
 
 protected:
     std::strong_ordering compare_congruent_impl(
@@ -903,7 +904,7 @@ public:
         return true;
     }
 
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 
 protected:
     std::strong_ordering compare_congruent_impl(
@@ -999,7 +1000,7 @@ public:
         return true;
     }
 
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 
 protected:
     std::strong_ordering compare_congruent_impl(
@@ -1062,7 +1063,7 @@ public:
         return !graph.is_dependent(this) && graph.check_dependency(this, referenced_type_);
     }
 
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 
 protected:
     std::strong_ordering compare_congruent_impl(
@@ -1154,7 +1155,7 @@ private:
     UnknownValue* clone() const noexcept final { return new UnknownValue(*this); }
     UnknownValue* resolve_to(const Type* target) const noexcept final { return new UnknownValue(); }
     void assign_from(Value* source) final { UNREACHABLE(); }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class NullValue final : public Value {
@@ -1174,7 +1175,7 @@ public:
         return new NullValue();
     }
     void assign_from(Value* source) final { UNREACHABLE(); }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class IntegerValue final : public Value {
@@ -1276,7 +1277,7 @@ public:
         IntegerValue* int_source = source->cast<IntegerValue>();
         this->value_ = int_source->value_;
     }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class FloatValue final : public Value {
@@ -1324,7 +1325,7 @@ public:
         FloatValue* float_source = source->cast<FloatValue>();
         this->value_ = float_source->value_;
     }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class BooleanValue final : public Value {
@@ -1349,7 +1350,7 @@ public:
         BooleanValue* bool_source = source->cast<BooleanValue>();
         this->value_ = bool_source->value_;
     }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class FunctionValue final : public Value {
@@ -1372,7 +1373,7 @@ public:
     FunctionValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
     void assign_from(Value* source) final { UNREACHABLE(); }
     Term invoke(ComparableSpan<Term> args) const { return callback_(args); }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class ArrayValue final : public Value {
@@ -1423,7 +1424,7 @@ public:
         /// TODO: implement
         UNREACHABLE();
     }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class InstanceValue final : public Value {
@@ -1459,7 +1460,7 @@ public:
         this->attributes_ = instance_source->attributes_;
     }
     Value* get_attr(std::string_view attr) noexcept { return attributes_.at(attr); }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 class ReferenceValue final : public Value {
@@ -1488,7 +1489,7 @@ public:
         ReferenceValue* ref_source = source->cast<ReferenceValue>();
         referenced_value_ = ref_source->referenced_value_;
     }
-    void transpile(Transpiler& transpiler) const noexcept final;
+    void transpile(Cursor& cursor) const noexcept final;
 };
 
 inline bool TypeRegistry::TypeComparator::operator()(

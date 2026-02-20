@@ -101,8 +101,9 @@ TEST_F(TypeInterningTest, VerticalCongruenceIsRespected) {
     TypeRegistry::get_at<StructType>(a, std::move(fields_a));
 
     // Simplify to A -> &A -> A
-    EXPECT_EQ(a, a->cast<StructType>()->fields_.at("a")->cast<ReferenceType>()->referenced_type_)
-        << "Inner reference type should point to the interned struct type";
+    EXPECT_EQ(
+        a->cast<StructType>()->fields_.at("a")->cast<ReferenceType>()->referenced_type_, a.get()
+    ) << "Inner reference type should point to the interned struct type";
 }
 
 TEST_F(TypeInterningTest, HorizontalCongruenceIsRespected) {
@@ -287,17 +288,6 @@ TEST_F(TypeInterningTest, InterningBetweenBisimilarGraphsAtDifferenceRoot) {
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_d{{"a", d_ref_e}};
     TypeRegistry::get_at<StructType>(d, std::move(fields_d));
 
-    // EXPECT_EQ(
-    //     a->cast<StructType>()
-    //         ->fields_.at("b")
-    //         ->cast<ReferenceType>()
-    //         ->referenced_type_->cast<StructType>()
-    //         ->fields_.at("c")
-    //         ->cast<ReferenceType>()
-    //         ->referenced_type_,
-    //     d.get()
-    // ) << "Bisimilar types should be interned even if their roots are not identical";
-    GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
     EXPECT_EQ(
         a->cast<StructType>()
             ->fields_.at("b")
@@ -305,7 +295,7 @@ TEST_F(TypeInterningTest, InterningBetweenBisimilarGraphsAtDifferenceRoot) {
             ->referenced_type_->cast<StructType>()
             ->fields_.at("c")
             ->cast<ReferenceType>()
-            ->referenced_type_->compare_congruent(d, assumed_equal),
-        std::strong_ordering::equal
-    ) << "Bisimilar types should be congruent even if their roots are not identical";
+            ->referenced_type_,
+        d.get()
+    ) << "Bisimilar types should be interned even if their roots are not identical";
 }
