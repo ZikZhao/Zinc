@@ -9,12 +9,13 @@
 
 /// TODO: put is_type_context in transpiler.state
 
+inline constexpr std::string_view no_lint_pragma = "// NOLINTNEXTLINE(misc-definitions-in-headers)";
+
 enum class Section {
     Includes,
     StructuralDeclarations,
     Main,
     Implementation,
-    Void,
     __len__,
 };
 
@@ -22,10 +23,13 @@ class BufferTree {
 public:
     struct Node : public GlobalMemory::MemoryManaged {
         GlobalMemory::String content;
-        GlobalMemory::Vector<Node*> children;
+        GlobalMemory::Vector<const Node*> children;
         const void* scope;
         Node* parent;
     };
+
+public:
+    static inline const Node newline{.content = "", .scope = nullptr, .parent = nullptr};
 
 private:
     Node* root_;
@@ -94,7 +98,7 @@ public:
     }
 
     Cursor& commit() noexcept {
-        if (target_->parent) {
+        if (!target_->content.empty()) {
             target_->parent->children.push_back(target_);
             target_ = new Node{.scope = nullptr, .parent = target_->parent};
         }
@@ -106,6 +110,21 @@ public:
         Node* new_child = new Node{.scope = nullptr, .parent = target_};
         tree_.add(scope, target_);
         return Cursor(tree_, *new_child);
+    }
+
+    Cursor& newline() noexcept {
+        assert(target_->content.empty());
+        target_->parent->children.push_back(&BufferTree::newline);
+        return *this;
+    }
+
+    Cursor& collapse(std::string_view trailing) noexcept {
+        if (target_->children.empty()) {
+            *this << trailing;
+        } else {
+            commit() << trailing;
+        }
+        return *this;
     }
 
     void clear() noexcept { target_->content.clear(); }
@@ -175,7 +194,7 @@ private:
         for (const BufferTree::Node* child : tree.root().children) {
             os << sep;
             output(os, *child, 0);
-            sep = "\n\n";
+            sep = (child->children.size() == 0 && child->content != no_lint_pragma) ? "\n\n" : "\n";
         }
     }
 
@@ -482,7 +501,7 @@ inline void ASTStructType::transpile(Transpiler& transpiler, Cursor& cursor) con
 
     // Insert structural definition if not defined yet
     if (inserted) {
-        transpiler.section(Section::StructuralDeclarations) << "struct " << struct_name << ";\n";
+        transpiler.section(Section::StructuralDeclarations) << "struct " << struct_name << ";";
         Cursor def_cursor = cursor;
         def_cursor << "struct " << struct_name << " {";
         bool prev_state = std::exchange(transpiler.state_.mangle_structural_identifiers, true);
@@ -491,7 +510,7 @@ inline void ASTStructType::transpile(Transpiler& transpiler, Cursor& cursor) con
             field->transpile(transpiler, field_cursor);
         }
         transpiler.state_.mangle_structural_identifiers = prev_state;
-        def_cursor.commit() << "};";
+        def_cursor.collapse("};");
     }
 }
 
@@ -620,7 +639,7 @@ inline void ASTFunctionDefinition::transpile(
 
     Cursor def_cursor = transpiler.section(Section::Implementation);
     if (is_main) {
-        def_cursor << "// NOLINTNEXTLINE(misc-definitions-in-headers)";
+        def_cursor << no_lint_pragma;
         def_cursor.commit();
     } else {
         def_cursor << "inline ";
@@ -636,11 +655,12 @@ inline void ASTFunctionDefinition::transpile(
     }
     def_cursor << ") {";
     transpiler.checker().enter(&body_);
-    Cursor local_def_cursor = def_cursor.open_child(&body_);
     for (const auto& stmt : body_) {
-        stmt->transpile(transpiler, local_def_cursor);
+        Cursor stmt_cursor = def_cursor.open_child(&body_);
+        stmt->transpile(transpiler, stmt_cursor);
+        stmt_cursor.commit();
     }
-    def_cursor << "}";
+    def_cursor.collapse("}");
     transpiler.checker().exit();
 }
 
