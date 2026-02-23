@@ -31,7 +31,7 @@ TEST_F(TypeInterningTest, CoinductionComparisonWorks) {
     a.construct<StructType>(std::move(fields_a));
 
     GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
-    EXPECT_EQ(a->compare_congruent(a, assumed_equal), std::strong_ordering::equal)
+    EXPECT_EQ(a->compare(a, assumed_equal), std::strong_ordering::equal)
         << "Coinductively defined type should be equal to itself";
 }
 

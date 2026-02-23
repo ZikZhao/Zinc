@@ -514,7 +514,7 @@ inline void ASTStructType::transpile(Transpiler& transpiler, Cursor& cursor) con
     }
 }
 
-inline void ASTReferenceExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+inline void ASTReferenceTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     expr_->transpile(transpiler, cursor);
     cursor << (is_mutable_ ? "" : " const") << "*";
 }
@@ -553,24 +553,21 @@ inline void ASTIfStatement::transpile(Transpiler& transpiler, Cursor& cursor) co
     condition_->transpile(transpiler, cursor);
     cursor << ") {";
     transpiler.checker().enter(&if_block_);
-    Cursor then_cursor = cursor.open_child(this);
     for (const auto& stmt : if_block_) {
+        Cursor then_cursor = cursor.open_child(this);
         stmt->transpile(transpiler, then_cursor);
-        then_cursor.commit();
     }
-    then_cursor.commit();
     transpiler.checker().exit();
-    cursor << "}";
+    cursor.commit() << "}";
     if (!else_block_.empty()) {
-        cursor << "else {";
+        cursor << " else {";
         transpiler.checker().enter(&else_block_);
-        Cursor else_cursor = cursor.open_child(this);
         for (const auto& stmt : else_block_) {
+            Cursor else_cursor = cursor.open_child(this);
             stmt->transpile(transpiler, else_cursor);
         }
         transpiler.checker().exit();
-        else_cursor.commit();
-        cursor << "}";
+        cursor.commit() << "}";
     }
 }
 
@@ -619,21 +616,25 @@ inline void ASTFunctionDefinition::transpile(
 ) const noexcept {
     bool is_main = transpiler.checker().is_at_top_level() && identifier_ == "main";
     bool will_mangle = !is_main && is_static_;
+    GlobalMemory::String scoped_identifier = GlobalMemory::format(
+        "{}{}{}", transpiler.checker().current_scope()->prefix_, will_mangle ? "$" : "", identifier_
+    );
 
     if (!is_main) {
         return_type_->transpile(transpiler, cursor);
         cursor << (will_mangle ? " $" : " ") << identifier_ << "(";
         const char* sep = "";
         for (const auto& param : parameters_) {
-            param->transpile(transpiler, cursor);
             cursor << sep;
+            param->transpile(transpiler, cursor);
             sep = ", ";
         }
         cursor << ");";
 
         if (is_static_ && transpiler.state_.niebloids.insert(identifier_).second) {
-            cursor << "constexpr auto " << identifier_ << " = [](auto&&... args) { return $"
-                   << identifier_ << "(std::forward<decltype(args)>(args)...); };";
+            cursor.commit() << "constexpr auto " << identifier_
+                            << " = [](auto&&... args) { return $" << identifier_
+                            << "(std::forward<decltype(args)>(args)...); };";
         }
     }
 
@@ -646,11 +647,11 @@ inline void ASTFunctionDefinition::transpile(
     }
 
     return_type_->transpile(transpiler, def_cursor);
-    def_cursor << " " << (will_mangle ? "$" : "") << identifier_ << "(";
+    def_cursor << " " << scoped_identifier << "(";
     const char* sep = "";
     for (const auto& param : parameters_) {
-        param->transpile(transpiler, def_cursor);
         def_cursor << sep;
+        param->transpile(transpiler, def_cursor);
         sep = ", ";
     }
     def_cursor << ") {";
@@ -669,25 +670,23 @@ inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor
 
     transpiler.checker().enter(this);
     transpiler.checker().enter(&identifier_);
-    Cursor local_cursor = cursor.open_child(this);
     for (const auto& field : fields_) {
+        Cursor local_cursor = cursor.open_child(this);
         field->transpile(transpiler, local_cursor);
-        local_cursor.commit();
     }
     transpiler.checker().exit();
     for (const auto& func : functions_) {
         if (!func->is_static_) {
             transpiler.checker().enter(&identifier_);
         }
+        Cursor local_cursor = cursor.open_child(this);
         func->transpile(transpiler, local_cursor);
-        local_cursor.commit();
         if (!func->is_static_) {
             transpiler.checker().exit();
         }
     }
     transpiler.checker().exit();
-
-    cursor << "};";
+    cursor.commit() << "};";
 }
 
 inline void ASTNamespaceDefinition::transpile(

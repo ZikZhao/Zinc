@@ -136,9 +136,10 @@ expr:
 	| identifier_ = identifier	# IdentifierExpr
 	| func_ = identifier OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
-	)? OP_RPAREN								# CallExpr
-	| OP_BITAND KW_MUT? inner_expr_ = expr		# RefExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr;
+	)? OP_RPAREN									# CallExpr
+	| OP_BITAND KW_MUT? inner_expr_ = expr			# AddressOfExpr
+	| target_ = expr OP_DOT member_ = identifier	# MemberAccessExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN		# ParenExpr;
 
 identifier: name_ = T_IDENTIFIER;
 
@@ -166,7 +167,11 @@ type:
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
-	| OP_BITAND KW_MUT? inner_type_ = type			# RefType
+	| inner_type_ = type OP_BITAND					# RefType
+	| KW_MUT inner_type_ = type OP_BITAND			# MutRefType
+	| inner_type_ = type OP_MUL						# PointerType
+	| KW_MUT inner_type_ = type OP_MUL				# MutPointerType
+	| inner_type_ = type OP_QUESTION				# OptionalType
 	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
 
 field_declaration:

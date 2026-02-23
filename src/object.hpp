@@ -15,13 +15,14 @@ enum class Kind : std::uint16_t {
     Struct,
     Interface,
     Instance,
+    Mut,
+    Reference,
+    Pointer,
     Intersection,
     Union,
-    Reference,
     Template,
 };
 
-class Transpiler;
 class Cursor;
 
 class TypeRegistry;
@@ -38,12 +39,13 @@ class BooleanType;
 class FunctionType;
 class ArrayType;
 class StructType;
-class StructType;
 class InterfaceType;
 class ClassType;
+class MutType;
+class ReferenceType;
+class PointerType;
 class IntersectionType;
 class UnionType;
-class ReferenceType;
 
 class Value;
 class UnknownValue;
@@ -143,8 +145,7 @@ class TypeResolution final {
     friend class TypeRegistry;
 
 private:
-    /// Indicates whether the type is sized (i.e., fully constructed) or unsized (i.e., under
-    /// construction).
+    /// Indicates whether the type is complete
     static constexpr std::uintptr_t flag = 1;
 
 private:
@@ -212,10 +213,12 @@ public:
             FunctionType,
             ArrayType,
             StructType,
-            IntersectionType,
-            UnionType,
             ClassType,
-            ReferenceType>;
+            MutType,
+            ReferenceType,
+            PointerType,
+            IntersectionType,
+            UnionType>;
         if constexpr (std::is_same_v<T, ClassType>) {
             // classes with same definition are distinct types
             out = new T(std::forward<decltype(args)>(args)...);
@@ -261,12 +264,13 @@ private:
         TypeSet<FunctionType>,
         TypeSet<ArrayType>,
         TypeSet<StructType>,
+        TypeSet<MutType>,
+        TypeSet<ReferenceType>,
+        TypeSet<PointerType>,
         TypeSet<IntersectionType>,
-        TypeSet<UnionType>,
-        TypeSet<ReferenceType>>
+        TypeSet<UnionType>>
         types_;
     GlobalMemory::FlatMap<std::type_index, Type*> builtin_types_;
-    GlobalMemory::FlatSet<const Type*> circular_types_;
 
 private:
     template <TypeClass T>
@@ -296,10 +300,10 @@ public:
 class Term : public GlobalMemory::MemoryManaged {
 public:
     enum class Category {
-        CompConst,   // a compile-time constant value -> const Value*
+        Type,        // a type -> const Type*
+        CompConst,   // a compile-time constant value -> Value*
         CompVar,     // a compile-time variable -> Value*
-        CompRValue,  // a compile-time temporary value -> const Value*
-        Immutable,   // a runtime constant value -> const Type*
+        CompRValue,  // a compile-time temporary value -> Value*
         Var,         // a runtime variable -> const Type*
         RValue,      // a runtime temporary value -> const Type*
     };
@@ -311,20 +315,15 @@ private:
     union {
         const Object* ptr_;
         const Type* type_;
-        const Value* value_;
-        Value* mvalue_;
+        Value* value_;
     };
     Category category_;
 
 public:
     Term(const Type* type, Category category) noexcept : type_(type), category_(category) {
         assert(
-            category == Category::Immutable || category == Category::Var ||
-            category == Category::RValue
+            category == Category::Type || category == Category::Var || category == Category::RValue
         );
-    }
-    Term(const Value* value, Category category) noexcept : value_(value), category_(category) {
-        assert(category == Category::CompConst || category == Category::CompRValue);
     }
     Term(Value* value, Category category) noexcept : value_(value), category_(category) {
         assert(
@@ -335,20 +334,18 @@ public:
 
 public:
     Term() noexcept = default;
+    operator bool() const noexcept { return type_ != nullptr; }
+    const Object* operator->() const noexcept { return ptr_; }
     const Type* effective_type() const noexcept;
+
     bool is_comptime() const noexcept {
         return category_ == Category::CompConst || category_ == Category::CompVar ||
                category_ == Category::CompRValue;
     }
-    bool is_mutable() const noexcept {
+    bool is_lvalue() const noexcept {
         return category_ == Category::CompVar || category_ == Category::Var;
     }
-    const Object* operator->() const noexcept { return ptr_; }
-    Value* comp_var() const noexcept {
-        assert(category_ == Category::CompVar);
-        return mvalue_;
-    }
-    operator bool() const noexcept { return type_ != nullptr; }
+    Value* get_comptime() const noexcept { return is_comptime() ? value_ : nullptr; }
 };
 
 class Object : public GlobalMemory::MemoryManaged {
@@ -435,7 +432,7 @@ public:
 
     virtual bool can_intern(TypeDependencyGraph& graph) noexcept = 0;
 
-    std::strong_ordering compare_congruent(
+    std::strong_ordering compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept {
         if (this == other) {
@@ -448,7 +445,7 @@ public:
             return std::strong_ordering::equal;
         }
         assumed_equal.insert(std::minmax(this, other));
-        return compare_congruent_impl(other, assumed_equal);
+        return compare_impl(other, assumed_equal);
     }
 
     bool assignable_from(const Type* source) const {
@@ -456,8 +453,10 @@ public:
         return this == source || assignable_from_impl(source);
     }
 
+    virtual const Type* member(std::string_view name) const noexcept { return nullptr; }
+
 protected:
-    virtual std::strong_ordering compare_congruent_impl(
+    virtual std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept = 0;
 
@@ -470,7 +469,7 @@ protected:
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final { return true; }
 
-    std::strong_ordering compare_congruent_impl(
+    std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         return this <=> other;
@@ -625,7 +624,7 @@ public:
     void transpile(Cursor& cursor) const noexcept final;
 
 protected:
-    std::strong_ordering compare_congruent_impl(
+    std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const FunctionType* other_func = other->cast<FunctionType>();
@@ -633,13 +632,13 @@ protected:
             return parameters_.size() <=> other_func->parameters_.size();
         }
         for (std::size_t i = 0; i < parameters_.size(); ++i) {
-            auto cmp = parameters_[i]->compare_congruent(other_func->parameters_[i], assumed_equal);
+            auto cmp = parameters_[i]->compare(other_func->parameters_[i], assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
             }
         }
         assumed_equal.insert({return_type_, other_func->return_type_});
-        return return_type_->compare_congruent(other_func->return_type_, assumed_equal);
+        return return_type_->compare(other_func->return_type_, assumed_equal);
     }
 
     bool assignable_from_impl(const Type* source) const final;
@@ -667,14 +666,14 @@ public:
     void transpile(Cursor& cursor) const noexcept final;
 
 protected:
-    std::strong_ordering compare_congruent_impl(
+    std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const ArrayType* other_array = other->cast<ArrayType>();
         if (size_ != other_array->size_) {
             return size_ <=> other_array->size_;
         }
-        return element_type_->compare_congruent(other_array->element_type_, assumed_equal);
+        return element_type_->compare(other_array->element_type_, assumed_equal);
     }
 
     bool assignable_from_impl(const Type* source) const final {
@@ -712,8 +711,16 @@ public:
 
     void transpile(Cursor& cursor) const noexcept final;
 
+    const Type* member(std::string_view name) const noexcept final {
+        auto it = fields_.find(name);
+        if (it == fields_.end()) {
+            return nullptr;
+        }
+        return it->second;
+    }
+
 protected:
-    std::strong_ordering compare_congruent_impl(
+    std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const StructType* other_struct = other->cast<StructType>();
@@ -726,7 +733,7 @@ protected:
             if (it1->first != it2->first) {
                 return it1->first <=> it2->first;
             }
-            auto cmp = it1->second->compare_congruent(it2->second, assumed_equal);
+            auto cmp = it1->second->compare(it2->second, assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
             }
@@ -774,7 +781,7 @@ public:
     void transpile(Cursor& cursor) const noexcept final;
 
 protected:
-    std::strong_ordering compare_congruent_impl(
+    std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         /// TODO:
@@ -792,6 +799,7 @@ public:
     static constexpr Kind kind = Kind::Instance;
 
 private:
+    const void* scope_;
     std::string_view identifier_;
     const Type* extends_;
     ComparableSpan<const Type*> implements_;
@@ -800,6 +808,7 @@ private:
 
 public:
     ClassType(
+        const void* scope,
         std::string_view identifier,
         const Type* extends,
         ComparableSpan<const Type*> interfaces,
@@ -807,6 +816,7 @@ public:
         GlobalMemory::FlatMap<std::string_view, FunctionOverloads> methods
     ) noexcept
         : Type(kind),
+          scope_(scope),
           identifier_(identifier),
           extends_(extends),
           implements_(interfaces),
@@ -842,13 +852,133 @@ public:
     void transpile(Cursor& cursor) const noexcept override;
 
 protected:
-    std::strong_ordering compare_congruent_impl(
+    std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         UNREACHABLE();
     }
 
     bool assignable_from_impl(const Type* other) const final { return false; }
+};
+
+class MutType final : public Type {
+public:
+    static constexpr Kind kind = Kind::Mut;
+
+public:
+    const Type* target_type_;
+
+public:
+    MutType(const Type* target_type) noexcept : Type(kind), target_type_(target_type) {}
+
+    std::string_view repr() const final {
+        return GlobalMemory::format_view("mut {}", target_type_->repr());
+    }
+
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        return graph.check_dependency(this, target_type_);
+    }
+
+    void transpile(Cursor& cursor) const noexcept final;
+
+protected:
+    std::strong_ordering compare_impl(
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const MutType* other_mut = other->cast<MutType>();
+        return target_type_->compare(other_mut->target_type_, assumed_equal);
+    }
+
+    bool assignable_from_impl(const Type* source) const final {
+        const MutType* other_mut = source->dyn_cast<MutType>();
+        return other_mut && target_type_->assignable_from(other_mut->target_type_);
+    }
+};
+
+class ReferenceType final : public Type {
+public:
+    static constexpr Kind kind = Kind::Reference;
+
+public:
+    const Type* referenced_type_;
+    bool is_mutable_;
+
+public:
+    ReferenceType(const Type* referenced_type, bool is_mutable) noexcept
+        : Type(kind), referenced_type_(referenced_type), is_mutable_(is_mutable) {}
+    std::string_view repr() const final {
+        return GlobalMemory::format_view(
+            "&{}{}", is_mutable_ ? "mut " : "", referenced_type_->repr()
+        );
+    }
+
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        return !graph.is_dependent(this) && graph.check_dependency(this, referenced_type_);
+    }
+
+    const Type* member(std::string_view name) const noexcept final {
+        return referenced_type_->member(name);
+    }
+
+    void transpile(Cursor& cursor) const noexcept final;
+
+protected:
+    std::strong_ordering compare_impl(
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const ReferenceType* other_ref = other->cast<ReferenceType>();
+        if (is_mutable_ != other_ref->is_mutable_) {
+            return is_mutable_ <=> other_ref->is_mutable_;
+        }
+        return referenced_type_->compare(other_ref->referenced_type_, assumed_equal);
+    }
+
+    bool assignable_from_impl(const Type* source) const final {
+        const ReferenceType* other_ref = source->dyn_cast<ReferenceType>();
+        return other_ref && referenced_type_->assignable_from(other_ref->referenced_type_);
+    }
+};
+
+class PointerType final : public Type {
+public:
+    static constexpr Kind kind = Kind::Pointer;
+
+public:
+    const Type* pointed_type_;
+    bool is_mutable_;
+
+public:
+    PointerType(const Type* pointed_type, bool is_mutable) noexcept
+        : Type(kind), pointed_type_(pointed_type), is_mutable_(is_mutable) {}
+    std::string_view repr() const final {
+        return GlobalMemory::format_view("*{}{}", is_mutable_ ? "mut " : "", pointed_type_->repr());
+    }
+
+    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        return !graph.is_dependent(this) && graph.check_dependency(this, pointed_type_);
+    }
+
+    const Type* member(std::string_view name) const noexcept final {
+        return pointed_type_->member(name);
+    }
+
+    void transpile(Cursor& cursor) const noexcept final;
+
+protected:
+    std::strong_ordering compare_impl(
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept final {
+        const PointerType* other_ptr = other->cast<PointerType>();
+        if (is_mutable_ != other_ptr->is_mutable_) {
+            return is_mutable_ <=> other_ptr->is_mutable_;
+        }
+        return pointed_type_->compare(other_ptr->pointed_type_, assumed_equal);
+    }
+
+    bool assignable_from_impl(const Type* source) const final {
+        const PointerType* other_ptr = source->dyn_cast<PointerType>();
+        return other_ptr && pointed_type_->assignable_from(other_ptr->pointed_type_);
+    }
 };
 
 class IntersectionType final : public Type {
@@ -907,7 +1037,7 @@ public:
     void transpile(Cursor& cursor) const noexcept final;
 
 protected:
-    std::strong_ordering compare_congruent_impl(
+    std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const IntersectionType* other_intersection = other->cast<IntersectionType>();
@@ -916,7 +1046,7 @@ protected:
         }
         for (std::size_t i = 0; i < types_.size(); ++i) {
             assumed_equal.insert({types_[i], other_intersection->types_[i]});
-            auto cmp = types_[i]->compare_congruent(other_intersection->types_[i], assumed_equal);
+            auto cmp = types_[i]->compare(other_intersection->types_[i], assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
             }
@@ -1003,7 +1133,7 @@ public:
     void transpile(Cursor& cursor) const noexcept final;
 
 protected:
-    std::strong_ordering compare_congruent_impl(
+    std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const UnionType* other_union = other->cast<UnionType>();
@@ -1012,7 +1142,7 @@ protected:
         }
         for (std::size_t i = 0; i < types_.size(); ++i) {
             assumed_equal.insert({types_[i], other_union->types_[i]});
-            auto cmp = types_[i]->compare_congruent(other_union->types_[i], assumed_equal);
+            auto cmp = types_[i]->compare(other_union->types_[i], assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
             }
@@ -1039,46 +1169,6 @@ protected:
             return true;
         }
         return false;
-    }
-};
-
-class ReferenceType final : public Type {
-public:
-    static constexpr Kind kind = Kind::Reference;
-
-public:
-    const Type* referenced_type_;
-    bool is_mutable_;
-
-public:
-    ReferenceType(const Type* referenced_type, bool is_mutable) noexcept
-        : Type(kind), referenced_type_(referenced_type), is_mutable_(is_mutable) {}
-    std::string_view repr() const final {
-        return GlobalMemory::format_view(
-            "&{}{}", is_mutable_ ? "mut " : "", referenced_type_->repr()
-        );
-    }
-
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
-        return !graph.is_dependent(this) && graph.check_dependency(this, referenced_type_);
-    }
-
-    void transpile(Cursor& cursor) const noexcept final;
-
-protected:
-    std::strong_ordering compare_congruent_impl(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
-    ) const noexcept final {
-        const ReferenceType* other_ref = other->cast<ReferenceType>();
-        if (is_mutable_ != other_ref->is_mutable_) {
-            return is_mutable_ <=> other_ref->is_mutable_;
-        }
-        return referenced_type_->compare_congruent(other_ref->referenced_type_, assumed_equal);
-    }
-
-    bool assignable_from_impl(const Type* source) const final {
-        const ReferenceType* other_ref = source->dyn_cast<ReferenceType>();
-        return other_ref && referenced_type_->assignable_from(other_ref->referenced_type_);
     }
 };
 
@@ -1139,6 +1229,7 @@ public:
     virtual Value* clone() const noexcept = 0;
     virtual Value* resolve_to(const Type* target) const = 0;
     virtual void assign_from(Value* source) = 0;
+    virtual Value* member(std::string_view name) const noexcept { return nullptr; }
 };
 
 class UnknownValue final : public Value {
@@ -1496,7 +1587,7 @@ inline bool TypeRegistry::TypeComparator::operator()(
     const Type* lhs, const Type* rhs
 ) const noexcept {
     GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
-    return lhs->compare_congruent(rhs, assumed_equal) == std::strong_ordering::less;
+    return lhs->compare(rhs, assumed_equal) == std::strong_ordering::less;
 }
 
 inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
@@ -1577,7 +1668,7 @@ inline const Type* TypeRegistry::simplify_recursive_type(
     return interned_type;
 }
 
-inline Term Term::unknown() noexcept { return Term(new UnknownValue(), Term::Category::Immutable); }
+inline Term Term::unknown() noexcept { return Term(new UnknownValue(), Term::Category::RValue); }
 
 inline const Type* Term::effective_type() const noexcept {
     if (auto type = ptr_->dyn_type()) {

@@ -162,16 +162,37 @@ public:
     }
 
     template <typename T>
-    class Allocator : public std::pmr::polymorphic_allocator<T> {
+    class Allocator {
     public:
-        using std::pmr::polymorphic_allocator<T>::polymorphic_allocator;
-        Allocator(std::pmr::memory_resource* r = pool()) : std::pmr::polymorphic_allocator<T>(r) {}
-        Allocator(const std::pmr::polymorphic_allocator<T>& other) noexcept
-            : std::pmr::polymorphic_allocator<T>(other) {}
+        using value_type = T;
+
+    public:
+        Allocator() noexcept = default;
 
         template <typename U>
-        void destroy(U* p) {
-            std::destroy_at(p);
+        Allocator(const Allocator<U>&) noexcept {}
+
+        T* allocate(std::size_t n) {
+            return static_cast<T*>(pool()->allocate(n * sizeof(T), alignof(T)));
+        }
+
+        void deallocate(T* p, std::size_t n) noexcept {
+            pool()->deallocate(p, n * sizeof(T), alignof(T));
+        }
+
+        template <typename U>
+        struct rebind {
+            using other = Allocator<U>;
+        };
+
+        template <typename U>
+        bool operator==(const Allocator<U>&) const noexcept {
+            return true;
+        }
+
+        template <typename U>
+        bool operator!=(const Allocator<U>&) const noexcept {
+            return false;
         }
     };
 

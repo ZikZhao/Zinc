@@ -1,4 +1,4 @@
-/* let a: i8 = 127;
+let a: i8 = 127;
 
 fn add(a: i32, b: i32) -> i32 {
     return a + b;
@@ -29,51 +29,11 @@ class Derived {
             return 0;
         }
     }
-}; */
-
-
-/*
-type Node = {
-    value: i32;
-    next: &Node;
 };
 
-type AnotherNode = {
-    value: i32;
-    next: &AnotherNode;
-};*/
-
-type A = {
-    a: &B;
-};
-
-type B = {
-    a: &A;
-};
-
-/*
-type A = {
-    b: &B;
-};
-
-type B = {
-    c: &C;
-    d: &D;
-};
-
-type C = {
-    a: &A;
-};
-
-type D = {
-    a: &A;
-};
-
-fn h(n: A) -> B {}
-*/
 
 fn main() -> i32 {
-    // f(2, 3);
-    // g(5, 4);
-    // g(3.0, 2.0);
+    f(2, 3);
+    g(5, 4);
+    g(3.0, 2.0);
 }

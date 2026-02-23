@@ -155,7 +155,6 @@ private:
                 transform_list(ctx->body_)
             );
         } else {
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -284,7 +283,6 @@ private:
             last_visited_ = new ASTRightShiftAssignOp(loc(ctx), left, right);
             break;
         default:
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -300,7 +298,6 @@ private:
             last_visited_ = new ASTNotEqualOp(loc(ctx), left, right);
             break;
         default:
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -322,7 +319,6 @@ private:
             last_visited_ = new ASTGreaterEqualOp(loc(ctx), left, right);
             break;
         default:
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -338,7 +334,6 @@ private:
             last_visited_ = new ASTRightShiftOp(loc(ctx), left, right);
             break;
         default:
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -354,7 +349,6 @@ private:
             last_visited_ = new ASTSubtractOp(loc(ctx), left, right);
             break;
         default:
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -375,7 +369,6 @@ private:
             last_visited_ = new ASTRemainderOp(loc(ctx), left, right);
             break;
         default:
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -399,7 +392,6 @@ private:
             last_visited_ = new ASTBitwiseNotOp(loc(ctx), expr);
             break;
         default:
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -416,10 +408,15 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitRefExpr(ZincParser::RefExprContext* ctx) noexcept final {
+    antlrcpp::Any visitAddressOfExpr(ZincParser::AddressOfExprContext* ctx) noexcept final {
         ASTExpression* expr = static_cast<ASTExpression*>(transform(ctx->inner_expr_));
         bool is_mutable = ctx->KW_MUT() != nullptr;
-        last_visited_ = new ASTReferenceExpr(loc(ctx), expr, is_mutable);
+        last_visited_ = new ASTReferenceTypeExpr(loc(ctx), expr, is_mutable);
+        return {};
+    }
+    antlrcpp::Any visitMemberAccessExpr(ZincParser::MemberAccessExprContext* ctx) noexcept final {
+        ASTExpression* target = static_cast<ASTExpression*>(transform(ctx->target_));
+        last_visited_ = new ASTMemberAccess(loc(ctx), target, text(ctx->member_));
         return {};
     }
     antlrcpp::Any visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept final {
@@ -457,7 +454,6 @@ private:
                 new ASTConstant(loc(ctx), text(ctx->value_), std::type_identity<NullValue>{});
             break;
         default:
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -501,13 +497,12 @@ private:
             /// TODO: write a new class to do
             /// TODO: current implementation leads to memory violation (TypeRegistry::get needs to
             /// be called on main thread)
-            last_visited_ = new ASTPrimitiveType(loc(ctx), TypeRegistry::get<StringType>());
+            // last_visited_ = new ASTPrimitiveType(loc(ctx), TypeRegistry::get<StringType>());
             break;
         case ZincParser::KW_BOOL:
             last_visited_ = new ASTPrimitiveType(loc(ctx), &BooleanType::instance);
             break;
         default:
-            assert(false);
             UNREACHABLE();
         }
         return {};
@@ -531,8 +526,12 @@ private:
     }
     antlrcpp::Any visitRefType(ZincParser::RefTypeContext* ctx) noexcept final {
         ASTExpression* inner_type = static_cast<ASTExpression*>(transform(ctx->inner_type_));
-        bool is_mutable = ctx->KW_MUT() != nullptr;
-        last_visited_ = new ASTReferenceExpr(loc(ctx), inner_type, is_mutable);
+        last_visited_ = new ASTReferenceTypeExpr(loc(ctx), inner_type, false);
+        return {};
+    }
+    antlrcpp::Any visitMutRefType(ZincParser::MutRefTypeContext* ctx) noexcept final {
+        ASTExpression* inner_type = static_cast<ASTExpression*>(transform(ctx->inner_type_));
+        last_visited_ = new ASTReferenceTypeExpr(loc(ctx), inner_type, true);
         return {};
     }
     antlrcpp::Any visitParenType(ZincParser::ParenTypeContext* ctx) noexcept final {

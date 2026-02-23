@@ -37,7 +37,7 @@ class ASTTemplateDefinition;
 
 using ScopeValue = PointerVariant<
     const ASTExpression*,                                // type alias
-    Term*,                                               // constant/variable/rvalue
+    Term*,                                               // constant/variable
     GlobalMemory::Vector<const ASTFunctionSignature*>*,  // function overloads
     const ASTTemplateDefinition*>;                       // template definition
 
@@ -140,7 +140,7 @@ public:
 
     void exit() noexcept { current_scope_ = current_scope_->parent_; }
 
-    Scope* get_current_scope() noexcept { return current_scope_; }
+    Scope* current_scope() noexcept { return current_scope_; }
 
     std::pair<const Scope*, const ScopeValue*> lookup(std::string_view identifier) const noexcept {
         Scope* scope = current_scope_;
@@ -412,31 +412,6 @@ private:
     }
 };
 
-class ASTFunctionCall final : public ASTExpression {
-public:
-    ASTExpression* const function_;
-    ComparableSpan<ASTExpression*> arguments_;
-
-public:
-    ASTFunctionCall(
-        const Location& loc, ASTExpression* function, ComparableSpan<ASTExpression*> arguments
-    ) noexcept
-        : ASTExpression(loc), function_(function), arguments_(arguments) {}
-    Term eval_term(
-        TypeChecker& checker, const Type* expected, bool expected_comptime
-    ) const noexcept final {
-        // TODO
-        return {};
-    }
-    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
-
-private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
-        // TODO
-        out = {};
-    }
-};
-
 using ASTAddOp = ASTBinaryOp<OperatorFunctors::Add>;
 using ASTSubtractOp = ASTBinaryOp<OperatorFunctors::Subtract>;
 using ASTNegateOp = ASTUnaryOp<OperatorFunctors::Negate>;
@@ -478,6 +453,65 @@ using ASTBitwiseXorAssignOp = ASTBinaryOp<OperatorFunctors::BitwiseXorAssign>;
 using ASTLeftShiftAssignOp = ASTBinaryOp<OperatorFunctors::LeftShiftAssign>;
 using ASTRightShiftAssignOp = ASTBinaryOp<OperatorFunctors::RightShiftAssign>;
 
+class ASTMemberAccess final : public ASTExpression {
+public:
+    ASTExpression* target_;
+    std::string_view field_;
+
+public:
+    ASTMemberAccess(const Location& loc, ASTExpression* target, std::string_view field) noexcept
+        : ASTExpression(loc), target_(target), field_(field) {}
+    Term eval_term(
+        TypeChecker& checker, const Type* expected, bool expected_comptime
+    ) const noexcept final {
+        Term term = target_->eval_term(checker, nullptr, false);
+        if (auto value = term.get_comptime()) {
+            Value* member_value = value->member(field_);
+            if (!member_value) {
+                Diagnostic::report(AttributeError(location_, field_));
+            }
+            return member_value ? Term(member_value, Term::Category::CompRValue) : Term::unknown();
+        } else {
+            const Type* type = term->cast<Type>();
+            const Type* member_type = type->member(field_);
+            if (!member_type) {
+                Diagnostic::report(AttributeError(location_, field_));
+            }
+            return member_type ? Term(member_type, Term::Category::Type) : Term::unknown();
+        }
+    }
+
+private:
+    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+        // TODO
+    };
+};
+
+class ASTFunctionCall final : public ASTExpression {
+public:
+    ASTExpression* const function_;
+    ComparableSpan<ASTExpression*> arguments_;
+
+public:
+    ASTFunctionCall(
+        const Location& loc, ASTExpression* function, ComparableSpan<ASTExpression*> arguments
+    ) noexcept
+        : ASTExpression(loc), function_(function), arguments_(arguments) {}
+    Term eval_term(
+        TypeChecker& checker, const Type* expected, bool expected_comptime
+    ) const noexcept final {
+        // TODO
+        return {};
+    }
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+        // TODO
+        out = {};
+    }
+};
+
 class ASTPrimitiveType final : public ASTExplicitTypeExpr {
 public:
     const Type* type_;
@@ -516,6 +550,7 @@ private:
             out = std::get<FunctionType*>(representation_);
             return;
         }
+        out = std::type_identity<FunctionType>();
         const auto& comps = std::get<Components>(representation_);
         bool any_error = false;
         ComparableSpan<const Type*> param_types =
@@ -580,20 +615,14 @@ private:
     }
 };
 
-class ASTReferenceExpr final : public ASTExpression {
+class ASTReferenceTypeExpr final : public ASTExplicitTypeExpr {
 public:
     ASTExpression* expr_;
     bool is_mutable_;
 
 public:
-    ASTReferenceExpr(const Location& loc, ASTExpression* expr, bool is_mutable) noexcept
-        : ASTExpression(loc), expr_(expr), is_mutable_(is_mutable) {}
-    Term eval_term(
-        TypeChecker& checker, const Type* expected, bool expected_comptime
-    ) const noexcept final {
-        /// TODO:
-        return {};
-    }
+    ASTReferenceTypeExpr(const Location& loc, ASTExpression* expr, bool is_mutable) noexcept
+        : ASTExplicitTypeExpr(loc), expr_(expr), is_mutable_(is_mutable) {}
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
@@ -821,7 +850,7 @@ class ASTFunctionSignature final {
 public:
     const ASTFunctionDefinition* owner_;
     ASTFunctionSignature(const ASTFunctionDefinition* owner) noexcept : owner_(owner) {}
-    Term eval_term(TypeChecker& checker) const noexcept;
+    const Object* eval(TypeChecker& checker) const noexcept;
 };
 
 class ASTFunctionDefinition final : public ASTNode {
@@ -1004,7 +1033,7 @@ public:
             );
             return new Term(Term::unknown());
         }
-        Scope& template_scope = Scope::create(this, *checker.get_current_scope());
+        Scope& template_scope = Scope::create(this, *checker.current_scope());
         for (size_t i = 0; i < parameters_.size(); ++i) {
             const auto& [param_name, param_type] = parameters_[i];
             Object* argument = arguments[i];
@@ -1101,11 +1130,11 @@ inline Term TypeChecker::lookup_term_in(std::string_view identifier, Scope& scop
         Scope* previous_scope = std::exchange(current_scope_, &scope);
         ComparableSpan<const Type*> overload_types =
             *func | std::views::transform([this](const ASTFunctionSignature* expr) -> const Type* {
-                Term overload_term = expr->eval_term(*this);
-                if (auto type = overload_term->dyn_type()) {
+                const Object* overload = expr->eval(*this);
+                if (auto type = overload->dyn_type()) {
                     return type->cast<FunctionType>();
                 }
-                return overload_term->cast<FunctionValue>()->get_type();
+                return overload->cast<FunctionValue>()->get_type();
             }) |
             GlobalMemory::collect<ComparableSpan<const Type*>>();
         const IntersectionType* intersection_type =
@@ -1129,7 +1158,7 @@ inline ASTRoot::ASTRoot(const Location& loc, ComparableSpan<ASTNode*> statements
     }
 }
 
-inline Term ASTFunctionSignature::eval_term(TypeChecker& checker) const noexcept {
+inline const Object* ASTFunctionSignature::eval(TypeChecker& checker) const noexcept {
     bool any_error = false;
     ComparableSpan params = owner_->parameters_ |
                             std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
@@ -1139,12 +1168,12 @@ inline Term ASTFunctionSignature::eval_term(TypeChecker& checker) const noexcept
                             }) |
                             GlobalMemory::collect<ComparableSpan<const Type*>>();
     if (any_error) {
-        return Term(TypeRegistry::get_unknown(), Term::Category::Var);
+        return TypeRegistry::get_unknown();
     }
     TypeResolution return_type;
     owner_->return_type_->eval_type(checker, return_type);
     /// TODO: handle constexpr functions
-    return Term(TypeRegistry::get<FunctionType>(params, return_type), Term::Category::Immutable);
+    return TypeRegistry::get<FunctionType>(params, return_type);
 }
 
 inline void ASTClassSignature::eval_type_impl(
@@ -1242,10 +1271,15 @@ inline void ASTClassSignature::eval_type_impl(
         ) |
         GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, FunctionOverloads>>();
     checker.exit();
-    checker.exit();
     out = TypeRegistry::get<ClassType>(
-        owner_->identifier_, extends_, interfaces, std::move(attrs), std::move(methods)
+        checker.current_scope(),
+        owner_->identifier_,
+        extends_,
+        interfaces,
+        std::move(attrs),
+        std::move(methods)
     );
+    checker.exit();
 }
 
 static_assert(requires { std::vector<int>(std::declval<const std::vector<int>&>()); });

@@ -326,7 +326,7 @@ public:
     TermSpec(Term term) noexcept
         : ptr_(
               reinterpret_cast<std::uintptr_t>(term.effective_type()) |
-              static_cast<std::uintptr_t>(term.is_mutable())
+              static_cast<std::uintptr_t>(term.is_lvalue())
           ) {
         static_assert(alignof(Type) >= 8);
         assert(term.effective_type() != nullptr);
@@ -558,12 +558,6 @@ private:
     GlobalMemory::MultiMap<OperatorCode, const Object* (*)(const Type*, const Type*)> templates_;
 
 public:
-    void register_custom_op(
-        OperatorCode opcode, const Type* left_type, const Type* right_type, const Object* func
-    ) {
-        map_[{opcode, left_type, right_type}] = func;
-    }
-
     const Type* eval_type_op(
         OperatorCode opcode, const Type* left, const Type* right = nullptr
     ) const {
@@ -612,6 +606,12 @@ public:
         }
     }
 
+    void register_custom_op(
+        OperatorCode opcode, const Type* left_type, const Type* right_type, const Object* func
+    ) {
+        map_[{opcode, left_type, right_type}] = func;
+    }
+
 private:
     const Object* try_instantiate(OperatorCode opcode, const Type* left, const Type* right) const {
         // User-defined operator templates
@@ -631,8 +631,8 @@ private:
         Kind right_kind = right ? right->kind_ : Kind::Unknown;
         bool comptime = left.is_comptime() && (right ? right.is_comptime() : true);
         if (comptime) {
-            Value* left_value = left.comp_var();
-            Value* right_value = right ? right.comp_var() : nullptr;
+            Value* left_value = left.get_comptime();
+            Value* right_value = right ? right.get_comptime() : nullptr;
             switch (GetOperatorGroup(opcode)) {
             case OperatorGroup::Arithmetic:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
@@ -709,7 +709,7 @@ private:
                 break;
             case OperatorGroup::Assignment:
                 /// TODO:
-                if (!left.is_mutable()) break;
+                if (!left.is_lvalue()) break;
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
@@ -758,7 +758,7 @@ private:
                 break;
             case OperatorGroup::Assignment:
                 /// TODO:
-                if (!left.is_mutable()) break;
+                if (!left.is_lvalue()) break;
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
