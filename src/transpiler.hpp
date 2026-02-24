@@ -275,125 +275,6 @@ inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checke
     }
 }
 
-/// ===================== Inline implementations of Objects =====================
-
-inline void UnknownType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
-
-inline void AnyType::transpile(Cursor& cursor) const noexcept { cursor << "std::any"; }
-
-inline void NullType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
-
-inline void IntegerType::transpile(Cursor& cursor) const noexcept {
-    cursor << "std::";
-    if (is_signed_) {
-        cursor << "int";
-    } else {
-        cursor << "uint";
-    }
-    switch (bits_) {
-    case 8:
-        cursor << "8_t";
-        break;
-    case 16:
-        cursor << "16_t";
-        break;
-    case 32:
-        cursor << "32_t";
-        break;
-    case 64:
-        cursor << "64_t";
-        break;
-    default:
-        UNREACHABLE();
-    }
-}
-
-inline void FloatType::transpile(Cursor& cursor) const noexcept {
-    switch (bits_) {
-    case 32:
-        cursor << "float";
-        break;
-    case 64:
-        cursor << "double";
-        break;
-    }
-}
-
-inline void BooleanType::transpile(Cursor& cursor) const noexcept { cursor << "bool"; }
-
-inline void FunctionType::transpile(Cursor& cursor) const noexcept {
-    cursor << "std::function<";
-    return_type_->transpile(cursor);
-    cursor << "(";
-    const char* sep = "";
-    for (const Type* param_type : parameters_) {
-        cursor << sep;
-        param_type->transpile(cursor);
-        sep = ", ";
-    }
-    cursor << ")>";
-}
-
-inline void ArrayType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
-
-inline void StructType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
-
-inline void InterfaceType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
-
-inline void ClassType::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
-
-inline void IntersectionType::transpile(Cursor& cursor) const noexcept {
-    cursor << "$PolyFunction<";
-    const char* sep = "";
-    for (const Type* sub_type : types_) {
-        cursor << sep;
-        sub_type->transpile(cursor);
-        sep = ", ";
-    }
-    cursor << ">";
-}
-
-inline void UnionType::transpile(Cursor& cursor) const noexcept {
-    cursor << "std::variant<";
-    const char* sep = "";
-    for (const Type* sub_type : types_) {
-        cursor << sep;
-        sub_type->transpile(cursor);
-        sep = ", ";
-    }
-    cursor << ">";
-}
-
-inline void ReferenceType::transpile(Cursor& cursor) const noexcept {
-    referenced_type_->transpile(cursor);
-    cursor << "*" << (is_mutable_ ? "" : " const");
-}
-
-inline void UnknownValue::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
-
-inline void NullValue::transpile(Cursor& cursor) const noexcept { cursor << "nullptr"; }
-
-inline void IntegerValue::transpile(Cursor& cursor) const noexcept {
-    cursor << GlobalMemory::format_view("{}", value_.to_string());
-}
-
-inline void FloatValue::transpile(Cursor& cursor) const noexcept {
-    cursor << GlobalMemory::format_view("0x{:a}", value_);
-}
-
-inline void BooleanValue::transpile(Cursor& cursor) const noexcept {
-    cursor << (value_ ? "true" : "false");
-}
-
-inline void FunctionValue::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
-
-inline void ArrayValue::transpile(Cursor& cursor) const noexcept {
-    /// TODO:
-    return;
-}
-
-inline void InstanceValue::transpile(Cursor& cursor) const noexcept { UNREACHABLE(); }
-
 /// ===================== Inline implementations of AST nodes =====================
 
 inline void ASTRoot::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -421,7 +302,22 @@ inline void ASTHiddenTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor)
 }
 
 inline void ASTConstant::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    value_->transpile(cursor);
+    switch (value_->kind_) {
+    case Kind::Nullptr:
+        cursor << "nullptr";
+        break;
+    case Kind::Integer:
+        cursor << value_->cast<IntegerValue>()->value_.to_string();
+        break;
+    case Kind::Float:
+        cursor << GlobalMemory::format_view("0x{:a}", value_->cast<FloatValue>()->value_);
+        break;
+    case Kind::Boolean:
+        cursor << (value_->cast<BooleanValue>()->value_ ? "true" : "false");
+        break;
+    default:
+        UNREACHABLE();
+    }
 }
 
 inline void ASTIdentifier::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -445,6 +341,14 @@ inline void ASTIdentifier::transpile(Transpiler& transpiler, Cursor& cursor) con
 }
 
 template <typename Op>
+inline void ASTUnaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    /// TODO: handle prefix/postfix
+    cursor << "(" << OperatorCodeToString(Op::opcode);
+    expr_->transpile(transpiler, cursor);
+    cursor << ")";
+}
+
+template <typename Op>
 inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     cursor << "(";
     left_->transpile(transpiler, cursor);
@@ -453,12 +357,30 @@ inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) c
     cursor << ")";
 }
 
-template <typename Op>
-inline void ASTUnaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    /// TODO: handle prefix/postfix
-    cursor << "(" << OperatorCodeToString(Op::opcode);
-    expr_->transpile(transpiler, cursor);
-    cursor << ")";
+inline void ASTMemberAccess::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    target_->transpile(transpiler, cursor);
+    cursor << "." << field_;
+}
+
+inline void ASTFieldInitialization::transpile(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    cursor << "." << identifier_ << " = ";
+    value_->transpile(transpiler, cursor);
+}
+
+inline void ASTStructInitialization::transpile(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    struct_type_->transpile(transpiler, cursor);
+    cursor << " {";
+    const char* sep = "";
+    for (const auto& field : field_inits_) {
+        cursor << sep;
+        field->transpile(transpiler, cursor);
+        sep = ", ";
+    }
+    cursor << "}";
 }
 
 inline void ASTFunctionCall::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -474,13 +396,65 @@ inline void ASTFunctionCall::transpile(Transpiler& transpiler, Cursor& cursor) c
 }
 
 inline void ASTPrimitiveType::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    type_->transpile(cursor);
+    switch (type_->kind_) {
+    case Kind::Any:
+        cursor << "std::any";
+        break;
+    case Kind::Integer:
+        cursor << "std::";
+        if (type_->cast<IntegerType>()->is_signed_) {
+            cursor << "int";
+        } else {
+            cursor << "uint";
+        }
+        switch (type_->cast<IntegerType>()->bits_) {
+        case 8:
+            cursor << "8_t";
+            break;
+        case 16:
+            cursor << "16_t";
+            break;
+        case 32:
+            cursor << "32_t";
+            break;
+        case 64:
+            cursor << "64_t";
+            break;
+        default:
+            UNREACHABLE();
+        }
+        break;
+    case Kind::Float:
+        switch (type_->cast<FloatType>()->bits_) {
+        case 32:
+            cursor << "float";
+            break;
+        case 64:
+            cursor << "double";
+            break;
+        default:
+            UNREACHABLE();
+        }
+        break;
+    case Kind::Boolean:
+        cursor << "bool";
+        break;
+    default:
+        UNREACHABLE();
+    }
 }
 
 inline void ASTFunctionType::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    TypeResolution func_type;
-    eval_type(transpiler.checker(), func_type);
-    func_type->transpile(cursor);
+    cursor << "std::function<";
+    return_type_->transpile(transpiler, cursor);
+    cursor << "(";
+    const char* sep = "";
+    for (const auto& param_type : parameter_types_) {
+        cursor << sep;
+        param_type->transpile(transpiler, cursor);
+        sep = ", ";
+    }
+    cursor << ")>";
 }
 
 inline void ASTFieldDeclaration::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -514,9 +488,18 @@ inline void ASTStructType::transpile(Transpiler& transpiler, Cursor& cursor) con
     }
 }
 
+inline void ASTMutableTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    expr_->transpile(transpiler, cursor);
+}
+
 inline void ASTReferenceTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     expr_->transpile(transpiler, cursor);
-    cursor << (is_mutable_ ? "" : " const") << "*";
+    cursor << "&";
+}
+
+inline void ASTPointerTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    expr_->transpile(transpiler, cursor);
+    cursor << "*";
 }
 
 inline void ASTExpressionStatement::transpile(
@@ -532,10 +515,10 @@ inline void ASTDeclaration::transpile(Transpiler& transpiler, Cursor& cursor) co
     } else if (!is_mutable_) {
         cursor << "const ";
     }
-    if (type_) {
-        type_->transpile(transpiler, cursor);
+    if (declared_type_) {
+        declared_type_->transpile(transpiler, cursor);
     } else {
-        expr_->eval_term(transpiler.checker(), nullptr, false).effective_type()->transpile(cursor);
+        cursor << "auto";
     }
     cursor << " " << identifier_ << " = ";
     expr_->transpile(transpiler, cursor);
@@ -670,9 +653,10 @@ inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor
 
     transpiler.checker().enter(this);
     transpiler.checker().enter(&identifier_);
-    for (const auto& field : fields_) {
+    for (const auto& field_decl : fields_) {
         Cursor local_cursor = cursor.open_child(this);
-        field->transpile(transpiler, local_cursor);
+        field_decl->declared_type_->transpile(transpiler, local_cursor);
+        local_cursor << " " << field_decl->identifier_ << ";";
     }
     transpiler.checker().exit();
     for (const auto& func : functions_) {

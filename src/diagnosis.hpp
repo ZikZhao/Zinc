@@ -159,6 +159,52 @@ public:
         : TypeError(location, message) {}
 };
 
+class DuplicateAttributeError final : public AttributeError {
+public:
+    DuplicateAttributeError(const Location& location, std::string_view attribute)
+        : AttributeError(
+              location, GlobalMemory::format_view("Duplicate attribute: '{}'", attribute)
+          ) {}
+};
+
+class UnknownAttributeError final : public AttributeError {
+public:
+    UnknownAttributeError(const Location& location, std::string_view attribute)
+        : AttributeError(
+              location, GlobalMemory::format_view("Unknown attribute: '{}'", attribute)
+          ) {}
+};
+
+class AttributeTypeMismatchError final : public AttributeError {
+public:
+    AttributeTypeMismatchError(
+        const Location& location,
+        std::string_view attribute,
+        std::string_view expected_type,
+        std::string_view actual_type
+    )
+        : AttributeError(
+              location,
+              GlobalMemory::format_view(
+                  "Attribute type mismatch for '{}': expected '{}', got '{}'",
+                  attribute,
+                  expected_type,
+                  actual_type
+              )
+          ) {}
+};
+
+class UninitializedAttributeError final : public AttributeError {
+public:
+    UninitializedAttributeError(const Location& location, std::string_view attribute)
+        : AttributeError(
+              location,
+              GlobalMemory::format_view(
+                  "Attribute '{}' is not initialized and has no default value", attribute
+              )
+          ) {}
+};
+
 class CompileTimeEvaluationError : public Problem {
 public:
     CompileTimeEvaluationError(const Location& location, std::string_view message)

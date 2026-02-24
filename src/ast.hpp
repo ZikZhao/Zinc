@@ -481,10 +481,125 @@ public:
         }
     }
 
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         // TODO
     };
+};
+
+class ASTFieldInitialization final : public ASTNode {
+public:
+    std::string_view identifier_;
+    ASTExpression* value_;
+
+public:
+    ASTFieldInitialization(
+        const Location& loc, std::string_view identifier, ASTExpression* value
+    ) noexcept
+        : ASTNode(loc), identifier_(std::move(identifier)), value_(value) {}
+    std::pair<std::string_view, Term> eval(TypeChecker& checker) const noexcept {
+        Term value_term = value_->eval_term(checker, nullptr, false);
+        if (value_term.is_type()) {
+            Diagnostic::report(SymbolCategoryMismatchError(location_, true));
+            return {identifier_, Term::unknown()};
+        }
+        return {identifier_, value_term};
+    }
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+};
+
+class ASTStructInitialization final : public ASTExpression {
+public:
+    ASTExpression* struct_type_;
+    ComparableSpan<ASTFieldInitialization*> field_inits_;
+
+public:
+    ASTStructInitialization(
+        const Location& loc,
+        ASTExpression* struct_type,
+        ComparableSpan<ASTFieldInitialization*> field_inits
+    ) noexcept
+        : ASTExpression(loc), struct_type_(struct_type), field_inits_(field_inits) {}
+
+    Term eval_term(
+        TypeChecker& checker, const Type* expected, bool expected_comptime
+    ) const noexcept final {
+        TypeResolution struct_type_res;
+        struct_type_->eval_type(checker, struct_type_res);
+        if (auto struct_type = struct_type_res->dyn_cast<StructType>()) {
+            if (expected_comptime) {
+                return Term(eval_comptime(checker, struct_type), Term::Category::CompRValue);
+            } else {
+                check_fields(checker, struct_type);
+                return Term(struct_type, Term::Category::RValue);
+            }
+        } else {
+            Diagnostic::report(
+                TypeMismatchError(struct_type_->location_, "struct", struct_type_res->repr())
+            );
+            return Term::unknown();
+        }
+    }
+
+protected:
+    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+        UNREACHABLE();
+    }
+
+private:
+    Value* eval_comptime(TypeChecker& checker, const StructType* struct_type) const noexcept {
+        GlobalMemory::Vector<std::pair<std::string_view, Value*>> inits =
+            field_inits_ | std::views::transform([&](ASTFieldInitialization* init) {
+                std::pair<std::string_view, Term> field = init->eval(checker);
+                if (!field.second.is_comptime()) {
+                    Diagnostic::report(NotConstantExpressionError(init->location_));
+                    return std::pair<std::string_view, Value*>{
+                        field.first, &UnknownValue::instance
+                    };
+                }
+                return std::pair<std::string_view, Value*>{
+                    field.first, field.second.get_comptime()
+                };
+            }) |
+            GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, Value*>>>();
+        GlobalMemory::Vector<std::pair<std::string_view, const Type*>> types =
+            inits | std::views::transform([&](const auto& init) {
+                return std::pair<std::string_view, const Type*>{
+                    init.first, init.second->get_type()
+                };
+            }) |
+            GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, const Type*>>>();
+        try {
+            struct_type->validate(types);
+        } catch (UnlocatedProblem& e) {
+            e.report_at(location_);
+            return &UnknownValue::instance;
+        }
+        return new StructValue(
+            struct_type,
+            inits | GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, Value*>>()
+        );
+    }
+
+    void check_fields(TypeChecker& checker, const StructType* struct_type) const noexcept {
+        GlobalMemory::Vector<std::pair<std::string_view, const Type*>> inits =
+            field_inits_ | std::views::transform([&](ASTFieldInitialization* init) {
+                std::pair<std::string_view, Term> field = init->eval(checker);
+                return std::pair<std::string_view, const Type*>{
+                    field.first, field.second.effective_type()
+                };
+            }) |
+            GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, const Type*>>>();
+        try {
+            struct_type->validate(inits);
+        } catch (UnlocatedProblem& e) {
+            e.report_at(location_);
+        }
+    }
+
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
 class ASTFunctionCall final : public ASTExpression {
@@ -528,11 +643,9 @@ private:
 };
 
 class ASTFunctionType final : public ASTExplicitTypeExpr {
-private:
-    using Components = std::tuple<ComparableSpan<ASTExpression*>, ASTExpression*>;
-
 public:
-    std::variant<Components, FunctionType*> representation_;
+    ComparableSpan<ASTExpression*> parameter_types_;
+    ASTExpression* return_type_;
 
 public:
     ASTFunctionType(
@@ -540,22 +653,16 @@ public:
         ComparableSpan<ASTExpression*> parameter_types,
         ASTExpression* return_type
     ) noexcept
-        : ASTExplicitTypeExpr(loc), representation_(Components(parameter_types, return_type)) {}
-    ASTFunctionType(FunctionType* func) noexcept : ASTExplicitTypeExpr({}), representation_(func) {}
+        : ASTExplicitTypeExpr(loc), parameter_types_(parameter_types), return_type_(return_type) {}
+
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
-        if (std::holds_alternative<FunctionType*>(representation_)) {
-            out = std::get<FunctionType*>(representation_);
-            return;
-        }
         out = std::type_identity<FunctionType>();
-        const auto& comps = std::get<Components>(representation_);
         bool any_error = false;
         ComparableSpan<const Type*> param_types =
-            std::get<0>(comps) |
-            std::views::transform([&](ASTExpression* param_expr) -> const Type* {
+            parameter_types_ | std::views::transform([&](ASTExpression* param_expr) -> const Type* {
                 TypeResolution param_type;
                 param_expr->eval_type(checker, param_type);
                 return param_type;
@@ -566,7 +673,7 @@ private:
             return;
         }
         TypeResolution return_type;
-        std::get<1>(comps)->eval_type(checker, return_type);
+        return_type_->eval_type(checker, return_type);
         TypeRegistry::get_at<FunctionType>(out, param_types, return_type);
     }
 };
@@ -615,14 +722,30 @@ private:
     }
 };
 
+class ASTMutableTypeExpr final : public ASTExplicitTypeExpr {
+public:
+    ASTExpression* expr_;
+
+public:
+    ASTMutableTypeExpr(const Location& loc, ASTExpression* expr) noexcept
+        : ASTExplicitTypeExpr(loc), expr_(expr) {}
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+        TypeResolution expr_type;
+        expr_->eval_type(checker, expr_type, false);
+        TypeRegistry::get_at<MutableType>(out, expr_type);
+    }
+};
+
 class ASTReferenceTypeExpr final : public ASTExplicitTypeExpr {
 public:
     ASTExpression* expr_;
-    bool is_mutable_;
 
 public:
     ASTReferenceTypeExpr(const Location& loc, ASTExpression* expr, bool is_mutable) noexcept
-        : ASTExplicitTypeExpr(loc), expr_(expr), is_mutable_(is_mutable) {}
+        : ASTExplicitTypeExpr(loc), expr_(expr) {}
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
@@ -633,7 +756,29 @@ private:
         if (!expr_type.is_sized()) {
             TypeRegistry::add_ref_dependency(out, expr_type);
         }
-        TypeRegistry::get_at<ReferenceType>(out, expr_type, is_mutable_);
+        TypeRegistry::get_at<ReferenceType>(out, expr_type);
+    }
+};
+
+class ASTPointerTypeExpr final : public ASTExplicitTypeExpr {
+public:
+    ASTExpression* expr_;
+    bool is_mutable_;
+
+public:
+    ASTPointerTypeExpr(const Location& loc, ASTExpression* expr, bool is_mutable) noexcept
+        : ASTExplicitTypeExpr(loc), expr_(expr), is_mutable_(is_mutable) {}
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+        out = std::type_identity<PointerType>();
+        TypeResolution expr_type;
+        expr_->eval_type(checker, expr_type, false);
+        if (!expr_type.is_sized()) {
+            TypeRegistry::add_ref_dependency(out, expr_type);
+        }
+        TypeRegistry::get_at<PointerType>(out, expr_type);
     }
 };
 
@@ -649,34 +794,38 @@ public:
 class ASTDeclaration final : public ASTNode {
 public:
     std::string_view identifier_;
-    ASTExpression* type_;
+    ASTExpression* declared_type_;
     ASTExpression* expr_;
     bool is_mutable_;
     bool is_constant_;
     ASTDeclaration(
         const Location& loc,
         std::string_view identifier,
-        ASTExpression* type,
+        ASTExpression* declared_type,
         ASTExpression* expr,
         bool is_mutable,
         bool is_constant
     ) noexcept
         : ASTNode(loc),
           identifier_(identifier),
-          type_(type),
+          declared_type_(declared_type),
           expr_(expr),
           is_mutable_(is_mutable),
           is_constant_(is_constant) {
+        assert(declared_type || expr);
         assert(!(is_mutable_ && is_constant_));
     }
     void check_types(TypeChecker& checker) final {
         TypeResolution declared_type;
-        if (type_) {
-            type_->eval_type(checker, declared_type);
+        if (declared_type_) {
+            declared_type_->eval_type(checker, declared_type);
         }
-        Term term = expr_->eval_term(checker, declared_type, is_constant_);
-        if (!is_constant_) {
-            term = Term(term.effective_type(), Term::Category::Var);
+        Term term = Term(declared_type, Term::Category::Var);
+        if (expr_) {
+            term = expr_->eval_term(checker, declared_type, is_constant_);
+            if (!is_constant_) {
+                term = Term(term.effective_type(), Term::Category::Var);
+            }
         }
         try {
             checker.add_variable(identifier_, term);
@@ -915,7 +1064,7 @@ public:
     std::string_view identifier_;
     std::string_view extends_;
     ComparableSpan<std::string_view> implements_;
-    ComparableSpan<ASTFieldDeclaration*> fields_;
+    ComparableSpan<ASTDeclaration*> fields_;
     ComparableSpan<ASTTypeAlias*> aliases_;
     ComparableSpan<ASTFunctionDefinition*> functions_;
     ComparableSpan<ASTClassDefinition*> classes_;
@@ -928,7 +1077,7 @@ public:
         std::string_view identifier,
         std::string_view extends,
         ComparableSpan<std::string_view> implements,
-        ComparableSpan<ASTFieldDeclaration*> fields,
+        ComparableSpan<ASTDeclaration*> fields,
         ComparableSpan<ASTTypeAlias*> aliases,
         ComparableSpan<ASTFunctionDefinition*> functions,
         ComparableSpan<ASTClassDefinition*> classes
@@ -1200,7 +1349,7 @@ inline void ASTClassSignature::eval_type_impl(
             Diagnostic::report(TypeMismatchError(owner_->location_, "class", type->repr()));
             return TypeRegistry::get_unknown();
         }
-        return type->cast<ClassType>();
+        return type->cast<InstanceType>();
     }();
     // Resolve implemented interfaces
     ComparableSpan interfaces =
@@ -1233,9 +1382,11 @@ inline void ASTClassSignature::eval_type_impl(
             std::pair<std::string_view, const Type*> result;
             result.first = field_decl->identifier_;
             TypeResolution field_type;
-            field_decl->type_->eval_type(checker, field_type);
+            field_decl->declared_type_->eval_type(checker, field_type);
             if (!field_type.is_sized()) {
-                Diagnostic::report(SymbolCategoryMismatchError(field_decl->type_->location_, true));
+                Diagnostic::report(
+                    SymbolCategoryMismatchError(field_decl->declared_type_->location_, true)
+                );
                 result.second = TypeRegistry::get_unknown();
             } else {
                 result.second = field_type;
@@ -1271,7 +1422,7 @@ inline void ASTClassSignature::eval_type_impl(
         ) |
         GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, FunctionOverloads>>();
     checker.exit();
-    out = TypeRegistry::get<ClassType>(
+    out = TypeRegistry::get<InstanceType>(
         checker.current_scope(),
         owner_->identifier_,
         extends_,

@@ -4,10 +4,28 @@
 #include "ZincBaseVisitor.h"
 #include "ZincLexer.h"
 #include "ZincParser.h"
+#include "antlr4-runtime.h"
 #include "ast.hpp"
 #include "builtins.hpp"
 #include "object.hpp"
 #include "source.hpp"
+
+class ErrorTracker : public antlr4::BaseErrorListener {
+public:
+    bool has_error = false;
+
+public:
+    virtual void syntaxError(
+        antlr4::Recognizer* recognizer,
+        antlr4::Token* offendingSymbol,
+        size_t line,
+        size_t charPositionInLine,
+        const std::string& msg,
+        std::exception_ptr e
+    ) override {
+        has_error = true;
+    }
+};
 
 class ASTBuilder final : private ZincBaseVisitor {
 private:
@@ -69,7 +87,13 @@ public:
         ZincLexer lexer(&input);
         antlr4::CommonTokenStream tokens(&lexer);
         ZincParser parser(&tokens);
+        ErrorTracker tracker;
+        lexer.addErrorListener(&tracker);
+        parser.addErrorListener(&tracker);
         antlr4::tree::ParseTree* tree = parser.program();
+        if (tracker.has_error) {
+            return nullptr;
+        }
         return static_cast<ASTRoot*>(transform(tree));
     }
 
@@ -209,8 +233,7 @@ private:
         ComparableSpan<std::string_view> implements =
             ctx->implements_ | std::views::transform([this](auto child) { return text(child); }) |
             GlobalMemory::collect<ComparableSpan<std::string_view>>();
-        ComparableSpan<ASTFieldDeclaration*> fields =
-            transform_list<ASTFieldDeclaration>(ctx->fields_);
+        ComparableSpan<ASTDeclaration*> fields = transform_list<ASTDeclaration>(ctx->fields_);
         ComparableSpan<ASTTypeAlias*> types = transform_list<ASTTypeAlias>(ctx->types_);
         ComparableSpan<ASTFunctionDefinition*> functions =
             transform_list<ASTFunctionDefinition>(ctx->functions_);
@@ -419,6 +442,13 @@ private:
         last_visited_ = new ASTMemberAccess(loc(ctx), target, text(ctx->member_));
         return {};
     }
+    antlrcpp::Any visitStructInitExpr(ZincParser::StructInitExprContext* ctx) noexcept final {
+        ASTExpression* struct_type = static_cast<ASTExpression*>(transform(ctx->struct_));
+        ComparableSpan<ASTFieldInitialization*> inits =
+            transform_list<ASTFieldInitialization>(ctx->inits_);
+        last_visited_ = new ASTStructInitialization(loc(ctx), struct_type, inits);
+        return {};
+    }
     antlrcpp::Any visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept final {
         last_visited_ = transform(ctx->inner_expr_);
         return {};
@@ -449,9 +479,9 @@ private:
             last_visited_ =
                 new ASTConstant(loc(ctx), text(ctx->value_), std::type_identity<BooleanValue>{});
             break;
-        case ZincParser::KW_NULL:
+        case ZincParser::KW_NULLPTR:
             last_visited_ =
-                new ASTConstant(loc(ctx), text(ctx->value_), std::type_identity<NullValue>{});
+                new ASTConstant(loc(ctx), text(ctx->value_), std::type_identity<NullptrValue>{});
             break;
         default:
             UNREACHABLE();
@@ -460,9 +490,6 @@ private:
     }
     antlrcpp::Any visitPrimitiveType(ZincParser::PrimitiveTypeContext* ctx) noexcept final {
         switch (ctx->primitive_->getType()) {
-        case ZincParser::KW_NULL:
-            last_visited_ = new ASTPrimitiveType(loc(ctx), &NullType::instance);
-            break;
         case ZincParser::KW_INT8:
             last_visited_ = new ASTPrimitiveType(loc(ctx), &IntegerType::i8_instance);
             break;
@@ -524,23 +551,36 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitRefType(ZincParser::RefTypeContext* ctx) noexcept final {
+    antlrcpp::Any visitMutableType(ZincParser::MutableTypeContext* ctx) noexcept final {
+        ASTExpression* inner_type = static_cast<ASTExpression*>(transform(ctx->inner_type_));
+        last_visited_ = new ASTMutableTypeExpr(loc(ctx), inner_type);
+        return {};
+    }
+    antlrcpp::Any visitReferenceType(ZincParser::ReferenceTypeContext* ctx) noexcept final {
         ASTExpression* inner_type = static_cast<ASTExpression*>(transform(ctx->inner_type_));
         last_visited_ = new ASTReferenceTypeExpr(loc(ctx), inner_type, false);
         return {};
     }
-    antlrcpp::Any visitMutRefType(ZincParser::MutRefTypeContext* ctx) noexcept final {
+    antlrcpp::Any visitPointerType(ZincParser::PointerTypeContext* ctx) noexcept final {
         ASTExpression* inner_type = static_cast<ASTExpression*>(transform(ctx->inner_type_));
-        last_visited_ = new ASTReferenceTypeExpr(loc(ctx), inner_type, true);
+        last_visited_ = new ASTPointerTypeExpr(loc(ctx), inner_type, false);
         return {};
     }
     antlrcpp::Any visitParenType(ZincParser::ParenTypeContext* ctx) noexcept final {
         last_visited_ = transform(ctx->inner_type_);
         return {};
     }
-    antlrcpp::Any visitField_declaration(ZincParser::Field_declarationContext* ctx) noexcept final {
+    antlrcpp::Any visitField_decl(ZincParser::Field_declContext* ctx) noexcept final {
         last_visited_ = new ASTFieldDeclaration(
             loc(ctx), text(ctx->identifier_), static_cast<ASTExpression*>(transform(ctx->type_))
+        );
+        return {};
+    }
+    antlrcpp::Any visitField_init(ZincParser::Field_initContext* ctx) noexcept final {
+        last_visited_ = new ASTFieldInitialization(
+            loc(ctx),
+            ctx->identifier_ ? text(ctx->identifier_) : "",
+            static_cast<ASTExpression*>(transform(ctx->value_))
         );
         return {};
     }

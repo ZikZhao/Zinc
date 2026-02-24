@@ -86,7 +86,7 @@ class_definition:
 			OP_COMMA implements_ += identifier
 		)*
 	)? OP_LBRACE (
-		fields_ += field_declaration
+		fields_ += declaration_statement
 		| types_ += type_alias
 		| functions_ += function_definition
 		| classes_ += class_definition
@@ -139,17 +139,19 @@ expr:
 	)? OP_RPAREN									# CallExpr
 	| OP_BITAND KW_MUT? inner_expr_ = expr			# AddressOfExpr
 	| target_ = expr OP_DOT member_ = identifier	# MemberAccessExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN		# ParenExpr;
+	| struct_ = type OP_LBRACE (
+		inits_ += field_init (OP_COMMA inits_ += field_init)*
+	)? OP_RBRACE								# StructInitExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr;
 
 identifier: name_ = T_IDENTIFIER;
 
 constant:
-	value_ = (T_INT | T_FLOAT | T_STRING | T_BOOL | KW_NULL);
+	value_ = (T_INT | T_FLOAT | T_STRING | T_BOOL | KW_NULLPTR);
 
 type:
 	primitive_ = (
-		KW_NULL
-		| KW_INT8
+		KW_INT8
 		| KW_INT16
 		| KW_INT32
 		| KW_INT64
@@ -161,26 +163,27 @@ type:
 		| KW_FLOAT64
 		| KW_STRING
 		| KW_BOOL
-	)													# PrimitiveType
-	| identifier_ = identifier							# IdentifierType
-	| OP_LBRACE fields_ += field_declaration* OP_RBRACE	# StructType
+	)							# PrimitiveType
+	| identifier_ = identifier	# IdentifierType
+	| OP_LBRACE (
+		fields_ += field_decl* (OP_COMMA fields_ += field_decl)
+	)? OP_RBRACE # StructType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
-	| inner_type_ = type OP_BITAND					# RefType
-	| KW_MUT inner_type_ = type OP_BITAND			# MutRefType
-	| inner_type_ = type OP_MUL						# PointerType
-	| KW_MUT inner_type_ = type OP_MUL				# MutPointerType
+	| KW_MUT inner_type_ = type						# MutableType
+	| OP_BITAND inner_type_ = type					# ReferenceType
+	| OP_MUL inner_type_ = type						# PointerType
 	| inner_type_ = type OP_QUESTION				# OptionalType
 	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
 
-field_declaration:
-	identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_SEMICOLON;
+field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
+
+field_init: identifier_ = T_IDENTIFIER OP_COLON value_ = expr;
 
 KW_LET: 'let';
 KW_MUT: 'mut';
 KW_CONST: 'const';
-KW_NULL: 'null';
 KW_INT8: 'i8';
 KW_INT16: 'i16';
 KW_INT32: 'i32';
@@ -193,6 +196,7 @@ KW_FLOAT32: 'f32';
 KW_FLOAT64: 'f64';
 KW_STRING: 'string';
 KW_BOOL: 'bool';
+KW_NULLPTR: 'nullptr';
 KW_IF: 'if';
 KW_ELSE: 'else';
 KW_SWITCH: 'switch';

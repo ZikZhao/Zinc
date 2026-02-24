@@ -12,16 +12,21 @@ let f: (i32, i32) -> i32 = add;
 
 let g = sub;
 
+type Node = {
+    value: i32,
+    next: *Node
+};
+
 class Base {
-    data: i32;
-    data2: f64;
+    let data: i32;
+    let data2: f64;
     fn add1() -> i32 {
         return data;
     }
 };
 
 class Derived {
-    data3: bool;
+    let data3: bool;
     fn sub1() -> i32 {
         if (data3) {
             return 1;
@@ -36,4 +41,5 @@ fn main() -> i32 {
     f(2, 3);
     g(5, 4);
     g(3.0, 2.0);
+    let b = Node{ value: 1, next: nullptr };
 }

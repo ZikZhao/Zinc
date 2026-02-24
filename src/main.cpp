@@ -32,6 +32,11 @@ int main(int argc, char* argv[]) {
     ASTBuilder builder(*sources.load(input_path), importer);
     ASTRoot* root = builder();
 
+    if (root == nullptr) {
+        Diagnostic::error("Failed to parse input");
+        return EXIT_FAILURE;
+    }
+
     Scope scope;
     OperationHandler ops;
     root->collect_symbols(scope, ops);
