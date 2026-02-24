@@ -20,8 +20,8 @@ type Node = {
 class Base {
     let data: i32;
     let data2: f64;
-    fn add1() -> i32 {
-        return data;
+    fn add1(other: i32) -> i32 {
+        return data + other;
     }
 };
 
@@ -36,10 +36,12 @@ class Derived {
     }
 };
 
-
 fn main() -> i32 {
     f(2, 3);
     g(5, 4);
     g(3.0, 2.0);
     let b = Node{ value: 1, next: nullptr };
+    let c = b.value;
+    let d = Base();
+    let e = d.add(1);
 }

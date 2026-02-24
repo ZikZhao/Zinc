@@ -35,11 +35,14 @@ class ASTFunctionDefinition;
 class ASTClassDefinition;
 class ASTTemplateDefinition;
 
+class Scope;
+
 using ScopeValue = PointerVariant<
     const ASTExpression*,                                // type alias
     Term*,                                               // constant/variable
     GlobalMemory::Vector<const ASTFunctionSignature*>*,  // function overloads
-    const ASTTemplateDefinition*>;                       // template definition
+    const ASTTemplateDefinition*,                        // template definition
+    const Scope*>;                                       // namespace
 
 class Scope final : public GlobalMemory::MemoryManaged {
     friend class TypeChecker;
@@ -123,7 +126,7 @@ public:
 class TypeChecker final {
 private:
     Scope* current_scope_;
-    GlobalMemory::Map<std::pair<const Scope*, std::string_view>, TypeResolution> id_cache_;
+    GlobalMemory::Map<std::pair<const Scope*, std::string_view>, TypeResolution> type_cache_;
     // GlobalMemory::FlatMap<std::pair<const Scope*, const ASTExpression*>, Type*> ptr_cache_;
 
 public:
@@ -142,7 +145,9 @@ public:
 
     Scope* current_scope() noexcept { return current_scope_; }
 
-    std::pair<const Scope*, const ScopeValue*> lookup(std::string_view identifier) const noexcept {
+    bool is_at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
+
+    std::pair<Scope*, const ScopeValue*> lookup(std::string_view identifier) const noexcept {
         Scope* scope = current_scope_;
         while (scope) {
             auto it = scope->identifiers_.find(identifier);
@@ -154,20 +159,9 @@ public:
         return {nullptr, nullptr};
     }
 
-    TypeResolution lookup_type(std::string_view identifier) {
-        return lookup_type_in(identifier, *current_scope_);
-    }
+    TypeResolution lookup_type(std::string_view identifier);
 
-    Term lookup_term(std::string_view identifier) {
-        return lookup_term_in(identifier, *current_scope_);
-    }
-
-    bool is_at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
-
-private:
-    TypeResolution lookup_type_in(std::string_view identifier, Scope& scope);
-
-    Term lookup_term_in(std::string_view identifier, Scope& scope);
+    Term lookup_term(std::string_view identifier);
 };
 
 class ASTNode : public GlobalMemory::MemoryManaged {
@@ -1226,57 +1220,45 @@ public:
 
 // ===================== Inline implementations =====================
 
-inline TypeResolution TypeChecker::lookup_type_in(std::string_view identifier, Scope& scope) {
+inline TypeResolution TypeChecker::lookup_type(std::string_view identifier) {
+    auto [scope, value] = lookup(identifier);
+    if (!scope) {
+        throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
+    } else if (!value->get<const ASTExpression*>()) {
+        /// TODO: template instantiation
+        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
+    }
     // Check cache
-    auto [it_id_cache, inserted] =
-        id_cache_.insert({std::pair{&scope, identifier}, TypeResolution()});
+    auto [it_id_cache, inserted] = type_cache_.insert({{scope, identifier}, TypeResolution()});
     if (!inserted) {
         return it_id_cache->second;
     }
     // Cache miss; resolve
-    auto it_id = scope.identifiers_.find(identifier);
-    if (it_id == scope.identifiers_.end()) {
-        if (scope.parent_ != nullptr) {
-            it_id_cache->second = lookup_type_in(identifier, *scope.parent_);
-            return it_id_cache->second;
-        }
-        throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
-    } else if (auto type = it_id->second.get<const ASTExpression*>()) {
-        Scope* previous_scope = std::exchange(current_scope_, &scope);
-        type->eval_type(*this, it_id_cache->second);
-        current_scope_ = previous_scope;
-        if (TypeRegistry::is_type_incomplete(it_id_cache->second)) {
-            const Type* incomplete_type = it_id_cache->second;
-            id_cache_.erase(it_id_cache);
-            return incomplete_type;
-        } else {
-            return it_id_cache->second;
-        }
-    } else if (it_id->second.get<Term*>()) {
-        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(false);
-    } else if (it_id->second.get<GlobalMemory::Vector<const ASTFunctionSignature*>*>()) {
-        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(false);
+    auto type_alias = value->get<const ASTExpression*>();
+    Scope* previous_scope = std::exchange(current_scope_, scope);
+    type_alias->eval_type(*this, it_id_cache->second);
+    current_scope_ = previous_scope;
+    // Ignore incomplete types in cache to prevent type interning bypassed
+    if (TypeRegistry::is_type_incomplete(it_id_cache->second)) {
+        const Type* incomplete_type = it_id_cache->second;
+        type_cache_.erase(it_id_cache);
+        return incomplete_type;
     } else {
-        /// TODO: template instantiation
-        assert(false);
+        return it_id_cache->second;
     }
 }
 
-inline Term TypeChecker::lookup_term_in(std::string_view identifier, Scope& scope) {
-    auto it = scope.identifiers_.find(identifier);
-    if (it == scope.identifiers_.end()) {
-        if (scope.parent_ != nullptr) {
-            return lookup_term_in(identifier, *scope.parent_);
-        }
+inline Term TypeChecker::lookup_term(std::string_view identifier) {
+    auto [scope, value] = lookup(identifier);
+    if (!scope) {
         throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
-    } else if (auto term = it->second.get<Term*>()) {
-        const Type* type = (*term)->dyn_type();
-        if (!type) {
-            type = (*term)->cast<Value>()->get_type();
-        }
+    }
+    if (value->get<const ASTExpression*>()) {
+        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
+    } else if (auto term = value->get<Term*>()) {
         return *term;
-    } else if (auto func = it->second.get<GlobalMemory::Vector<const ASTFunctionSignature*>*>()) {
-        Scope* previous_scope = std::exchange(current_scope_, &scope);
+    } else if (auto func = value->get<GlobalMemory::Vector<const ASTFunctionSignature*>*>()) {
+        Scope* previous_scope = std::exchange(current_scope_, scope);
         ComparableSpan<const Type*> overload_types =
             *func | std::views::transform([this](const ASTFunctionSignature* expr) -> const Type* {
                 const Object* overload = expr->eval(*this);
@@ -1290,10 +1272,8 @@ inline Term TypeChecker::lookup_term_in(std::string_view identifier, Scope& scop
             TypeRegistry::get<IntersectionType>(overload_types);
         current_scope_ = previous_scope;
         return Term(intersection_type, Term::Category::Var);
-    } else if (it->second.get<const ASTExpression*>()) {
-        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
     } else {
-        /// TODO: template instantiation
+        /// TODO: throw
         assert(false);
     }
 }

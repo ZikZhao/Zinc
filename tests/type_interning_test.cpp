@@ -20,12 +20,12 @@ TEST_F(TypeInterningTest, CoinductionComparisonWorks) {
     TypeResolution b = std::type_identity<StructType>();
     TypeResolution ref_a = std::type_identity<ReferenceType>();
 
-    ref_a.construct<ReferenceType>(a, false);
+    ref_a.construct<ReferenceType>(a);
 
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_b{{"a", ref_a}};
     b.construct<StructType>(std::move(fields_b));
 
-    ref_b.construct<ReferenceType>(b, false);
+    ref_b.construct<ReferenceType>(b);
 
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_a{{"b", ref_b}};
     a.construct<StructType>(std::move(fields_a));
@@ -37,13 +37,9 @@ TEST_F(TypeInterningTest, CoinductionComparisonWorks) {
 
 TEST_F(TypeInterningTest, ReferenceTypesAreInterned) {
     const auto* int_type = &IntegerType::untyped_instance;
-    const auto* ref1 = TypeRegistry::get<ReferenceType>(int_type, false);
-    const auto* ref2 = TypeRegistry::get<ReferenceType>(int_type, false);
+    const auto* ref1 = TypeRegistry::get<ReferenceType>(int_type);
+    const auto* ref2 = TypeRegistry::get<ReferenceType>(int_type);
     EXPECT_EQ(ref1, ref2) << "Reference types to same type should be interned";
-    const auto* mut_ref1 = TypeRegistry::get<ReferenceType>(int_type, true);
-    const auto* mut_ref2 = TypeRegistry::get<ReferenceType>(int_type, true);
-    EXPECT_EQ(mut_ref1, mut_ref2) << "Mutable reference types should be interned";
-    EXPECT_NE(ref1, mut_ref1) << "Mutable and immutable references should be different";
 }
 
 TEST_F(TypeInterningTest, SimpleStructTypesAreInterned) {
@@ -65,7 +61,7 @@ TEST_F(TypeInterningTest, RecursiveTypesAreInterned) {
     TypeResolution a = std::type_identity<StructType>();
     TypeResolution ref_a = std::type_identity<ReferenceType>();
     TypeRegistry::add_ref_dependency(ref_a, a);
-    TypeRegistry::get_at<ReferenceType>(ref_a, a, false);
+    TypeRegistry::get_at<ReferenceType>(ref_a, a);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields{{"a", ref_a}};
     TypeRegistry::get_at<StructType>(a, std::move(fields));
 
@@ -73,7 +69,7 @@ TEST_F(TypeInterningTest, RecursiveTypesAreInterned) {
     TypeResolution b = std::type_identity<StructType>();
     TypeResolution ref_b = std::type_identity<ReferenceType>();
     TypeRegistry::add_ref_dependency(ref_b, b);
-    TypeRegistry::get_at<ReferenceType>(ref_b, b, false);
+    TypeRegistry::get_at<ReferenceType>(ref_b, b);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields2{{"a", ref_b}};
     TypeRegistry::get_at<StructType>(b, std::move(fields2));
 
@@ -88,14 +84,14 @@ TEST_F(TypeInterningTest, VerticalCongruenceIsRespected) {
     TypeResolution ref_a = std::type_identity<ReferenceType>();
 
     TypeRegistry::add_ref_dependency(ref_a, a);
-    TypeRegistry::get_at<ReferenceType>(ref_a, a, false);
+    TypeRegistry::get_at<ReferenceType>(ref_a, a);
 
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_b{{"a", ref_a}};
     TypeRegistry::get_at<StructType>(b, std::move(fields_b));
 
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(ref_a))
         << "ref_a should be incomplete before defining ref_b";
-    TypeRegistry::get_at<ReferenceType>(ref_b, b, false);
+    TypeRegistry::get_at<ReferenceType>(ref_b, b);
 
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_a{{"a", ref_b}};
     TypeRegistry::get_at<StructType>(a, std::move(fields_a));
@@ -122,25 +118,25 @@ TEST_F(TypeInterningTest, HorizontalCongruenceIsRespected) {
 
     // C branch
     TypeRegistry::add_ref_dependency(c_ref_a, a);
-    TypeRegistry::get_at<ReferenceType>(c_ref_a, a, false);
+    TypeRegistry::get_at<ReferenceType>(c_ref_a, a);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_c{{"a", c_ref_a}};
     TypeRegistry::get_at<StructType>(c, std::move(fields_c));
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(c));
-    TypeRegistry::get_at<ReferenceType>(ref_c, c, false);
+    TypeRegistry::get_at<ReferenceType>(ref_c, c);
 
     // D branch
     TypeRegistry::add_ref_dependency(d_ref_a, a);
-    TypeRegistry::get_at<ReferenceType>(d_ref_a, a, false);
+    TypeRegistry::get_at<ReferenceType>(d_ref_a, a);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_d{{"a", d_ref_a}};
     TypeRegistry::get_at<StructType>(d, std::move(fields_d));
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(d));
-    TypeRegistry::get_at<ReferenceType>(ref_d, d, false);
+    TypeRegistry::get_at<ReferenceType>(ref_d, d);
 
     // B
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_b{{"c", ref_c}, {"d", ref_d}};
     TypeRegistry::get_at<StructType>(b, std::move(fields_b));
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(b));
-    TypeRegistry::get_at<ReferenceType>(ref_b, b, false);
+    TypeRegistry::get_at<ReferenceType>(ref_b, b);
 
     // A
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_a{{"b", ref_b}};
@@ -172,29 +168,29 @@ TEST_F(TypeInterningTest, IrregularHorizontalCongruenceIsRespected) {
 
     // C branch
     TypeRegistry::add_ref_dependency(c_ref_a, a);
-    TypeRegistry::get_at<ReferenceType>(c_ref_a, a, false);
+    TypeRegistry::get_at<ReferenceType>(c_ref_a, a);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_c{{"a", c_ref_a}};
     TypeRegistry::get_at<StructType>(c, std::move(fields_c));
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(c));
-    TypeRegistry::get_at<ReferenceType>(ref_c, c, false);
+    TypeRegistry::get_at<ReferenceType>(ref_c, c);
 
     // D branch
     TypeRegistry::add_ref_dependency(e_ref_a, a);
-    TypeRegistry::get_at<ReferenceType>(e_ref_a, a, false);
+    TypeRegistry::get_at<ReferenceType>(e_ref_a, a);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_e{{"a", e_ref_a}};
     TypeRegistry::get_at<StructType>(e, std::move(fields_e));
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(e));
-    TypeRegistry::get_at<ReferenceType>(ref_e, e, false);
+    TypeRegistry::get_at<ReferenceType>(ref_e, e);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_d{{"e", ref_e}};
     TypeRegistry::get_at<StructType>(d, std::move(fields_d));
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(d));
-    TypeRegistry::get_at<ReferenceType>(ref_d, d, false);
+    TypeRegistry::get_at<ReferenceType>(ref_d, d);
 
     // B
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_b{{"c", ref_c}, {"d", ref_d}};
     TypeRegistry::get_at<StructType>(b, std::move(fields_b));
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(b));
-    TypeRegistry::get_at<ReferenceType>(ref_b, b, false);
+    TypeRegistry::get_at<ReferenceType>(ref_b, b);
 
     // A
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_a{{"b", ref_b}};
@@ -221,13 +217,13 @@ TEST_F(TypeInterningTest, PartialCompleteTypesAreNotInterned) {
     TypeRegistry::add_ref_dependency(ref_a, a);
     TypeRegistry::add_ref_dependency(c_ref_b, b);
 
-    TypeRegistry::get_at<ReferenceType>(ref_a, a, false);
-    TypeRegistry::get_at<ReferenceType>(c_ref_b, b, false);
+    TypeRegistry::get_at<ReferenceType>(ref_a, a);
+    TypeRegistry::get_at<ReferenceType>(c_ref_b, b);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_c{{"a", ref_a}, {"b", c_ref_b}};
     TypeRegistry::get_at<StructType>(c, std::move(fields_c));
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(c));
 
-    TypeRegistry::get_at<ReferenceType>(ref_c, c, false);
+    TypeRegistry::get_at<ReferenceType>(ref_c, c);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_b{{"c", ref_c}};
     TypeRegistry::get_at<StructType>(b, std::move(fields_b));
     EXPECT_TRUE(TypeRegistry::is_type_incomplete(b));
@@ -248,16 +244,16 @@ TEST_F(TypeInterningTest, InterningBetweenBisimilarGraphsAtDifferenceRoot) {
     TypeRegistry::add_ref_dependency(c_ref_a, a);
     TypeRegistry::add_ref_dependency(b_ref_a, a);
 
-    TypeRegistry::get_at<ReferenceType>(c_ref_a, a, false);
+    TypeRegistry::get_at<ReferenceType>(c_ref_a, a);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_c{{"a", c_ref_a}};
     TypeRegistry::get_at<StructType>(c, std::move(fields_c));
 
-    TypeRegistry::get_at<ReferenceType>(ref_c, c, false);
-    TypeRegistry::get_at<ReferenceType>(b_ref_a, a, false);
+    TypeRegistry::get_at<ReferenceType>(ref_c, c);
+    TypeRegistry::get_at<ReferenceType>(b_ref_a, a);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_b{{"c", ref_c}, {"a", b_ref_a}};
     TypeRegistry::get_at<StructType>(b, std::move(fields_b));
 
-    TypeRegistry::get_at<ReferenceType>(ref_b, b, false);
+    TypeRegistry::get_at<ReferenceType>(ref_b, b);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_a{{"b", ref_b}};
     TypeRegistry::get_at<StructType>(a, std::move(fields_a));
 
@@ -275,16 +271,16 @@ TEST_F(TypeInterningTest, InterningBetweenBisimilarGraphsAtDifferenceRoot) {
     TypeRegistry::add_ref_dependency(ref_d, d);
     TypeRegistry::add_ref_dependency(f_ref_e, e);
 
-    TypeRegistry::get_at<ReferenceType>(ref_d, d, false);
-    TypeRegistry::get_at<ReferenceType>(f_ref_e, e, false);
+    TypeRegistry::get_at<ReferenceType>(ref_d, d);
+    TypeRegistry::get_at<ReferenceType>(f_ref_e, e);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_f{{"c", ref_d}, {"a", f_ref_e}};
     TypeRegistry::get_at<StructType>(f, std::move(fields_f));
 
-    TypeRegistry::get_at<ReferenceType>(ref_f, f, false);
+    TypeRegistry::get_at<ReferenceType>(ref_f, f);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_e{{"b", ref_f}};
     TypeRegistry::get_at<StructType>(e, std::move(fields_e));
 
-    TypeRegistry::get_at<ReferenceType>(d_ref_e, e, false);
+    TypeRegistry::get_at<ReferenceType>(d_ref_e, e);
     GlobalMemory::FlatMap<std::string_view, const Type*> fields_d{{"a", d_ref_e}};
     TypeRegistry::get_at<StructType>(d, std::move(fields_d));
 
