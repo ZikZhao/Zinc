@@ -93,7 +93,8 @@ class_definition:
 	)* OP_RBRACE OP_SEMICOLON;
 
 namespace_definition:
-	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += namespace_item* OP_RBRACE;
+	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += namespace_item* OP_RBRACE
+		OP_SEMICOLON;
 
 expr:
 	<assoc = right> left_ = expr op_ = (
@@ -134,7 +135,7 @@ expr:
 	) expr_ = expr				# UnaryExpr
 	| constant_ = constant		# ConstExpr
 	| identifier_ = identifier	# IdentifierExpr
-	| func_ = identifier OP_LPAREN (
+	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN									# CallExpr
 	| OP_BITAND KW_MUT? inner_expr_ = expr			# AddressOfExpr
@@ -172,7 +173,7 @@ type:
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
 	| KW_MUT inner_type_ = type						# MutableType
-	| OP_BITAND inner_type_ = type					# ReferenceType
+	| KW_MOVE? OP_BITAND inner_type_ = type			# ReferenceType
 	| OP_MUL inner_type_ = type						# PointerType
 	| inner_type_ = type OP_QUESTION				# OptionalType
 	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
@@ -213,6 +214,8 @@ KW_EXTENDS: 'extends';
 KW_IMPLEMENTS: 'implements';
 KW_STATIC: 'static';
 KW_NAMESPACE: 'namespace';
+KW_MOVE: 'move';
+KW_FORWARD: 'forward';
 
 OP_ADD: '+';
 OP_SUB: '-';

@@ -558,12 +558,12 @@ private:
     }
     antlrcpp::Any visitReferenceType(ZincParser::ReferenceTypeContext* ctx) noexcept final {
         ASTExpression* inner_type = static_cast<ASTExpression*>(transform(ctx->inner_type_));
-        last_visited_ = new ASTReferenceTypeExpr(loc(ctx), inner_type, false);
+        last_visited_ = new ASTReferenceTypeExpr(loc(ctx), inner_type, ctx->KW_MOVE() != nullptr);
         return {};
     }
     antlrcpp::Any visitPointerType(ZincParser::PointerTypeContext* ctx) noexcept final {
         ASTExpression* inner_type = static_cast<ASTExpression*>(transform(ctx->inner_type_));
-        last_visited_ = new ASTPointerTypeExpr(loc(ctx), inner_type, false);
+        last_visited_ = new ASTPointerTypeExpr(loc(ctx), inner_type);
         return {};
     }
     antlrcpp::Any visitParenType(ZincParser::ParenTypeContext* ctx) noexcept final {

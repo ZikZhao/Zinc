@@ -104,15 +104,34 @@ public:
         : TypeError(location, GlobalMemory::format_view("Type '{}' is not callable", type_repr)) {}
 };
 
-class ArgumentMismatchError final : public TypeError {
+class ArgumentCountMismatchError final : public TypeError {
 public:
-    ArgumentMismatchError(
+    ArgumentCountMismatchError(
         const Location& location, std::size_t expected_count, std::size_t actual_count
     )
         : TypeError(
               location,
               GlobalMemory::format_view(
                   "Argument count mismatch: expected {}, got {}", expected_count, actual_count
+              )
+          ) {}
+};
+
+class ArgumentMismatchError final : public TypeError {
+public:
+    ArgumentMismatchError(
+        const Location& location,
+        std::size_t index,
+        std::string_view expected,
+        std::string_view actual
+    )
+        : TypeError(
+              location,
+              GlobalMemory::format_view(
+                  "Argument type mismatch at index {}: expected '{}', got '{}'",
+                  index,
+                  expected,
+                  actual
               )
           ) {}
 };

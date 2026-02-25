@@ -12,6 +12,11 @@ let f: (i32, i32) -> i32 = add;
 
 let g = sub;
 
+namespace DataCenter {
+    let a = 1;
+    let b = 1.0;
+};
+
 type Node = {
     value: i32,
     next: *Node
@@ -40,6 +45,7 @@ fn main() -> i32 {
     f(2, 3);
     g(5, 4);
     g(3.0, 2.0);
+    let a = DataCenter.a;
     let b = Node{ value: 1, next: nullptr };
     let c = b.value;
     let d = Base();

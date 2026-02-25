@@ -81,7 +81,30 @@ private:
     static constexpr std::size_t mask = std::bit_ceil(sizeof...(Ts)) - 1;
 
     template <typename U>
-    static constexpr bool IsCandidate = TypeInTupleV<U, std::tuple<Ts...>>;
+    static constexpr bool IsCandidate = std::disjunction_v<std::is_convertible<U, Ts>...>;
+
+    template <typename U, typename... Us>
+    struct Index {};
+
+    template <typename U, typename Head>
+        requires std::is_convertible_v<U, Head>
+    struct Index<U, Head> {
+        static constexpr std::size_t value = 0;
+    };
+
+    template <typename U, typename Head, typename... Tail>
+        requires std::is_convertible_v<U, Head>
+    struct Index<U, Head, Tail...> {
+        static constexpr std::size_t value = 0;
+    };
+
+    template <typename U, typename Head, typename... Tail>
+    struct Index<U, Head, Tail...> {
+        static constexpr std::size_t value = 1 + Index<U, Tail...>::value;
+    };
+
+    template <typename U>
+    static constexpr std::size_t IndexV = Index<U, Ts...>::value;
 
 private:
     std::uintptr_t ptr_;
@@ -91,8 +114,7 @@ public:
 
     template <typename T>
         requires(IsCandidate<T>)
-    PointerVariant(T ptr) noexcept
-        : ptr_(reinterpret_cast<std::uintptr_t>(ptr) | IndexOfTypeInTupleV<T, Ts...>) {
+    PointerVariant(T ptr) noexcept : ptr_(reinterpret_cast<std::uintptr_t>(ptr) | IndexV<T>) {
         static_assert(
             alignof(T) >= sizeof...(Ts),
             "PointerVariant targets must have alignment >= sizeof...(Ts) to store the type tag."
@@ -103,7 +125,7 @@ public:
     template <typename T>
         requires(IsCandidate<T>)
     T get() const noexcept {
-        constexpr std::size_t index = IndexOfTypeInTupleV<T, Ts...>;
+        constexpr std::size_t index = IndexV<T>;
         return ((ptr_ & mask) == index) ? reinterpret_cast<T>(ptr_ & ~mask) : nullptr;
     }
 };
