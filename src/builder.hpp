@@ -233,17 +233,27 @@ private:
         ComparableSpan<std::string_view> implements =
             ctx->implements_ | std::views::transform([this](auto child) { return text(child); }) |
             GlobalMemory::collect<ComparableSpan<std::string_view>>();
+        ComparableSpan<ASTConstructorDestructorDefinition*> constructors =
+            transform_list<ASTConstructorDestructorDefinition>(ctx->constructor_);
+        ComparableSpan<ASTConstructorDestructorDefinition*> destructors =
+            transform_list<ASTConstructorDestructorDefinition>(ctx->destructor_);
         ComparableSpan<ASTDeclaration*> fields = transform_list<ASTDeclaration>(ctx->fields_);
         ComparableSpan<ASTTypeAlias*> types = transform_list<ASTTypeAlias>(ctx->types_);
         ComparableSpan<ASTFunctionDefinition*> functions =
             transform_list<ASTFunctionDefinition>(ctx->functions_);
         ComparableSpan<ASTClassDefinition*> classes =
             transform_list<ASTClassDefinition>(ctx->classes_);
+        if (destructors.size() > 1) {
+            /// TODO: thread safety
+            Diagnostic::report(DuplicateDestructorError(destructors[1]->location_));
+        }
         last_visited_ = new ASTClassDefinition(
             loc(ctx),
             text(ctx->identifier_),
             ctx->extends_ ? text(ctx->extends_) : "",
             implements,
+            constructors,
+            destructors.empty() ? nullptr : destructors[0],
             fields,
             types,
             functions,
@@ -581,6 +591,20 @@ private:
             loc(ctx),
             ctx->identifier_ ? text(ctx->identifier_) : "",
             static_cast<ASTExpression*>(transform(ctx->value_))
+        );
+        return {};
+    }
+    antlrcpp::Any visitConstructor(ZincParser::ConstructorContext* ctx) noexcept final {
+        ComparableSpan<ASTFunctionParameter*> parameters =
+            transform_list<ASTFunctionParameter>(ctx->parameters_);
+        ComparableSpan<ASTNode*> body = transform_list(ctx->body_);
+        last_visited_ = new ASTConstructorDestructorDefinition(loc(ctx), parameters, body);
+        return {};
+    }
+    antlrcpp::Any visitDestructor(ZincParser::DestructorContext* ctx) noexcept final {
+        ComparableSpan<ASTNode*> body = transform_list(ctx->body_);
+        last_visited_ = new ASTConstructorDestructorDefinition(
+            loc(ctx), ComparableSpan<ASTFunctionParameter*>{}, body
         );
         return {};
     }

@@ -172,6 +172,12 @@ public:
         : TypeError(location, "Cannot multiply string by non-positive integer") {}
 };
 
+class DuplicateDestructorError final : public TypeError {
+public:
+    DuplicateDestructorError(const Location& location)
+        : TypeError(location, "Multiple destructors defined for a class") {}
+};
+
 class AttributeError : public TypeError {
 public:
     AttributeError(const Location& location, std::string_view message)

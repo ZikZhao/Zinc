@@ -30,7 +30,6 @@ class ASTContinueStatement;
 class ASTBreakStatement;
 class ASTReturnStatement;
 class ASTFunctionParameter;
-class ASTFunctionSignature;
 class ASTFunctionDefinition;
 class ASTClassDefinition;
 class ASTTemplateDefinition;
@@ -38,11 +37,11 @@ class ASTTemplateDefinition;
 class Scope;
 
 using ScopeValue = PointerVariant<
-    const ASTExpression*,                                // type alias
-    Term*,                                               // constant/variable
-    GlobalMemory::Vector<const ASTFunctionSignature*>*,  // function overloads
-    const ASTTemplateDefinition*,                        // template definition
-    const Scope*>;                                       // namespace
+    const ASTExpression*,                                 // type alias
+    Term*,                                                // constant/variable
+    GlobalMemory::Vector<const ASTFunctionDefinition*>*,  // function overloads
+    const ASTTemplateDefinition*,                         // template definition
+    const Scope*>;                                        // namespace
 
 class Scope final : public GlobalMemory::MemoryManaged {
     friend class TypeChecker;
@@ -95,14 +94,14 @@ public:
         }
     }
 
-    void add_function(std::string_view identifier, const ASTFunctionSignature* expr) {
+    void add_function(std::string_view identifier, const ASTFunctionDefinition* expr) {
         if (auto it = identifiers_.find(identifier); it == identifiers_.end()) {
             auto overloads =
-                GlobalMemory::alloc<GlobalMemory::Vector<const ASTFunctionSignature*>>();
+                GlobalMemory::alloc<GlobalMemory::Vector<const ASTFunctionDefinition*>>();
             overloads->push_back(expr);
             identifiers_[identifier] = overloads;
         } else {
-            auto overloads = it->second.get<GlobalMemory::Vector<const ASTFunctionSignature*>*>();
+            auto overloads = it->second.get<GlobalMemory::Vector<const ASTFunctionDefinition*>*>();
             if (!overloads) {
                 throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
             }
@@ -685,6 +684,7 @@ public:
             } else if (auto func_type = func_term->dyn_cast<FunctionType>()) {
                 try {
                     func_type->validate(args_terms);
+                    return Term(func_type->return_type_, Term::Category::RValue);
                 } catch (UnlocatedProblem& e) {
                     e.report_at(location_);
                     return Term::unknown();
@@ -1074,13 +1074,6 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
-class ASTFunctionSignature final {
-public:
-    const ASTFunctionDefinition* owner_;
-    ASTFunctionSignature(const ASTFunctionDefinition* owner) noexcept : owner_(owner) {}
-    const Object* eval(TypeChecker& checker) const noexcept;
-};
-
 class ASTFunctionDefinition final : public ASTNode {
 public:
     std::string_view identifier_;
@@ -1089,7 +1082,6 @@ public:
     ComparableSpan<ASTNode*> body_;
     bool is_const_;
     bool is_static_;
-    ASTFunctionSignature* signature_;
 
 public:
     ASTFunctionDefinition(
@@ -1107,10 +1099,9 @@ public:
           return_type_(return_type),
           body_(body),
           is_const_(is_const),
-          is_static_(is_static),
-          signature_(new ASTFunctionSignature(this)) {}
+          is_static_(is_static) {}
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
-        scope.add_function(identifier_, signature_);
+        scope.add_function(identifier_, this);
         Scope& local_scope = Scope::create(&body_, scope);
         for (auto& stmt : body_) {
             stmt->collect_symbols(local_scope, ops);
@@ -1128,6 +1119,23 @@ public:
         }
         checker.exit();
     }
+    const Object* get_func_obj(TypeChecker& checker) const noexcept {
+        bool any_error = false;
+        ComparableSpan params =
+            parameters_ | std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
+                TypeResolution param_type;
+                param->type_->eval_type(checker, param_type);
+                return param_type;
+            }) |
+            GlobalMemory::collect<ComparableSpan<const Type*>>();
+        if (any_error) {
+            return TypeRegistry::get_unknown();
+        }
+        TypeResolution return_type;
+        return_type_->eval_type(checker, return_type);
+        /// TODO: handle constexpr functions
+        return TypeRegistry::get<FunctionType>(params, return_type);
+    }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
@@ -1138,17 +1146,45 @@ public:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final;
 };
 
+class ASTConstructorDestructorDefinition final : public ASTNode {
+public:
+    ComparableSpan<ASTFunctionParameter*> parameters_;
+    ComparableSpan<ASTNode*> body_;
+
+public:
+    ASTConstructorDestructorDefinition(
+        const Location& loc,
+        ComparableSpan<ASTFunctionParameter*> parameters,
+        ComparableSpan<ASTNode*> body
+    ) noexcept
+        : ASTNode(loc), parameters_(parameters), body_(body) {}
+    const Object* get_func_obj(TypeChecker& checker) const noexcept {
+        bool any_error = false;
+        ComparableSpan params =
+            parameters_ | std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
+                TypeResolution param_type;
+                param->type_->eval_type(checker, param_type);
+                return param_type;
+            }) |
+            GlobalMemory::collect<ComparableSpan<const Type*>>();
+        if (any_error) {
+            return TypeRegistry::get_unknown();
+        }
+        return TypeRegistry::get<FunctionType>(params, nullptr);
+    }
+};
+
 class ASTClassDefinition final : public ASTNode {
 public:
     std::string_view identifier_;
     std::string_view extends_;
     ComparableSpan<std::string_view> implements_;
+    ComparableSpan<ASTConstructorDestructorDefinition*> constructors_;
+    ASTConstructorDestructorDefinition* destructor_;
     ComparableSpan<ASTDeclaration*> fields_;
     ComparableSpan<ASTTypeAlias*> aliases_;
     ComparableSpan<ASTFunctionDefinition*> functions_;
     ComparableSpan<ASTClassDefinition*> classes_;
-
-    ASTClassSignature* signature_;
 
 public:
     ASTClassDefinition(
@@ -1156,6 +1192,8 @@ public:
         std::string_view identifier,
         std::string_view extends,
         ComparableSpan<std::string_view> implements,
+        ComparableSpan<ASTConstructorDestructorDefinition*> constructors,
+        ASTConstructorDestructorDefinition* destructor,
         ComparableSpan<ASTDeclaration*> fields,
         ComparableSpan<ASTTypeAlias*> aliases,
         ComparableSpan<ASTFunctionDefinition*> functions,
@@ -1165,12 +1203,14 @@ public:
           identifier_(identifier),
           extends_(extends),
           implements_(implements),
+          constructors_(constructors),
+          destructor_(destructor),
           fields_(fields),
           aliases_(aliases),
           functions_(functions),
-          classes_(classes),
-          signature_(new ASTClassSignature(this)) {}
+          classes_(classes) {}
     void collect_symbols(Scope& scope, OperationHandler& ops) final {
+        scope.add_type(identifier_, new ASTClassSignature(this));
         Scope& static_scope = Scope::create(this, scope, identifier_);
         Scope& instance_scope = Scope::create(&identifier_, static_scope);
         for (auto& func : functions_) {
@@ -1343,21 +1383,24 @@ inline Term TypeChecker::lookup_term(std::string_view identifier) {
         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
     } else if (auto term = value->get<Term*>()) {
         return *term;
-    } else if (auto func = value->get<GlobalMemory::Vector<const ASTFunctionSignature*>*>()) {
-        Scope* previous_scope = std::exchange(current_scope_, scope);
+    } else if (auto func = value->get<GlobalMemory::Vector<const ASTFunctionDefinition*>*>()) {
+        TypeCheckerGuard guard(*this, scope);
         ComparableSpan<const Type*> overload_types =
-            *func | std::views::transform([this](const ASTFunctionSignature* expr) -> const Type* {
-                const Object* overload = expr->eval(*this);
+            *func | std::views::transform([this](const ASTFunctionDefinition* expr) -> const Type* {
+                const Object* overload = expr->get_func_obj(*this);
                 if (auto type = overload->dyn_type()) {
                     return type->cast<FunctionType>();
                 }
                 return overload->cast<FunctionValue>()->get_type();
             }) |
             GlobalMemory::collect<ComparableSpan<const Type*>>();
-        const IntersectionType* intersection_type =
-            TypeRegistry::get<IntersectionType>(overload_types);
-        current_scope_ = previous_scope;
-        return Term(intersection_type, Term::Category::Var);
+        if (overload_types.size() == 1) {
+            return Term(overload_types[0], Term::Category::Var);
+        } else {
+            const IntersectionType* intersection_type =
+                TypeRegistry::get<IntersectionType>(overload_types);
+            return Term(intersection_type, Term::Category::Var);
+        }
     } else {
         /// TODO: throw
         assert(false);
@@ -1371,24 +1414,6 @@ inline ASTRoot::ASTRoot(const Location& loc, ComparableSpan<ASTNode*> statements
             func_decl->is_static_ = true;
         }
     }
-}
-
-inline const Object* ASTFunctionSignature::eval(TypeChecker& checker) const noexcept {
-    bool any_error = false;
-    ComparableSpan params = owner_->parameters_ |
-                            std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
-                                TypeResolution param_type;
-                                param->type_->eval_type(checker, param_type);
-                                return param_type;
-                            }) |
-                            GlobalMemory::collect<ComparableSpan<const Type*>>();
-    if (any_error) {
-        return TypeRegistry::get_unknown();
-    }
-    TypeResolution return_type;
-    owner_->return_type_->eval_type(checker, return_type);
-    /// TODO: handle constexpr functions
-    return TypeRegistry::get<FunctionType>(params, return_type);
 }
 
 inline void ASTClassSignature::eval_type_impl(

@@ -86,7 +86,9 @@ class_definition:
 			OP_COMMA implements_ += identifier
 		)*
 	)? OP_LBRACE (
-		fields_ += declaration_statement
+		constructor_ += constructor
+		| destructor_ += destructor
+		| fields_ += declaration_statement
 		| types_ += type_alias
 		| functions_ += function_definition
 		| classes_ += class_definition
@@ -182,6 +184,16 @@ field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 
 field_init: identifier_ = T_IDENTIFIER OP_COLON value_ = expr;
 
+constructor:
+	KW_INIT OP_LPAREN (
+		parameters_ += parameter (
+			OP_COMMA parameters_ += parameter
+		)*
+	)? OP_RPAREN OP_LBRACE body_ += statement* OP_RBRACE;
+
+destructor:
+	KW_DROP OP_LPAREN OP_RPAREN OP_LBRACE body_ += statement* OP_RBRACE;
+
 KW_LET: 'let';
 KW_MUT: 'mut';
 KW_CONST: 'const';
@@ -212,6 +224,8 @@ KW_TYPE: 'type';
 KW_CLASS: 'class';
 KW_EXTENDS: 'extends';
 KW_IMPLEMENTS: 'implements';
+KW_INIT: 'init';
+KW_DROP: 'drop';
 KW_STATIC: 'static';
 KW_NAMESPACE: 'namespace';
 KW_MOVE: 'move';
