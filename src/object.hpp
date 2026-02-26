@@ -68,7 +68,7 @@ concept TypeClass = std::derived_from<T, Type> && !std::is_abstract_v<T>;
 template <typename V>
 concept ValueClass = std::derived_from<V, Value> && !std::is_abstract_v<V>;
 
-using FunctionOverloads = GlobalMemory::Vector<const Object*>;
+using FunctionOverloadVector = GlobalMemory::Vector<const Object*>;
 
 class TypeDependencyGraph {
 public:
@@ -302,12 +302,9 @@ public:
 class Term : public GlobalMemory::MemoryManaged {
 public:
     enum class Category {
-        Type,        // a type -> const Type*
-        CompConst,   // a compile-time constant value -> Value*
-        CompVar,     // a compile-time variable -> Value*
-        CompRValue,  // a compile-time temporary value -> Value*
-        Var,         // a runtime variable -> const Type*
-        RValue,      // a runtime temporary value -> const Type*
+        Type,      // a type -> const Type*
+        Comptime,  // a compile-time value -> Value*
+        Runtime,   // a runtime value -> const Type*
     };
 
 public:
@@ -322,17 +319,10 @@ private:
     Category category_;
 
 public:
-    Term(const Type* type, Category category) noexcept : type_(type), category_(category) {
-        assert(
-            category == Category::Type || category == Category::Var || category == Category::RValue
-        );
-    }
-    Term(Value* value, Category category) noexcept : value_(value), category_(category) {
-        assert(
-            category == Category::CompConst || category == Category::CompVar ||
-            category == Category::CompRValue
-        );
-    }
+    explicit Term(const Object* obj) noexcept;
+    explicit Term(const Type* type, bool is_type = false) noexcept
+        : type_(type), category_(is_type ? Category::Type : Category::Runtime) {}
+    explicit Term(Value* value) noexcept : value_(value), category_(Category::Comptime) {}
 
 public:
     Term() noexcept = default;
@@ -341,20 +331,16 @@ public:
     const Type* effective_type() const noexcept;
 
     bool is_unknown() const noexcept;
-    bool is_comptime() const noexcept {
-        return category_ == Category::CompConst || category_ == Category::CompVar ||
-               category_ == Category::CompRValue;
-    }
-    bool is_lvalue() const noexcept {
-        return category_ == Category::CompVar || category_ == Category::Var;
-    }
     bool is_type() const noexcept { return category_ == Category::Type; }
+    bool is_comptime() const noexcept { return category_ == Category::Comptime; }
     Value* get_comptime() const noexcept { return is_comptime() ? value_ : nullptr; }
 };
 
 class Object : public GlobalMemory::MemoryManaged {
 public:
     Kind kind_;
+
+private:
     bool is_type_;
 
 public:
@@ -623,21 +609,6 @@ public:
         return !has_incomplete_child;
     }
 
-    void validate(ComparableSpan<Term> args) const {
-        if (args.size() != parameters_.size()) {
-            throw UnlocatedProblem::make<ArgumentCountMismatchError>(
-                parameters_.size(), args.size()
-            );
-        }
-        for (std::size_t i = 0; i < args.size(); ++i) {
-            if (!parameters_[i]->assignable_from(args[i].effective_type())) {
-                throw UnlocatedProblem::make<ArgumentMismatchError>(
-                    i, parameters_[i]->repr(), args[i].effective_type()->repr()
-                );
-            }
-        }
-    }
-
     Value* default_construct() const noexcept final;
 
 protected:
@@ -846,15 +817,15 @@ class InstanceType : public Type {
 public:
     static constexpr Kind kind = Kind::Instance;
 
-private:
+public:
     const void* scope_;
     std::string_view identifier_;
     const Type* extends_;
     ComparableSpan<const Type*> implements_;
-    FunctionOverloads constructors_;
+    FunctionOverloadVector constructors_;
     const Object* destructor_;
     GlobalMemory::FlatMap<std::string_view, const Type*> attr_;
-    GlobalMemory::FlatMap<std::string_view, FunctionOverloads> methods_;
+    GlobalMemory::FlatMap<std::string_view, FunctionOverloadVector> methods_;
 
 public:
     InstanceType(
@@ -862,10 +833,10 @@ public:
         std::string_view identifier,
         const Type* extends,
         ComparableSpan<const Type*> interfaces,
-        FunctionOverloads constructors,
+        FunctionOverloadVector constructors,
         const Object* destructor,
         GlobalMemory::FlatMap<std::string_view, const Type*> attr,
-        GlobalMemory::FlatMap<std::string_view, FunctionOverloads> methods
+        GlobalMemory::FlatMap<std::string_view, FunctionOverloadVector> methods
     ) noexcept
         : Type(kind),
           scope_(scope),
@@ -883,13 +854,11 @@ public:
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
 
-    void validate(ComparableSpan<Term> args) const;
-
     Value* default_construct() const noexcept final {
         /// TODO:
     }
 
-    FunctionOverloads get_method(std::string_view name) const {
+    FunctionOverloadVector get_method(std::string_view name) const {
         auto it = methods_.find(name);
         if (it == methods_.end()) {
             throw UnlocatedProblem::make<AttributeError>(
@@ -1671,15 +1640,15 @@ class ReferenceValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Reference;
 
-private:
+public:
     const ReferenceType* type_;
-    Value** referenced_value_;
+    Value* referenced_value_;
 
 public:
-    ReferenceValue(const ReferenceType* type, Value** referenced_value) noexcept
+    ReferenceValue(const ReferenceType* type, Value* referenced_value) noexcept
         : Value(kind), type_(type), referenced_value_(referenced_value) {}
     std::string_view repr() const final {
-        return GlobalMemory::format_view("&{}", (*referenced_value_)->repr());
+        return GlobalMemory::format_view("&{}", referenced_value_->repr());
     }
     const ReferenceType* get_type() const noexcept final { return type_; }
     ReferenceValue* clone() const noexcept final { return new ReferenceValue(*this); }
@@ -1699,7 +1668,7 @@ class PointerValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Pointer;
 
-private:
+public:
     const PointerType* type_;
     Value* pointed_value_;
 
@@ -1725,6 +1694,55 @@ public:
     void assign_from(Value* source) final {
         PointerValue* ptr_source = source->cast<PointerValue>();
         this->pointed_value_ = ptr_source->pointed_value_;
+    }
+};
+
+class FunctionOverloadSet final : public Value {
+public:
+    static constexpr Kind kind = Kind::Intersection;
+
+public:
+    const Type* type_;
+    GlobalMemory::Vector<const Object*> overloads_;
+
+public:
+    FunctionOverloadSet(GlobalMemory::Vector<const Object*> overloads) noexcept
+        : Value(kind), type_(compute_type(overloads)), overloads_(std::move(overloads)) {}
+    std::string_view repr() const final {
+        return GlobalMemory::format_view(
+            "function overload set with {} overloads", overloads_.size()
+        );
+    }
+    const Type* get_type() const noexcept final { return type_; }
+    FunctionOverloadSet* clone() const noexcept final { return new FunctionOverloadSet(*this); }
+    FunctionOverloadSet* resolve_to(const Type* target) const final {
+        if (target && !target->assignable_from(get_type())) {
+            throw UnlocatedProblem::make<TypeMismatchError>(
+                "function overload set", target->repr()
+            );
+        }
+        return new FunctionOverloadSet(*this);
+    }
+    void assign_from(Value* source) final {
+        FunctionOverloadSet* set_source = source->cast<FunctionOverloadSet>();
+        this->overloads_ = set_source->overloads_;
+    }
+
+private:
+    const Type* compute_type(const GlobalMemory::Vector<const Object*>& overloads) const noexcept {
+        if (overloads.size() == 1) {
+            return overloads[0]->dyn_type() ? overloads[0]->cast<Type>()
+                                            : overloads[0]->cast<Value>()->get_type();
+        } else {
+            GlobalMemory::Vector<const Type*> types;
+            for (const Object* overload : overloads) {
+                types.push_back(
+                    overload->dyn_type() ? overload->cast<Type>()
+                                         : overload->cast<Value>()->get_type()
+                );
+            }
+            return TypeRegistry::get<IntersectionType>(types);
+        }
     }
 };
 
@@ -1823,17 +1841,17 @@ inline const Type* TypeRegistry::simplify_recursive_type(
     return interned_type;
 }
 
-inline Term Term::unknown() noexcept {
-    return Term(&UnknownType::instance, Term::Category::RValue);
-}
+inline Term Term::unknown() noexcept { return Term(&UnknownType::instance); }
 
 inline bool Term::is_unknown() const noexcept { return ptr_->kind_ == Kind::Unknown; }
 
 inline const Type* Term::effective_type() const noexcept {
-    if (auto type = ptr_->dyn_type()) {
-        return type;
+    if (category_ == Category::Comptime) {
+        return value_->get_type();
+    } else if (category_ == Category::Runtime) {
+        return type_;
     } else {
-        return ptr_->cast<Value>()->get_type();
+        return nullptr;
     }
 }
 
@@ -1930,23 +1948,6 @@ inline Value* StructType::default_construct() const noexcept {
         return nullptr;
     }
     return new StructValue(this, std::move(values));
-}
-
-inline void InstanceType::validate(ComparableSpan<Term> args) const {
-    for (const Object* constructor : constructors_) {
-        const FunctionType* func_type = constructor->is_type_
-                                            ? constructor->cast<FunctionType>()
-                                            : constructor->cast<FunctionValue>()->type_;
-        if (func_type->parameters_.size() == args.size()) {
-            try {
-                func_type->validate(args);
-                return;
-            } catch (const UnlocatedProblem& e) {
-                // continue to try other overloads
-            }
-        }
-    }
-    throw UnlocatedProblem::make<ArgumentMismatchError>(0, repr(), "given arguments");
 }
 
 inline Value* MutableType::default_construct() const noexcept {

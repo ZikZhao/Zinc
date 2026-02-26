@@ -318,26 +318,6 @@ constexpr std::string_view GetOperatorString(OperatorCode opcode) {
     }
 }
 
-class TermSpec {
-public:
-    std::uintptr_t ptr_;
-
-public:
-    TermSpec(Term term) noexcept
-        : ptr_(
-              reinterpret_cast<std::uintptr_t>(term.effective_type()) |
-              static_cast<std::uintptr_t>(term.is_lvalue())
-          ) {
-        static_assert(alignof(Type) >= 8);
-        assert(term.effective_type() != nullptr);
-    }
-    operator bool() const noexcept { return ptr_ != 0; }
-    operator const Type*() const noexcept {
-        return reinterpret_cast<const Type*>(ptr_ & ~std::uintptr_t(1));
-    }
-    bool is_mutable() const noexcept { return (ptr_ & 1) != 0; }
-};
-
 namespace PrimitiveOperations {
 
 template <OperatorGroup G>
@@ -584,7 +564,7 @@ public:
                 return func_value->invoke(GlobalMemory::pack_array(left, right));
             } else {
                 auto func_type = it->second->cast<FunctionType>();
-                return Term(func_type->return_type_, Term::Category::RValue);
+                return Term(func_type->return_type_);
             }
         } else {
             if (const Object* instantiated = try_instantiate(opcode, left_type, right_type)) {
@@ -593,16 +573,35 @@ public:
                     if (comptime) {
                         return func_value->invoke(GlobalMemory::pack_array(left, right));
                     } else {
-                        return Term(func_value->get_type()->return_type_, Term::Category::RValue);
+                        return Term(func_value->get_type()->return_type_);
                     }
                 } else {
                     auto func_type = instantiated->cast<FunctionType>();
-                    return Term(func_type->return_type_, Term::Category::RValue);
+                    return Term(func_type->return_type_);
                 }
             }
             throw UnlocatedProblem::make<OperationNotDefinedError>(
                 GetOperatorString(opcode), left->repr(), right ? right->repr() : ""
             );
+        }
+    }
+
+    Term eval_term_call(Term callee, ComparableSpan<Term> args) {
+        Term decayed_callee = callee_decay(callee);
+        GlobalMemory::Vector<const Object*> overloads = list_overloads(decayed_callee);
+        if (overloads.empty()) {
+            if (decayed_callee.is_type()) {
+                /// TODO: throw type is not callable error
+            } else {
+                throw UnlocatedProblem::make<OperationNotDefinedError>("call", callee->repr(), "");
+            }
+        }
+        const Object* overload = overload_resolution(std::move(overloads), args);
+        if (auto func_value = overload->dyn_cast<FunctionValue>()) {
+            return func_value->invoke(args);
+        } else {
+            auto func_type = overload->cast<FunctionType>();
+            return Term(func_type->return_type_);
         }
     }
 
@@ -613,6 +612,80 @@ public:
     }
 
 private:
+    bool is_prvalue(Term term) const { return term->kind_ != Kind::Reference; }
+
+    bool is_lvalue(Term term) const {
+        return term->kind_ == Kind::Reference &&
+               !term.effective_type()->cast<ReferenceType>()->is_moved_;
+    }
+
+    bool is_xvalue(Term term) const {
+        return term->kind_ == Kind::Reference &&
+               term.effective_type()->cast<ReferenceType>()->is_moved_;
+    }
+
+    Term callee_decay(Term term) const {
+        if (term.is_type()) {
+            if (auto cls_type = term->dyn_cast<InstanceType>()) {
+                return Term(new FunctionOverloadSet(cls_type->constructors_));
+            }
+        } else {
+            if (auto ref_value = term->dyn_cast<ReferenceValue>()) {
+                return callee_decay(Term(ref_value->referenced_value_));
+            } else if (auto ref_type = term->dyn_cast<ReferenceType>()) {
+                return callee_decay(Term(ref_type->referenced_type_));
+            } else if (auto ptr_value = term->dyn_cast<PointerValue>()) {
+                return callee_decay(Term(ptr_value->pointed_value_));
+            } else if (auto ptr_type = term->dyn_cast<PointerType>()) {
+                return callee_decay(Term(ptr_type->pointed_type_));
+            }
+        }
+        return term;
+    }
+
+    GlobalMemory::Vector<const Object*> list_overloads(Term func) const {
+        if (func.is_type()) return {};
+        if (auto overload_set = func->dyn_cast<FunctionOverloadSet>()) {
+            return overload_set->overloads_;
+        } else if (auto intersection_type = func->dyn_cast<IntersectionType>()) {
+            return intersection_type->types_ |
+                   GlobalMemory::collect<GlobalMemory::Vector<const Object*>>();
+        } else if (auto func_value = func->dyn_cast<FunctionValue>()) {
+            return {func_value};
+        } else if (auto func_type = func->dyn_cast<FunctionType>()) {
+            return {func_type};
+        } else {
+            return {};
+        }
+    }
+
+    const Object* overload_resolution(
+        GlobalMemory::Vector<const Object*> overloads, ComparableSpan<Term> args
+    ) const {
+        const Object* best_candidate = nullptr;
+        GlobalMemory::Vector<const Type*> args_types =
+            args | std::views::transform([](Term arg) { return arg.effective_type(); }) |
+            GlobalMemory::collect<GlobalMemory::Vector<const Type*>>();
+        for (const Object* candidate : overloads) {
+            bool satisfies = true;
+            const FunctionType* func_type = candidate->dyn_cast<FunctionType>();
+            if (!func_type) func_type = candidate->cast<FunctionValue>()->get_type();
+            for (std::size_t i = 0; i < func_type->parameters_.size(); ++i) {
+                if (!func_type->parameters_[i]->assignable_from(args_types[i])) {
+                    satisfies = false;
+                    break;
+                }
+            }
+            if (satisfies) {
+                if (best_candidate) {
+                    /// TODO: throw ambiguity error
+                }
+                best_candidate = candidate;
+            }
+        }
+        return best_candidate;
+    }
+
     const Object* try_instantiate(OperatorCode opcode, const Type* left, const Type* right) const {
         // User-defined operator templates
         auto range = templates_.equal_range(opcode);
@@ -636,84 +709,54 @@ private:
             switch (GetOperatorGroup(opcode)) {
             case OperatorGroup::Arithmetic:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term(
-                        PrimitiveOperations::integer_op(opcode, left_value, right_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::integer_op(opcode, left_value, right_value));
                 } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
-                    return Term(
-                        PrimitiveOperations::float_op(opcode, left_value, right_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::float_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::UnaryArithmetic:
                 assert(!right);
                 if (left_kind == Kind::Integer) {
-                    return Term(
-                        PrimitiveOperations::integer_op(opcode, left_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::integer_op(opcode, left_value));
                 } else if (left_kind == Kind::Float) {
-                    return Term(
-                        PrimitiveOperations::float_op(opcode, left_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::float_op(opcode, left_value));
                 }
                 break;
             case OperatorGroup::Comparison:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term(
-                        PrimitiveOperations::integer_op(opcode, left_value, right_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::integer_op(opcode, left_value, right_value));
                 } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
-                    return Term(
-                        PrimitiveOperations::float_op(opcode, left_value, right_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::float_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::Logical:
                 if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
-                    return Term(
-                        PrimitiveOperations::boolean_op(opcode, left_value, right_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::boolean_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::UnaryLogical:
                 assert(!right);
                 if (left_kind == Kind::Boolean) {
-                    return Term(
-                        PrimitiveOperations::boolean_op(opcode, left_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::boolean_op(opcode, left_value));
                 }
                 break;
             case OperatorGroup::Bitwise:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term(
-                        PrimitiveOperations::integer_op(opcode, left_value, right_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::integer_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::UnaryBitwise:
                 if (left_kind == Kind::Integer) {
-                    return Term(
-                        PrimitiveOperations::integer_op(opcode, left_value),
-                        Term::Category::CompRValue
-                    );
+                    return Term(PrimitiveOperations::integer_op(opcode, left_value));
                 }
                 break;
             case OperatorGroup::Assignment:
                 /// TODO:
-                if (!left.is_lvalue()) break;
+                if (!is_lvalue(left)) break;
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
-                    return Term(left_type, Term::Category::RValue);
+                    return Term(left_type);
                 }
                 break;
             }
@@ -722,47 +765,47 @@ private:
             case OperatorGroup::Arithmetic:
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float)) {
-                    return Term(left_type, Term::Category::RValue);
+                    return Term(left_type);
                 }
                 break;
             case OperatorGroup::UnaryArithmetic:
                 if (left_kind == Kind::Integer || left_kind == Kind::Float) {
-                    return Term(left_type, Term::Category::RValue);
+                    return Term(left_type);
                 }
                 break;
             case OperatorGroup::Comparison:
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float)) {
-                    return Term(&BooleanType::instance, Term::Category::RValue);
+                    return Term(&BooleanType::instance);
                 }
                 break;
             case OperatorGroup::Logical:
                 if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
-                    return Term(&BooleanType::instance, Term::Category::RValue);
+                    return Term(&BooleanType::instance);
                 }
                 break;
             case OperatorGroup::UnaryLogical:
                 if (left_kind == Kind::Boolean) {
-                    return Term(&BooleanType::instance, Term::Category::RValue);
+                    return Term(&BooleanType::instance);
                 }
                 break;
             case OperatorGroup::Bitwise:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term(left_type, Term::Category::RValue);
+                    return Term(left_type);
                 }
                 break;
             case OperatorGroup::UnaryBitwise:
                 if (left_kind == Kind::Integer) {
-                    return Term(left_type, Term::Category::RValue);
+                    return Term(left_type);
                 }
                 break;
             case OperatorGroup::Assignment:
                 /// TODO:
-                if (!left.is_lvalue()) break;
+                if (!is_lvalue(left)) break;
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
-                    return Term(left_type, Term::Category::RValue);
+                    return Term(left_type);
                 }
                 break;
             }
