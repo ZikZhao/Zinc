@@ -1,27 +1,3 @@
-let a: i8 = 127;
-
-fn add(a: i32, b: i32) -> i32 {
-    return a + b;
-}
-
-fn sub(a: i32, b: i32) -> i32 { return a - b; }
-
-fn sub(a: f64, b: f64) -> f64 { return a - b; }
-
-let f: (i32, i32) -> i32 = add;
-
-let g = sub;
-
-namespace DataCenter {
-    let a = 1;
-    let b = 1.0;
-};
-
-type Node = {
-    value: i32,
-    next: *Node
-};
-
 class Base {
     let data: i32;
     let data2: f64;
@@ -35,6 +11,9 @@ class Base {
 
 class Derived {
     let data3: bool;
+    init(self: &mut Self) {
+        self.data3 = true;
+    }
     fn sub1(self: &Self) -> i32 {
         if (self.data3) {
             return 1;
@@ -45,12 +24,7 @@ class Derived {
 };
 
 fn main() -> i32 {
-    f(2, 3);
-    g(5, 4);
-    g(3.0, 2.0);
-    let a = DataCenter.a;
-    let b = Node{ value: 1, next: nullptr };
-    let c = b.value;
-    let d = Base();
-    let e = d.add(1);
+    let instance1 = Base(10);
+    let instance2 = Derived();
+    let data = instance1.add1(5);
 }

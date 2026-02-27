@@ -560,16 +560,20 @@ public:
     }
 
     Term eval_call(Term callee, ComparableSpan<Term> args) {
-        Term decayed_callee = callee_decay(callee);
-        GlobalMemory::Vector<FunctionObject> overloads = list_overloads(decayed_callee);
+        Term decayed = callee_decay(callee);
+        GlobalMemory::Vector<FunctionObject> overloads = list_overloads(decayed);
         if (overloads.empty()) {
-            if (decayed_callee.is_type()) {
+            if (decayed.is_type()) {
                 /// TODO: throw type is not callable error
             } else {
                 throw UnlocatedProblem::make<OperationNotDefinedError>("call", callee->repr(), "");
             }
         }
         FunctionObject overload = overload_resolution(std::move(overloads), args);
+        if (!overload) {
+            /// TODO: throw no matching overload error
+            throw;
+        }
         if (auto func_value = overload->dyn_cast<FunctionValue>()) {
             return func_value->invoke(args);
         } else {
@@ -684,24 +688,14 @@ private:
             args | std::views::transform([](Term arg) { return arg.effective_type(); }) |
             GlobalMemory::collect<GlobalMemory::Vector<const Type*>>();
         for (FunctionObject candidate : overloads) {
-            bool satisfies = true;
             const FunctionType* func_type = candidate->dyn_cast<FunctionType>();
             if (!func_type) func_type = candidate->cast<FunctionValue>()->get_type();
-            std::span parameters = func_type->parameters_;
-            if (func_type->is_method_) {
-                if (args_types.empty()) {
-                    satisfies = false;
-                    continue;
-                }
-                /// TODO: handle template deducing this
-                parameters = parameters.subspan(1);
-            }
-            if (parameters.size() != args_types.size()) {
-                satisfies = false;
+            if (func_type->parameters_.size() != args_types.size()) {
                 continue;
             }
-            for (std::size_t i = 0; i < parameters.size(); ++i) {
-                if (!parameters[i]->assignable_from(args_types[i])) {
+            bool satisfies = true;
+            for (std::size_t i = 0; i < func_type->parameters_.size(); ++i) {
+                if (!func_type->parameters_[i]->assignable_from(args_types[i])) {
                     satisfies = false;
                     break;
                 }

@@ -58,7 +58,7 @@ class ArrayValue;
 class StructValue;
 class InterfaceValue;
 class InstanceValue;
-class MutValue;
+class MutableValue;
 class ReferenceValue;
 class PointerValue;
 class FunctionOverloadSetValue;
@@ -129,7 +129,7 @@ public:
         edges_.push_back({parent, child, nullptr});
     }
 
-    bool is_dependent(const Type* parent) const noexcept {
+    bool is_parent(const Type* parent) const noexcept {
         return std::ranges::any_of(edges_, [&](const Edge& edge) { return edge.parent == parent; });
     }
 
@@ -182,12 +182,23 @@ public:
 
 private:
     template <TypeClass T>
+        requires(!std::is_same_v<T, InstanceType>)
     T* construct(auto&&... args) noexcept {
         assert(ptr_ && !is_sized());
         std::construct_at(
             reinterpret_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...
         );
         ptr_ &= ~flag;
+        return reinterpret_cast<T*>(ptr_);
+    }
+
+    template <std::same_as<InstanceType> T>
+    T* reconstruct(auto&&... args) noexcept {
+        assert(ptr_ && is_sized());
+        std::destroy_at(reinterpret_cast<T*>(ptr_ & ~flag));
+        std::construct_at(
+            reinterpret_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...
+        );
         return reinterpret_cast<T*>(ptr_);
     }
 };
@@ -224,7 +235,7 @@ public:
             UnionType>;
         if constexpr (std::is_same_v<T, InstanceType>) {
             // classes with same definition are distinct types
-            out = new T(std::forward<decltype(args)>(args)...);
+            out.reconstruct<T>(std::forward<decltype(args)>(args)...);
         } else if constexpr (TypeInTupleV<T, Composites>) {
             instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
         } else {
@@ -258,7 +269,7 @@ public:
     }
 
     static bool is_type_incomplete(const Type* type) noexcept {
-        return instance->graph_.is_dependent(type);
+        return instance->graph_.is_parent(type);
     }
 
 private:
@@ -310,6 +321,8 @@ public:
 
 public:
     static Term unknown() noexcept;
+    static Term lvalue(const Type* type) noexcept;
+    static Term xvalue(const Type* type) noexcept;
 
 private:
     union {
@@ -334,6 +347,7 @@ public:
     bool is_unknown() const noexcept;
     bool is_type() const noexcept { return category_ == Category::Type; }
     bool is_comptime() const noexcept { return category_ == Category::Comptime; }
+    const Type* get_type() const noexcept { return is_type() ? type_ : nullptr; }
     Value* get_comptime() const noexcept { return is_comptime() ? value_ : nullptr; }
 };
 
@@ -435,10 +449,7 @@ public:
         return compare_impl(other, assumed_equal);
     }
 
-    bool assignable_from(const Type* source) const {
-        assert(!(this == source) || assignable_from_impl(source));
-        return this == source || assignable_from_impl(source);
-    }
+    bool assignable_from(const Type* source) const noexcept;
 
     virtual Value* default_construct() const noexcept = 0;
 
@@ -447,7 +458,7 @@ protected:
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept = 0;
 
-    virtual bool assignable_from_impl(const Type* source) const = 0;
+    virtual bool assignable_from_impl(const Type* source) const noexcept = 0;
 };
 
 class PrimitiveType : public Type {
@@ -476,7 +487,7 @@ private:
 
 public:
     std::string_view repr() const final { return "unknown"; }
-    bool assignable_from_impl(const Type* source) const final { return true; }
+    bool assignable_from_impl(const Type* source) const noexcept final { return true; }
     Value* default_construct() const noexcept final;
 };
 
@@ -488,7 +499,7 @@ public:
 public:
     AnyType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "any"; }
-    bool assignable_from_impl(const Type* source) const final { return true; }
+    bool assignable_from_impl(const Type* source) const noexcept final { return true; }
     Value* default_construct() const noexcept final;
 };
 
@@ -500,7 +511,7 @@ public:
 public:
     NullptrType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "nullptr"; }
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         /// No variable can have null type except null literal
         UNREACHABLE();
     }
@@ -532,7 +543,7 @@ public:
     std::string_view repr() const final {
         return GlobalMemory::format_view("{}{}", is_signed_ ? "i" : "u", bits_);
     }
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         const IntegerType* other_int = source->dyn_cast<IntegerType>();
         return other_int && (other_int->bits_ == 0 || (this->is_signed_ == other_int->is_signed_ &&
                                                        this->bits_ >= other_int->bits_));
@@ -555,7 +566,7 @@ public:
         assert(bits == 0 || bits == 32 || bits == 64);
     }
     std::string_view repr() const final { return GlobalMemory::format_view("f{}", bits_); }
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         const FloatType* other_float = source->dyn_cast<FloatType>();
         return other_float && (other_float->bits_ == 0 || this->bits_ >= other_float->bits_);
     }
@@ -570,7 +581,7 @@ public:
 public:
     BooleanType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "bool"; }
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         return source->dyn_cast<BooleanType>() != nullptr;
     }
     Value* default_construct() const noexcept final;
@@ -581,21 +592,18 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
-    bool is_method_;
     ComparableSpan<const Type*> parameters_;
     const Type* return_type_;
 
 public:
-    FunctionType(
-        ComparableSpan<const Type*> parameters, const Type* return_type, bool is_method = false
-    ) noexcept
-        : Type(kind), is_method_(is_method), parameters_(parameters), return_type_(return_type) {}
+    FunctionType(ComparableSpan<const Type*> parameters, const Type* return_type) noexcept
+        : Type(kind), parameters_(parameters), return_type_(return_type) {}
 
     std::string_view repr() const final {
         GlobalMemory::String params_repr =
             parameters_ | std::views::transform([](const Type* type) { return type->repr(); }) |
             std::views::join_with(", "sv) | GlobalMemory::collect<GlobalMemory::String>();
-        return GlobalMemory::format_view("({}) => {}", params_repr, return_type_->repr());
+        return GlobalMemory::format_view("({}) -> {}", params_repr, return_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -631,7 +639,7 @@ protected:
         return return_type_->compare(other_func->return_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const final;
+    bool assignable_from_impl(const Type* source) const noexcept final;
 };
 
 class ArrayType final : public Type {
@@ -666,7 +674,7 @@ protected:
         return element_type_->compare(other_array->element_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         const ArrayType* other_array = source->dyn_cast<ArrayType>();
         return other_array && element_type_->assignable_from(other_array->element_type_) &&
                (size_ == 0 || size_ == other_array->size_);
@@ -754,7 +762,7 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         // (a,b,c) is assignable to (a,b)
         // i.e., source must have at least all fields of this
         const StructType* other_struct = source->dyn_cast<StructType>();
@@ -801,7 +809,7 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         /// TODO:
         return false;
     }
@@ -822,6 +830,8 @@ public:
     GlobalMemory::FlatMap<std::string_view, FunctionOverloadSetValue*> methods_;
 
 public:
+    InstanceType(std::string_view identifier) noexcept : Type(kind), identifier_(identifier) {}
+
     InstanceType(
         const void* scope,
         std::string_view identifier,
@@ -842,9 +852,7 @@ public:
           attrs_(std::move(attrs)),
           methods_(std::move(methods)) {}
 
-    std::string_view repr() const override {
-        return GlobalMemory::format_view("class {}", identifier_);
-    }
+    std::string_view repr() const override { return GlobalMemory::format_view("{}", identifier_); }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
 
@@ -867,10 +875,10 @@ protected:
     std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
-        UNREACHABLE();
+        return this <=> other;
     }
 
-    bool assignable_from_impl(const Type* other) const final { return false; }
+    bool assignable_from_impl(const Type* other) const noexcept final { return this == other; }
 };
 
 class MutableType final : public Type {
@@ -888,7 +896,7 @@ public:
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
-        return graph.check_dependency(this, target_type_);
+        return !graph.is_parent(this) && graph.check_dependency(this, target_type_);
     }
 
     Value* default_construct() const noexcept final;
@@ -901,7 +909,7 @@ protected:
         return target_type_->compare(other_mut->target_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         const MutableType* other_mut = source->dyn_cast<MutableType>();
         return other_mut && target_type_->assignable_from(other_mut->target_type_);
     }
@@ -925,7 +933,7 @@ public:
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
-        return !graph.is_dependent(this) && graph.check_dependency(this, referenced_type_);
+        return !graph.is_parent(this) && graph.check_dependency(this, referenced_type_);
     }
 
     Value* default_construct() const noexcept final {
@@ -943,9 +951,10 @@ protected:
         return referenced_type_->compare(other_ref->referenced_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         const ReferenceType* other_ref = source->dyn_cast<ReferenceType>();
-        return other_ref && referenced_type_->assignable_from(other_ref->referenced_type_);
+        return other_ref && (is_moved_ == other_ref->is_moved_) &&
+               referenced_type_->assignable_from(other_ref->referenced_type_);
     }
 };
 
@@ -963,7 +972,7 @@ public:
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
-        return !graph.is_dependent(this) && graph.check_dependency(this, pointed_type_);
+        return !graph.is_parent(this) && graph.check_dependency(this, pointed_type_);
     }
 
     Value* default_construct() const noexcept final;
@@ -976,7 +985,7 @@ protected:
         return pointed_type_->compare(other_ptr->pointed_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         const PointerType* other_ptr = source->dyn_cast<PointerType>();
         return (other_ptr && pointed_type_->assignable_from(other_ptr->pointed_type_)) ||
                source->kind_ == Kind::Nullptr;
@@ -1056,7 +1065,7 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         // (a & b & c) is assignable to (a & b)
         // i.e., source supports at least all the function overloads of this
         if (const IntersectionType* other_intersection = source->dyn_cast<IntersectionType>()) {
@@ -1152,7 +1161,7 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool assignable_from_impl(const Type* source) const final {
+    bool assignable_from_impl(const Type* source) const noexcept final {
         // (a | b) is assignable to (a | b | c)
         // i.e., source must be assignable to at least one of the types in this
         if (const UnionType* other_union = source->dyn_cast<UnionType>()) {
@@ -1821,6 +1830,14 @@ inline const Type* TypeRegistry::simplify_recursive_type(
 
 inline Term Term::unknown() noexcept { return Term(&UnknownType::instance); }
 
+inline Term Term::lvalue(const Type* type) noexcept {
+    return Term(TypeRegistry::get<ReferenceType>(TypeRegistry::get<MutableType>(type), false));
+}
+
+inline Term Term::xvalue(const Type* type) noexcept {
+    return Term(TypeRegistry::get<ReferenceType>(type, true));
+}
+
 inline bool Term::is_unknown() const noexcept { return ptr_->kind_ == Kind::Unknown; }
 
 inline const Type* Term::effective_type() const noexcept {
@@ -1831,6 +1848,17 @@ inline const Type* Term::effective_type() const noexcept {
     } else {
         return nullptr;
     }
+}
+
+inline bool Type::assignable_from(const Type* source) const noexcept {
+    assert(!(this == source) || assignable_from_impl(source));
+    if (this == source) {
+        return true;
+    }
+    if (auto mut = source->dyn_cast<MutableType>()) {
+        return assignable_from_impl(mut->target_type_);
+    }
+    return assignable_from_impl(source);
 }
 
 inline UnknownType UnknownType::instance;
@@ -1869,7 +1897,7 @@ inline BooleanType BooleanType::instance;
 
 inline Value* BooleanType::default_construct() const noexcept { return new BooleanValue(false); }
 
-inline bool FunctionType::assignable_from_impl(const Type* source) const {
+inline bool FunctionType::assignable_from_impl(const Type* source) const noexcept {
     // (Base) => Derived is assignable to (Derived) => Base
     // i.e., parameters are contravariant, return type is covariant
     if (const FunctionType* func_other = source->dyn_cast<FunctionType>()) {

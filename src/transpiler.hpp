@@ -655,25 +655,16 @@ inline void ASTFunctionDefinition::transpile(
 inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     cursor << "struct " << identifier_ << " {";
 
-    transpiler.checker().enter(this);
-    transpiler.checker().enter(&identifier_);
+    TypeCheckerGuard guard(transpiler.checker(), this);
     for (const auto& field_decl : fields_) {
         Cursor local_cursor = cursor.open_child(this);
         field_decl->declared_type_->transpile(transpiler, local_cursor);
         local_cursor << " " << field_decl->identifier_ << ";";
     }
-    transpiler.checker().exit();
     for (const auto& func : functions_) {
-        if (!func->is_static_) {
-            transpiler.checker().enter(&identifier_);
-        }
         Cursor local_cursor = cursor.open_child(this);
         func->transpile(transpiler, local_cursor);
-        if (!func->is_static_) {
-            transpiler.checker().exit();
-        }
     }
-    transpiler.checker().exit();
     cursor.commit() << "};";
 }
 
@@ -681,11 +672,10 @@ inline void ASTNamespaceDefinition::transpile(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
     cursor << "namespace " << identifier_ << " {";
-    transpiler.checker().enter(this);
+    TypeCheckerGuard guard(transpiler.checker(), this);
     Cursor local_cursor = cursor.open_child(this);
     for (const auto& item : items_) {
         item->transpile(transpiler, local_cursor);
         local_cursor.commit();
     }
-    transpiler.checker().exit();
 }
