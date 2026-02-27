@@ -223,7 +223,13 @@ private:
         );
         return {};
     }
-    antlrcpp::Any visitParameter(ZincParser::ParameterContext* ctx) noexcept final {
+    antlrcpp::Any visitSelfParam(ZincParser::SelfParamContext* ctx) noexcept final {
+        last_visited_ = new ASTFunctionParameter(
+            loc(ctx), "self", static_cast<ASTExpression*>(transform(ctx->type_))
+        );
+        return {};
+    }
+    antlrcpp::Any visitNormalParam(ZincParser::NormalParamContext* ctx) noexcept final {
         last_visited_ = new ASTFunctionParameter(
             loc(ctx), text(ctx->identifier_), static_cast<ASTExpression*>(transform(ctx->type_))
         );
@@ -270,6 +276,10 @@ private:
         last_visited_ = new ASTNamespaceDefinition(
             loc(ctx), ctx->identifier_ ? text(ctx->identifier_) : "", items
         );
+        return {};
+    }
+    antlrcpp::Any visitSelfExpr(ZincParser::SelfExprContext* ctx) noexcept final {
+        last_visited_ = new ASTSelfExpr(loc(ctx), false);
         return {};
     }
     antlrcpp::Any visitAssignExpr(ZincParser::AssignExprContext* ctx) noexcept final {
@@ -496,6 +506,10 @@ private:
         default:
             UNREACHABLE();
         }
+        return {};
+    }
+    antlrcpp::Any visitSelfType(ZincParser::SelfTypeContext* ctx) noexcept final {
+        last_visited_ = new ASTSelfExpr(loc(ctx), true);
         return {};
     }
     antlrcpp::Any visitPrimitiveType(ZincParser::PrimitiveTypeContext* ctx) noexcept final {

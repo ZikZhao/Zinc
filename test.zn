@@ -25,15 +25,18 @@ type Node = {
 class Base {
     let data: i32;
     let data2: f64;
-    fn add1(other: i32) -> i32 {
-        return data + other;
+    init(self: &mut Self, value: i32) {
+        self.data = value;
+    }
+    fn add1(self: &Self, other: i32) -> i32 {
+        return self.data + other;
     }
 };
 
 class Derived {
     let data3: bool;
-    fn sub1() -> i32 {
-        if (data3) {
+    fn sub1(self: &Self) -> i32 {
+        if (self.data3) {
             return 1;
         } else {
             return 0;

@@ -61,14 +61,15 @@ class InstanceValue;
 class MutValue;
 class ReferenceValue;
 class PointerValue;
-class OverloadedFunctionValue;
+class FunctionOverloadSetValue;
 
 template <typename T>
 concept TypeClass = std::derived_from<T, Type> && !std::is_abstract_v<T>;
 template <typename V>
 concept ValueClass = std::derived_from<V, Value> && !std::is_abstract_v<V>;
 
-using FunctionOverloadVector = GlobalMemory::Vector<const Object*>;
+using FunctionObject = const Object*;  // either FunctionType or FunctionValue
+using FunctionOverloadVector = GlobalMemory::Vector<FunctionObject>;
 
 class TypeDependencyGraph {
 public:
@@ -441,8 +442,6 @@ public:
 
     virtual Value* default_construct() const noexcept = 0;
 
-    virtual const Type* member(std::string_view name) const noexcept { return nullptr; }
-
 protected:
     virtual std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
@@ -582,12 +581,15 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
+    bool is_method_;
     ComparableSpan<const Type*> parameters_;
     const Type* return_type_;
 
 public:
-    FunctionType(ComparableSpan<const Type*> parameters, const Type* return_type) noexcept
-        : Type(kind), parameters_(parameters), return_type_(return_type) {}
+    FunctionType(
+        ComparableSpan<const Type*> parameters, const Type* return_type, bool is_method = false
+    ) noexcept
+        : Type(kind), is_method_(is_method), parameters_(parameters), return_type_(return_type) {}
 
     std::string_view repr() const final {
         GlobalMemory::String params_repr =
@@ -730,14 +732,6 @@ public:
         }
     }
 
-    const Type* member(std::string_view name) const noexcept final {
-        auto it = fields_.find(name);
-        if (it == fields_.end()) {
-            return nullptr;
-        }
-        return it->second;
-    }
-
 protected:
     std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
@@ -782,7 +776,7 @@ public:
     static constexpr Kind kind = Kind::Interface;
 
 private:
-    GlobalMemory::FlatMap<std::string_view, OverloadedFunctionValue*> methods_;
+    GlobalMemory::FlatMap<std::string_view, FunctionOverloadVector> methods_;
 
 public:
     InterfaceType() noexcept : Type(kind) {}
@@ -822,10 +816,10 @@ public:
     std::string_view identifier_;
     const Type* extends_;
     ComparableSpan<const Type*> implements_;
-    FunctionOverloadVector constructors_;
-    const Object* destructor_;
-    GlobalMemory::FlatMap<std::string_view, const Type*> attr_;
-    GlobalMemory::FlatMap<std::string_view, FunctionOverloadVector> methods_;
+    FunctionOverloadSetValue* constructors_;
+    FunctionObject destructor_;
+    GlobalMemory::FlatMap<std::string_view, const Type*> attrs_;
+    GlobalMemory::FlatMap<std::string_view, FunctionOverloadSetValue*> methods_;
 
 public:
     InstanceType(
@@ -833,19 +827,19 @@ public:
         std::string_view identifier,
         const Type* extends,
         ComparableSpan<const Type*> interfaces,
-        FunctionOverloadVector constructors,
-        const Object* destructor,
-        GlobalMemory::FlatMap<std::string_view, const Type*> attr,
-        GlobalMemory::FlatMap<std::string_view, FunctionOverloadVector> methods
+        FunctionOverloadSetValue* constructors,
+        FunctionObject destructor,
+        GlobalMemory::FlatMap<std::string_view, const Type*> attrs,
+        GlobalMemory::FlatMap<std::string_view, FunctionOverloadSetValue*> methods
     ) noexcept
         : Type(kind),
           scope_(scope),
           identifier_(identifier),
           extends_(extends),
           implements_(interfaces),
-          constructors_(std::move(constructors)),
+          constructors_(constructors),
           destructor_(destructor),
-          attr_(std::move(attr)),
+          attrs_(std::move(attrs)),
           methods_(std::move(methods)) {}
 
     std::string_view repr() const override {
@@ -856,21 +850,12 @@ public:
 
     Value* default_construct() const noexcept final {
         /// TODO:
-    }
-
-    FunctionOverloadVector get_method(std::string_view name) const {
-        auto it = methods_.find(name);
-        if (it == methods_.end()) {
-            throw UnlocatedProblem::make<AttributeError>(
-                GlobalMemory::format_view("Class {} has no method named {}", identifier_, name)
-            );
-        }
-        return it->second;
+        assert(false);
     }
 
     const Type* get_attr(std::string_view name) const {
-        auto it = attr_.find(name);
-        if (it == attr_.end()) {
+        auto it = attrs_.find(name);
+        if (it == attrs_.end()) {
             throw UnlocatedProblem::make<AttributeError>(
                 GlobalMemory::format_view("Class {} has no attribute named {}", identifier_, name)
             );
@@ -947,10 +932,6 @@ public:
         return nullptr;  // references cannot be default-constructed
     }
 
-    const Type* member(std::string_view name) const noexcept final {
-        return referenced_type_->member(name);
-    }
-
 protected:
     std::strong_ordering compare_impl(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
@@ -983,10 +964,6 @@ public:
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
         return !graph.is_dependent(this) && graph.check_dependency(this, pointed_type_);
-    }
-
-    const Type* member(std::string_view name) const noexcept final {
-        return pointed_type_->member(name);
     }
 
     Value* default_construct() const noexcept final;
@@ -1254,7 +1231,6 @@ public:
     virtual Value* clone() const noexcept = 0;
     virtual Value* resolve_to(const Type* target) const = 0;
     virtual void assign_from(Value* source) = 0;
-    virtual Value* member(std::string_view name) const noexcept { return nullptr; }
 };
 
 class UnknownValue final : public Value {
@@ -1578,34 +1554,34 @@ public:
     static constexpr Kind kind = Kind::Instance;
 
 public:
-    const InstanceType* cls_;
-    GlobalMemory::FlatMap<std::string_view, Value*> attributes_;
+    const InstanceType* type_;
+    GlobalMemory::FlatMap<std::string_view, Value*> attrs_;
 
 public:
-    InstanceValue(const InstanceType* cls, decltype(attributes_) attributes) noexcept
-        : Value(kind), cls_(cls), attributes_(std::move(attributes)) {}
+    InstanceValue(const InstanceType* type, decltype(attrs_) attributes) noexcept
+        : Value(kind), type_(type), attrs_(std::move(attributes)) {}
     std::string_view repr() const final {
-        return GlobalMemory::format_view("<instance of {}>", cls_->repr());
+        return GlobalMemory::format_view("<instance of {}>", type_->repr());
     }
-    const InstanceType* get_type() const noexcept final { return cls_; }
+    const InstanceType* get_type() const noexcept final { return type_; }
     InstanceValue* clone() const noexcept final {
         GlobalMemory::FlatMap<std::string_view, Value*> cloned_attributes;
-        for (const auto& [name, value] : attributes_) {
+        for (const auto& [name, value] : attrs_) {
             cloned_attributes.insert({name, value->clone()});
         }
-        return new InstanceValue(cls_, std::move(cloned_attributes));
+        return new InstanceValue(type_, std::move(cloned_attributes));
     }
     InstanceValue* resolve_to(const Type* target) const final {
-        if (target && target != cls_) {
+        if (target && target != type_) {
             throw UnlocatedProblem::make<TypeMismatchError>("instance", target->repr());
         }
         return new InstanceValue(*this);
     }
     void assign_from(Value* source) final {
         InstanceValue* instance_source = source->cast<InstanceValue>();
-        this->attributes_ = instance_source->attributes_;
+        this->attrs_ = instance_source->attrs_;
     }
-    Value* get_attr(std::string_view attr) noexcept { return attributes_.at(attr); }
+    Value* get_attr(std::string_view attr) noexcept { return attrs_.at(attr); }
 };
 
 class MutableValue final : public Value {
@@ -1697,16 +1673,16 @@ public:
     }
 };
 
-class FunctionOverloadSet final : public Value {
+class FunctionOverloadSetValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Intersection;
 
 public:
     const Type* type_;
-    GlobalMemory::Vector<const Object*> overloads_;
+    GlobalMemory::Vector<FunctionObject> overloads_;
 
 public:
-    FunctionOverloadSet(GlobalMemory::Vector<const Object*> overloads) noexcept
+    FunctionOverloadSetValue(GlobalMemory::Vector<FunctionObject> overloads) noexcept
         : Value(kind), type_(compute_type(overloads)), overloads_(std::move(overloads)) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view(
@@ -1714,28 +1690,30 @@ public:
         );
     }
     const Type* get_type() const noexcept final { return type_; }
-    FunctionOverloadSet* clone() const noexcept final { return new FunctionOverloadSet(*this); }
-    FunctionOverloadSet* resolve_to(const Type* target) const final {
+    FunctionOverloadSetValue* clone() const noexcept final {
+        return new FunctionOverloadSetValue(*this);
+    }
+    FunctionOverloadSetValue* resolve_to(const Type* target) const final {
         if (target && !target->assignable_from(get_type())) {
             throw UnlocatedProblem::make<TypeMismatchError>(
                 "function overload set", target->repr()
             );
         }
-        return new FunctionOverloadSet(*this);
+        return new FunctionOverloadSetValue(*this);
     }
     void assign_from(Value* source) final {
-        FunctionOverloadSet* set_source = source->cast<FunctionOverloadSet>();
+        FunctionOverloadSetValue* set_source = source->cast<FunctionOverloadSetValue>();
         this->overloads_ = set_source->overloads_;
     }
 
 private:
-    const Type* compute_type(const GlobalMemory::Vector<const Object*>& overloads) const noexcept {
+    const Type* compute_type(const GlobalMemory::Vector<FunctionObject>& overloads) const noexcept {
         if (overloads.size() == 1) {
             return overloads[0]->dyn_type() ? overloads[0]->cast<Type>()
                                             : overloads[0]->cast<Value>()->get_type();
         } else {
             GlobalMemory::Vector<const Type*> types;
-            for (const Object* overload : overloads) {
+            for (FunctionObject overload : overloads) {
                 types.push_back(
                     overload->dyn_type() ? overload->cast<Type>()
                                          : overload->cast<Value>()->get_type()

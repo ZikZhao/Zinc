@@ -76,7 +76,9 @@ function_definition:
 		)*
 	)? OP_RPAREN (OP_ARROW return_type_ = type)? OP_LBRACE body_ += statement* OP_RBRACE;
 
-parameter: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
+parameter:
+	KW_SELF OP_COLON type_ = type						# SelfParam
+	| identifier_ = T_IDENTIFIER OP_COLON type_ = type	# NormalParam;
 
 class_definition:
 	KW_CLASS identifier_ = T_IDENTIFIER (
@@ -99,7 +101,8 @@ namespace_definition:
 		OP_SEMICOLON;
 
 expr:
-	<assoc = right> left_ = expr op_ = (
+	KW_SELF # SelfExpr
+	| <assoc = right> left_ = expr op_ = (
 		OP_ASSIGN
 		| OP_ADD_ASSIGN
 		| OP_SUB_ASSIGN
@@ -153,7 +156,8 @@ constant:
 	value_ = (T_INT | T_FLOAT | T_STRING | T_BOOL | KW_NULLPTR);
 
 type:
-	primitive_ = (
+	KW_SELF_TYPE # SelfType
+	| primitive_ = (
 		KW_INT8
 		| KW_INT16
 		| KW_INT32
@@ -224,6 +228,8 @@ KW_TYPE: 'type';
 KW_CLASS: 'class';
 KW_EXTENDS: 'extends';
 KW_IMPLEMENTS: 'implements';
+KW_SELF: 'self';
+KW_SELF_TYPE: 'Self';
 KW_INIT: 'init';
 KW_DROP: 'drop';
 KW_STATIC: 'static';

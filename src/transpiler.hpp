@@ -320,6 +320,10 @@ inline void ASTConstant::transpile(Transpiler& transpiler, Cursor& cursor) const
     }
 }
 
+inline void ASTSelfExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << (is_type_ ? "decltype(*this)" : "this");
+}
+
 inline void ASTIdentifier::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     if (!transpiler.state_.mangle_structural_identifiers) {
         cursor << str_;
@@ -359,7 +363,7 @@ inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) c
 
 inline void ASTMemberAccess::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     target_->transpile(transpiler, cursor);
-    cursor << "." << field_;
+    cursor << "." << member_;
 }
 
 inline void ASTFieldInitialization::transpile(
