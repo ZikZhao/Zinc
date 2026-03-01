@@ -348,7 +348,7 @@ public:
     }
 
 public:
-    struct MemoryManaged {
+    struct MonotonicAllocated {
         static void* operator new(std::size_t size) { return GlobalMemory::alloc_raw(size); }
         static void operator delete(void* ptr, std::size_t size) {}
     };

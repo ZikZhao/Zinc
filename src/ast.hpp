@@ -43,7 +43,7 @@ using ScopeValue = PointerVariant<
     const ASTTemplateDefinition*,                         // template definition
     const Scope*>;                                        // namespace
 
-class Scope final : public GlobalMemory::MemoryManaged {
+class Scope final : public GlobalMemory::MonotonicAllocated {
     friend class TypeChecker;
     friend class TypeCheckerGuard;
 
@@ -203,7 +203,7 @@ public:
     ~TypeCheckerGuard() noexcept { checker_.current_scope_ = prev_; }
 };
 
-class ASTNode : public GlobalMemory::MemoryManaged {
+class ASTNode : public GlobalMemory::MonotonicAllocated {
 public:
     Location location_;
     ASTNode(const Location& loc) noexcept : location_(loc) {}
@@ -308,13 +308,13 @@ public:
         if (expected) {
             try {
                 Value* typed_value = value_->resolve_to(expected);
-                return Term(typed_value);
+                return Term::prvalue(typed_value);
             } catch (UnlocatedProblem& e) {
                 e.report_at(location_);
                 return Term::unknown();
             }
         }
-        return Term(value_);
+        return Term::prvalue(value_);
     }
     void resolve_type(const Type* target_type) { value_ = value_->resolve_to(target_type); }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
@@ -337,7 +337,7 @@ public:
         : ASTExpression(loc), is_type_(is_type) {}
     Term eval_term(TypeChecker& checker, const Type* expected, bool comptime) const noexcept final {
         if (is_type_) {
-            return Term(checker.self_type());
+            return Term::type(checker.self_type());
         } else {
             return checker.lookup_term("self");
         }
@@ -588,10 +588,10 @@ public:
         struct_type_->eval_type(checker, struct_type_res);
         if (auto struct_type = struct_type_res->dyn_cast<StructType>()) {
             if (comptime) {
-                return Term(eval_comptime(checker, struct_type));
+                return Term::prvalue(eval_comptime(checker, struct_type));
             } else {
                 check_fields(checker, struct_type);
-                return Term(struct_type);
+                return Term::prvalue(struct_type);
             }
         } else {
             Diagnostic::report(
@@ -681,16 +681,18 @@ public:
             GlobalMemory::collect<GlobalMemory::Vector<Term>>();
         Term func_term;
         if (auto member_access = dynamic_cast<ASTMemberAccess*>(function_)) {
-            auto [term, self] = member_access->eval_term_for_call(checker, comptime);
+            auto [term, self_type] = member_access->eval_term_for_call(checker, comptime);
             if (term.is_unknown()) {
                 return Term::unknown();
             }
-            args_terms.insert(args_terms.begin(), Term::lvalue(self));
+            Term instance = Term::lvalue(TypeRegistry::get<MutableType>(self_type));
+            args_terms.insert(args_terms.begin(), instance);
             func_term = term;
         } else {
             func_term = function_->eval_term(checker, nullptr, comptime);
             if (func_term.is_type()) {
-                args_terms.insert(args_terms.begin(), Term::lvalue(func_term.get_type()));
+                Term instance = Term::lvalue(TypeRegistry::get<MutableType>(func_term.get_type()));
+                args_terms.insert(args_terms.begin(), instance);
             }
         }
         if (any_error) {
@@ -776,7 +778,8 @@ public:
     void check_types(TypeChecker& checker) final {
         TypeResolution field_type;
         type_->eval_type(checker, field_type);
-        checker.add_variable(identifier_, Term(field_type));
+        /// TODO: is this necessary?
+        checker.add_variable(identifier_, Term::lvalue(field_type.get()));
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
@@ -909,11 +912,11 @@ public:
         if (declared_type_) {
             declared_type_->eval_type(checker, declared_type);
         }
-        Term term = Term(declared_type);
+        Term term = Term::type(declared_type);
         if (expr_) {
             term = expr_->eval_term(checker, declared_type, is_constant_);
             if (!is_constant_) {
-                term = Term(term.effective_type());
+                term = Term::lvalue(term.effective_type());
             }
         }
         try {
@@ -1122,7 +1125,7 @@ public:
         for (auto& param : parameters_) {
             TypeResolution param_type;
             param->type_->eval_type(checker, param_type);
-            checker.add_variable(param->identifier_, Term(param_type));
+            checker.add_variable(param->identifier_, Term::lvalue(param_type.get()));
         }
         for (auto& stmt : body_) {
             stmt->check_types(checker);
@@ -1342,7 +1345,7 @@ public:
                     ));
                     return new Term(Term::unknown());
                 }
-                template_scope.add_variable(param_name, Term(argument->cast<Value>()));
+                template_scope.add_variable(param_name, Term::lvalue(argument->cast<Value>()));
             }
         }
         ASTNode* node = target_->as_node();
@@ -1393,7 +1396,7 @@ inline Term TypeChecker::lookup_term(std::string_view identifier) {
         TypeCheckerGuard guard(*this, scope);
         TypeResolution out;
         alias->eval_type(*this, out);
-        return Term(out, true);
+        return Term::type(out);
     } else if (auto term = value->get<Term*>()) {
         return *term;
     } else if (auto func = value->get<GlobalMemory::Vector<const ASTFunctionDefinition*>*>()) {
@@ -1403,7 +1406,7 @@ inline Term TypeChecker::lookup_term(std::string_view identifier) {
                 return func_def->get_func_obj(*this);
             }) |
             GlobalMemory::collect<GlobalMemory::Vector<FunctionObject>>();
-        return Term(new FunctionOverloadSetValue(func_vec));
+        return Term::prvalue(new FunctionOverloadSetValue(func_vec));
     } else {
         /// TODO: throw
         assert(false);

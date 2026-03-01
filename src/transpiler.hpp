@@ -21,7 +21,7 @@ enum class Section {
 
 class BufferTree {
 public:
-    struct Node : public GlobalMemory::MemoryManaged {
+    struct Node : public GlobalMemory::MonotonicAllocated {
         GlobalMemory::String content;
         GlobalMemory::Vector<const Node*> children;
         const void* scope;
@@ -362,8 +362,13 @@ inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) c
 }
 
 inline void ASTMemberAccess::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    target_->transpile(transpiler, cursor);
-    cursor << "." << member_;
+    if (auto self = dynamic_cast<ASTSelfExpr*>(target_); self && !self->is_type_) {
+        cursor << "this->" << member_;
+        return;
+    } else {
+        target_->transpile(transpiler, cursor);
+        cursor << "." << member_;
+    }
 }
 
 inline void ASTFieldInitialization::transpile(
@@ -611,12 +616,15 @@ inline void ASTFunctionDefinition::transpile(
         return_type_->transpile(transpiler, cursor);
         cursor << (will_mangle ? " $" : " ") << identifier_ << "(";
         const char* sep = "";
-        for (const auto& param : parameters_) {
+        for (size_t index = is_static_ ? 0 : 1; index < parameters_.size(); index++) {
             cursor << sep;
-            param->transpile(transpiler, cursor);
+            parameters_[index]->transpile(transpiler, cursor);
             sep = ", ";
         }
-        cursor << ");";
+        cursor << ")";
+        if (!is_static_) {
+        }
+        cursor << ";";
 
         if (is_static_ && transpiler.state_.niebloids.insert(identifier_).second) {
             cursor.commit() << "constexpr auto " << identifier_
@@ -636,9 +644,9 @@ inline void ASTFunctionDefinition::transpile(
     return_type_->transpile(transpiler, def_cursor);
     def_cursor << " " << scoped_identifier << "(";
     const char* sep = "";
-    for (const auto& param : parameters_) {
+    for (size_t index = is_static_ ? 0 : 1; index < parameters_.size(); index++) {
         def_cursor << sep;
-        param->transpile(transpiler, def_cursor);
+        parameters_[index]->transpile(transpiler, def_cursor);
         sep = ", ";
     }
     def_cursor << ") {";

@@ -23,6 +23,12 @@ enum class Kind : std::uint16_t {
     Template,
 };
 
+enum class ValueCategory {
+    Right,
+    Left,
+    Expiring,
+};
+
 class Cursor;
 
 class TypeRegistry;
@@ -311,7 +317,7 @@ public:
     TypeRegistry() noexcept = default;
 };
 
-class Term : public GlobalMemory::MemoryManaged {
+class Term : public GlobalMemory::MonotonicAllocated {
 public:
     enum class Category {
         Type,      // a type -> const Type*
@@ -321,8 +327,14 @@ public:
 
 public:
     static Term unknown() noexcept;
-    static Term lvalue(const Type* type) noexcept;
-    static Term xvalue(const Type* type) noexcept;
+    static Term prvalue(auto* ptr) noexcept { return Term(ptr, ValueCategory::Right); }
+    static Term lvalue(auto* ptr) noexcept { return Term(ptr, ValueCategory::Left); }
+    static Term xvalue(auto* ptr) noexcept { return Term(ptr, ValueCategory::Expiring); }
+    static Term type(const Type* type) noexcept { return Term(type); }
+    static Term forward_like(const Term& source, auto* ptr) noexcept {
+        assert(!source.is_type());
+        return Term(ptr, source.value_category());
+    }
 
 private:
     union {
@@ -331,18 +343,23 @@ private:
         Value* value_;
     };
     Category category_;
+    ValueCategory value_category_;
 
-public:
+private:
     explicit Term(const Object* obj) noexcept;
-    explicit Term(const Type* type, bool is_type = false) noexcept
-        : type_(type), category_(is_type ? Category::Type : Category::Runtime) {}
-    explicit Term(Value* value) noexcept : value_(value), category_(Category::Comptime) {}
+    explicit Term(const Type* type) noexcept : type_(type), category_(Category::Type) {}
+    Term(const Type* type, ValueCategory value_category) noexcept
+        : type_(type), category_(Category::Runtime), value_category_(value_category) {}
+    Term(Value* value, ValueCategory value_category) noexcept
+        : value_(value), category_(Category::Comptime), value_category_(value_category) {}
 
 public:
     Term() noexcept = default;
-    operator bool() const noexcept { return type_ != nullptr; }
+
+    operator bool() const noexcept { return ptr_ != nullptr; }
     const Object* operator->() const noexcept { return ptr_; }
     const Type* effective_type() const noexcept;
+    ValueCategory value_category() const noexcept { return value_category_; }
 
     bool is_unknown() const noexcept;
     bool is_type() const noexcept { return category_ == Category::Type; }
@@ -351,7 +368,7 @@ public:
     Value* get_comptime() const noexcept { return is_comptime() ? value_ : nullptr; }
 };
 
-class Object : public GlobalMemory::MemoryManaged {
+class Object : public GlobalMemory::MonotonicAllocated {
 public:
     Kind kind_;
 
@@ -1829,14 +1846,6 @@ inline const Type* TypeRegistry::simplify_recursive_type(
 }
 
 inline Term Term::unknown() noexcept { return Term(&UnknownType::instance); }
-
-inline Term Term::lvalue(const Type* type) noexcept {
-    return Term(TypeRegistry::get<ReferenceType>(TypeRegistry::get<MutableType>(type), false));
-}
-
-inline Term Term::xvalue(const Type* type) noexcept {
-    return Term(TypeRegistry::get<ReferenceType>(type, true));
-}
 
 inline bool Term::is_unknown() const noexcept { return ptr_->kind_ == Kind::Unknown; }
 
