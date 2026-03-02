@@ -60,14 +60,15 @@ target_compile_options(antlr4_generated_lib PRIVATE -w)
 
 # Runtime embedding generation
 set(RUNTIME_HPP_SRC "${SOURCE_DIR}/runtime.hpp")
+set(STD_D_ZN_SRC "${SOURCE_DIR}/std.d.zn")
 set(CONVERTER_PY "${CMAKE_SOURCE_DIR}/tools/runtime-converter.py")
 set(RUNTIME_HPP_STR "${CMAKE_BINARY_DIR}/runtime-str.hpp")
 
 add_custom_command(
     OUTPUT ${RUNTIME_HPP_STR}
-    COMMAND ${Python3_EXECUTABLE} ${CONVERTER_PY} ${RUNTIME_HPP_SRC} ${RUNTIME_HPP_STR}
-    DEPENDS ${RUNTIME_HPP_SRC}
-    COMMENT "Embedding runtime.hpp into binary..."
+    COMMAND ${Python3_EXECUTABLE} ${CONVERTER_PY} ${RUNTIME_HPP_STR} ${RUNTIME_HPP_SRC} ${STD_D_ZN_SRC}
+    DEPENDS ${RUNTIME_HPP_SRC} ${STD_D_ZN_SRC}
+    COMMENT "Embedding runtime.hpp and std.d.zn into binary..."
     VERBATIM
 )
 

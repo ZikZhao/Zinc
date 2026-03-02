@@ -176,20 +176,21 @@ public:
                 .stem()
                 .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
         std::fstream stream(GlobalMemory::format("out/{}.hpp", stem).c_str(), std::ios::out);
-        stream << "#pragma once\n\n";
-        output(stream, Section::Includes);
-        stream << "\n\n/* ---------- Structural Declarations ---------- */\n\n";
-        output(stream, Section::StructuralDeclarations);
-        stream << "\n\n/* ---------- Main ---------- */\n\n";
-        output(stream, Section::Main);
-        stream << "\n\n/* ---------- Implementation ---------- */\n\n";
-        output(stream, Section::Implementation);
+        stream << "#pragma once";
+        output(stream, Section::Includes, "Includes");
+        output(stream, Section::StructuralDeclarations, "Structural Declarations");
+        output(stream, Section::Main, "Main");
+        output(stream, Section::Implementation, "Implementation");
         stream << "\n";
     }
 
 private:
-    void output(std::ostream& os, Section section) const noexcept {
+    void output(std::ostream& os, Section section, std::string_view title) const noexcept {
         const BufferTree& tree = sections_[static_cast<std::size_t>(section)];
+        if (tree.root().children.empty()) {
+            return;
+        }
+        os << "\n\n/* ---------- " << title << " ---------- */\n\n";
         const char* sep = "";
         for (const BufferTree::Node* child : tree.root().children) {
             os << sep;
@@ -236,7 +237,7 @@ inline void precompile_headers() {
     }
 }
 
-inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checker) {
+inline int transpile_all(ASTNode* root, SourceManager& sources, TypeChecker& checker) {
     try {
         std::filesystem::create_directory("out");
     } catch (const std::filesystem::filesystem_error& e) {
@@ -251,7 +252,7 @@ inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checke
     cursor.commit();
     transpiler.flush();
     Diagnostic::message(
-        GlobalMemory::format_view("Transformed {} modules to './out'", sources.files.size())
+        GlobalMemory::format_view("Transformed {} modules to './out'", sources.files.size() - 1)
     );
 
     precompile_headers();
@@ -272,7 +273,9 @@ inline void transpile(ASTNode* root, SourceManager& sources, TypeChecker& checke
     );
     if (std::system(GlobalMemory::String(compile_command).c_str()) != 0) {
         Diagnostic::error("Failed to compile output executable");
+        return EXIT_FAILURE;
     }
+    return EXIT_SUCCESS;
 }
 
 /// ===================== Inline implementations of AST nodes =====================
@@ -368,6 +371,10 @@ inline void ASTMemberAccess::transpile(Transpiler& transpiler, Cursor& cursor) c
     if (auto self = dynamic_cast<ASTSelfExpr*>(target_); self && !self->is_type_) {
         cursor << "this->" << member_;
         return;
+    } else if (auto identifier = dynamic_cast<ASTIdentifier*>(target_)) {
+        const ScopeValue* symbol = transpiler.checker().lookup(identifier->str_).second;
+        cursor << identifier->str_ << (symbol && symbol->get<const Scope*>() ? "::" : ".")
+               << member_;
     } else {
         target_->transpile(transpiler, cursor);
         cursor << "." << member_;
@@ -628,7 +635,7 @@ inline void ASTFunctionDefinition::transpile(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
     bool is_main = transpiler.checker().is_at_top_level() && identifier_ == "main";
-    bool will_mangle = !is_main && is_static_;
+    bool will_mangle = !is_main && is_static();
     GlobalMemory::String scoped_identifier = GlobalMemory::format(
         "{}{}{}", transpiler.checker().current_scope()->prefix_, will_mangle ? "$" : "", identifier_
     );
@@ -637,23 +644,27 @@ inline void ASTFunctionDefinition::transpile(
         return_type_->transpile(transpiler, cursor);
         cursor << (will_mangle ? " $" : " ") << identifier_ << "(";
         const char* sep = "";
-        for (size_t index = is_static_ ? 0 : 1; index < parameters_.size(); index++) {
+        for (size_t index = is_static() ? 0 : 1; index < parameters_.size(); index++) {
             cursor << sep;
             parameters_[index]->transpile(transpiler, cursor);
             sep = ", ";
         }
         cursor << ")";
-        if (!is_static_) {
+        if (!is_static()) {
             cursor << " ";
             parameters_[0]->transpile_qualifiers(transpiler, cursor);
         }
         cursor << ";";
 
-        if (is_static_ && transpiler.state_.niebloids.insert(identifier_).second) {
+        if (is_static() && transpiler.state_.niebloids.insert(identifier_).second) {
             cursor.commit() << "constexpr auto " << identifier_
                             << " = [](auto&&... args) { return $" << identifier_
                             << "(std::forward<decltype(args)>(args)...); };";
         }
+    }
+
+    if (is_no_body_) {
+        return;
     }
 
     Cursor def_cursor = transpiler.section(Section::Implementation);
@@ -667,13 +678,13 @@ inline void ASTFunctionDefinition::transpile(
     return_type_->transpile(transpiler, def_cursor);
     def_cursor << " " << scoped_identifier << "(";
     const char* sep = "";
-    for (const auto& param : parameters_ | std::views::drop(is_static_ ? 0 : 1)) {
+    for (const auto& param : parameters_ | std::views::drop(is_static() ? 0 : 1)) {
         def_cursor << sep;
         param->transpile(transpiler, def_cursor);
         sep = ", ";
     }
     def_cursor << ") ";
-    if (!is_static_) {
+    if (!is_static()) {
         parameters_[0]->transpile_qualifiers(transpiler, def_cursor);
         def_cursor << " ";
     }
@@ -691,22 +702,37 @@ inline void ASTFunctionDefinition::transpile(
 inline void ASTConstructorDestructorDefinition::transpile(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
-    cursor << (is_constructor_ ? "" : "~")
-           << transpiler.checker().self_type()->cast<InstanceType>()->identifier_ << "(";
+    std::string_view classname =
+        transpiler.checker().self_type()->cast<InstanceType>()->identifier_;
+    cursor << (is_constructor_ ? "" : "~") << classname << "(";
     const char* sep = "";
     for (const auto& param : parameters_ | std::views::drop(1)) {
         cursor << sep;
         param->transpile(transpiler, cursor);
         sep = ", ";
     }
-    cursor << ") ";
-    cursor << "{";
+    cursor << ");";
+
+    Cursor def_cursor = transpiler.section(Section::Implementation);
+    def_cursor << "inline ";
+    def_cursor << classname << "::";
+    if (!is_constructor_) {
+        def_cursor << "~";
+    }
+    def_cursor << classname << "(";
+    sep = "";
+    for (const auto& param : parameters_ | std::views::drop(1)) {
+        def_cursor << sep;
+        param->transpile(transpiler, def_cursor);
+        sep = ", ";
+    }
+    def_cursor << ") {";
     TypeCheckerGuard guard(transpiler.checker(), &body_);
     for (const auto& stmt : body_) {
-        Cursor stmt_cursor = cursor.open_child(&body_);
+        Cursor stmt_cursor = def_cursor.open_child(&body_);
         stmt->transpile(transpiler, stmt_cursor);
     }
-    cursor.commit() << "}";
+    def_cursor.commit() << "}";
 }
 
 inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {

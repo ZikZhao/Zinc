@@ -1,6 +1,8 @@
 #pragma once
 #include "pch.hpp"
 
+#include "runtime-str.hpp"
+
 struct Location {
     std::uint32_t id = 0;
     std::uint32_t begin = 0;
@@ -43,6 +45,20 @@ public:
         );
         file_id_map_.insert({path, static_cast<std::uint32_t>(files.size()) - 1});
         return &files.back();
+    }
+
+    File* load_std() noexcept {
+        static File std_file = [&]() {
+            GlobalMemory::String content(std_d_zn_str());
+            std::vector<std::size_t> line_offsets = compute_line_offsets(content);
+            return File{
+                .id = std::numeric_limits<std::uint32_t>::max(),
+                .path = "<std.zinc>",
+                .content = std::move(content),
+                .line_offsets = std::move(line_offsets)
+            };
+        }();
+        return &std_file;
     }
 
     const File& operator[](std::size_t id) const noexcept {

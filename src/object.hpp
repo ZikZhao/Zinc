@@ -1864,8 +1864,12 @@ inline bool Type::assignable_from(const Type* source) const noexcept {
     if (this == source) {
         return true;
     }
-    if (auto mut = source->dyn_cast<MutableType>()) {
-        return assignable_from_impl(mut->target_type_);
+    if (kind_ != source->kind_) {
+        if (auto mut = source->dyn_cast<MutableType>()) {
+            return assignable_from_impl(mut->target_type_);
+        } else if (auto ref = source->dyn_cast<ReferenceType>()) {
+            return assignable_from_impl(ref->referenced_type_);
+        }
     }
     return assignable_from_impl(source);
 }

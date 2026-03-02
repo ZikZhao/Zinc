@@ -22,14 +22,31 @@ public:
     }
 };
 
+std::pair<Scope&, MemberAccessHandler> get_root(
+    SourceManager& sources, ImportManager<ASTRoot>& importer
+) {
+    static auto [std_scope, std_sema] = [&]() {
+        ASTBuilder builder(*sources.load_std(), importer);
+        ASTRoot* root = builder();
+        static Scope scope;
+        MemberAccessHandler sema;
+        root->collect_symbols(scope, sema);
+        return std::pair{&scope, sema};
+    }();
+    return {Scope::create_root(*std_scope), std_sema};
+}
+
 int main(int argc, char* argv[]) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <input.zn>" << std::endl;
+        return EXIT_FAILURE;
+    }
+
     ThreadGuard guard;
 
     SourceManager sources;
     ImportManager<ASTRoot> importer(sources);
-
-    std::string_view input_path = (argc > 1) ? argv[1] : "<stdin>";
-    ASTBuilder builder(*sources.load(input_path), importer);
+    ASTBuilder builder(*sources.load(argv[1]), importer);
     ASTRoot* root = builder();
 
     if (root == nullptr) {
@@ -37,8 +54,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    Scope scope;
-    MemberAccessHandler sema;
+    auto [scope, sema] = get_root(sources, importer);
     root->collect_symbols(scope, sema);
 
     TypeChecker checker(scope, sema);
@@ -46,8 +62,8 @@ int main(int argc, char* argv[]) {
 
     bool has_error = Diagnostic::print(sources);
     if (!has_error) {
-        transpile(root, sources, checker);
+        return transpile_all(root, sources, checker);
+    } else {
+        return EXIT_FAILURE;
     }
-
-    return has_error ? EXIT_FAILURE : EXIT_SUCCESS;
 }

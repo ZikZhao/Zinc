@@ -219,7 +219,8 @@ private:
             return_type,
             body,
             ctx->KW_CONST() != nullptr,
-            ctx->KW_STATIC() != nullptr
+            ctx->KW_STATIC() != nullptr,
+            ctx->semi_ != nullptr
         );
         return {};
     }

@@ -74,7 +74,10 @@ function_definition:
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
-	)? OP_RPAREN (OP_ARROW return_type_ = type)? OP_LBRACE body_ += statement* OP_RBRACE;
+	)? OP_RPAREN (OP_ARROW return_type_ = type)? (
+		OP_LBRACE body_ += statement* OP_RBRACE
+		| semi_ = OP_SEMICOLON
+	);
 
 parameter:
 	KW_SELF OP_COLON type_ = type						# SelfParam

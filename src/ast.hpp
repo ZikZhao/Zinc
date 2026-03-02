@@ -48,14 +48,17 @@ class Scope final : public GlobalMemory::MonotonicAllocated {
     friend class TypeCheckerGuard;
 
 public:
-    static Scope& create(const void* owner, Scope& parent, std::string_view name = "") {
-        Scope* scope = new Scope(parent, name);
-        Scope& ref = *scope;
-        parent.children_.insert({owner, scope});
-        return ref;
+    static Scope& create_root(Scope& std_scope) {
+        Scope* scope = new Scope();
+        scope->add_namespace("std", std_scope);
+        return *scope;
     }
 
-    static Scope& create_hidden(Scope& parent) { return *new Scope(parent, ""); }
+    static Scope& create(const void* owner, Scope& parent, std::string_view name = "") {
+        Scope* scope = new Scope(parent, name);
+        parent.children_.insert({owner, scope});
+        return *scope;
+    }
 
 private:
     Scope* parent_ = nullptr;
@@ -706,8 +709,10 @@ public:
             if (term.is_unknown()) {
                 return Term::unknown();
             }
-            Term instance = Term::lvalue(TypeRegistry::get<MutableType>(self_type));
-            args_terms.insert(args_terms.begin(), instance);
+            if (self_type) {
+                Term instance = Term::lvalue(TypeRegistry::get<MutableType>(self_type));
+                args_terms.insert(args_terms.begin(), instance);
+            }
             func_term = term;
         } else {
             func_term = function_->eval_term(checker, nullptr, comptime);
@@ -1116,7 +1121,8 @@ public:
     ASTExpression* return_type_;
     ComparableSpan<ASTNode*> body_;
     bool is_const_;
-    bool is_static_;
+    bool declared_static_;
+    bool is_no_body_;
 
 public:
     ASTFunctionDefinition(
@@ -1126,7 +1132,8 @@ public:
         ASTExpression* return_type,
         ComparableSpan<ASTNode*> body,
         bool is_const,
-        bool is_static
+        bool declared_static,
+        bool is_no_body
     ) noexcept
         : ASTNode(loc),
           identifier_(identifier),
@@ -1134,7 +1141,8 @@ public:
           return_type_(return_type),
           body_(body),
           is_const_(is_const),
-          is_static_(is_static) {}
+          declared_static_(declared_static),
+          is_no_body_(is_no_body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_function(identifier_, this);
         Scope& local_scope = Scope::create(&body_, scope);
@@ -1152,6 +1160,9 @@ public:
         for (auto& stmt : body_) {
             stmt->check_types(checker);
         }
+    }
+    bool is_static() const noexcept {
+        return declared_static_ || (!parameters_.empty() && parameters_[0]->identifier_ != "self");
     }
     FunctionObject get_func_obj(TypeChecker& checker) const noexcept {
         bool any_error = false;
@@ -1472,7 +1483,7 @@ inline ASTRoot::ASTRoot(const Location& loc, ComparableSpan<ASTNode*> statements
     : ASTNode(loc), statements_(statements) {
     for (auto& stmt : statements_) {
         if (auto func_decl = dynamic_cast<ASTFunctionDefinition*>(stmt)) {
-            func_decl->is_static_ = true;
+            func_decl->declared_static_ = true;
         }
     }
 }
@@ -1578,7 +1589,7 @@ inline GlobalMemory::FlatMap<std::string_view, FunctionOverloadSetValue*>
 ASTClassSignature::resolve_methods(TypeChecker& checker) const noexcept {
     GlobalMemory::Vector non_static_functions =
         owner_->functions_ |
-        std::views::filter([](const auto& func_def) { return !func_def->is_static_; }) |
+        std::views::filter([](const auto& func_def) { return !func_def->is_static(); }) |
         GlobalMemory::collect<GlobalMemory::Vector<const ASTFunctionDefinition*>>();
     std::ranges::sort(non_static_functions, [](const auto& a, const auto& b) {
         return a->identifier_ < b->identifier_;

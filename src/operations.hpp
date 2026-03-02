@@ -799,7 +799,7 @@ public:
             }
         }
         GlobalMemory::Vector<const Type*> arg_types = extract_arg_types(args);
-        FunctionObject overload = overload_resolution(std::move(overloads), arg_types);
+        FunctionObject overload = overload_resolution(overloads, arg_types);
         if (!overload) {
             /// TODO: throw no matching overload error
             throw;
@@ -911,7 +911,7 @@ private:
     }
 
     FunctionObject overload_resolution(
-        GlobalMemory::Vector<FunctionObject> overloads, ComparableSpan<const Type*> arg_types
+        const GlobalMemory::Vector<FunctionObject>& overloads, ComparableSpan<const Type*> arg_types
     ) const {
         FunctionObject best_candidate = nullptr;
         for (FunctionObject candidate : overloads) {
