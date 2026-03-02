@@ -38,10 +38,10 @@ int main(int argc, char* argv[]) {
     }
 
     Scope scope;
-    OperationHandler ops;
-    root->collect_symbols(scope, ops);
+    MemberAccessHandler sema;
+    root->collect_symbols(scope, sema);
 
-    TypeChecker checker(scope, ops);
+    TypeChecker checker(scope, sema);
     root->check_types(checker);
 
     bool has_error = Diagnostic::print(sources);

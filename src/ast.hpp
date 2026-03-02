@@ -140,10 +140,11 @@ private:
     // GlobalMemory::FlatMap<std::pair<const Scope*, const ASTExpression*>, Type*> ptr_cache_;
 
 public:
-    OperationHandler& ops_;
+    MemberAccessHandler& sema_;
 
 public:
-    TypeChecker(Scope& root, OperationHandler& ops) noexcept : current_scope_(&root), ops_(ops) {}
+    TypeChecker(Scope& root, MemberAccessHandler& sema) noexcept
+        : current_scope_(&root), sema_(sema) {}
 
     void add_variable(std::string_view identifier, Term term) {
         current_scope_->add_variable(identifier, term);
@@ -208,7 +209,7 @@ public:
     Location location_;
     ASTNode(const Location& loc) noexcept : location_(loc) {}
     virtual ~ASTNode() noexcept = default;
-    virtual void collect_symbols(Scope& scope, OperationHandler& ops) {}
+    virtual void collect_symbols(Scope& scope, MemberAccessHandler& sema) {}
     virtual void check_types(TypeChecker& checker) {}
     virtual void transpile(Transpiler& transpiler, Cursor& cursor) const { UNREACHABLE(); };
 };
@@ -224,9 +225,9 @@ class ASTRoot final : public ASTNode {
 public:
     ComparableSpan<ASTNode*> statements_;
     ASTRoot(const Location& loc, ComparableSpan<ASTNode*> statements) noexcept;
-    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         for (auto& child : statements_) {
-            child->collect_symbols(scope, ops);
+            child->collect_symbols(scope, sema);
         }
     }
     void check_types(TypeChecker& checker) final {
@@ -242,10 +243,10 @@ public:
     ComparableSpan<ASTNode*> statements_;
     ASTLocalBlock(const Location& loc, ComparableSpan<ASTNode*> statements) noexcept
         : ASTNode(loc), statements_(statements) {}
-    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         Scope& local_scope = Scope::create(this, scope);
         for (auto& stmt : statements_) {
-            stmt->collect_symbols(local_scope, ops);
+            stmt->collect_symbols(local_scope, sema);
         }
     }
     void check_types(TypeChecker& checker) final {
@@ -294,6 +295,26 @@ class ASTHiddenTypeExpr : public ASTExplicitTypeExpr {
 public:
     ASTHiddenTypeExpr() noexcept : ASTExplicitTypeExpr({}) {}
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+};
+
+class ASTParenExpr final : public ASTExpression {
+public:
+    ASTExpression* inner_;
+
+public:
+    ASTParenExpr(const Location& loc, ASTExpression* inner) noexcept
+        : ASTExpression(loc), inner_(inner) {}
+    Term eval_term(TypeChecker& checker, const Type* expected, bool comptime) const noexcept final {
+        return inner_->eval_term(checker, expected, comptime);
+    }
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+protected:
+    void eval_type_impl(
+        TypeChecker& checker, TypeResolution& out, bool require_complete
+    ) const noexcept final {
+        inner_->eval_type(checker, out, require_complete);
+    }
 };
 
 class ASTConstant final : public ASTExpression {
@@ -409,7 +430,7 @@ public:
         : ASTExpression(loc), expr_(expr) {}
     Term eval_term(TypeChecker& checker, const Type* expected, bool comptime) const noexcept final {
         Term expr_term = expr_->eval_term(checker, expected, comptime);
-        return checker.ops_.eval_value_op(Op::opcode, expr_term);
+        return checker.sema_.eval_value_op(Op::opcode, expr_term);
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
@@ -418,7 +439,7 @@ private:
         TypeResolution expr_result;
         expr_->eval_type(checker, expr_result);
         try {
-            out = TypeResolution(checker.ops_.eval_type_op(Op::opcode, expr_result));
+            out = TypeResolution(checker.sema_.eval_type_op(Op::opcode, expr_result));
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
             out = TypeRegistry::get_unknown();
@@ -439,7 +460,7 @@ public:
         Term left_term = left_->eval_term(checker, expected, comptime);
         Term right_term = right_->eval_term(checker, expected, comptime);
         try {
-            return checker.ops_.eval_value_op(Op::opcode, left_term, right_term);
+            return checker.sema_.eval_value_op(Op::opcode, left_term, right_term);
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
             return Term::unknown();
@@ -454,7 +475,7 @@ private:
         TypeResolution right_result;
         right_->eval_type(checker, right_result);
         try {
-            out = checker.ops_.eval_type_op(Op::opcode, left_result, right_result);
+            out = checker.sema_.eval_type_op(Op::opcode, left_result, right_result);
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
             out = TypeRegistry::get_unknown();
@@ -516,7 +537,7 @@ public:
         if (term) return term;
 
         term = target_->eval_term(checker, nullptr, false);
-        return checker.ops_.eval_access(term, member_);
+        return checker.sema_.eval_access(term, member_);
     }
     std::pair<Term, const Type*> eval_term_for_call(
         TypeChecker& checker, bool comptime
@@ -525,7 +546,7 @@ public:
         if (term) return {term, nullptr};
 
         Term target_term = target_->eval_term(checker, nullptr, comptime);
-        return {checker.ops_.eval_access(target_term, member_), target_term.effective_type()};
+        return {checker.sema_.eval_access(target_term, member_), target_term.effective_type()};
     }
 
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
@@ -699,7 +720,7 @@ public:
             return Term::unknown();
         }
         try {
-            return checker.ops_.eval_call(func_term, args_terms);
+            return checker.sema_.eval_call(func_term, args_terms);
         } catch (UnlocatedProblem& e) {
             e.report_at(location_);
             return Term::unknown();
@@ -936,7 +957,7 @@ public:
 public:
     ASTTypeAlias(const Location& loc, std::string_view identifier, ASTExpression* type) noexcept
         : ASTNode(loc), identifier_(std::move(identifier)), type_(type) {}
-    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_type(identifier_, type_);
     }
     void check_types(TypeChecker& checker) final { checker.lookup_type(identifier_); }
@@ -957,15 +978,15 @@ public:
         ComparableSpan<ASTNode*> else_block = {}
     ) noexcept
         : ASTNode(loc), condition_(condition), if_block_(if_block), else_block_(else_block) {}
-    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         Scope& if_scope = Scope::create(&if_block_, scope);
         for (auto& stmt : if_block_) {
-            stmt->collect_symbols(if_scope, ops);
+            stmt->collect_symbols(if_scope, sema);
         }
         if (!else_block_.empty()) {
             Scope& else_scope = Scope::create(&else_block_, scope);
             for (auto& stmt : else_block_) {
-                stmt->collect_symbols(else_scope, ops);
+                stmt->collect_symbols(else_scope, sema);
             }
         }
     }
@@ -1023,13 +1044,13 @@ public:
           condition_(nullptr),
           increment_(nullptr),
           body_(body) {}
-    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         Scope& local_scope = Scope::create(&body_, scope);
         if (initializer_) {
-            initializer_->collect_symbols(local_scope, ops);
+            initializer_->collect_symbols(local_scope, sema);
         }
         for (auto& stmt : body_) {
-            stmt->collect_symbols(local_scope, ops);
+            stmt->collect_symbols(local_scope, sema);
         }
     }
     void check_types(TypeChecker& checker) final {
@@ -1085,6 +1106,7 @@ public:
     ) noexcept
         : ASTNode(loc), identifier_(identifier), type_(type) {}
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+    void transpile_qualifiers(Transpiler& transpiler, Cursor& cursor) const noexcept;
 };
 
 class ASTFunctionDefinition final : public ASTNode {
@@ -1113,11 +1135,11 @@ public:
           body_(body),
           is_const_(is_const),
           is_static_(is_static) {}
-    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_function(identifier_, this);
         Scope& local_scope = Scope::create(&body_, scope);
         for (auto& stmt : body_) {
-            stmt->collect_symbols(local_scope, ops);
+            stmt->collect_symbols(local_scope, sema);
         }
     }
     void check_types(TypeChecker& checker) final {
@@ -1153,16 +1175,35 @@ public:
 
 class ASTConstructorDestructorDefinition final : public ASTNode {
 public:
+    bool is_constructor_;
     ComparableSpan<ASTFunctionParameter*> parameters_;
     ComparableSpan<ASTNode*> body_;
 
 public:
     ASTConstructorDestructorDefinition(
         const Location& loc,
+        bool is_constructor,
         ComparableSpan<ASTFunctionParameter*> parameters,
         ComparableSpan<ASTNode*> body
     ) noexcept
-        : ASTNode(loc), parameters_(parameters), body_(body) {}
+        : ASTNode(loc), is_constructor_(is_constructor), parameters_(parameters), body_(body) {}
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
+        Scope& local_scope = Scope::create(&body_, scope);
+        for (auto& stmt : body_) {
+            stmt->collect_symbols(local_scope, sema);
+        }
+    }
+    void check_types(TypeChecker& checker) final {
+        TypeCheckerGuard guard(checker, &body_);
+        for (auto& param : parameters_) {
+            TypeResolution param_type;
+            param->type_->eval_type(checker, param_type);
+            checker.add_variable(param->identifier_, Term::lvalue(param_type.get()));
+        }
+        for (auto& stmt : body_) {
+            stmt->check_types(checker);
+        }
+    }
     FunctionObject get_func_obj(TypeChecker& checker, const Type* owner_type) const noexcept {
         bool any_error = false;
         ComparableSpan params =
@@ -1177,6 +1218,8 @@ public:
         }
         return TypeRegistry::get<FunctionType>(params, owner_type);
     }
+
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
 class ASTClassSignature final : public ASTHiddenTypeExpr {
@@ -1237,12 +1280,18 @@ public:
           aliases_(aliases),
           functions_(functions),
           classes_(classes) {}
-    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         auto signature = new ASTClassSignature(this);
         scope.add_type(identifier_, signature);
         Scope& class_scope = Scope::create(this, scope, identifier_);
+        for (auto& ctor : constructors_) {
+            ctor->collect_symbols(class_scope, sema);
+        }
+        if (destructor_) {
+            destructor_->collect_symbols(class_scope, sema);
+        }
         for (auto& func : functions_) {
-            func->collect_symbols(class_scope, ops);
+            func->collect_symbols(class_scope, sema);
         }
     }
     void check_types(TypeChecker& checker) final {
@@ -1250,6 +1299,12 @@ public:
         TypeCheckerGuard guard(checker, this);
         for (auto& field : fields_) {
             field->check_types(checker);
+        }
+        for (auto& ctor : constructors_) {
+            ctor->check_types(checker);
+        }
+        if (destructor_) {
+            destructor_->check_types(checker);
         }
         for (auto& func : functions_) {
             func->check_types(checker);
@@ -1266,10 +1321,10 @@ public:
         const Location& loc, std::string_view identifier, ComparableSpan<ASTNode*> items
     ) noexcept
         : ASTNode(loc), identifier_(identifier), items_(items) {}
-    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         Scope& namespace_scope = Scope::create(this, scope, identifier_);
         for (auto& item : items_) {
-            item->collect_symbols(namespace_scope, ops);
+            item->collect_symbols(namespace_scope, sema);
         }
         scope.add_namespace(identifier_, namespace_scope);
     }
@@ -1308,7 +1363,7 @@ public:
         ComparableSpan<std::pair<std::string_view, ASTExplicitTypeExpr*>> parameters
     ) noexcept
         : ASTNode(loc), target_(target), parameters_(parameters) {}
-    void collect_symbols(Scope& scope, OperationHandler& ops) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_template(target_->get_template_name(), this);
     }
     ScopeValue instantiate(TypeChecker& checker, ComparableSpan<Object*> arguments) {
@@ -1349,7 +1404,7 @@ public:
             }
         }
         ASTNode* node = target_->as_node();
-        node->collect_symbols(template_scope, checker.ops_);
+        node->collect_symbols(template_scope, checker.sema_);
         checker.enter(this);
         node->check_types(checker);
         checker.exit();

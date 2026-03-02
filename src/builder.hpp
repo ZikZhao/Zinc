@@ -612,13 +612,13 @@ private:
         ComparableSpan<ASTFunctionParameter*> parameters =
             transform_list<ASTFunctionParameter>(ctx->parameters_);
         ComparableSpan<ASTNode*> body = transform_list(ctx->body_);
-        last_visited_ = new ASTConstructorDestructorDefinition(loc(ctx), parameters, body);
+        last_visited_ = new ASTConstructorDestructorDefinition(loc(ctx), true, parameters, body);
         return {};
     }
     antlrcpp::Any visitDestructor(ZincParser::DestructorContext* ctx) noexcept final {
         ComparableSpan<ASTNode*> body = transform_list(ctx->body_);
         last_visited_ = new ASTConstructorDestructorDefinition(
-            loc(ctx), ComparableSpan<ASTFunctionParameter*>{}, body
+            loc(ctx), false, ComparableSpan<ASTFunctionParameter*>{}, body
         );
         return {};
     }

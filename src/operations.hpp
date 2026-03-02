@@ -532,186 +532,7 @@ inline Value* assignment_op(OperatorCode opcode, Value* left, Value* right) {
 }
 }  // namespace PrimitiveOperations
 
-class MemberAccessHandler {
-public:
-    Term eval_access(Term object, std::string_view member) {
-        object = value_decay(object);
-        if (object.is_type()) {
-            /// TODO: handle type member access
-            return {};
-        } else {
-            Term result;
-            if (object->kind_ == Kind::Struct) {
-                result = struct_access(object, member);
-            } else if (object->kind_ == Kind::Instance) {
-                result = instance_access(object, member);
-            } else {
-                throw UnlocatedProblem::make<OperationNotDefinedError>(".", object->repr(), member);
-            }
-            if (!result) {
-                /// TODO: throw member not found error
-                throw;
-            }
-            return result;
-        }
-    }
-
-    Term eval_call(Term callee, ComparableSpan<Term> args) {
-        Term decayed = callee_decay(callee);
-        GlobalMemory::Vector<FunctionObject> overloads = list_overloads(decayed);
-        if (overloads.empty()) {
-            if (decayed.is_type()) {
-                /// TODO: throw type is not callable error
-            } else {
-                throw UnlocatedProblem::make<OperationNotDefinedError>("call", callee->repr(), "");
-            }
-        }
-        GlobalMemory::Vector<const Type*> arg_types = extract_arg_types(args);
-        FunctionObject overload = overload_resolution(std::move(overloads), arg_types);
-        if (!overload) {
-            /// TODO: throw no matching overload error
-            throw;
-        }
-        if (auto func_value = overload->dyn_cast<FunctionValue>()) {
-            return func_value->invoke(args);
-        } else {
-            auto func_type = overload->cast<FunctionType>();
-            return Term::prvalue(func_type->return_type_);
-        }
-    }
-
-private:
-    Term value_decay(Term term) const {
-        if (term.is_type()) return term;
-
-        if (auto ref_value = term->dyn_cast<ReferenceValue>()) {
-            return Term::lvalue(ref_value->referenced_value_);
-        } else if (auto ref_type = term->dyn_cast<ReferenceType>()) {
-            return Term::lvalue(ref_type->referenced_type_);
-        } else if (auto ptr_value = term->dyn_cast<PointerValue>()) {
-            return value_decay(Term::lvalue(ptr_value->pointed_value_));
-        } else if (auto ptr_type = term->dyn_cast<PointerType>()) {
-            return value_decay(Term::lvalue(ptr_type->pointed_type_));
-        }
-        return term;
-    }
-
-    Term struct_access(Term object, std::string_view member) {
-        if (auto struct_type = object->dyn_cast<StructType>()) {
-            auto attr_it = struct_type->fields_.find(member);
-            if (attr_it != struct_type->fields_.end()) {
-                return Term::forward_like(object, attr_it->second);
-            }
-        } else {
-            auto struct_value = object.get_comptime()->cast<StructValue>();
-            auto attr_it = struct_value->type_->fields_.find(member);
-            if (attr_it != struct_value->type_->fields_.end()) {
-                return Term::forward_like(object, attr_it->second);
-            }
-        }
-        return {};
-    }
-
-    Term instance_access(Term object, std::string_view member) {
-        if (auto instance_type = object->cast<InstanceType>()) {
-            auto method_it = instance_type->methods_.find(member);
-            if (method_it != instance_type->methods_.end()) {
-                return Term::forward_like(object, method_it->second);
-            }
-            auto attr_it = instance_type->attrs_.find(member);
-            if (attr_it != instance_type->attrs_.end()) {
-                return Term::forward_like(object, attr_it->second);
-            }
-        } else {
-            auto instance_value = object.get_comptime()->cast<InstanceValue>();
-            auto attr_it = instance_value->attrs_.find(member);
-            if (attr_it != instance_value->attrs_.end()) {
-                return Term::forward_like(object, attr_it->second);
-            }
-            auto method_it = instance_value->type_->methods_.find(member);
-            if (method_it != instance_value->type_->methods_.end()) {
-                return Term::forward_like(object, method_it->second);
-            }
-        }
-        return {};
-    }
-
-    Term callee_decay(Term term) const {
-        if (term.is_type()) {
-            if (auto cls_type = term->dyn_cast<InstanceType>()) {
-                return Term::prvalue(cls_type->constructors_);
-            }
-        } else {
-            return value_decay(term);
-        }
-        return term;
-    }
-
-    GlobalMemory::Vector<FunctionObject> list_overloads(Term func) const {
-        if (func.is_type()) return {};
-        if (auto overload_set = func->dyn_cast<FunctionOverloadSetValue>()) {
-            return overload_set->overloads_;
-        } else if (auto intersection_type = func->dyn_cast<IntersectionType>()) {
-            return intersection_type->types_ |
-                   GlobalMemory::collect<GlobalMemory::Vector<FunctionObject>>();
-        } else if (auto func_value = func->dyn_cast<FunctionValue>()) {
-            return {func_value};
-        } else if (auto func_type = func->dyn_cast<FunctionType>()) {
-            return {func_type};
-        } else {
-            return {};
-        }
-    }
-
-    const Type* category_decay(Term obj) const {
-        if (obj.is_type()) {
-            /// TODO: throw type is not a valid argument error
-            return &UnknownType::instance;
-        }
-        const Type* type = obj.effective_type();
-        if (obj.value_category() == ValueCategory::Left) {
-            return TypeRegistry::get<ReferenceType>(type, false);
-        } else if (obj.value_category() == ValueCategory::Expiring) {
-            return TypeRegistry::get<ReferenceType>(type, true);
-        } else {
-            return type;
-        }
-    }
-
-    GlobalMemory::Vector<const Type*> extract_arg_types(ComparableSpan<Term> args) const {
-        return args | std::views::transform([this](Term arg) { return category_decay(arg); }) |
-               GlobalMemory::collect<GlobalMemory::Vector<const Type*>>();
-    }
-
-    FunctionObject overload_resolution(
-        GlobalMemory::Vector<FunctionObject> overloads, ComparableSpan<const Type*> arg_types
-    ) const {
-        FunctionObject best_candidate = nullptr;
-        for (FunctionObject candidate : overloads) {
-            const FunctionType* func_type = candidate->dyn_cast<FunctionType>();
-            if (!func_type) func_type = candidate->cast<FunctionValue>()->get_type();
-            if (func_type->parameters_.size() != arg_types.size()) {
-                continue;
-            }
-            bool satisfies = true;
-            for (std::size_t i = 0; i < func_type->parameters_.size(); ++i) {
-                if (!func_type->parameters_[i]->assignable_from(arg_types[i])) {
-                    satisfies = false;
-                    break;
-                }
-            }
-            if (satisfies) {
-                if (best_candidate) {
-                    /// TODO: throw ambiguity error
-                }
-                best_candidate = candidate;
-            }
-        }
-        return best_candidate;
-    }
-};
-
-class OperationHandler final : public MemberAccessHandler {
+class OperationHandler {
 private:
     GlobalMemory::FlatMap<std::tuple<OperatorCode, const Type*, const Type*>, FunctionObject> map_;
     GlobalMemory::MultiMap<OperatorCode, FunctionObject (*)(const Type*, const Type*)> templates_;
@@ -725,15 +546,21 @@ public:
     }
 
     Term eval_value_op(OperatorCode opcode, Term left, Term right = {}) {
-        if (left->kind_ == Kind::Unknown || (right && right->kind_ == Kind::Unknown)) {
+        bool left_is_mutable = false;
+        Term decayed_left = value_decay(left, &left_is_mutable);
+        Term decayed_right = value_decay(right);
+        if (decayed_left->kind_ == Kind::Unknown ||
+            (decayed_right && decayed_right->kind_ == Kind::Unknown)) {
             return Term::unknown();
-        } else if ((left->kind_ == Kind::Integer || left->kind_ == Kind::Float ||
-                    left->kind_ == Kind::Boolean) &&
-                   (right ? (right->kind_ == Kind::Integer || right->kind_ == Kind::Float ||
-                             right->kind_ == Kind::Boolean)
+        } else if ((decayed_left->kind_ == Kind::Integer || decayed_left->kind_ == Kind::Float ||
+                    decayed_left->kind_ == Kind::Boolean) &&
+                   (right ? (decayed_right->kind_ == Kind::Integer ||
+                             decayed_right->kind_ == Kind::Float ||
+                             decayed_right->kind_ == Kind::Boolean)
                           : true)) {
-            return eval_primitive_op(opcode, left, right);
+            return eval_primitive_op(opcode, decayed_left, decayed_right, left_is_mutable);
         }
+        /// TODO: check mutability for assignment operations
         bool comptime = left.is_comptime() && (right && right.is_comptime());
         const Type* left_type = left.effective_type();
         const Type* right_type = right ? right.effective_type() : nullptr;
@@ -771,6 +598,29 @@ public:
         map_[{opcode, left_type, right_type}] = func;
     }
 
+protected:
+    Term value_decay(Term term, bool* is_mutable = nullptr) const {
+        if (!term) return term;
+        if (term.is_type()) return term;
+
+        if (auto ref_value = term->dyn_cast<ReferenceValue>()) {
+            return value_decay(Term::lvalue(ref_value->referenced_value_), is_mutable);
+        } else if (auto ref_type = term->dyn_cast<ReferenceType>()) {
+            return value_decay(Term::lvalue(ref_type->referenced_type_), is_mutable);
+        } else if (auto ptr_value = term->dyn_cast<PointerValue>()) {
+            return value_decay(Term::lvalue(ptr_value->pointed_value_), is_mutable);
+        } else if (auto ptr_type = term->dyn_cast<PointerType>()) {
+            return value_decay(Term::lvalue(ptr_type->pointed_type_), is_mutable);
+        } else if (auto mut_type = term->dyn_cast<MutableType>()) {
+            if (is_mutable) *is_mutable = true;
+            return value_decay(Term::lvalue(mut_type->target_type_), is_mutable);
+        } else if (auto mut_value = term->dyn_cast<MutableValue>()) {
+            if (is_mutable) *is_mutable = false;
+            return value_decay(Term::lvalue(mut_value->value_), is_mutable);
+        }
+        return term;
+    }
+
 private:
     FunctionObject try_instantiate(OperatorCode opcode, const Type* left, const Type* right) const {
         // User-defined operator templates
@@ -784,7 +634,7 @@ private:
         return nullptr;
     }
 
-    Term eval_primitive_op(OperatorCode opcode, Term left, Term right) const {
+    Term eval_primitive_op(OperatorCode opcode, Term left, Term right, bool left_is_mutable) const {
         const Type* left_type = left.effective_type();
         Kind left_kind = left->kind_;
         Kind right_kind = right ? right->kind_ : Kind::Unknown;
@@ -850,7 +700,7 @@ private:
                 break;
             case OperatorGroup::Assignment:
                 /// TODO:
-                if (left.value_category() != ValueCategory::Left) break;
+                if (!left_is_mutable) break;
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
@@ -899,7 +749,7 @@ private:
                 break;
             case OperatorGroup::Assignment:
                 /// TODO:
-                if (left.value_category() != ValueCategory::Left) break;
+                if (!left_is_mutable) break;
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
@@ -910,6 +760,181 @@ private:
         }
         /// TODO: throw error
         return Term::unknown();
+    }
+};
+
+class MemberAccessHandler final : public OperationHandler {
+public:
+    Term eval_access(Term object, std::string_view member) {
+        bool is_mutable = false;
+        object = value_decay(object, &is_mutable);
+        if (object.is_type()) {
+            /// TODO: handle type member access
+            return {};
+        } else {
+            Term result;
+            if (object->kind_ == Kind::Struct) {
+                result = struct_access(object, member);
+            } else if (object->kind_ == Kind::Instance) {
+                result = instance_access(object, member);
+            } else {
+                throw UnlocatedProblem::make<OperationNotDefinedError>(".", object->repr(), member);
+            }
+            if (!result) {
+                /// TODO: throw member not found error
+                throw;
+            }
+            return is_mutable ? wrap_in_mutable(result) : result;
+        }
+    }
+
+    Term eval_call(Term callee, ComparableSpan<Term> args) {
+        Term decayed = callee_decay(callee);
+        GlobalMemory::Vector<FunctionObject> overloads = list_overloads(decayed);
+        if (overloads.empty()) {
+            if (decayed.is_type()) {
+                /// TODO: throw type is not callable error
+            } else {
+                throw UnlocatedProblem::make<OperationNotDefinedError>("call", callee->repr(), "");
+            }
+        }
+        GlobalMemory::Vector<const Type*> arg_types = extract_arg_types(args);
+        FunctionObject overload = overload_resolution(std::move(overloads), arg_types);
+        if (!overload) {
+            /// TODO: throw no matching overload error
+            throw;
+        }
+        if (auto func_value = overload->dyn_cast<FunctionValue>()) {
+            return func_value->invoke(args);
+        } else {
+            auto func_type = overload->cast<FunctionType>();
+            return Term::prvalue(func_type->return_type_);
+        }
+    }
+
+private:
+    Term callee_decay(Term term) const {
+        if (term.is_type()) {
+            if (auto cls_type = term->dyn_cast<InstanceType>()) {
+                return Term::prvalue(cls_type->constructors_);
+            }
+        } else {
+            return value_decay(term);
+        }
+        return term;
+    }
+
+    Term wrap_in_mutable(Term term) const {
+        if (auto value = term.get_comptime()) {
+            return Term::forward_like(
+                term, new MutableValue(TypeRegistry::get<MutableType>(term.effective_type()), value)
+            );
+        } else {
+            return Term::forward_like(term, TypeRegistry::get<MutableType>(term.effective_type()));
+        }
+    }
+
+    Term struct_access(Term object, std::string_view member) {
+        if (auto struct_type = object->dyn_cast<StructType>()) {
+            auto attr_it = struct_type->fields_.find(member);
+            if (attr_it != struct_type->fields_.end()) {
+                return Term::forward_like(object, attr_it->second);
+            }
+        } else {
+            auto struct_value = object.get_comptime()->cast<StructValue>();
+            auto attr_it = struct_value->type_->fields_.find(member);
+            if (attr_it != struct_value->type_->fields_.end()) {
+                return Term::forward_like(object, attr_it->second);
+            }
+        }
+        return {};
+    }
+
+    Term instance_access(Term object, std::string_view member) {
+        if (auto instance_type = object->cast<InstanceType>()) {
+            auto method_it = instance_type->methods_.find(member);
+            if (method_it != instance_type->methods_.end()) {
+                return Term::forward_like(object, method_it->second);
+            }
+            auto attr_it = instance_type->attrs_.find(member);
+            if (attr_it != instance_type->attrs_.end()) {
+                return Term::forward_like(object, attr_it->second);
+            }
+        } else {
+            auto instance_value = object.get_comptime()->cast<InstanceValue>();
+            auto attr_it = instance_value->attrs_.find(member);
+            if (attr_it != instance_value->attrs_.end()) {
+                return Term::forward_like(object, attr_it->second);
+            }
+            auto method_it = instance_value->type_->methods_.find(member);
+            if (method_it != instance_value->type_->methods_.end()) {
+                return Term::forward_like(object, method_it->second);
+            }
+        }
+        return {};
+    }
+
+    GlobalMemory::Vector<FunctionObject> list_overloads(Term func) const {
+        if (func.is_type()) return {};
+        if (auto overload_set = func->dyn_cast<FunctionOverloadSetValue>()) {
+            return overload_set->overloads_;
+        } else if (auto intersection_type = func->dyn_cast<IntersectionType>()) {
+            return intersection_type->types_ |
+                   GlobalMemory::collect<GlobalMemory::Vector<FunctionObject>>();
+        } else if (auto func_value = func->dyn_cast<FunctionValue>()) {
+            return {func_value};
+        } else if (auto func_type = func->dyn_cast<FunctionType>()) {
+            return {func_type};
+        } else {
+            return {};
+        }
+    }
+
+    const Type* category_decay(Term obj) const {
+        if (obj.is_type()) {
+            /// TODO: throw type is not a valid argument error
+            return &UnknownType::instance;
+        }
+        const Type* type = obj.effective_type();
+        if (obj.value_category() == ValueCategory::Left) {
+            return TypeRegistry::get<ReferenceType>(type, false);
+        } else if (obj.value_category() == ValueCategory::Expiring) {
+            return TypeRegistry::get<ReferenceType>(type, true);
+        } else {
+            return type;
+        }
+    }
+
+    GlobalMemory::Vector<const Type*> extract_arg_types(ComparableSpan<Term> args) const {
+        return args | std::views::transform([this](Term arg) { return category_decay(arg); }) |
+               GlobalMemory::collect<GlobalMemory::Vector<const Type*>>();
+    }
+
+    FunctionObject overload_resolution(
+        GlobalMemory::Vector<FunctionObject> overloads, ComparableSpan<const Type*> arg_types
+    ) const {
+        FunctionObject best_candidate = nullptr;
+        for (FunctionObject candidate : overloads) {
+            const FunctionType* func_type = candidate->dyn_cast<FunctionType>();
+            if (!func_type) func_type = candidate->cast<FunctionValue>()->get_type();
+            if (func_type->parameters_.size() != arg_types.size()) {
+                continue;
+            }
+            bool satisfies = true;
+            for (std::size_t i = 0; i < func_type->parameters_.size(); ++i) {
+                if (!func_type->parameters_[i]->assignable_from(arg_types[i])) {
+                    satisfies = false;
+                    break;
+                }
+            }
+            if (satisfies) {
+                if (best_candidate) {
+                    /// TODO: throw ambiguity error
+                }
+                best_candidate = candidate;
+            }
+        }
+        return best_candidate;
     }
 };
 

@@ -301,6 +301,12 @@ inline void ASTHiddenTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor)
     UNREACHABLE();
 }
 
+inline void ASTParenExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    cursor << "(";
+    inner_->transpile(transpiler, cursor);
+    cursor << ")";
+}
+
 inline void ASTConstant::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     switch (value_->kind_) {
     case Kind::Nullptr:
@@ -347,18 +353,15 @@ inline void ASTIdentifier::transpile(Transpiler& transpiler, Cursor& cursor) con
 template <typename Op>
 inline void ASTUnaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     /// TODO: handle prefix/postfix
-    cursor << "(" << OperatorCodeToString(Op::opcode);
+    cursor << OperatorCodeToString(Op::opcode);
     expr_->transpile(transpiler, cursor);
-    cursor << ")";
 }
 
 template <typename Op>
 inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    cursor << "(";
     left_->transpile(transpiler, cursor);
     cursor << " " << OperatorCodeToString(Op::opcode) << " ";
     right_->transpile(transpiler, cursor);
-    cursor << ")";
 }
 
 inline void ASTMemberAccess::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -603,6 +606,24 @@ inline void ASTFunctionParameter::transpile(Transpiler& transpiler, Cursor& curs
     cursor << " " << identifier_;
 }
 
+inline void ASTFunctionParameter::transpile_qualifiers(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    TypeResolution qualified_type;
+    type_->eval_type(transpiler.checker(), qualified_type);
+    if (auto ref_type = qualified_type->dyn_cast<ReferenceType>()) {
+        if (ref_type->is_moved_) {
+            cursor << "&&";
+        } else if (ref_type->referenced_type_->dyn_cast<MutableType>()) {
+            cursor << "&";
+        } else {
+            cursor << "const &";
+        }
+    } else {
+        UNREACHABLE();
+    }
+}
+
 inline void ASTFunctionDefinition::transpile(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
@@ -623,6 +644,8 @@ inline void ASTFunctionDefinition::transpile(
         }
         cursor << ")";
         if (!is_static_) {
+            cursor << " ";
+            parameters_[0]->transpile_qualifiers(transpiler, cursor);
         }
         cursor << ";";
 
@@ -644,12 +667,17 @@ inline void ASTFunctionDefinition::transpile(
     return_type_->transpile(transpiler, def_cursor);
     def_cursor << " " << scoped_identifier << "(";
     const char* sep = "";
-    for (size_t index = is_static_ ? 0 : 1; index < parameters_.size(); index++) {
+    for (const auto& param : parameters_ | std::views::drop(is_static_ ? 0 : 1)) {
         def_cursor << sep;
-        parameters_[index]->transpile(transpiler, def_cursor);
+        param->transpile(transpiler, def_cursor);
         sep = ", ";
     }
-    def_cursor << ") {";
+    def_cursor << ") ";
+    if (!is_static_) {
+        parameters_[0]->transpile_qualifiers(transpiler, def_cursor);
+        def_cursor << " ";
+    }
+    def_cursor << "{";
     transpiler.checker().enter(&body_);
     for (const auto& stmt : body_) {
         Cursor stmt_cursor = def_cursor.open_child(&body_);
@@ -660,6 +688,27 @@ inline void ASTFunctionDefinition::transpile(
     transpiler.checker().exit();
 }
 
+inline void ASTConstructorDestructorDefinition::transpile(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    cursor << (is_constructor_ ? "" : "~")
+           << transpiler.checker().self_type()->cast<InstanceType>()->identifier_ << "(";
+    const char* sep = "";
+    for (const auto& param : parameters_ | std::views::drop(1)) {
+        cursor << sep;
+        param->transpile(transpiler, cursor);
+        sep = ", ";
+    }
+    cursor << ") ";
+    cursor << "{";
+    TypeCheckerGuard guard(transpiler.checker(), &body_);
+    for (const auto& stmt : body_) {
+        Cursor stmt_cursor = cursor.open_child(&body_);
+        stmt->transpile(transpiler, stmt_cursor);
+    }
+    cursor.commit() << "}";
+}
+
 inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     cursor << "struct " << identifier_ << " {";
 
@@ -668,6 +717,14 @@ inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor
         Cursor local_cursor = cursor.open_child(this);
         field_decl->declared_type_->transpile(transpiler, local_cursor);
         local_cursor << " " << field_decl->identifier_ << ";";
+    }
+    for (const auto& ctor : constructors_) {
+        Cursor local_cursor = cursor.open_child(this);
+        ctor->transpile(transpiler, local_cursor);
+    }
+    if (destructor_) {
+        Cursor local_cursor = cursor.open_child(this);
+        destructor_->transpile(transpiler, cursor);
     }
     for (const auto& func : functions_) {
         Cursor local_cursor = cursor.open_child(this);

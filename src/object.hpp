@@ -1614,7 +1614,7 @@ class MutableValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Mutable;
 
-private:
+public:
     const MutableType* type_;
     Value* value_;
 
