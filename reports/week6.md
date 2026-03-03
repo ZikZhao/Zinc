@@ -26,9 +26,7 @@ flowchart LR
     subgraph P2 [Semantic Analysis]
         SC[Symbol Collection] --> TC[Type Check]
         BC[Borrow Checker]
-        LO[Lock Order Analysis]
         TC --> BC
-        TC --> LO
     end
 
     subgraph P3 [Transpilation]
@@ -37,7 +35,6 @@ flowchart LR
 
     AST --> SC
     BC --> Transpiler
-    LO --> Transpiler
 ```
 
 #### 3. Language Comparison
@@ -62,7 +59,7 @@ flowchart LR
 
 - **Unified AST for Semantic Disambiguation:**
 
-   Zinc allows for limited compile-time type manipulation, similar to C++. This capability, however, introduces syntactic ambiguities where type operations and value expressions overlap. For instance, `array[1]` could be interpreted as:
+  Zinc allows for limited compile-time type manipulation, similar to C++. This capability, however, introduces syntactic ambiguities where type operations and value expressions overlap. For instance, `array[1]` could be interpreted as:
 
   - Type Declaration: An array of type `array` with size 1.
   - Indexing Operation: Accessing the second element of variable `array`.
@@ -96,27 +93,39 @@ flowchart LR
 - **Recursive Check-Mode for Declarations**
 
   If a declaration explicitly specifies a target type, the assignment proceeds by recursively entering the expression in Check-Mode. This forces the expression tree to adopt the expected type, triggering an error if a node cannot be converted (e.g., due to range overflow or prohibited implicit conversions). For example, in `let a: i8[3] = [1, 2, 3]`, the array node propagates the i8 requirement to its three child nodes, ensuring each element validates itself against the i8 constraints.
-  
-- ==**Recursive Type Interning & Canonicalization**==
-  
+
+- **Recursive Type Interning & Canonicalization**
+
   To support immutable recursive types efficiently, I implemented a comprehensive interning strategy based on structural graph minimization. This system addresses the challenge of cyclic dependencies through a multi-stage resolution process:
-  
+
   1. **Split-Phase Construction:** Reference types are stored as direct `Type*` pointers rather than double indirections to support both identifiers and raw type expressions. To facilitate this, type construction is strictly separated into **Allocation** and **Initialization** phases. A type address is available in the cache immediately after allocation, allowing recursive references to point to the address of a type that is currently being constructed, regardless of its initialization state.
   2. **Completeness vs. Sizedness:** The system distinguishes between a type being **Sized** (having a known memory layout, e.g., a pointer is 8 bytes) and **Complete** (having all descendants fully initialized). For example, in `type A = { a: &A; }`, the field `&A` is *sized* but *incomplete* until `A` closes the cycle. This distinction is critical for the precise timing for interning: only *complete* subgraphs are eligible for the global pool.
   3. **Dependency-Driven Resolution:** While acyclic (tree-structured) types are interned immediately via standard co-inductive comparison, recursive types utilize a **dependency graph**. An incomplete type registers dependencies on its incomplete children. The type is marked as *complete* only when all dependencies are resolved or when the dependency chain forms a cycle back to itself (closing the loop), at which point it triggers the interning process.
   4. **Two-Phase Interning (Canonicalization):** Interning occurs in two stages to minimize the state machine represented by the type graph:
-  
-       - **Self-Interning (Local Canonicalization):** This phase performs graph minimization on the newly constructed type tree before it touches the global pool. It enforces **Vertical Congruence** (collapsing isomorphic linear chains, e.g., merging `A` and `B` in `type A = { a: &B }; type B = { a: &A };`) and **Horizontal Congruence** (merging identical sibling branches, e.g., merging `C` and `D` in `type A = { b: &B; }; type B = { c: &C; d: &D; }; type C = { a: &A; }; type D = { a: &A; };`). This ensures that structurally identical recursive types are reduced to a single canonical instance.
+
+       - ==**Self-Interning (Local Canonicalization):**== This phase minimizes the newly constructed recursive type graph before it enters the global pool. Using a unified bottom-up coinductive traversal, the algorithm evaluates and locally pools child nodes first. When structurally identical nodes are detected, it discards the duplicate and redirects the parent's edges in-place. This single mechanism naturally resolves both isomorphic cyclic chains (e.g., merging A and B in `type A = { a: &B }; type B = { a: &A };`) and redundant sibling branches (e.g., merging C and D in `type A = { b: &B; }; type B = { c: &C; d: &D; }; type C/D = { a: &A };`). Consequently, all equivalent recursive structures are reduced to a single canonical instance on the fly.
        - **Global Interning:** Once locally minimized, the entire connected component (the type and its dependencies) is promoted to the global registry. This is an **atomic "all-or-nothing" operation**: either the top-level type matches an existing global instance (in which case the entire new graph is discarded to prevent partial dangling references), or the whole graph is interned as a new entry.
   5. **Transient Cache Management:** To prevent the type cache from holding dangling references to discarded temporary types (e.g., intermediate nodes `b1` and `b2` created during the resolution of `type A = { b1: &B; b2: &B; };`), the system implements a **cache invalidation policy**. If a type expression evaluates to an incomplete type, that entry is removed rather than reused. This forces a re-evaluation which, guaranteed by Horizontal Congruence, will eventually merge distinct allocation addresses into a single canonical instance upon completion, ensuring memory safety without complex invalidation sets.
-  
-- ==**Structural-to-Nominal Mapping & Implicit Dependency Reordering**==
+
+- **Structural-to-Nominal Mapping & Implicit Dependency Reordering**
 
   Since C++ relies on nominal typing (classes/structs) unlike Zinc's structural type system, the transpiler synthesizes stable nominal definitions (e.g., `struct $structural_1`) for every unique structural shape encountered. A key challenge was handling recursive types: my initial approach relied on fragile forward declarations because the generated struct body referenced external type aliases. The refined strategy decouples the struct definition from its aliases by internally canonicalizing recursive identifiers, enabling a consistent definition-before-use emission order for both recursive and non-recursive types.
 
   Remarkably, this ordering is achieved without an explicit topological sort algorithm. Instead, it emerges naturally from an on-demand generation model using Cursor proxies. Output tokens are buffered in scoped Cursor instances rather than being written directly to the stream. For a declaration like `type A = B`, the transpiler initializes a cursor for the alias statement "using A = ...". When traversing B, if the structural type `$structural_n` is undefined, a nested cursor is instantiated on the stack to generate its definition. Since the nested cursor completes and flushes its content to the underlying stream before the parent cursor finalizes the alias declaration, the dependency (the struct definition) is guaranteed to appear in the output strictly before its usage, effectively leveraging the transpiler's call stack to enforce topological correctness.
 
-- ==**Error Recovery & Error Cascading Prevention**==
+- ==**C++ Interoperability & The Mutability Inversion Model**==
+
+   To ensure seamless interoperability with C++, adopting Rust's reference semantics (which behave primarily as non-nullable pointers) proved structurally inadequate. C++ references are strictly non-rebindable aliases, whereas its pointers accommodate nullability; forcing Rust's model onto C++ generation could mislead developers into writing ill-formed templates, such as std::vector<int32_t&>. Consequently, the language comprehensively inherits C++'s reference and pointer semantics, but fundamentally inverts its mutability paradigm. C++ defaults to pervasive, mutable implicit borrowing, which heavily obfuscates strict static borrow checking. To resolve this without heavily altering C++'s syntactic intuition, the mut keyword is introduced not as a property of the binding (as in Rust), but strictly as a property of the type—acting as the exact inverse of C++'s const. All data access and borrows are strictly immutable by default. While reference borrowing remains implicit and the & operator is traditionally reserved for address-of pointer operations, obtaining mutable access requires explicit opt-in: mut something for references and &mut something for pointers. Ultimately, both pointers and references are uniformly governed by the static borrow checker, ensuring memory safety without compromising C++ compatibility.
+
+- ==**Explicit `self` and Method References**==
+
+   Member functions in Zinc adopt an explicit, strongly-typed `self` parameter, aligning with the paradigms of Python and Rust. To enforce strict syntactic boundaries, invoking a method directly through the class scope, such as `MyClass.func(obj, ...)`, is strictly prohibited. However, the language introduces Java-style method references using the double colon operator (e.g., `MyClass::func`). In Zinc, `::` is exclusively reserved for this purpose, acting as syntactic sugar to generate an anonymous function, rather than serving as a general scope resolution operator.
+
+- ==**Value Categories and Move Semantics**==
+
+   C++ value categories (lvalue, prvalue, xvalue, etc.) and the overloaded semantics of `&&` (rvalue references versus universal references) are notorious sources of confusion. While Rust handles moves implicitly, discarding C++'s granular value semantics is not viable, as they are crucial for paradigms like rvalue-qualified methods in builder patterns. Zinc resolves this friction by elevating `move` and `forward` to first-class language keywords. Obtaining an rvalue is done via `move x`, which evaluates to the type `move &T`. Because moving inherently requires mutability, `move &T` is strictly equivalent to `move &mut T`, allowing intuitive overloads such as `fn func(self: &mut Self)` for lvalues and `fn func(self: move &Self)` for rvalues. Perfect forwarding is similarly streamlined: declaring a universal reference becomes `fn func(x: forward &T)`. This acts as a chameleon—yielding `&T` when passed an lvalue, and `move &T` when passed an rvalue. To pass it downstream, the programmer simply writes `forward x`, entirely eliminating the need to explicitly specify types or grapple with convoluted double-reference (`&&`) syntax, thus drastically flattening the learning curve while preserving C++'s expressive power.
+
+- **Error Recovery & Error Cascading Prevention**
 
   To enhance diagnostic utility, the type system implements a robust error recovery mechanism. Instead of aborting upon the first semantic failure, the compiler reports the error and injects a sentinel `UnknownType` or `UnknownValue` (depending on the context) as results. These sentinels are designed to silently propagate through upstream operations: any expression interacting with an 'Unknown' operand evaluates to 'Unknown' without emitting further diagnostics. This strategy effectively suppresses cascading false positives (spurious errors) stemming from the initial fault, while preserving the compiler's ability to continue analyzing independent code sections and report multiple genuine errors in a single pass.
 
@@ -131,7 +140,7 @@ The development is structured into granular phases to ensure stability before in
 | **P3**    | **Control Flow & Ops**   | Done        | Control flow (if/for), Operator Overloading via `OperationHandler`. |
 | **P4**    | **Transpilation**        | In Progress | Emitting C++20 code based on semantic analysis results.      |
 | **P5**    | **Classes & Namespaces** | In Progress | Struct/Class layouts, Member resolution, Namespace scoping.  |
-| **P6**    | **Static Safety**        | Planned     | Borrow Checker, Lock Order Checker                           |
+| **P6**    | **Static Safety**        | In Progress | Borrow Checker, ==~~Lock Order Checker~~==                   |
 | **P7**    | **Metaprogramming**      | Planned     | Template inference and expansion (LSP support if time permits). |
 
 #### 6. Concrete Implementation
@@ -140,13 +149,13 @@ The development is structured into granular phases to ensure stability before in
 
   To maximize allocation performance during compilation, I implemented a custom "Funnel" memory model using C++23 `std::pmr`:
 
-  1. **Thread-Local Unsynchronized Pool:** For resizeable objects (vectors/maps), avoiding atomic overhead.
+  1. **Thread-Local Unsynchronized Pool:** For resizable objects (vectors/maps), avoiding atomic overhead.
   2. **Thread-Local Monotonic Buffer:** For fixed-size immutable nodes (AST), offering pointer-bumping speed.
   3. **Upstream Synchronized Pool:** Acts as the backing source, ensuring thread safety only when strictly necessary.
 
 - **Pointer Tagging for Unified Symbol Storage**
 
-  To optimize the memory footprint of the Scope system, I consolidated the four distinct symbol categories (Type Aliases, Variables, Overloads, and Templates) into a single unified map. Using separate maps for each category would incur a 4x overhead for the map structures and complicate duplicate symbol detection. Instead, I implemented a `PointerVariant` using tagged pointers. By leveraging the 8-byte alignment of the allocated objects, the lower three bits of the pointer are utilized to store the category tag. This allows the compiler to distinguish between symbol types within a standard 64-bit pointer size, simplifying collision checks while maximizing cache efficiency.
+  To optimize the memory footprint of the Scope system, I consolidated the four distinct symbol categories (Type Aliases, Variables, Overloads, and Templates) into a single unified map. Using separate maps for each category would incur a 5x overhead for the map structures and complicate duplicate symbol detection. Instead, I implemented a `PointerVariant` using tagged pointers. By leveraging the 8-byte alignment of the allocated objects, the lower three bits of the pointer are utilized to store the category tag. This allows the compiler to distinguish between symbol types within a standard 64-bit pointer size, simplifying collision checks while maximizing cache efficiency.
 
 - **The PolyFunction Runtime:**
 
@@ -156,11 +165,16 @@ The development is structured into granular phases to ensure stability before in
 
   I have overhauled the internal representation of integer values, moving from a tagged union of int64, uint64, and string_view to a unified BigInt implementation. This provides infinite precision for compile-time evaluation; users can now write complex integer expressions as long as the final result fits within the target container. This transition eliminates the overhead of repeatedly tag-checking during integer processing and removes concerns regarding intermediate overflows during constant folding.
 
-#### 7. Next Steps
+#### 7. ==Remaining Goals==
 
-1. ==~~(Done) Type interning system capable for recursive types~~==
-2. ==~~(Done) Type definition transpiling reordered~~==
-3. Built-in types (by declaration file)
-4. Mutability
-5. Borrow checker (lexical and statement-level lifetimes)
-6. Static lock order analysis (lock ranking with escape hatch)
+1. Template Syntax
+2. Deferred Static Analysis on Template Instantiation
+3. Built-in Types (by declaration file)
+4. Borrow Checker: Lexical and Statement-level Lifetimes
+5. Borrow Checker: Return Type Lifetime Annotations
+6. Array Type, Vector Type, Intersection and Union of Dynamic Struct Type
+7. Completing Built-in Types
+8. Method Reference
+9. Metaprogramming: Built-in Predicates
+10. Metaprogramming: Concepts (Traits)
+11. Module System
