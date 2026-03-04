@@ -70,7 +70,19 @@ type_alias:
 	KW_TYPE identifier_ = T_IDENTIFIER OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
-	KW_CONST? KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER OP_LPAREN (
+	KW_CONST? KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER (
+		template_list_ = template_parameter_list
+	)? OP_LPAREN (
+		parameters_ += parameter (
+			OP_COMMA parameters_ += parameter
+		)*
+	)? OP_RPAREN (OP_ARROW return_type_ = type)? (
+		OP_LBRACE body_ += statement* OP_RBRACE
+		| semi_ = OP_SEMICOLON
+	);
+
+specialized_function_definition:
+	spec_ = specialize_parameter_list KW_CONST? KW_STATIC? KW_FUNC OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
@@ -85,8 +97,8 @@ parameter:
 
 class_definition:
 	KW_CLASS identifier_ = T_IDENTIFIER (
-		KW_EXTENDS extends_ = identifier
-	)? (
+		template_list_ = template_parameter_list
+	)? (KW_EXTENDS extends_ = identifier)? (
 		KW_IMPLEMENTS implements_ += identifier (
 			OP_COMMA implements_ += identifier
 		)*
@@ -97,11 +109,10 @@ class_definition:
 		| types_ += type_alias
 		| functions_ += function_definition
 		| classes_ += class_definition
-	)* OP_RBRACE OP_SEMICOLON;
+	)* OP_RBRACE;
 
 namespace_definition:
-	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += namespace_item* OP_RBRACE
-		OP_SEMICOLON;
+	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += namespace_item* OP_RBRACE;
 
 expr:
 	KW_SELF # SelfExpr
@@ -150,8 +161,9 @@ expr:
 	| target_ = expr OP_DOT member_ = identifier	# MemberAccessExpr
 	| struct_ = type OP_LBRACE (
 		inits_ += field_init (OP_COMMA inits_ += field_init)*
-	)? OP_RBRACE								# StructInitExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr;
+	)? OP_RBRACE											# StructInitExpr
+	| template_ = expr instantiation_ = instantiation_list	# TemplateInstantiationExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN				# ParenExpr;
 
 identifier: name_ = T_IDENTIFIER;
 
@@ -180,12 +192,13 @@ type:
 	)? OP_RBRACE # StructType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
-	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
-	| KW_MUT inner_type_ = type						# MutableType
-	| KW_MOVE? OP_BITAND inner_type_ = type			# ReferenceType
-	| OP_MUL inner_type_ = type						# PointerType
-	| inner_type_ = type OP_QUESTION				# OptionalType
-	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
+	)? OP_RPAREN OP_ARROW return_type_ = type				# FunctionType
+	| KW_MUT inner_type_ = type								# MutableType
+	| KW_MOVE? OP_BITAND inner_type_ = type					# ReferenceType
+	| OP_MUL inner_type_ = type								# PointerType
+	| inner_type_ = type OP_QUESTION						# OptionalType
+	| template_ = type instantiation_ = instantiation_list	# TemplateInstantiationType
+	| OP_LBRACKET inner_type_ = type OP_RBRACKET			# ParenType;
 
 field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 
@@ -200,6 +213,32 @@ constructor:
 
 destructor:
 	KW_DROP OP_LPAREN OP_RPAREN OP_LBRACE body_ += statement* OP_RBRACE;
+
+template_parameter_list:
+	OP_LT parameters_ += template_parameter (
+		OP_COMMA parameters_ += template_parameter
+	)* OP_GT;
+
+specialize_parameter_list:
+	KW_SPECIALIZE # FullSpecialize
+	| KW_SPECIALIZE OP_LT (
+		OP_COMMA parameters_ += template_parameter
+	)* OP_GT # PartialSpecialize;
+
+template_parameter:
+	identifier_ = T_IDENTIFIER OP_COLON KW_TYPE (
+		OP_EQ default_ = type
+	)? # TypeTemplateParam
+	| identifier_ = T_IDENTIFIER OP_COLON type_ = type (
+		OP_EQ default_ = expr
+	) # ComptimeTemplateParam;
+
+instantiation_list:
+	OP_LT arguments_ += instantiation_argument (
+		OP_COMMA arguments_ += instantiation_argument
+	)* OP_GT;
+
+instantiation_argument: type_ = type | value_ = expr;
 
 KW_LET: 'let';
 KW_MUT: 'mut';
@@ -239,6 +278,7 @@ KW_STATIC: 'static';
 KW_NAMESPACE: 'namespace';
 KW_MOVE: 'move';
 KW_FORWARD: 'forward';
+KW_SPECIALIZE: 'specialize';
 
 OP_ADD: '+';
 OP_SUB: '-';

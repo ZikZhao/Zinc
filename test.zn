@@ -1,31 +1,18 @@
 fn main() -> i32 {
-    let instance1 = Base(10);
-    let instance2 = Derived();
-    let data = instance1.add1(5);
-    let data2 = std.lib_add(instance1.data, 3);
+    let x = MyClass<i32>(42);
+    return x.method1(10);
 }
 
-class Base {
-    let data: i32;
-    let data2: f64;
-    init(self: &mut Self, value: i32) {
-        self.data = value;
+/*class MyClass<T: type> {
+    let value: T;
+    init(self: &Self, value: T) {
+        self.value = value;
     }
-    fn add1(self: &Self, other: i32) -> i32 {
-        return self.data + other;
+    fn method1(self: &Self, x: i32) -> T {
+        return self.value;
     }
-};
+}*/
 
-class Derived {
-    let data3: bool;
-    init(self: &mut Self) {
-        self.data3 = true;
-    }
-    fn sub1(self: &Self) -> i32 {
-        if (self.data3) {
-            return 1;
-        } else {
-            return 0;
-        }
-    }
-};
+fn add<T: type>(a: T, b: T) -> T {
+    return a + b;
+}

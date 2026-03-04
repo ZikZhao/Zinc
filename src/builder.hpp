@@ -222,6 +222,17 @@ private:
             ctx->KW_STATIC() != nullptr,
             ctx->semi_ != nullptr
         );
+        if (ctx->template_list_) {
+            using Parameter = ASTTemplateDefinition::Parameter;
+            auto template_parameters =
+                std::any_cast<GlobalMemory::Vector<Parameter>>(visit(ctx->template_list_));
+            last_visited_ = new ASTTemplateDefinition(
+                loc(ctx),
+                identifier,
+                template_parameters | GlobalMemory::collect<ComparableSpan<Parameter>>(),
+                static_cast<ASTNode*>(last_visited_)
+            );
+        }
         return {};
     }
     antlrcpp::Any visitSelfParam(ZincParser::SelfParamContext* ctx) noexcept final {
@@ -622,5 +633,31 @@ private:
             loc(ctx), false, ComparableSpan<ASTFunctionParameter*>{}, body
         );
         return {};
+    }
+    antlrcpp::Any visitTemplate_parameter_list(
+        ZincParser::Template_parameter_listContext* ctx
+    ) noexcept final {
+        return ctx->parameters_ | std::views::transform([this](auto child) {
+                   return std::any_cast<ASTTemplateDefinition::Parameter>(visit(child));
+               }) |
+               GlobalMemory::collect<GlobalMemory::Vector<ASTTemplateDefinition::Parameter>>();
+    }
+    antlrcpp::Any visitTypeTemplateParam(ZincParser::TypeTemplateParamContext* ctx) noexcept final {
+        return ASTTemplateDefinition::Parameter{
+            .is_nttp = false,
+            .identifier = text(ctx->identifier_),
+            .constraint = nullptr,
+            .default_value = static_cast<const ASTExpression*>(transform(ctx->default_))
+        };
+    }
+    antlrcpp::Any visitComptimeTemplateParam(
+        ZincParser::ComptimeTemplateParamContext* ctx
+    ) noexcept final {
+        return ASTTemplateDefinition::Parameter{
+            .is_nttp = true,
+            .identifier = text(ctx->identifier_),
+            .constraint = static_cast<const ASTExpression*>(transform(ctx->type_)),
+            .default_value = nullptr,
+        };
     }
 };
