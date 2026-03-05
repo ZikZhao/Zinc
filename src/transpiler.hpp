@@ -138,6 +138,7 @@ public:
         bool mangle_structural_identifiers = false;
         GlobalMemory::FlatSet<std::string_view> niebloids;
         GlobalMemory::FlatMap<const StructType*, std::size_t> structurals;
+        GlobalMemory::FlatMap<std::string_view, GlobalMemory::String> identifier_map;
         GlobalMemory::FlatSet<const ASTExpression*> types_visited;
     };
 
@@ -297,7 +298,7 @@ inline void ASTLocalBlock::transpile(Transpiler& transpiler, Cursor& cursor) con
         local_cursor.commit();
     }
     transpiler.checker().exit();
-    cursor << "}";
+    cursor.collapse("}");
 }
 
 inline void ASTHiddenTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -368,17 +369,17 @@ inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) c
 }
 
 inline void ASTMemberAccess::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    if (auto self = dynamic_cast<ASTSelfExpr*>(target_); self && !self->is_type_) {
-        cursor << "this->" << member_;
-        return;
-    } else if (auto identifier = dynamic_cast<ASTIdentifier*>(target_)) {
-        const ScopeValue* symbol = transpiler.checker().lookup(identifier->str_).second;
-        cursor << identifier->str_ << (symbol && symbol->get<const Scope*>() ? "::" : ".")
-               << member_;
-    } else {
-        target_->transpile(transpiler, cursor);
-        cursor << "." << member_;
-    }
+    // if (auto self = dynamic_cast<ASTSelfExpr*>(target_); self && !self->is_type_) {
+    //     cursor << "this->" << member_;
+    //     return;
+    // } else if (auto identifier = dynamic_cast<ASTIdentifier*>(target_)) {
+    //     const ScopeValue* symbol = transpiler.checker().lookup(identifier->str_).second;
+    //     cursor << identifier->str_ << (symbol && symbol->get<const Scope*>() ? "::" : ".")
+    //            << member_;
+    // } else {
+    //     target_->transpile(transpiler, cursor);
+    //     cursor << "." << member_;
+    // }
 }
 
 inline void ASTFieldInitialization::transpile(
@@ -573,7 +574,7 @@ inline void ASTIfStatement::transpile(Transpiler& transpiler, Cursor& cursor) co
         stmt->transpile(transpiler, then_cursor);
     }
     transpiler.checker().exit();
-    cursor.commit() << "}";
+    cursor.collapse("}");
     if (!else_block_.empty()) {
         cursor << " else {";
         transpiler.checker().enter(&else_block_);
@@ -582,7 +583,7 @@ inline void ASTIfStatement::transpile(Transpiler& transpiler, Cursor& cursor) co
             stmt->transpile(transpiler, else_cursor);
         }
         transpiler.checker().exit();
-        cursor.commit() << "}";
+        cursor.collapse("}");
     }
 }
 
@@ -745,7 +746,7 @@ inline void ASTConstructorDestructorDefinition::transpile(
         Cursor stmt_cursor = def_cursor.open_child(&body_);
         stmt->transpile(transpiler, stmt_cursor);
     }
-    def_cursor.commit() << "}";
+    def_cursor.collapse("}");
 }
 
 inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -769,7 +770,7 @@ inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor
         Cursor local_cursor = cursor.open_child(this);
         func->transpile(transpiler, local_cursor);
     }
-    cursor.commit() << "};";
+    cursor.collapse("};");
 }
 
 inline void ASTNamespaceDefinition::transpile(

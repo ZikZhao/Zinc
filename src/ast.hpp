@@ -63,9 +63,9 @@ public:
 public:
     TemplateFamily(const ASTTemplateDefinition* main) noexcept : main_(main) {}
     Scope& specialization_resolution(
-        TypeChecker& checker, ComparableSpan<Term> arguments
+        TypeChecker& checker, std::span<Term> arguments
     ) const noexcept;
-    ScopeValue instantiate(TypeChecker& checker, ComparableSpan<Term> arguments) const noexcept;
+    ScopeValue instantiate(TypeChecker& checker, std::span<Term> arguments) const noexcept;
 };
 
 class Scope final : public GlobalMemory::MonotonicAllocated {
@@ -172,9 +172,28 @@ public:
         }
     }
 
-    ScopeValue& operator[](std::string_view identifier) noexcept {
-        assert(identifiers_.contains(identifier));
-        return identifiers_.at(identifier);
+    const ScopeValue* operator[](std::string_view identifier) const noexcept {
+        auto it = identifiers_.find(identifier);
+        if (it != identifiers_.end()) {
+            return &it->second;
+        }
+        return nullptr;
+    }
+};
+
+class DependencyGraph final {
+public:
+    struct Edge {
+        const ASTNode* from;
+        const ASTNode* to;
+    };
+
+private:
+    GlobalMemory::FlatMap<const ASTNode*, GlobalMemory::Vector<const ASTNode*>> adjacency_list_;
+
+public:
+    void add_edge(const ASTNode* from, const ASTNode* to) noexcept {
+        adjacency_list_[from].push_back(to);
     }
 };
 
@@ -233,6 +252,14 @@ public:
         return nullptr;
     }
 
+    const ScopeValue* operator[](std::string_view identifier) const noexcept {
+        auto it = current_scope_->identifiers_.find(identifier);
+        if (it != current_scope_->identifiers_.end()) {
+            return &it->second;
+        }
+        return nullptr;
+    }
+
     std::pair<Scope*, const ScopeValue*> lookup(std::string_view identifier) const noexcept {
         Scope* scope = current_scope_;
         while (scope) {
@@ -251,7 +278,7 @@ public:
     Term lookup_term(std::string_view identifier);
 
     TypeResolution lookup_type_instatiation(
-        std::string_view identifier, ComparableSpan<Term> arguments
+        std::string_view identifier, std::span<Term> arguments
     ) {
         auto [scope, value] = lookup(identifier);
         if (!value) {
@@ -276,7 +303,7 @@ public:
         }
     }
 
-    Term lookup_term_instatiation(std::string_view identifier, ComparableSpan<Term> arguments) {
+    Term lookup_term_instatiation(std::string_view identifier, std::span<Term> arguments) {
         auto [scope, value] = lookup(identifier);
         if (!value) {
             throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
@@ -319,8 +346,8 @@ public:
 
 class ASTRoot final : public ASTNode {
 public:
-    ComparableSpan<ASTNode*> statements_;
-    ASTRoot(const Location& loc, ComparableSpan<ASTNode*> statements) noexcept
+    std::span<ASTNode*> statements_;
+    ASTRoot(const Location& loc, std::span<ASTNode*> statements) noexcept
         : ASTNode(loc), statements_(statements) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         for (auto& child : statements_) {
@@ -337,8 +364,8 @@ public:
 
 class ASTLocalBlock final : public ASTNode {
 public:
-    ComparableSpan<ASTNode*> statements_;
-    ASTLocalBlock(const Location& loc, ComparableSpan<ASTNode*> statements) noexcept
+    std::span<ASTNode*> statements_;
+    ASTLocalBlock(const Location& loc, std::span<ASTNode*> statements) noexcept
         : ASTNode(loc), statements_(statements) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         Scope& local_scope = Scope::create(this, scope);
@@ -639,19 +666,22 @@ using ASTRightShiftAssignOp = ASTBinaryOp<OperatorFunctors::RightShiftAssign>;
 class ASTMemberAccess final : public ASTExpression {
 public:
     ASTExpression* target_;
-    std::string_view member_;
+    std::span<std::string_view> members_;
 
 public:
-    ASTMemberAccess(const Location& loc, ASTExpression* target, std::string_view member) noexcept
-        : ASTExpression(loc), target_(target), member_(member) {}
+    ASTMemberAccess(
+        const Location& loc, ASTExpression* target, std::span<std::string_view> members
+    ) noexcept
+        : ASTExpression(loc), target_(target), members_(members) {}
     TermWithReceiver eval_term(
         TypeChecker& checker, const Type* expected, bool comptime
     ) const noexcept final {
-        Term term = try_namespace_access<Term, &TypeChecker::lookup_term>(checker);
-        if (term) return {term, {}};
-
-        term = target_->eval_term(checker, nullptr, false).subject;
-        return {checker.sema_.eval_access(term, member_), term.is_type() ? Term{} : term};
+        if (auto identifier = dynamic_cast<ASTIdentifier*>(target_)) {
+            return try_namespace_access(checker, identifier->str_);
+        } else {
+            Term subject_term = target_->eval_term(checker, nullptr, comptime).subject;
+            return eval_members(checker, subject_term, members_);
+        }
     }
 
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
@@ -661,17 +691,56 @@ private:
         // TODO
     };
 
-    template <typename R, R (TypeChecker::*LookupFunc)(std::string_view)>
-    R try_namespace_access(TypeChecker& checker) const noexcept {
-        if (auto identifier = dynamic_cast<ASTIdentifier*>(target_)) {
-            Scope* namespace_scope;
-            if (checker.lookup(identifier->str_).second &&
-                (namespace_scope = checker.lookup(identifier->str_).second->get<Scope*>())) {
-                TypeChecker::Guard guard(checker, namespace_scope);
-                return (checker.*LookupFunc)(member_);
+    TermWithReceiver try_namespace_access(
+        TypeChecker& checker, std::string_view subject
+    ) const noexcept {
+        auto [_, subject_value] = checker.lookup(subject);
+        auto scope_ptr = subject_value->get<const Scope*>();
+        if (!scope_ptr) {
+            return eval_members(checker, checker.lookup_term(subject), members_);
+        }
+        std::span<std::string_view> members = members_;
+        while (!members.empty()) {
+            std::string_view member = members.front();
+            auto next = (*scope_ptr)[member];
+            if (!next) {
+                throw UnlocatedProblem::make<UndeclaredIdentifierError>(member);
+                return {Term::unknown(), {}};
+            }
+            if (auto next_scope = next->get<const Scope*>()) {
+                scope_ptr = next_scope;
+                members = members.subspan(1);
+            } else if (auto next_term = next->get<Term*>()) {
+                if (members.size()) {
+                    return eval_members(checker, *next_term, members);
+                } else {
+                    return {*next_term, {}};
+                }
+            } else {
+                UNREACHABLE();
             }
         }
-        return R{};
+        /// TODO: evaluates to namespace is invalid
+        throw;
+    }
+
+    TermWithReceiver eval_members(
+        TypeChecker& checker, Term current_term, std::span<std::string_view> members
+    ) const noexcept {
+        Term subject;
+        if (current_term.is_unknown()) {
+            return {Term::unknown(), {}};
+        }
+        for (std::string_view member : members) {
+            try {
+                subject = current_term;
+                current_term = checker.sema_.eval_access(current_term, member);
+            } catch (UnlocatedProblem& e) {
+                e.report_at(location_);
+                return {Term::unknown(), {}};
+            }
+        }
+        return {current_term, subject};
     }
 };
 
@@ -699,13 +768,13 @@ public:
 class ASTStructInitialization final : public ASTExpression {
 public:
     ASTExpression* struct_type_;
-    ComparableSpan<ASTFieldInitialization*> field_inits_;
+    std::span<ASTFieldInitialization*> field_inits_;
 
 public:
     ASTStructInitialization(
         const Location& loc,
         ASTExpression* struct_type,
-        ComparableSpan<ASTFieldInitialization*> field_inits
+        std::span<ASTFieldInitialization*> field_inits
     ) noexcept
         : ASTExpression(loc), struct_type_(struct_type), field_inits_(field_inits) {}
 
@@ -791,11 +860,11 @@ private:
 class ASTFunctionCall final : public ASTExpression {
 public:
     ASTExpression* function_;
-    ComparableSpan<ASTExpression*> arguments_;
+    std::span<ASTExpression*> arguments_;
 
 public:
     ASTFunctionCall(
-        const Location& loc, ASTExpression* function, ComparableSpan<ASTExpression*> arguments
+        const Location& loc, ASTExpression* function, std::span<ASTExpression*> arguments
     ) noexcept
         : ASTExpression(loc), function_(function), arguments_(arguments) {}
     TermWithReceiver eval_term(
@@ -852,14 +921,12 @@ private:
 
 class ASTFunctionType final : public ASTExplicitTypeExpr {
 public:
-    ComparableSpan<ASTExpression*> parameter_types_;
+    std::span<ASTExpression*> parameter_types_;
     ASTExpression* return_type_;
 
 public:
     ASTFunctionType(
-        const Location& loc,
-        ComparableSpan<ASTExpression*> parameter_types,
-        ASTExpression* return_type
+        const Location& loc, std::span<ASTExpression*> parameter_types, ASTExpression* return_type
     ) noexcept
         : ASTExplicitTypeExpr(loc), parameter_types_(parameter_types), return_type_(return_type) {}
 
@@ -869,13 +936,13 @@ private:
     void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         out = std::type_identity<FunctionType>();
         bool any_error = false;
-        ComparableSpan<const Type*> param_types =
+        std::span<const Type*> param_types =
             parameter_types_ | std::views::transform([&](ASTExpression* param_expr) -> const Type* {
                 TypeResolution param_type;
                 param_expr->eval_type(checker, param_type);
                 return param_type;
             }) |
-            GlobalMemory::collect<ComparableSpan<const Type*>>();
+            GlobalMemory::collect<std::span<const Type*>>();
         if (any_error) {
             out = TypeRegistry::get_unknown();
             return;
@@ -907,10 +974,10 @@ public:
 
 class ASTStructType final : public ASTExplicitTypeExpr {
 public:
-    ComparableSpan<ASTFieldDeclaration*> fields_;
+    std::span<ASTFieldDeclaration*> fields_;
 
 public:
-    ASTStructType(const Location& loc, ComparableSpan<ASTFieldDeclaration*> fields) noexcept
+    ASTStructType(const Location& loc, std::span<ASTFieldDeclaration*> fields) noexcept
         : ASTExplicitTypeExpr(loc), fields_(fields) {}
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
@@ -998,13 +1065,11 @@ private:
 class ASTTemplateInstantiation final : public ASTExpression {
 public:
     std::string_view template_name_;
-    ComparableSpan<ASTExpression*> arguments_;
+    std::span<ASTExpression*> arguments_;
 
 public:
     ASTTemplateInstantiation(
-        const Location& loc,
-        std::string_view template_name,
-        ComparableSpan<ASTExpression*> arguments
+        const Location& loc, std::string_view template_name, std::span<ASTExpression*> arguments
     ) noexcept
         : ASTExpression(loc), template_name_(template_name), arguments_(arguments) {}
     TermWithReceiver eval_term(
@@ -1036,14 +1101,14 @@ class ASTTemplateMemberAccessInstantiation final : public ASTExpression {
 public:
     ASTExpression* target_;
     std::string_view member_;
-    ComparableSpan<ASTExpression*> arguments_;
+    std::span<ASTExpression*> arguments_;
 
 public:
     ASTTemplateMemberAccessInstantiation(
         const Location& loc,
         ASTExpression* target,
         std::string_view member,
-        ComparableSpan<ASTExpression*> arguments
+        std::span<ASTExpression*> arguments
     ) noexcept
         : ASTExpression(loc), target_(target), member_(member), arguments_(arguments) {}
     TermWithReceiver eval_term(
@@ -1136,13 +1201,13 @@ public:
 class ASTIfStatement final : public ASTNode {
 public:
     ASTExpression* const condition_;
-    const ComparableSpan<ASTNode*> if_block_;
-    const ComparableSpan<ASTNode*> else_block_;
+    const std::span<ASTNode*> if_block_;
+    const std::span<ASTNode*> else_block_;
     ASTIfStatement(
         const Location& loc,
         ASTExpression* condition,
-        ComparableSpan<ASTNode*> if_block,
-        ComparableSpan<ASTNode*> else_block = {}
+        std::span<ASTNode*> if_block,
+        std::span<ASTNode*> else_block = {}
     ) noexcept
         : ASTNode(loc), condition_(condition), if_block_(if_block), else_block_(else_block) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
@@ -1180,13 +1245,13 @@ public:
     ASTNode* const initializer_;  // Declaration or expression
     ASTExpression* const condition_;
     ASTExpression* const increment_;
-    const ComparableSpan<ASTNode*> body_;
+    const std::span<ASTNode*> body_;
     ASTForStatement(
         const Location& loc,
         ASTDeclaration* initializer,
         ASTExpression* condition,
         ASTExpression* increment,
-        ComparableSpan<ASTNode*> body
+        std::span<ASTNode*> body
     ) noexcept
         : ASTNode(loc),
           initializer_(initializer),
@@ -1198,14 +1263,14 @@ public:
         ASTExpression* initializer,
         ASTExpression* condition,
         ASTExpression* increment,
-        ComparableSpan<ASTNode*> body
+        std::span<ASTNode*> body
     ) noexcept
         : ASTNode(loc),
           initializer_(initializer),
           condition_(condition),
           increment_(increment),
           body_(body) {}
-    ASTForStatement(const Location& loc, ComparableSpan<ASTNode*> body) noexcept
+    ASTForStatement(const Location& loc, std::span<ASTNode*> body) noexcept
         : ASTNode(loc),
           initializer_(nullptr),
           condition_(nullptr),
@@ -1279,9 +1344,9 @@ public:
 class ASTFunctionDefinition final : public ASTNode {
 public:
     std::string_view identifier_;
-    ComparableSpan<ASTFunctionParameter*> parameters_;
+    std::span<ASTFunctionParameter*> parameters_;
     ASTExpression* return_type_;
-    ComparableSpan<ASTNode*> body_;
+    std::span<ASTNode*> body_;
     bool is_const_;
     bool declared_static_;
     bool is_no_body_;
@@ -1290,9 +1355,9 @@ public:
     ASTFunctionDefinition(
         const Location& loc,
         std::string_view identifier,
-        ComparableSpan<ASTFunctionParameter*> parameters,
+        std::span<ASTFunctionParameter*> parameters,
         ASTExpression* return_type,
-        ComparableSpan<ASTNode*> body,
+        std::span<ASTNode*> body,
         bool is_const,
         bool declared_static,
         bool is_no_body
@@ -1328,13 +1393,13 @@ public:
     }
     FunctionObject get_func_obj(TypeChecker& checker) const noexcept {
         bool any_error = false;
-        ComparableSpan params =
-            parameters_ | std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
-                TypeResolution param_type;
-                param->type_->eval_type(checker, param_type);
-                return param_type;
-            }) |
-            GlobalMemory::collect<ComparableSpan<const Type*>>();
+        std::span params = parameters_ |
+                           std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
+                               TypeResolution param_type;
+                               param->type_->eval_type(checker, param_type);
+                               return param_type;
+                           }) |
+                           GlobalMemory::collect<std::span<const Type*>>();
         if (any_error) {
             return TypeRegistry::get_unknown();
         }
@@ -1349,15 +1414,15 @@ public:
 class ASTConstructorDestructorDefinition final : public ASTNode {
 public:
     bool is_constructor_;
-    ComparableSpan<ASTFunctionParameter*> parameters_;
-    ComparableSpan<ASTNode*> body_;
+    std::span<ASTFunctionParameter*> parameters_;
+    std::span<ASTNode*> body_;
 
 public:
     ASTConstructorDestructorDefinition(
         const Location& loc,
         bool is_constructor,
-        ComparableSpan<ASTFunctionParameter*> parameters,
-        ComparableSpan<ASTNode*> body
+        std::span<ASTFunctionParameter*> parameters,
+        std::span<ASTNode*> body
     ) noexcept
         : ASTNode(loc), is_constructor_(is_constructor), parameters_(parameters), body_(body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
@@ -1379,13 +1444,13 @@ public:
     }
     FunctionObject get_func_obj(TypeChecker& checker, const Type* owner_type) const noexcept {
         bool any_error = false;
-        ComparableSpan params =
-            parameters_ | std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
-                TypeResolution param_type;
-                param->type_->eval_type(checker, param_type);
-                return param_type;
-            }) |
-            GlobalMemory::collect<ComparableSpan<const Type*>>();
+        std::span params = parameters_ |
+                           std::views::transform([&](ASTFunctionParameter* param) -> const Type* {
+                               TypeResolution param_type;
+                               param->type_->eval_type(checker, param_type);
+                               return param_type;
+                           }) |
+                           GlobalMemory::collect<std::span<const Type*>>();
         if (any_error) {
             return TypeRegistry::get_unknown();
         }
@@ -1405,7 +1470,7 @@ public:
 
 private:
     const Type* resolve_base(TypeChecker& checker) const noexcept;
-    ComparableSpan<const Type*> resolve_interfaces(TypeChecker& checker) const noexcept;
+    std::span<const Type*> resolve_interfaces(TypeChecker& checker) const noexcept;
     FunctionOverloadSetValue* resolve_constructors(
         TypeChecker& checker, const Type* owner_type
     ) const noexcept;
@@ -1422,26 +1487,26 @@ class ASTClassDefinition final : public ASTNode {
 public:
     std::string_view identifier_;
     std::string_view extends_;
-    ComparableSpan<std::string_view> implements_;
-    ComparableSpan<ASTConstructorDestructorDefinition*> constructors_;
+    std::span<std::string_view> implements_;
+    std::span<ASTConstructorDestructorDefinition*> constructors_;
     ASTConstructorDestructorDefinition* destructor_;
-    ComparableSpan<ASTDeclaration*> fields_;
-    ComparableSpan<ASTTypeAlias*> aliases_;
-    ComparableSpan<ASTFunctionDefinition*> functions_;
-    ComparableSpan<ASTClassDefinition*> classes_;
+    std::span<ASTDeclaration*> fields_;
+    std::span<ASTTypeAlias*> aliases_;
+    std::span<ASTFunctionDefinition*> functions_;
+    std::span<ASTClassDefinition*> classes_;
 
 public:
     ASTClassDefinition(
         const Location& loc,
         std::string_view identifier,
         std::string_view extends,
-        ComparableSpan<std::string_view> implements,
-        ComparableSpan<ASTConstructorDestructorDefinition*> constructors,
+        std::span<std::string_view> implements,
+        std::span<ASTConstructorDestructorDefinition*> constructors,
         ASTConstructorDestructorDefinition* destructor,
-        ComparableSpan<ASTDeclaration*> fields,
-        ComparableSpan<ASTTypeAlias*> aliases,
-        ComparableSpan<ASTFunctionDefinition*> functions,
-        ComparableSpan<ASTClassDefinition*> classes
+        std::span<ASTDeclaration*> fields,
+        std::span<ASTTypeAlias*> aliases,
+        std::span<ASTFunctionDefinition*> functions,
+        std::span<ASTClassDefinition*> classes
     ) noexcept
         : ASTNode(loc),
           identifier_(identifier),
@@ -1489,9 +1554,9 @@ public:
 class ASTNamespaceDefinition final : public ASTNode {
 public:
     std::string_view identifier_;
-    ComparableSpan<ASTNode*> items_;
+    std::span<ASTNode*> items_;
     ASTNamespaceDefinition(
-        const Location& loc, std::string_view identifier, ComparableSpan<ASTNode*> items
+        const Location& loc, std::string_view identifier, std::span<ASTNode*> items
     ) noexcept
         : ASTNode(loc), identifier_(identifier), items_(items) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
@@ -1537,14 +1602,14 @@ public:
 class ASTTemplateDefinition final : public ASTNode {
 public:
     std::string_view identifier_;
-    ComparableSpan<ASTTemplateParameter*> parameters_;
+    std::span<ASTTemplateParameter*> parameters_;
     ASTNode* target_node_;
 
 public:
     ASTTemplateDefinition(
         const Location& loc,
         std::string_view identifier,
-        ComparableSpan<ASTTemplateParameter*> parameters,
+        std::span<ASTTemplateParameter*> parameters,
         ASTNode* target_node
     ) noexcept
         : ASTNode(loc),
@@ -1563,7 +1628,7 @@ class ASTTemplateSpecialization final {};
 // ===================== Inline implementations =====================
 
 inline Scope& TemplateFamily::specialization_resolution(
-    TypeChecker& checker, ComparableSpan<Term> arguments
+    TypeChecker& checker, std::span<Term> arguments
 ) const noexcept {
     Scope& instantiation_scope = Scope::create(this, *checker.current_scope());
     for (const ASTTemplateSpecialization* specialization : specializations_) {
@@ -1591,7 +1656,7 @@ inline Scope& TemplateFamily::specialization_resolution(
 }
 
 inline ScopeValue TemplateFamily::instantiate(
-    TypeChecker& checker, ComparableSpan<Term> arguments
+    TypeChecker& checker, std::span<Term> arguments
 ) const noexcept {
     if (arguments.size() != main_->parameters_.size()) {
         // Diagnostic::report(
@@ -1604,8 +1669,8 @@ inline ScopeValue TemplateFamily::instantiate(
     TypeChecker::Guard guard(checker, &template_scope);
     main_->target_node_->collect_symbols(template_scope, checker.sema_);
     main_->target_node_->check_types(checker);
-    ScopeValue unevaluated = template_scope[main_->identifier_];
-    if (auto alias = unevaluated.get<const ASTExpression*>()) {
+    const ScopeValue* unevaluated = template_scope[main_->identifier_];
+    if (auto alias = unevaluated->get<const ASTExpression*>()) {
         TypeResolution resolved;
         alias->eval_type(checker, resolved);
         return ScopeValue(resolved.get());
@@ -1685,7 +1750,7 @@ inline void ASTClassSignature::eval_type_impl(
     TypeChecker::Guard guard(checker, owner_);
     checker.set_self_type(incomplete_class);
     const Type* base = resolve_base(checker);
-    ComparableSpan<const Type*> interfaces = resolve_interfaces(checker);
+    std::span<const Type*> interfaces = resolve_interfaces(checker);
     FunctionOverloadSetValue* constructors = resolve_constructors(checker, out);
     FunctionObject destructor = resolve_destructor(checker);
     GlobalMemory::FlatMap<std::string_view, const Type*> attrs = resolve_attrs(checker);
@@ -1723,7 +1788,7 @@ inline const Type* ASTClassSignature::resolve_base(TypeChecker& checker) const n
     return type;
 }
 
-inline ComparableSpan<const Type*> ASTClassSignature::resolve_interfaces(
+inline std::span<const Type*> ASTClassSignature::resolve_interfaces(
     TypeChecker& checker
 ) const noexcept {
     auto get_interface_type = [&](std::string_view interface_name) -> const Type* {
@@ -1742,7 +1807,7 @@ inline ComparableSpan<const Type*> ASTClassSignature::resolve_interfaces(
         return type->cast<InterfaceType>();
     };
     return owner_->implements_ | std::views::transform(get_interface_type) |
-           GlobalMemory::collect<ComparableSpan<const Type*>>();
+           GlobalMemory::collect<std::span<const Type*>>();
 }
 
 inline FunctionOverloadSetValue* ASTClassSignature::resolve_constructors(

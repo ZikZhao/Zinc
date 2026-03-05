@@ -48,10 +48,10 @@ private:
         }
     }
     template <std::derived_from<ASTNode> T = ASTNode>
-    ComparableSpan<T*> transform_list(const auto& contexts) noexcept {
+    std::span<T*> transform_list(const auto& contexts) noexcept {
         return contexts |
                std::views::transform([this](auto ctx) { return static_cast<T*>(transform(ctx)); }) |
-               GlobalMemory::collect<ComparableSpan<T*>>();
+               GlobalMemory::collect<std::span<T*>>();
     }
     Location loc(const antlr4::ParserRuleContext* ctx) noexcept {
         assert(ctx != nullptr);
@@ -99,10 +99,10 @@ public:
 
 private:
     antlrcpp::Any visitProgram(ZincParser::ProgramContext* ctx) noexcept final {
-        ComparableSpan statements =
+        std::span statements =
             ctx->statements_ |
             std::views::transform([this](auto child) { return transform(child); }) |
-            GlobalMemory::collect<ComparableSpan<ASTNode*>>();
+            GlobalMemory::collect<std::span<ASTNode*>>();
         last_visited_ = new ASTRoot(loc(ctx), std::move(statements));
         return {};
     }
@@ -117,10 +117,10 @@ private:
         return {};
     }
     antlrcpp::Any visitLocal_block(ZincParser::Local_blockContext* ctx) noexcept final {
-        ComparableSpan statements =
+        std::span statements =
             ctx->statements_ |
             std::views::transform([this](auto child) { return transform(child); }) |
-            GlobalMemory::collect<ComparableSpan<ASTNode*>>();
+            GlobalMemory::collect<std::span<ASTNode*>>();
         last_visited_ = new ASTLocalBlock(loc(ctx), statements);
         return {};
     }
@@ -207,11 +207,11 @@ private:
     antlrcpp::Any visitFunction_definition(
         ZincParser::Function_definitionContext* ctx
     ) noexcept final {
-        ComparableSpan<ASTFunctionParameter*> parameters =
+        std::span<ASTFunctionParameter*> parameters =
             transform_list<ASTFunctionParameter>(ctx->parameters_);
         std::string_view identifier = text(ctx->identifier_);
         ASTExpression* return_type = static_cast<ASTExpression*>(transform(ctx->return_type_));
-        ComparableSpan<ASTNode*> body = transform_list(ctx->body_);
+        std::span<ASTNode*> body = transform_list(ctx->body_);
         last_visited_ = new ASTFunctionDefinition(
             loc(ctx),
             identifier,
@@ -226,7 +226,7 @@ private:
             last_visited_ = new ASTTemplateDefinition(
                 loc(ctx),
                 identifier,
-                std::any_cast<ComparableSpan<ASTTemplateParameter*>>(visit(ctx->template_list_)),
+                std::any_cast<std::span<ASTTemplateParameter*>>(visit(ctx->template_list_)),
                 static_cast<ASTNode*>(last_visited_)
             );
         }
@@ -245,19 +245,18 @@ private:
         return {};
     }
     antlrcpp::Any visitClass_definition(ZincParser::Class_definitionContext* ctx) noexcept final {
-        ComparableSpan<std::string_view> implements =
+        std::span<std::string_view> implements =
             ctx->implements_ | std::views::transform([this](auto child) { return text(child); }) |
-            GlobalMemory::collect<ComparableSpan<std::string_view>>();
-        ComparableSpan<ASTConstructorDestructorDefinition*> constructors =
+            GlobalMemory::collect<std::span<std::string_view>>();
+        std::span<ASTConstructorDestructorDefinition*> constructors =
             transform_list<ASTConstructorDestructorDefinition>(ctx->constructor_);
-        ComparableSpan<ASTConstructorDestructorDefinition*> destructors =
+        std::span<ASTConstructorDestructorDefinition*> destructors =
             transform_list<ASTConstructorDestructorDefinition>(ctx->destructor_);
-        ComparableSpan<ASTDeclaration*> fields = transform_list<ASTDeclaration>(ctx->fields_);
-        ComparableSpan<ASTTypeAlias*> types = transform_list<ASTTypeAlias>(ctx->types_);
-        ComparableSpan<ASTFunctionDefinition*> functions =
+        std::span<ASTDeclaration*> fields = transform_list<ASTDeclaration>(ctx->fields_);
+        std::span<ASTTypeAlias*> types = transform_list<ASTTypeAlias>(ctx->types_);
+        std::span<ASTFunctionDefinition*> functions =
             transform_list<ASTFunctionDefinition>(ctx->functions_);
-        ComparableSpan<ASTClassDefinition*> classes =
-            transform_list<ASTClassDefinition>(ctx->classes_);
+        std::span<ASTClassDefinition*> classes = transform_list<ASTClassDefinition>(ctx->classes_);
         if (destructors.size() > 1) {
             /// TODO: thread safety
             Diagnostic::report(DuplicateDestructorError(destructors[1]->location_));
@@ -278,7 +277,7 @@ private:
             last_visited_ = new ASTTemplateDefinition(
                 loc(ctx),
                 text(ctx->identifier_),
-                std::any_cast<ComparableSpan<ASTTemplateParameter*>>(visit(ctx->template_list_)),
+                std::any_cast<std::span<ASTTemplateParameter*>>(visit(ctx->template_list_)),
                 static_cast<ASTNode*>(last_visited_)
             );
         }
@@ -287,9 +286,9 @@ private:
     antlrcpp::Any visitNamespace_definition(
         ZincParser::Namespace_definitionContext* ctx
     ) noexcept final {
-        ComparableSpan<ASTNode*> items =
+        std::span<ASTNode*> items =
             ctx->items_ | std::views::transform([this](auto child) { return transform(child); }) |
-            GlobalMemory::collect<ComparableSpan<ASTNode*>>();
+            GlobalMemory::collect<std::span<ASTNode*>>();
         last_visited_ = new ASTNamespaceDefinition(
             loc(ctx), ctx->identifier_ ? text(ctx->identifier_) : "", items
         );
@@ -468,7 +467,7 @@ private:
         ZincParser::TemplateIdentifierExprContext* ctx
     ) noexcept final {
         std::string_view template_name = text(ctx->identifier_);
-        auto arguments = std::any_cast<ComparableSpan<ASTExpression*>>(visit(ctx->template_args_));
+        auto arguments = std::any_cast<std::span<ASTExpression*>>(visit(ctx->template_args_));
         last_visited_ = new ASTTemplateInstantiation(loc(ctx), template_name, arguments);
         return {};
     }
@@ -488,12 +487,16 @@ private:
     }
     antlrcpp::Any visitMemberAccessExpr(ZincParser::MemberAccessExprContext* ctx) noexcept final {
         ASTExpression* target = static_cast<ASTExpression*>(transform(ctx->target_));
-        last_visited_ = new ASTMemberAccess(loc(ctx), target, text(ctx->member_));
+        last_visited_ = new ASTMemberAccess(
+            loc(ctx), target, ctx->members_ | std::views::transform([this](auto child) {
+                                  return text(child);
+                              }) | GlobalMemory::collect<std::span<std::string_view>>()
+        );
         return {};
     }
     antlrcpp::Any visitStructInitExpr(ZincParser::StructInitExprContext* ctx) noexcept final {
         ASTExpression* struct_type = static_cast<ASTExpression*>(transform(ctx->struct_));
-        ComparableSpan<ASTFieldInitialization*> inits =
+        std::span<ASTFieldInitialization*> inits =
             transform_list<ASTFieldInitialization>(ctx->inits_);
         last_visited_ = new ASTStructInitialization(loc(ctx), struct_type, inits);
         return {};
@@ -634,16 +637,16 @@ private:
         return {};
     }
     antlrcpp::Any visitConstructor(ZincParser::ConstructorContext* ctx) noexcept final {
-        ComparableSpan<ASTFunctionParameter*> parameters =
+        std::span<ASTFunctionParameter*> parameters =
             transform_list<ASTFunctionParameter>(ctx->parameters_);
-        ComparableSpan<ASTNode*> body = transform_list(ctx->body_);
+        std::span<ASTNode*> body = transform_list(ctx->body_);
         last_visited_ = new ASTConstructorDestructorDefinition(loc(ctx), true, parameters, body);
         return {};
     }
     antlrcpp::Any visitDestructor(ZincParser::DestructorContext* ctx) noexcept final {
-        ComparableSpan<ASTNode*> body = transform_list(ctx->body_);
+        std::span<ASTNode*> body = transform_list(ctx->body_);
         last_visited_ = new ASTConstructorDestructorDefinition(
-            loc(ctx), false, ComparableSpan<ASTFunctionParameter*>{}, body
+            loc(ctx), false, std::span<ASTFunctionParameter*>{}, body
         );
         return {};
     }
@@ -653,7 +656,7 @@ private:
         return ctx->parameters_ | std::views::transform([this](auto child) {
                    return static_cast<ASTTemplateParameter*>(transform(child));
                }) |
-               GlobalMemory::collect<ComparableSpan<ASTTemplateParameter*>>();
+               GlobalMemory::collect<std::span<ASTTemplateParameter*>>();
     }
     antlrcpp::Any visitTypeTemplateParam(ZincParser::TypeTemplateParamContext* ctx) noexcept final {
         last_visited_ = new ASTTemplateParameter{
@@ -683,7 +686,7 @@ private:
         return ctx->arguments_ | std::views::transform([this](auto child) {
                    return static_cast<ASTExpression*>(transform(child));
                }) |
-               GlobalMemory::collect<ComparableSpan<ASTExpression*>>();
+               GlobalMemory::collect<std::span<ASTExpression*>>();
     }
     antlrcpp::Any visitInstantiation_argument(
         ZincParser::Instantiation_argumentContext* ctx

@@ -159,7 +159,7 @@ expr:
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN																		# CallExpr
 	| OP_BITAND KW_MUT? inner_expr_ = expr												# AddressOfExpr
-	| target_ = expr OP_DOT member_ = identifier										# MemberAccessExpr
+	| target_ = expr (OP_DOT members_ += identifier)+									# MemberAccessExpr
 	| target_ = expr OP_DOT member_ = identifier template_args_ = instantiation_list	#
 		TemplateMemberAccessExpr
 	| struct_ = type OP_LBRACE (

@@ -150,43 +150,7 @@ class MultiMapPrinter:
     
     def display_hint(self):
         return 'map'
-
-
-class ComparableSpanPrinter:
-    """Pretty printer for ComparableSpan"""
     
-    def __init__(self, val):
-        self.val = val
-    
-    def to_string(self):
-        # ComparableSpan inherits from std::span
-        try:
-            size = int(self.val['_M_extent']['_M_extent_value'])
-        except:
-            # Try alternative member access
-            try:
-                size = int(self.val['_M_extent'])
-            except:
-                size = 0
-        
-        return f"ComparableSpan with {size} elements"
-    
-    def children(self):
-        try:
-            ptr = self.val['_M_ptr']
-            try:
-                size = int(self.val['_M_extent']['_M_extent_value'])
-            except:
-                size = int(self.val['_M_extent'])
-            
-            for i in range(min(size, 100)):
-                yield (f'[{i}]', ptr[i])
-        except:
-            pass
-    
-    def display_hint(self):
-        return 'array'
-
 
 def build_pretty_printer():
     """Build and register the pretty printer"""
@@ -204,9 +168,6 @@ def build_pretty_printer():
     # MultiMap
     pp.add_printer('MultiMap', '^GlobalMemory::MultiMap<.*>$', MultiMapPrinter)
     
-    # ComparableSpan
-    pp.add_printer('ComparableSpan', '^ComparableSpan<.*>$', ComparableSpanPrinter)
-    
     return pp
 
 
@@ -219,6 +180,5 @@ gdb.write("  - TypeResolution\n")
 gdb.write("  - GlobalMemory::FlatSet\n")
 gdb.write("  - GlobalMemory::FlatMap\n")
 gdb.write("  - GlobalMemory::MultiMap\n")
-gdb.write("  - ComparableSpan\n")
 gdb.write(f"Total global pretty printers: {len(gdb.pretty_printers)}\n")
 gdb.flush()

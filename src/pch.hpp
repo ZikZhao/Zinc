@@ -130,30 +130,6 @@ public:
     }
 };
 
-template <typename T>
-class ComparableSpan : public std::span<T> {
-public:
-    using std::span<T>::span;
-    using std::span<T>::begin;
-    using std::span<T>::end;
-
-    std::strong_ordering operator<=>(const ComparableSpan<T>& other) const noexcept {
-        return std::lexicographical_compare_three_way(
-            this->begin(), this->end(), other.begin(), other.end()
-        );
-    }
-
-    bool operator==(const ComparableSpan<T>& other) const noexcept {
-        return std::equal(this->begin(), this->end(), other.begin(), other.end());
-    }
-
-    explicit operator std::string_view() const noexcept
-        requires std::is_same_v<T, char>
-    {
-        return std::string_view(this->data(), this->size());
-    }
-};
-
 class GlobalMemory {
 private:
     static std::pmr::memory_resource* global_heap() noexcept {
@@ -254,21 +230,21 @@ public:
     }
 
     template <typename T>
-    static constexpr ComparableSpan<T> alloc_array(std::size_t n) {
+    static constexpr std::span<T> alloc_array(std::size_t n) {
         void* ptr = monotonic()->allocate(n * sizeof(T), alignof(T));
         if constexpr (std::is_trivially_default_constructible_v<T>) {
-            return ComparableSpan<T>(static_cast<T*>(ptr), n);
+            return std::span<T>(static_cast<T*>(ptr), n);
         } else {
             T* typed_ptr = static_cast<T*>(ptr);
             std::uninitialized_default_construct(typed_ptr, typed_ptr + n);
-            return ComparableSpan<T>(typed_ptr, n);
+            return std::span<T>(typed_ptr, n);
         }
     }
 
     template <typename T, typename... Args>
         requires(std::is_same_v<T, Args> && ...)
-    static constexpr ComparableSpan<std::decay_t<T>> pack_array(T&& first, Args&&... rest) {
-        ComparableSpan span = alloc_array<std::decay_t<T>>(sizeof...(rest) + 1);
+    static constexpr std::span<std::decay_t<T>> pack_array(T&& first, Args&&... rest) {
+        std::span span = alloc_array<std::decay_t<T>>(sizeof...(rest) + 1);
         std::size_t index = 0;
         span[0] = std::forward<T>(first);
         ((span[++index] = std::forward<Args>(rest)), ...);
@@ -290,23 +266,21 @@ private:
     };
 
     template <typename E>
-    class RangeCollector<ComparableSpan<E>> {
+    class RangeCollector<std::span<E>> {
         template <std::ranges::input_range R>
-        friend ComparableSpan<E> operator|(R&& range, RangeCollector) {
+        friend std::span<E> operator|(R&& range, RangeCollector) {
             static_assert(std::is_same_v<std::ranges::range_value_t<R>, E>);
             if constexpr (std::ranges::sized_range<R>) {
-                ComparableSpan span = alloc_array<E>(std::ranges::size(range));
-                std::uninitialized_copy(
-                    std::ranges::begin(range), std::ranges::end(range), span.data()
-                );
+                std::span span = alloc_array<E>(std::ranges::size(range));
+                std::ranges::uninitialized_copy(std::forward<R>(range), span);
                 return span;
             } else {
                 GlobalMemory::Vector<E> temp;
                 for (auto&& item : range) {
                     temp.push_back(std::forward<decltype(item)>(item));
                 }
-                ComparableSpan span = alloc_array<E>(temp.size());
-                std::uninitialized_copy(temp.begin(), temp.end(), span.data());
+                std::span span = alloc_array<E>(temp.size());
+                std::ranges::uninitialized_move(temp, span);
                 return span;
             }
         }
@@ -328,14 +302,14 @@ public:
     template <typename... Args>
     static std::string_view format_view(std::format_string<Args...> fmt, Args&&... args) {
         std::size_t size = std::formatted_size(fmt, std::forward<Args>(args)...);
-        ComparableSpan<char> result = alloc_array<char>(size);
+        std::span<char> result = alloc_array<char>(size);
         std::format_to(result.begin(), fmt, std::forward<Args>(args)...);
-        return static_cast<std::string_view>(result);
+        return std::string_view(result.data(), result.size());
     }
 
     static std::string_view hex_string(std::string_view input) {
         constexpr char hex_chars[] = "0123456789ABCDEF";
-        ComparableSpan<char> result = alloc_array<char>(input.size() * 2 + 3);
+        std::span<char> result = alloc_array<char>(input.size() * 2 + 3);
         for (std::size_t i = 0; i < input.size(); ++i) {
             unsigned char byte = static_cast<unsigned char>(input[i]);
             result[i * 2 + 1] = hex_chars[(byte >> 4) & 0x0F];
@@ -344,7 +318,7 @@ public:
         result[0] = '\"';
         result[input.size() * 2 + 1] = '\"';
         result[input.size() * 2 + 2] = '\0';
-        return static_cast<std::string_view>(result);
+        return std::string_view(result.data(), input.size() * 2 + 3);
     }
 
 public:

@@ -788,7 +788,7 @@ public:
         }
     }
 
-    Term eval_call(Term callee, ComparableSpan<Term> args) {
+    Term eval_call(Term callee, std::span<Term> args) {
         if (callee.is_unknown()) {
             return Term::unknown();
         }
@@ -909,13 +909,13 @@ private:
         }
     }
 
-    GlobalMemory::Vector<const Type*> extract_arg_types(ComparableSpan<Term> args) const {
+    GlobalMemory::Vector<const Type*> extract_arg_types(std::span<Term> args) const {
         return args | std::views::transform([this](Term arg) { return category_decay(arg); }) |
                GlobalMemory::collect<GlobalMemory::Vector<const Type*>>();
     }
 
     FunctionObject overload_resolution(
-        const GlobalMemory::Vector<FunctionObject>& overloads, ComparableSpan<const Type*> arg_types
+        const GlobalMemory::Vector<FunctionObject>& overloads, std::span<const Type*> arg_types
     ) const {
         FunctionObject best_candidate = nullptr;
         for (FunctionObject candidate : overloads) {

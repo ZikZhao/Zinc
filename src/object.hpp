@@ -608,11 +608,11 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
-    ComparableSpan<const Type*> parameters_;
+    std::span<const Type*> parameters_;
     const Type* return_type_;
 
 public:
-    FunctionType(ComparableSpan<const Type*> parameters, const Type* return_type) noexcept
+    FunctionType(std::span<const Type*> parameters, const Type* return_type) noexcept
         : Type(kind), parameters_(parameters), return_type_(return_type) {}
 
     std::string_view repr() const final {
@@ -725,7 +725,7 @@ public:
 
     Value* default_construct() const noexcept final;
 
-    void validate(ComparableSpan<std::pair<std::string_view, const Type*>> fields) const {
+    void validate(std::span<std::pair<std::string_view, const Type*>> fields) const {
         auto uninitialized = fields_;
         for (const auto& [id, type] : fields_) {
             auto it = std::find_if(
@@ -839,7 +839,7 @@ public:
     const Scope* scope_;
     std::string_view identifier_;
     const Type* extends_;
-    ComparableSpan<const Type*> implements_;
+    std::span<const Type*> implements_;
     FunctionOverloadSetValue* constructors_;
     FunctionObject destructor_;
     GlobalMemory::FlatMap<std::string_view, const Type*> attrs_;
@@ -852,7 +852,7 @@ public:
         const Scope* scope,
         std::string_view identifier,
         const Type* extends,
-        ComparableSpan<const Type*> interfaces,
+        std::span<const Type*> interfaces,
         FunctionOverloadSetValue* constructors,
         FunctionObject destructor,
         GlobalMemory::FlatMap<std::string_view, const Type*> attrs,
@@ -1013,7 +1013,7 @@ public:
     static constexpr Kind kind = Kind::Intersection;
 
 private:
-    static ComparableSpan<const Type*> flatten(ComparableSpan<const Type*> unflattened_types) {
+    static std::span<const Type*> flatten(std::span<const Type*> unflattened_types) {
         std::size_t size = 0;
         for (const Type* type : unflattened_types) {
             if (const IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
@@ -1022,7 +1022,7 @@ private:
                 size++;
             }
         }
-        ComparableSpan<const Type*> buffer = GlobalMemory::alloc_array<const Type*>(size);
+        std::span<const Type*> buffer = GlobalMemory::alloc_array<const Type*>(size);
         std::size_t index = 0;
         for (const Type* type : unflattened_types) {
             if (const IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
@@ -1035,13 +1035,13 @@ private:
         }
         return buffer;
     }
-    static ComparableSpan<const Type*> flatten(const Type* left, const Type* right) {
+    static std::span<const Type*> flatten(const Type* left, const Type* right) {
         const Type* types[] = {left, right};
-        return flatten(ComparableSpan<const Type*>(types));
+        return flatten(std::span<const Type*>(types));
     }
 
 public:
-    ComparableSpan<const Type*> types_;
+    std::span<const Type*> types_;
 
 public:
     IntersectionType(auto&&... unflattened_types) noexcept
@@ -1109,7 +1109,7 @@ public:
     static constexpr Kind kind = Kind::Union;
 
 private:
-    static ComparableSpan<const Type*> flatten(ComparableSpan<const Type*> unflattened_types) {
+    static std::span<const Type*> flatten(std::span<const Type*> unflattened_types) {
         std::size_t size = 0;
         for (const Type* type : unflattened_types) {
             if (const UnionType* union_type = type->dyn_cast<UnionType>()) {
@@ -1118,7 +1118,7 @@ private:
                 size++;
             }
         }
-        ComparableSpan<const Type*> buffer = GlobalMemory::alloc_array<const Type*>(size);
+        std::span<const Type*> buffer = GlobalMemory::alloc_array<const Type*>(size);
         std::size_t index = 0;
         for (const Type* type : unflattened_types) {
             if (const UnionType* union_type = type->dyn_cast<UnionType>()) {
@@ -1131,13 +1131,13 @@ private:
         }
         return buffer;
     }
-    static ComparableSpan<const Type*> flatten(const Type* left, const Type* right) {
+    static std::span<const Type*> flatten(const Type* left, const Type* right) {
         const Type* types[] = {left, right};
-        return flatten(ComparableSpan<const Type*>(types));
+        return flatten(std::span<const Type*>(types));
     }
 
 public:
-    ComparableSpan<const Type*> types_;
+    std::span<const Type*> types_;
 
 public:
     UnionType(auto&&... unflattened_types) noexcept
@@ -1472,7 +1472,7 @@ public:
 
 public:
     const FunctionType* type_;
-    std::function<Term(ComparableSpan<Term>)> callback_;
+    std::function<Term(std::span<Term>)> callback_;
 
 public:
     FunctionValue(const FunctionType* type, decltype(callback_) invoke) noexcept
@@ -1485,7 +1485,7 @@ public:
     FunctionValue* clone() const noexcept final { UNREACHABLE(); }
     FunctionValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
     void assign_from(Value* source) final { UNREACHABLE(); }
-    Term invoke(ComparableSpan<Term> args) const { return callback_(args); }
+    Term invoke(std::span<Term> args) const { return callback_(args); }
 };
 
 class ArrayValue final : public Value {
