@@ -33,7 +33,7 @@ std::pair<Scope&, MemberAccessHandler> get_root(
         root->collect_symbols(scope, sema);
         return std::pair{&scope, sema};
     }();
-    return {Scope::create_root(*std_scope), std_sema};
+    return {Scope::root(*std_scope), std_sema};
 }
 
 int main(int argc, char* argv[]) {

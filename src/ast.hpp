@@ -21,6 +21,7 @@ class ASTBinaryOp;
 class ASTFunctionCall;
 class ASTPrimitiveType;
 class ASTStructType;
+class ASTRuntimeSymbolDeclaration;
 class ASTDeclaration;
 class ASTFieldDeclaration;
 class ASTTypeAlias;
@@ -48,44 +49,51 @@ using FunctionOverloadDecl =
     PointerVariant<const ASTFunctionDefinition*, const ASTTemplateDefinition*>;
 
 using ScopeValue = PointerVariant<
-    const Type*,                                  // type (from template)
+    Term*,                                        // type/comptime (from template)
     const ASTExpression*,                         // type alias
-    Term*,                                        // constant/variable
+    const ASTRuntimeSymbolDeclaration*,           // constant/variable/parameters
     GlobalMemory::Vector<FunctionOverloadDecl>*,  // function overloads
     TemplateFamily*,                              // template definition
     const Scope*>;                                // namespace
 
 class TemplateFamily final : public GlobalMemory::MonotonicAllocated {
 public:
-    const ASTTemplateDefinition* main_;
+    const ASTTemplateDefinition* primary_;
     GlobalMemory::Vector<const ASTTemplateSpecialization*> specializations_;
 
 public:
-    TemplateFamily(const ASTTemplateDefinition* main) noexcept : main_(main) {}
+    TemplateFamily(const ASTTemplateDefinition* primary) noexcept : primary_(primary) {}
     Scope& specialization_resolution(
         TypeChecker& checker, std::span<Term> arguments
     ) const noexcept;
-    ScopeValue instantiate(TypeChecker& checker, std::span<Term> arguments) const noexcept;
+    Term instantiate(TypeChecker& checker, std::span<Term> arguments) const noexcept;
 };
 
 class Scope final : public GlobalMemory::MonotonicAllocated {
     friend class TypeChecker;
 
 public:
-    static Scope& create_root(Scope& std_scope) {
+    static Scope& root(Scope& std_scope) {
         Scope* scope = new Scope();
         scope->add_namespace("std", std_scope);
         return *scope;
     }
 
-    static Scope& create(const void* owner, Scope& parent, std::string_view name = "") {
-        Scope* scope = new Scope(parent, name);
+    static Scope& anonymous(Scope& parent, const void* owner) {
+        Scope* scope = new Scope(parent, owner, "");
+        parent.children_.insert({owner, scope});
+        return *scope;
+    }
+
+    static Scope& named(Scope& parent, const ASTNode* owner, std::string_view name) {
+        Scope* scope = new Scope(parent, owner, name);
         parent.children_.insert({owner, scope});
         return *scope;
     }
 
 private:
     Scope* parent_ = nullptr;
+    const void* owner_ = nullptr;
     GlobalMemory::FlatMap<const void*, Scope*> children_;
     GlobalMemory::FlatMap<std::string_view, ScopeValue> identifiers_;
     const Type* self_type_ = nullptr;
@@ -94,7 +102,8 @@ public:
     std::string_view prefix_;
 
 private:
-    Scope(Scope& parent, std::string_view name) noexcept : parent_(&parent) {
+    Scope(Scope& parent, const void* owner, std::string_view name) noexcept
+        : parent_(&parent), owner_(owner) {
         if (name.empty()) {
             prefix_ = parent.prefix_;
         } else {
@@ -109,8 +118,8 @@ public:
 
     Scope* parent() const noexcept { return parent_; }
 
-    void add_type(std::string_view identifier, const Type* type) {
-        auto [_, inserted] = identifiers_.insert({identifier, type});
+    void add_template_argument(std::string_view identifier, Term type) {
+        auto [_, inserted] = identifiers_.insert({identifier, new Term(type)});
         if (!inserted) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
@@ -123,8 +132,8 @@ public:
         }
     }
 
-    void add_variable(std::string_view identifier, Term term) {
-        auto [_, inserted] = identifiers_.insert({identifier, new Term(term)});
+    void add_variable(std::string_view identifier, const ASTRuntimeSymbolDeclaration* decl) {
+        auto [_, inserted] = identifiers_.insert({identifier, decl});
         if (!inserted) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
@@ -227,10 +236,6 @@ public:
     TypeChecker(Scope& root, MemberAccessHandler& sema) noexcept
         : current_scope_(&root), sema_(sema) {}
 
-    void add_variable(std::string_view identifier, Term term) {
-        current_scope_->add_variable(identifier, term);
-    }
-
     void enter(const void* child) noexcept { current_scope_ = current_scope_->children_.at(child); }
 
     void exit() noexcept { current_scope_ = current_scope_->parent_; }
@@ -286,17 +291,11 @@ public:
         }
         if (auto family = value->get<TemplateFamily*>()) {
             Guard guard(*this, scope);
-            ScopeValue result = family->instantiate(*this, arguments);
-            if (auto type_result = result.get<const Type*>()) {
-                return TypeResolution(type_result);
-            } else if (result.get<Term*>()) {
-                /// TODO: throw: expected a type but got a comptime value
-                throw;
-            } else if (result.get<GlobalMemory::Vector<FunctionOverloadDecl>*>()) {
-                throw;
-            } else {
-                UNREACHABLE();
+            Term result = family->instantiate(*this, arguments);
+            if (!result.is_type()) {
+                throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
             }
+            return result.get_type();
         } else {
             /// TODO: better error reporting
             throw;
@@ -310,16 +309,8 @@ public:
         }
         if (auto family = value->get<TemplateFamily*>()) {
             Guard guard(*this, scope);
-            ScopeValue result = family->instantiate(*this, arguments);
-            if (auto term_result = result.get<Term*>()) {
-                return *term_result;
-            } else if (auto type_result = result.get<const Type*>()) {
-                return Term::type(type_result);
-            } else if (result.get<GlobalMemory::Vector<FunctionOverloadDecl>*>()) {
-                throw;
-            } else {
-                UNREACHABLE();
-            }
+            Term result = family->instantiate(*this, arguments);
+            return result;
         } else {
             /// TODO: better error reporting
             throw;
@@ -368,7 +359,7 @@ public:
     ASTLocalBlock(const Location& loc, std::span<ASTNode*> statements) noexcept
         : ASTNode(loc), statements_(statements) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& local_scope = Scope::create(this, scope);
+        Scope& local_scope = Scope::anonymous(scope, this);
         for (auto& stmt : statements_) {
             stmt->collect_symbols(local_scope, sema);
         }
@@ -967,7 +958,7 @@ public:
         TypeResolution field_type;
         type_->eval_type(checker, field_type);
         /// TODO: is this necessary?
-        checker.add_variable(identifier_, Term::lvalue(field_type.get()));
+        // checker.add_variable(identifier_, Term::lvalue(field_type.get()));
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
@@ -1136,7 +1127,13 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
-class ASTDeclaration final : public ASTNode {
+class ASTRuntimeSymbolDeclaration : public ASTNode {
+public:
+    ASTRuntimeSymbolDeclaration(const Location& loc) noexcept : ASTNode(loc) {}
+    virtual Term eval_init(TypeChecker& checker) const noexcept = 0;
+};
+
+class ASTDeclaration final : public ASTRuntimeSymbolDeclaration {
 public:
     std::string_view identifier_;
     ASTExpression* declared_type_;
@@ -1151,7 +1148,7 @@ public:
         bool is_mutable,
         bool is_constant
     ) noexcept
-        : ASTNode(loc),
+        : ASTRuntimeSymbolDeclaration(loc),
           identifier_(identifier),
           declared_type_(declared_type),
           expr_(expr),
@@ -1160,23 +1157,29 @@ public:
         assert(declared_type || expr);
         assert(!(is_mutable_ && is_constant_));
     }
-    void check_types(TypeChecker& checker) final {
+    void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
+        try {
+            scope.add_variable(identifier_, this);
+        } catch (UnlocatedProblem& e) {
+            e.report_at(location_);
+        }
+    }
+    void check_types(TypeChecker& checker) final { checker.lookup(identifier_); }
+    Term eval_init(TypeChecker& checker) const noexcept final {
         TypeResolution declared_type;
         if (declared_type_) {
             declared_type_->eval_type(checker, declared_type);
         }
-        Term term = Term::type(declared_type);
+        Term term = Term::lvalue(declared_type.get());
         if (expr_) {
-            term = expr_->eval_term(checker, declared_type, is_constant_).subject;
-            if (!is_constant_) {
-                term = Term::lvalue(term.effective_type());
+            Term expr_term = expr_->eval_term(checker, declared_type, is_constant_).subject;
+            if (is_constant_) {
+                term = Term::lvalue(expr_term.get_comptime());
+            } else if (!declared_type_) {
+                term = Term::lvalue(expr_term.effective_type());
             }
         }
-        try {
-            checker.add_variable(identifier_, term);
-        } catch (UnlocatedProblem& e) {
-            e.report_at(location_);
-        }
+        return term;
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
@@ -1211,12 +1214,12 @@ public:
     ) noexcept
         : ASTNode(loc), condition_(condition), if_block_(if_block), else_block_(else_block) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& if_scope = Scope::create(&if_block_, scope);
+        Scope& if_scope = Scope::anonymous(scope, &if_block_);
         for (auto& stmt : if_block_) {
             stmt->collect_symbols(if_scope, sema);
         }
         if (!else_block_.empty()) {
-            Scope& else_scope = Scope::create(&else_block_, scope);
+            Scope& else_scope = Scope::anonymous(scope, &else_block_);
             for (auto& stmt : else_block_) {
                 stmt->collect_symbols(else_scope, sema);
             }
@@ -1277,7 +1280,7 @@ public:
           increment_(nullptr),
           body_(body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& local_scope = Scope::create(&body_, scope);
+        Scope& local_scope = Scope::anonymous(scope, &body_);
         if (initializer_) {
             initializer_->collect_symbols(local_scope, sema);
         }
@@ -1329,14 +1332,19 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
-class ASTFunctionParameter final : public ASTNode {
+class ASTFunctionParameter final : public ASTRuntimeSymbolDeclaration {
 public:
     std::string_view identifier_;
     ASTExpression* type_;
     ASTFunctionParameter(
         const Location& loc, std::string_view identifier, ASTExpression* type
     ) noexcept
-        : ASTNode(loc), identifier_(identifier), type_(type) {}
+        : ASTRuntimeSymbolDeclaration(loc), identifier_(identifier), type_(type) {}
+    Term eval_init(TypeChecker& checker) const noexcept final {
+        TypeResolution param_type;
+        type_->eval_type(checker, param_type);
+        return Term::lvalue(param_type.get());
+    }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
     void transpile_qualifiers(Transpiler& transpiler, Cursor& cursor) const noexcept;
 };
@@ -1372,18 +1380,16 @@ public:
           is_no_body_(is_no_body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_function(identifier_, this);
-        Scope& local_scope = Scope::create(&body_, scope);
+        Scope& local_scope = Scope::anonymous(scope, &body_);
+        for (auto& param : parameters_) {
+            local_scope.add_variable(param->identifier_, param);
+        }
         for (auto& stmt : body_) {
             stmt->collect_symbols(local_scope, sema);
         }
     }
     void check_types(TypeChecker& checker) final {
         TypeChecker::Guard guard(checker, &body_);
-        for (auto& param : parameters_) {
-            TypeResolution param_type;
-            param->type_->eval_type(checker, param_type);
-            checker.add_variable(param->identifier_, Term::lvalue(param_type.get()));
-        }
         for (auto& stmt : body_) {
             stmt->check_types(checker);
         }
@@ -1426,18 +1432,16 @@ public:
     ) noexcept
         : ASTNode(loc), is_constructor_(is_constructor), parameters_(parameters), body_(body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& local_scope = Scope::create(&body_, scope);
+        Scope& local_scope = Scope::anonymous(scope, &body_);
+        for (auto& param : parameters_) {
+            local_scope.add_variable(param->identifier_, param);
+        }
         for (auto& stmt : body_) {
             stmt->collect_symbols(local_scope, sema);
         }
     }
     void check_types(TypeChecker& checker) final {
         TypeChecker::Guard guard(checker, &body_);
-        for (auto& param : parameters_) {
-            TypeResolution param_type;
-            param->type_->eval_type(checker, param_type);
-            checker.add_variable(param->identifier_, Term::lvalue(param_type.get()));
-        }
         for (auto& stmt : body_) {
             stmt->check_types(checker);
         }
@@ -1521,7 +1525,7 @@ public:
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         auto signature = new ASTClassSignature(this);
         scope.add_alias(identifier_, signature);
-        Scope& class_scope = Scope::create(this, scope, identifier_);
+        Scope& class_scope = Scope::named(scope, this, identifier_);
         for (auto& ctor : constructors_) {
             ctor->collect_symbols(class_scope, sema);
         }
@@ -1560,7 +1564,7 @@ public:
     ) noexcept
         : ASTNode(loc), identifier_(identifier), items_(items) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& namespace_scope = Scope::create(this, scope, identifier_);
+        Scope& namespace_scope = Scope::named(scope, this, identifier_);
         for (auto& item : items_) {
             item->collect_symbols(namespace_scope, sema);
         }
@@ -1630,14 +1634,14 @@ class ASTTemplateSpecialization final {};
 inline Scope& TemplateFamily::specialization_resolution(
     TypeChecker& checker, std::span<Term> arguments
 ) const noexcept {
-    Scope& instantiation_scope = Scope::create(this, *checker.current_scope());
+    Scope& instantiation_scope = Scope::anonymous(*checker.current_scope(), nullptr);
     for (const ASTTemplateSpecialization* specialization : specializations_) {
         // if (specialization->match(checker, arguments)) {
         //     specialization->instantiate(checker, arguments)->merge_into(out_scope);
         //     return;
         // }
     }
-    for (const ASTTemplateParameter* param : main_->parameters_) {
+    for (const ASTTemplateParameter* param : primary_->parameters_) {
         if (param->is_nttp_) {
             TypeResolution constraint_type;
             param->constraint_->eval_type(checker, constraint_type);
@@ -1645,38 +1649,40 @@ inline Scope& TemplateFamily::specialization_resolution(
                 throw;
                 return instantiation_scope;
             }
-            instantiation_scope.add_variable(
+            instantiation_scope.add_template_argument(
                 param->identifier_, Term::lvalue(arguments[0].get_comptime())
             );
         } else {
-            instantiation_scope.add_type(param->identifier_, arguments[0]->cast<Type>());
+            instantiation_scope.add_template_argument(
+                param->identifier_, Term::type(arguments[0]->cast<Type>())
+            );
         }
     }
     return instantiation_scope;
 }
 
-inline ScopeValue TemplateFamily::instantiate(
+inline Term TemplateFamily::instantiate(
     TypeChecker& checker, std::span<Term> arguments
 ) const noexcept {
-    if (arguments.size() != main_->parameters_.size()) {
+    if (arguments.size() != primary_->parameters_.size()) {
         // Diagnostic::report(
         //     TemplateArgumentCountMismatchError(location_, main_->parameters_.size(),
         //     arguments.size())
         // );
-        return new Term(Term::unknown());
+        return Term::unknown();
     }
     Scope& template_scope = specialization_resolution(checker, arguments);
     TypeChecker::Guard guard(checker, &template_scope);
-    main_->target_node_->collect_symbols(template_scope, checker.sema_);
-    main_->target_node_->check_types(checker);
-    const ScopeValue* unevaluated = template_scope[main_->identifier_];
+    primary_->target_node_->collect_symbols(template_scope, checker.sema_);
+    primary_->target_node_->check_types(checker);
+    const ScopeValue* unevaluated = template_scope[primary_->identifier_];
     if (auto alias = unevaluated->get<const ASTExpression*>()) {
         TypeResolution resolved;
         alias->eval_type(checker, resolved);
-        return ScopeValue(resolved.get());
+        return Term::type(resolved.get());
     } else {
         /// TODO:
-        return {};
+        return Term::unknown();
     }
 }
 
@@ -1684,8 +1690,11 @@ inline TypeResolution TypeChecker::lookup_type(std::string_view identifier) {
     auto [scope, value] = lookup(identifier);
     if (!scope) {
         throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
-    } else if (value->get<const Type*>()) {
-        return value->get<const Type*>();
+    } else if (auto term = value->get<Term*>()) {
+        if (!term->is_type()) {
+            throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
+        }
+        return term->get_type();
     } else if (!value->get<const ASTExpression*>()) {
         /// TODO: template instantiation
         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
@@ -1714,15 +1723,15 @@ inline Term TypeChecker::lookup_term(std::string_view identifier) {
     if (!scope) {
         throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
     }
-    if (auto type = value->get<const Type*>()) {
-        return Term::type(type);
+    if (auto term = value->get<Term*>()) {
+        return *term;
     } else if (auto alias = value->get<const ASTExpression*>()) {
         Guard guard(*this, scope);
         TypeResolution out;
         alias->eval_type(*this, out);
         return Term::type(out);
-    } else if (auto term = value->get<Term*>()) {
-        return *term;
+    } else if (auto decl = value->get<const ASTRuntimeSymbolDeclaration*>()) {
+        return decl->eval_init(*this);
     } else if (auto func = value->get<GlobalMemory::Vector<FunctionOverloadDecl>*>()) {
         Guard guard(*this, scope);
         GlobalMemory::Vector<FunctionObject> func_vec =

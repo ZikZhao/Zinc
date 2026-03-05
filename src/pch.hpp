@@ -81,7 +81,11 @@ private:
     static constexpr std::size_t mask = std::bit_ceil(sizeof...(Ts)) - 1;
 
     template <typename U>
-    static constexpr bool IsCandidate = std::disjunction_v<std::is_convertible<U, Ts>...>;
+    static constexpr bool IsCandidate = std::disjunction_v<std::is_same<U, Ts>...>;
+
+    template <typename U>
+    static constexpr bool IsConvertibleToCandidate =
+        std::disjunction_v<std::is_convertible<U, Ts>...>;
 
     template <typename U, typename... Us>
     struct Index {};
@@ -113,7 +117,7 @@ public:
     PointerVariant() noexcept = default;
 
     template <typename T>
-        requires(IsCandidate<T>)
+        requires(IsConvertibleToCandidate<T>)
     PointerVariant(T ptr) noexcept : ptr_(reinterpret_cast<std::uintptr_t>(ptr) | IndexV<T>) {
         static_assert(
             alignof(T) >= sizeof...(Ts),
@@ -333,81 +337,34 @@ public:
 
 template <typename Key, typename Value, typename Comp>
 class GlobalMemory::FlatMap {
-private:
-    template <bool IsConst>
-    class IteratorImpl {
-    private:
-        using key_type = const Key;
-        using mapped_type = std::conditional_t<IsConst, const Value, Value>;
-
-        struct Proxy {
-            key_type& first;
-            mapped_type& second;
-            Proxy* operator->() { return this; }
-        };
-
-    public:
-        using iterator_category = std::forward_iterator_tag;
-        using difference_type = std::ptrdiff_t;
-        using value_type = std::pair<key_type, mapped_type>;
-        using pointer = Proxy;
-        using reference = Proxy;
-
-    private:
-        key_type* key_ptr_;
-        mapped_type* value_ptr_;
-
-    public:
-        IteratorImpl() = default;
-        IteratorImpl(key_type* key_ptr, mapped_type* value_ptr)
-            : key_ptr_(key_ptr), value_ptr_(value_ptr) {}
-        IteratorImpl& operator++() {
-            ++key_ptr_;
-            ++value_ptr_;
-            return *this;
-        }
-        IteratorImpl operator++(int) {
-            IteratorImpl temp = *this;
-            ++(*this);
-            return temp;
-        }
-        bool operator==(const IteratorImpl& other) const noexcept {
-            return key_ptr_ == other.key_ptr_;
-        }
-        bool operator!=(const IteratorImpl& other) const noexcept { return !(*this == other); }
-        reference operator*() { return Proxy(*key_ptr_, *value_ptr_); }
-        pointer operator->() { return Proxy(*key_ptr_, *value_ptr_); }
-        key_type* key_ptr() const noexcept { return key_ptr_; }
-    };
-
 public:
     using key_type = Key;
     using mapped_type = Value;
-    using value_type = std::pair<const Key, Value>;
+    using value_type = std::pair<Key, Value>;
     using size_type = std::size_t;
-    using iterator = IteratorImpl<false>;
-    using const_iterator = IteratorImpl<true>;
+    using iterator = typename Vector<value_type>::iterator;
+    using const_iterator = typename Vector<value_type>::const_iterator;
 
 private:
-    Vector<Key> keys_;
-    Vector<Value> values_;
+    Vector<value_type> data_;
+
+    struct CompareFirst {
+        bool operator()(const value_type& a, const value_type& b) const {
+            return Comp{}(a.first, b.first);
+        }
+        bool operator()(const value_type& a, const Key& b) const { return Comp{}(a.first, b); }
+        bool operator()(const Key& a, const value_type& b) const { return Comp{}(a, b.first); }
+    };
 
 public:
     FlatMap() noexcept = default;
-    FlatMap(const FlatMap& other) noexcept(
-        noexcept(std::declval<Vector<Key>&>() = std::declval<const Vector<Key>&>()) &&
-        noexcept(std::declval<Vector<Value>&>() = std::declval<const Vector<Value>&>())
-    ) = default;
-    FlatMap& operator=(const FlatMap& other) noexcept(
-        noexcept(std::declval<Vector<Key>&>() = std::declval<const Vector<Key>&>()) &&
-        noexcept(std::declval<Vector<Value>&>() = std::declval<const Vector<Value>&>())
-    ) = default;
+    FlatMap(const FlatMap& other) noexcept = default;
+    FlatMap& operator=(const FlatMap& other) noexcept = default;
     FlatMap(FlatMap&& other) noexcept = default;
     FlatMap& operator=(FlatMap&& other) noexcept = default;
 
     FlatMap(std::initializer_list<std::pair<Key, Value>> init) {
-        keys_.reserve(init.size());
-        values_.reserve(init.size());
+        data_.reserve(init.size());
         for (const auto& pair : init) {
             this->insert(pair);
         }
@@ -415,132 +372,103 @@ public:
 
     template <std::ranges::input_range R>
     FlatMap(std::from_range_t, R&& range) {
-        Vector<Key> unsorted_keys;
-        Vector<Value> unsorted_values;
+        Vector<value_type> unsorted;
         if constexpr (std::ranges::sized_range<R>) {
-            unsorted_keys.reserve(std::ranges::size(range));
-            unsorted_values.reserve(std::ranges::size(range));
+            unsorted.reserve(std::ranges::size(range));
         }
         for (auto&& pair : range) {
-            unsorted_keys.push_back(std::forward<decltype(pair.first)>(pair.first));
-            unsorted_values.push_back(std::forward<decltype(pair.second)>(pair.second));
+            unsorted.push_back(std::forward<decltype(pair)>(pair));
         }
-        Vector<std::size_t> indices(unsorted_keys.size());
-        std::ranges::iota(indices.begin(), indices.end(), 0);
-        std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
-            return Comp{}(unsorted_keys[a], unsorted_keys[b]);
+        std::sort(unsorted.begin(), unsorted.end(), CompareFirst{});
+        auto last = std::unique(unsorted.begin(), unsorted.end(), [](const auto& a, const auto& b) {
+            return a.first == b.first;
         });
-        std::unique(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
-            return unsorted_keys[a] == unsorted_keys[b];
-        });
-        keys_.reserve(unsorted_keys.size());
-        values_.reserve(unsorted_values.size());
-        for (std::size_t index : indices) {
-            keys_.push_back(std::move(unsorted_keys[index]));
-            values_.push_back(std::move(unsorted_values[index]));
-        }
+        unsorted.erase(last, unsorted.end());
+        data_ = std::move(unsorted);
     }
-    constexpr std::size_t size() const noexcept { return keys_.size(); }
+
+    constexpr std::size_t size() const noexcept { return data_.size(); }
+
     std::pair<iterator, bool> insert(std::pair<Key, Value> pair) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), pair.first, Comp{});
-        if (it != keys_.end() && !Comp{}(pair.first, *it)) {
-            return {
-                iterator(
-                    &keys_[std::distance(keys_.begin(), it)],
-                    &values_[std::distance(keys_.begin(), it)]
-                ),
-                false
-            };
+        auto it = std::lower_bound(data_.begin(), data_.end(), pair.first, CompareFirst{});
+        if (it != data_.end() && !Comp{}(pair.first, it->first)) {
+            return {it, false};
         }
-        std::size_t index = std::distance(keys_.begin(), it);
-        keys_.insert(it, std::move(pair.first));
-        values_.insert(values_.begin() + index, std::move(pair.second));
-        return {iterator(&keys_[index], &values_[index]), true};
+        return {data_.insert(it, std::move(pair)), true};
     }
+
     template <typename... Args>
     std::pair<iterator, bool> emplace(Args&&... args) {
         return insert(std::pair<Key, Value>(std::forward<Args>(args)...));
     }
-    iterator erase(iterator pos) {
-        size_type index = pos.key_ptr() - keys_.data();
-        keys_.erase(keys_.begin() + index);
-        values_.erase(values_.begin() + index);
-        if (index < keys_.size()) {
-            return iterator(&keys_[index], &values_[index]);
-        }
-        return end();
-    }
+
+    iterator erase(iterator pos) { return data_.erase(pos); }
+
     size_type erase(const Key& key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it != keys_.end() && !Comp{}(key, *it)) {
-            size_type index = std::distance(keys_.begin(), it);
-            keys_.erase(it);
-            values_.erase(values_.begin() + index);
+        auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
+        if (it != data_.end() && !Comp{}(key, it->first)) {
+            data_.erase(it);
             return 1;
         }
         return 0;
     }
+
     iterator find(const Key& key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || Comp{}(key, *it)) {
+        auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
+        if (it == data_.end() || Comp{}(key, it->first)) {
             return this->end();
         }
-        std::size_t index = std::distance(keys_.begin(), it);
-        return iterator(&keys_[index], &values_[index]);
+        return it;
     }
+
     const_iterator find(const Key& key) const {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || Comp{}(key, *it)) {
+        auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
+        if (it == data_.end() || Comp{}(key, it->first)) {
             return this->end();
         }
-        std::size_t index = std::distance(keys_.begin(), it);
-        return const_iterator(&keys_[index], &values_[index]);
+        return it;
     }
+
     bool contains(const Key& key) const {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        return it != keys_.end() && !Comp{}(key, *it);
+        auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
+        return it != data_.end() && !Comp{}(key, it->first);
     }
+
     Value& at(const Key& key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || Comp{}(key, *it)) {
-            throw std::out_of_range("Key not found in GlobalMemory::Map");
+        auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
+        if (it == data_.end() || Comp{}(key, it->first)) {
+            throw std::out_of_range("Key not found in GlobalMemory::FlatMap");
         }
-        std::size_t index = std::distance(keys_.begin(), it);
-        return values_[index];
+        return it->second;
     }
+
     const Value& at(const Key& key) const {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || Comp{}(key, *it)) {
-            throw std::out_of_range("Key not found in GlobalMemory::Map");
+        auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
+        if (it == data_.end() || Comp{}(key, it->first)) {
+            throw std::out_of_range("Key not found in GlobalMemory::FlatMap");
         }
-        std::size_t index = std::distance(keys_.begin(), it);
-        return values_[index];
+        return it->second;
     }
+
     Value& operator[](const Key& key) {
-        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
-        if (it == keys_.end() || Comp{}(key, *it)) {
-            std::size_t index = std::distance(keys_.begin(), it);
-            keys_.insert(it, key);
-            values_.insert(values_.begin() + index, Value{});
-            return values_[index];
-        } else {
-            std::size_t index = std::distance(keys_.begin(), it);
-            return values_[index];
+        auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
+        if (it == data_.end() || Comp{}(key, it->first)) {
+            it = data_.insert(it, value_type{key, Value{}});
         }
+        return it->second;
     }
-    iterator begin() noexcept { return iterator(keys_.data(), values_.data()); }
-    iterator end() noexcept {
-        return iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
-    }
-    const_iterator begin() const noexcept { return const_iterator(keys_.data(), values_.data()); }
-    const_iterator end() const noexcept {
-        return const_iterator(keys_.data() + keys_.size(), values_.data() + values_.size());
-    }
+
+    iterator begin() noexcept { return data_.begin(); }
+    iterator end() noexcept { return data_.end(); }
+    const_iterator begin() const noexcept { return data_.begin(); }
+    const_iterator end() const noexcept { return data_.end(); }
+
     std::strong_ordering operator<=>(const FlatMap<Key, Value, Comp>& other) const noexcept {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
     }
+
     bool operator==(const FlatMap<Key, Value, Comp>& other) const noexcept {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
