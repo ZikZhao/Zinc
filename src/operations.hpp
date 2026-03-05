@@ -789,11 +789,15 @@ public:
     }
 
     Term eval_call(Term callee, ComparableSpan<Term> args) {
+        if (callee.is_unknown()) {
+            return Term::unknown();
+        }
         Term decayed = callee_decay(callee);
         GlobalMemory::Vector<FunctionObject> overloads = list_overloads(decayed);
         if (overloads.empty()) {
             if (decayed.is_type()) {
                 /// TODO: throw type is not callable error
+                throw;
             } else {
                 throw UnlocatedProblem::make<OperationNotDefinedError>("call", callee->repr(), "");
             }

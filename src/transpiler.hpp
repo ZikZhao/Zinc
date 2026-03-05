@@ -521,6 +521,19 @@ inline void ASTPointerTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor
     cursor << "*";
 }
 
+inline void ASTTemplateInstantiation::transpile(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    cursor << template_name_ << "<";
+    const char* sep = "";
+    for (const auto& arg : arguments_) {
+        cursor << sep;
+        arg->transpile(transpiler, cursor);
+        sep = ", ";
+    }
+    cursor << ">";
+}
+
 inline void ASTExpressionStatement::transpile(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
@@ -727,7 +740,7 @@ inline void ASTConstructorDestructorDefinition::transpile(
         sep = ", ";
     }
     def_cursor << ") {";
-    TypeCheckerGuard guard(transpiler.checker(), &body_);
+    TypeChecker::Guard guard(transpiler.checker(), &body_);
     for (const auto& stmt : body_) {
         Cursor stmt_cursor = def_cursor.open_child(&body_);
         stmt->transpile(transpiler, stmt_cursor);
@@ -738,7 +751,7 @@ inline void ASTConstructorDestructorDefinition::transpile(
 inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     cursor << "struct " << identifier_ << " {";
 
-    TypeCheckerGuard guard(transpiler.checker(), this);
+    TypeChecker::Guard guard(transpiler.checker(), this);
     for (const auto& field_decl : fields_) {
         Cursor local_cursor = cursor.open_child(this);
         field_decl->declared_type_->transpile(transpiler, local_cursor);
@@ -763,10 +776,50 @@ inline void ASTNamespaceDefinition::transpile(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
     cursor << "namespace " << identifier_ << " {";
-    TypeCheckerGuard guard(transpiler.checker(), this);
+    TypeChecker::Guard guard(transpiler.checker(), this);
     Cursor local_cursor = cursor.open_child(this);
     for (const auto& item : items_) {
         item->transpile(transpiler, local_cursor);
         local_cursor.commit();
     }
+}
+
+inline void ASTTemplateParameter::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    if (is_nttp_) {
+        constraint_->transpile(transpiler, cursor);
+        cursor << identifier_;
+    } else {
+        cursor << "typename " << identifier_;
+    }
+    if (default_value_) {
+        cursor << " = ";
+        default_value_->transpile(transpiler, cursor);
+    }
+}
+
+inline void ASTTemplateDefinition::transpile(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    cursor << "template <";
+    const char* sep = "";
+    for (const auto& param : parameters_) {
+        cursor << sep;
+        param->transpile(transpiler, cursor);
+        sep = ", ";
+    }
+    cursor << ">";
+    auto constrainted_types = parameters_ | std::views::filter([](const auto& param) {
+                                  return !param->is_nttp_ && param->constraint_;
+                              });
+    if (!constrainted_types.empty()) {
+        sep = " requires(";
+        for (const auto& type : constrainted_types) {
+            cursor << sep;
+            type->constraint_->transpile(transpiler, cursor);
+            sep = " && ";
+        }
+        cursor << ")";
+    }
+
+    target_node_->transpile(transpiler, cursor);
 }

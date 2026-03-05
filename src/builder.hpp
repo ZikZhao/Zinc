@@ -223,13 +223,10 @@ private:
             ctx->semi_ != nullptr
         );
         if (ctx->template_list_) {
-            using Parameter = ASTTemplateDefinition::Parameter;
-            auto template_parameters =
-                std::any_cast<GlobalMemory::Vector<Parameter>>(visit(ctx->template_list_));
             last_visited_ = new ASTTemplateDefinition(
                 loc(ctx),
                 identifier,
-                template_parameters | GlobalMemory::collect<ComparableSpan<Parameter>>(),
+                std::any_cast<ComparableSpan<ASTTemplateParameter*>>(visit(ctx->template_list_)),
                 static_cast<ASTNode*>(last_visited_)
             );
         }
@@ -277,6 +274,14 @@ private:
             functions,
             classes
         );
+        if (ctx->template_list_) {
+            last_visited_ = new ASTTemplateDefinition(
+                loc(ctx),
+                text(ctx->identifier_),
+                std::any_cast<ComparableSpan<ASTTemplateParameter*>>(visit(ctx->template_list_)),
+                static_cast<ASTNode*>(last_visited_)
+            );
+        }
         return {};
     }
     antlrcpp::Any visitNamespace_definition(
@@ -455,6 +460,18 @@ private:
         last_visited_ = transform(ctx->constant_);
         return {};
     }
+    antlrcpp::Any visitIdentifierExpr(ZincParser::IdentifierExprContext* ctx) noexcept final {
+        last_visited_ = transform(ctx->identifier_);
+        return {};
+    }
+    antlrcpp::Any visitTemplateIdentifierExpr(
+        ZincParser::TemplateIdentifierExprContext* ctx
+    ) noexcept final {
+        std::string_view template_name = text(ctx->identifier_);
+        auto arguments = std::any_cast<ComparableSpan<ASTExpression*>>(visit(ctx->template_args_));
+        last_visited_ = new ASTTemplateInstantiation(loc(ctx), template_name, arguments);
+        return {};
+    }
     antlrcpp::Any visitCallExpr(ZincParser::CallExprContext* ctx) noexcept final {
         last_visited_ = new ASTFunctionCall(
             loc(ctx),
@@ -483,10 +500,6 @@ private:
     }
     antlrcpp::Any visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept final {
         last_visited_ = transform(ctx->inner_expr_);
-        return {};
-    }
-    antlrcpp::Any visitIdentifierExpr(ZincParser::IdentifierExprContext* ctx) noexcept final {
-        last_visited_ = transform(ctx->identifier_);
         return {};
     }
     antlrcpp::Any visitIdentifier(ZincParser::IdentifierContext* ctx) noexcept final {
@@ -638,26 +651,45 @@ private:
         ZincParser::Template_parameter_listContext* ctx
     ) noexcept final {
         return ctx->parameters_ | std::views::transform([this](auto child) {
-                   return std::any_cast<ASTTemplateDefinition::Parameter>(visit(child));
+                   return static_cast<ASTTemplateParameter*>(transform(child));
                }) |
-               GlobalMemory::collect<GlobalMemory::Vector<ASTTemplateDefinition::Parameter>>();
+               GlobalMemory::collect<ComparableSpan<ASTTemplateParameter*>>();
     }
     antlrcpp::Any visitTypeTemplateParam(ZincParser::TypeTemplateParamContext* ctx) noexcept final {
-        return ASTTemplateDefinition::Parameter{
-            .is_nttp = false,
-            .identifier = text(ctx->identifier_),
-            .constraint = nullptr,
-            .default_value = static_cast<const ASTExpression*>(transform(ctx->default_))
+        last_visited_ = new ASTTemplateParameter{
+            loc(ctx),
+            false,
+            text(ctx->identifier_),
+            nullptr,
+            static_cast<const ASTExpression*>(transform(ctx->default_))
         };
+        return {};
     }
     antlrcpp::Any visitComptimeTemplateParam(
         ZincParser::ComptimeTemplateParamContext* ctx
     ) noexcept final {
-        return ASTTemplateDefinition::Parameter{
-            .is_nttp = true,
-            .identifier = text(ctx->identifier_),
-            .constraint = static_cast<const ASTExpression*>(transform(ctx->type_)),
-            .default_value = nullptr,
+        last_visited_ = new ASTTemplateParameter{
+            loc(ctx),
+            true,
+            text(ctx->identifier_),
+            static_cast<const ASTExpression*>(transform(ctx->type_)),
+            nullptr
         };
+        return {};
+    }
+    antlrcpp::Any visitInstantiation_list(
+        ZincParser::Instantiation_listContext* ctx
+    ) noexcept final {
+        return ctx->arguments_ | std::views::transform([this](auto child) {
+                   return static_cast<ASTExpression*>(transform(child));
+               }) |
+               GlobalMemory::collect<ComparableSpan<ASTExpression*>>();
+    }
+    antlrcpp::Any visitInstantiation_argument(
+        ZincParser::Instantiation_argumentContext* ctx
+    ) noexcept final {
+        return static_cast<ASTExpression*>(
+            ctx->type_ ? transform(ctx->type_) : transform(ctx->value_)
+        );
     }
 };

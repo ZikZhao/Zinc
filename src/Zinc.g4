@@ -151,19 +151,21 @@ expr:
 		| OP_SUB
 		| OP_NOT
 		| OP_BITNOT
-	) expr_ = expr				# UnaryExpr
-	| constant_ = constant		# ConstExpr
-	| identifier_ = identifier	# IdentifierExpr
+	) expr_ = expr														# UnaryExpr
+	| constant_ = constant												# ConstExpr
+	| identifier_ = identifier											# IdentifierExpr
+	| identifier_ = T_IDENTIFIER template_args_ = instantiation_list	# TemplateIdentifierExpr
 	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
-	)? OP_RPAREN									# CallExpr
-	| OP_BITAND KW_MUT? inner_expr_ = expr			# AddressOfExpr
-	| target_ = expr OP_DOT member_ = identifier	# MemberAccessExpr
+	)? OP_RPAREN																		# CallExpr
+	| OP_BITAND KW_MUT? inner_expr_ = expr												# AddressOfExpr
+	| target_ = expr OP_DOT member_ = identifier										# MemberAccessExpr
+	| target_ = expr OP_DOT member_ = identifier template_args_ = instantiation_list	#
+		TemplateMemberAccessExpr
 	| struct_ = type OP_LBRACE (
 		inits_ += field_init (OP_COMMA inits_ += field_init)*
-	)? OP_RBRACE											# StructInitExpr
-	| template_ = expr instantiation_ = instantiation_list	# TemplateInstantiationExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN				# ParenExpr;
+	)? OP_RBRACE								# StructInitExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr;
 
 identifier: name_ = T_IDENTIFIER;
 
@@ -185,20 +187,20 @@ type:
 		| KW_FLOAT64
 		| KW_STRING
 		| KW_BOOL
-	)							# PrimitiveType
-	| identifier_ = identifier	# IdentifierType
+	)																# PrimitiveType
+	| identifier_ = identifier										# IdentifierType
+	| identifier_ = identifier template_args_ = instantiation_list	# TemplateTypeInstantiation
 	| OP_LBRACE (
 		fields_ += field_decl* (OP_COMMA fields_ += field_decl)
 	)? OP_RBRACE # StructType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
-	)? OP_RPAREN OP_ARROW return_type_ = type				# FunctionType
-	| KW_MUT inner_type_ = type								# MutableType
-	| KW_MOVE? OP_BITAND inner_type_ = type					# ReferenceType
-	| OP_MUL inner_type_ = type								# PointerType
-	| inner_type_ = type OP_QUESTION						# OptionalType
-	| template_ = type instantiation_ = instantiation_list	# TemplateInstantiationType
-	| OP_LBRACKET inner_type_ = type OP_RBRACKET			# ParenType;
+	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
+	| KW_MUT inner_type_ = type						# MutableType
+	| KW_MOVE? OP_BITAND inner_type_ = type			# ReferenceType
+	| OP_MUL inner_type_ = type						# PointerType
+	| inner_type_ = type OP_QUESTION				# OptionalType
+	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
 
 field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 

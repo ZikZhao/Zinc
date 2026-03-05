@@ -177,6 +177,8 @@ The development is structured into granular phases to ensure stability before in
 8. Method Reference
 9. Metaprogramming: Built-in Predicates
 10. Metaprogramming: Concepts (Traits)
-11. ==Abbreviated Function Templates by `auto` keyword==
-12. Module System
-13. ==Class Template Argument Deduction (CTAD): by in-class deduction guide==
+11. ==Template: Variadic Parameters==
+12. ==Abbreviated Function Templates by `auto` keyword==
+13. Module System
+14. ==Class Template Argument Deduction (CTAD): by in-class deduction guide==
+15. ==String Literals As Types==

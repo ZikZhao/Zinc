@@ -29,9 +29,8 @@ enum class ValueCategory {
     Expiring,
 };
 
+class Scope;
 class Cursor;
-
-class TypeRegistry;
 
 class Object;
 
@@ -837,7 +836,7 @@ public:
     static constexpr Kind kind = Kind::Instance;
 
 public:
-    const void* scope_;
+    const Scope* scope_;
     std::string_view identifier_;
     const Type* extends_;
     ComparableSpan<const Type*> implements_;
@@ -850,7 +849,7 @@ public:
     InstanceType(std::string_view identifier) noexcept : Type(kind), identifier_(identifier) {}
 
     InstanceType(
-        const void* scope,
+        const Scope* scope,
         std::string_view identifier,
         const Type* extends,
         ComparableSpan<const Type*> interfaces,

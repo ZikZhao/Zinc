@@ -3,7 +3,7 @@ fn main() -> i32 {
     return x.method1(10);
 }
 
-/*class MyClass<T: type> {
+class MyClass<T: type> {
     let value: T;
     init(self: &Self, value: T) {
         self.value = value;
@@ -11,7 +11,7 @@ fn main() -> i32 {
     fn method1(self: &Self, x: i32) -> T {
         return self.value;
     }
-}*/
+}
 
 fn add<T: type>(a: T, b: T) -> T {
     return a + b;
