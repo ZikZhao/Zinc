@@ -85,26 +85,25 @@ class FlatMapPrinter:
     
     def to_string(self):
         try:
-            keys = self.val['keys_']
-            size = int(keys['_M_impl']['_M_finish'] - keys['_M_impl']['_M_start'])
+            data = self.val['data_']
+            size = int(data['_M_impl']['_M_finish'] - data['_M_impl']['_M_start'])
             return f"FlatMap with {size} entries"
         except:
             return "FlatMap"
     
     def children(self):
         try:
-            keys = self.val['keys_']
-            values = self.val['values_']
+            data = self.val['data_']
             
-            keys_start = keys['_M_impl']['_M_start']
-            keys_finish = keys['_M_impl']['_M_finish']
-            values_start = values['_M_impl']['_M_start']
+            start = data['_M_impl']['_M_start']
+            finish = data['_M_impl']['_M_finish']
             
-            size = int(keys_finish - keys_start)
+            size = int(finish - start)
             
             for i in range(min(size, 100)):  # Limit to 100 elements
-                key = keys_start[i]
-                value = values_start[i]
+                pair = start[i]
+                key = pair['first']
+                value = pair['second']
                 # Yield key-value pairs
                 yield (f'[{i}].key', key)
                 yield (f'[{i}].value', value)
@@ -123,26 +122,25 @@ class MultiMapPrinter:
     
     def to_string(self):
         try:
-            keys = self.val['keys_']
-            size = int(keys['_M_impl']['_M_finish'] - keys['_M_impl']['_M_start'])
+            entries = self.val['entries_']
+            size = int(entries['_M_impl']['_M_finish'] - entries['_M_impl']['_M_start'])
             return f"MultiMap with {size} entries"
         except:
             return "MultiMap"
     
     def children(self):
         try:
-            keys = self.val['keys_']
-            values = self.val['values_']
+            entries = self.val['entries_']
             
-            keys_start = keys['_M_impl']['_M_start']
-            keys_finish = keys['_M_impl']['_M_finish']
-            values_start = values['_M_impl']['_M_start']
+            start = entries['_M_impl']['_M_start']
+            finish = entries['_M_impl']['_M_finish']
             
-            size = int(keys_finish - keys_start)
+            size = int(finish - start)
             
             for i in range(min(size, 100)):
-                key = keys_start[i]
-                value = values_start[i]
+                pair = start[i]
+                key = pair['first']
+                value = pair['second']
                 yield (f'[{i}].key', key)
                 yield (f'[{i}].value', value)
         except Exception as e:
