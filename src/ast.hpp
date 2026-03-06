@@ -79,21 +79,21 @@ public:
         return *scope;
     }
 
-    static Scope& anonymous(Scope& parent, const void* owner) {
-        Scope* scope = new Scope(parent, owner, "");
-        parent.children_.insert({owner, scope});
+    static Scope& anonymous(Scope& parent, const ASTNode* origin, const void* key = nullptr) {
+        Scope* scope = new Scope(parent, origin, "");
+        parent.children_.insert({key ? key : origin, scope});
         return *scope;
     }
 
-    static Scope& named(Scope& parent, const ASTNode* owner, std::string_view name) {
-        Scope* scope = new Scope(parent, owner, name);
-        parent.children_.insert({owner, scope});
+    static Scope& named(Scope& parent, const ASTNode* origin, std::string_view name) {
+        Scope* scope = new Scope(parent, origin, name);
+        parent.children_.insert({origin, scope});
         return *scope;
     }
 
 private:
     Scope* parent_ = nullptr;
-    const void* owner_ = nullptr;
+    const ASTNode* origin_ = nullptr;
     GlobalMemory::FlatMap<const void*, Scope*> children_;
     GlobalMemory::FlatMap<std::string_view, ScopeValue> identifiers_;
     const Type* self_type_ = nullptr;
@@ -102,8 +102,8 @@ public:
     std::string_view prefix_;
 
 private:
-    Scope(Scope& parent, const void* owner, std::string_view name) noexcept
-        : parent_(&parent), owner_(owner) {
+    Scope(Scope& parent, const ASTNode* origin, std::string_view name) noexcept
+        : parent_(&parent), origin_(origin) {
         if (name.empty()) {
             prefix_ = parent.prefix_;
         } else {
@@ -193,16 +193,16 @@ public:
 class DependencyGraph final {
 public:
     struct Edge {
-        const ASTNode* from;
-        const ASTNode* to;
+        const ASTNode* user;
+        const ASTNode* provider;
     };
 
 private:
-    GlobalMemory::FlatMap<const ASTNode*, GlobalMemory::Vector<const ASTNode*>> adjacency_list_;
+    GlobalMemory::FlatMap<const ASTNode*, GlobalMemory::Vector<Edge>> adjacency_list_;
 
 public:
-    void add_edge(const ASTNode* from, const ASTNode* to) noexcept {
-        adjacency_list_[from].push_back(to);
+    void add_edge(const ASTNode* origin, const ASTNode* user, const ASTNode* provider) noexcept {
+        adjacency_list_[origin].push_back({user, provider});
     }
 };
 
@@ -227,14 +227,16 @@ public:
 private:
     Scope* current_scope_;
     GlobalMemory::Map<std::pair<const Scope*, std::string_view>, TypeResolution> type_cache_;
+    DependencyGraph& dep_graph_;
     // GlobalMemory::FlatMap<std::pair<const Scope*, const ASTExpression*>, Type*> ptr_cache_;
 
 public:
     MemberAccessHandler& sema_;
+    ASTNode* current_node_ = nullptr;
 
 public:
-    TypeChecker(Scope& root, MemberAccessHandler& sema) noexcept
-        : current_scope_(&root), sema_(sema) {}
+    TypeChecker(Scope& root, DependencyGraph& dep_graph, MemberAccessHandler& sema) noexcept
+        : current_scope_(&root), dep_graph_(dep_graph), sema_(sema) {}
 
     void enter(const void* child) noexcept { current_scope_ = current_scope_->children_.at(child); }
 
@@ -244,7 +246,10 @@ public:
 
     bool is_at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
 
-    void set_self_type(const Type* type) noexcept { current_scope_->self_type_ = type; }
+    void set_self_type(const Type* type) noexcept {
+        assert(current_scope_->self_type_ == nullptr);
+        current_scope_->self_type_ = type;
+    }
 
     const Type* self_type() const noexcept {
         auto current = current_scope_;
@@ -267,11 +272,16 @@ public:
 
     std::pair<Scope*, const ScopeValue*> lookup(std::string_view identifier) const noexcept {
         Scope* scope = current_scope_;
+        const ASTNode* user = current_node_;
         while (scope) {
             auto it = scope->identifiers_.find(identifier);
             if (it != scope->identifiers_.end()) {
+                dep_graph_.add_edge(
+                    scope->origin_, user, static_cast<const ASTNode*>(it->second.get())
+                );
                 return {scope, &it->second};
             }
+            user = scope->origin_;
             scope = scope->parent();
         }
         return {nullptr, nullptr};
@@ -324,7 +334,12 @@ public:
     ASTNode(const Location& loc) noexcept : location_(loc) {}
     virtual ~ASTNode() noexcept = default;
     virtual void collect_symbols(Scope& scope, MemberAccessHandler& sema) {}
-    virtual void check_types(TypeChecker& checker) {}
+    void check_types(TypeChecker& checker) {
+        ASTNode* prev = std::exchange(checker.current_node_, this);
+        do_check_types(checker);
+        checker.current_node_ = prev;
+    }
+    virtual void do_check_types(TypeChecker& checker) {}
     virtual void transpile(Transpiler& transpiler, Cursor& cursor) const { UNREACHABLE(); };
 };
 
@@ -345,17 +360,21 @@ public:
             child->collect_symbols(scope, sema);
         }
     }
-    void check_types(TypeChecker& checker) final {
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final {
         for (auto& child : statements_) {
             child->check_types(checker);
         }
     }
-    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
 class ASTLocalBlock final : public ASTNode {
 public:
     std::span<ASTNode*> statements_;
+
+public:
     ASTLocalBlock(const Location& loc, std::span<ASTNode*> statements) noexcept
         : ASTNode(loc), statements_(statements) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
@@ -364,14 +383,16 @@ public:
             stmt->collect_symbols(local_scope, sema);
         }
     }
-    void check_types(TypeChecker& checker) final {
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final {
         checker.enter(this);
         for (auto& stmt : statements_) {
             stmt->check_types(checker);
         }
         checker.exit();
     }
-    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
 class ASTExpression : public ASTNode {
@@ -380,18 +401,18 @@ public:
     void eval_type(
         TypeChecker& checker, TypeResolution& out, bool require_complete = true
     ) const noexcept {
-        eval_type_impl(checker, out, require_complete);
+        do_eval_type(checker, out, require_complete);
         assert(require_complete ? out.is_sized() : true);
     }
     virtual TermWithReceiver eval_term(
         TypeChecker& checker, const Type* expected, bool comptime
     ) const noexcept = 0;
-    void check_types(TypeChecker& checker) final {
+
+private:
+    void do_check_types(TypeChecker& checker) final {
         std::ignore = eval_term(checker, nullptr, false).subject;
     }
-
-protected:
-    virtual void eval_type_impl(
+    virtual void do_eval_type(
         TypeChecker& checker, TypeResolution& out, bool require_complete
     ) const noexcept = 0;
 };
@@ -429,8 +450,8 @@ public:
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
-protected:
-    void eval_type_impl(
+private:
+    void do_eval_type(
         TypeChecker& checker, TypeResolution& out, bool require_complete
     ) const noexcept final {
         inner_->eval_type(checker, out, require_complete);
@@ -463,7 +484,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(
+    void do_eval_type(
         TypeChecker& checker, TypeResolution& out, bool require_complete
     ) const noexcept final {
         /// TODO: return literal type
@@ -489,8 +510,8 @@ public:
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
-protected:
-    void eval_type_impl(
+private:
+    void do_eval_type(
         TypeChecker& checker, TypeResolution& out, bool require_complete
     ) const noexcept final {
         if (!is_type_) {
@@ -531,7 +552,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(
+    void do_eval_type(
         TypeChecker& checker, TypeResolution& out, bool require_complete
     ) const noexcept final {
         TypeResolution result = checker.lookup_type(str_);
@@ -563,7 +584,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         TypeResolution expr_result;
         expr_->eval_type(checker, expr_result);
         try {
@@ -599,7 +620,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         TypeResolution left_result;
         left_->eval_type(checker, left_result);
         TypeResolution right_result;
@@ -678,7 +699,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         // TODO
     };
 
@@ -790,7 +811,7 @@ public:
     }
 
 protected:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         UNREACHABLE();
     }
 
@@ -889,7 +910,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         // TODO
         out = {};
     }
@@ -905,7 +926,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         out = type_;
     }
 };
@@ -924,7 +945,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         out = std::type_identity<FunctionType>();
         bool any_error = false;
         std::span<const Type*> param_types =
@@ -954,12 +975,6 @@ public:
         const Location& loc, std::string_view identifier, ASTExpression* type
     ) noexcept
         : ASTNode(loc), identifier_(std::move(identifier)), type_(type) {}
-    void check_types(TypeChecker& checker) final {
-        TypeResolution field_type;
-        type_->eval_type(checker, field_type);
-        /// TODO: is this necessary?
-        // checker.add_variable(identifier_, Term::lvalue(field_type.get()));
-    }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
@@ -973,7 +988,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         out = std::type_identity<StructType>();
         GlobalMemory::FlatMap<std::string_view, const Type*> field_map =
             fields_ |
@@ -999,7 +1014,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         out = std::type_identity<MutableType>();
         TypeResolution expr_type;
         expr_->eval_type(checker, expr_type, false);
@@ -1021,7 +1036,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         out = std::type_identity<ReferenceType>();
         TypeResolution expr_type;
         expr_->eval_type(checker, expr_type, false);
@@ -1042,7 +1057,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final {
         out = std::type_identity<PointerType>();
         TypeResolution expr_type;
         expr_->eval_type(checker, expr_type, false);
@@ -1076,7 +1091,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 protected:
-    void eval_type_impl(
+    void do_eval_type(
         TypeChecker& checker, TypeResolution& out, bool require_complete
     ) const noexcept final {
         GlobalMemory::Vector<Term> args_terms =
@@ -1111,7 +1126,7 @@ public:
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 protected:
-    void eval_type_impl(
+    void do_eval_type(
         TypeChecker& checker, TypeResolution& out, bool require_complete
     ) const noexcept final {
         UNREACHABLE();
@@ -1121,10 +1136,14 @@ protected:
 class ASTExpressionStatement final : public ASTNode {
 public:
     ASTExpression* const expr_;
+
+public:
     ASTExpressionStatement(const Location& loc, ASTExpression* expr) noexcept
         : ASTNode(loc), expr_(expr) {}
-    void check_types(TypeChecker& checker) final { expr_->check_types(checker); }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final { expr_->check_types(checker); }
 };
 
 class ASTRuntimeSymbolDeclaration : public ASTNode {
@@ -1140,6 +1159,8 @@ public:
     ASTExpression* expr_;
     bool is_mutable_;
     bool is_constant_;
+
+public:
     ASTDeclaration(
         const Location& loc,
         std::string_view identifier,
@@ -1164,7 +1185,6 @@ public:
             e.report_at(location_);
         }
     }
-    void check_types(TypeChecker& checker) final { checker.lookup(identifier_); }
     Term eval_init(TypeChecker& checker) const noexcept final {
         TypeResolution declared_type;
         if (declared_type_) {
@@ -1182,6 +1202,9 @@ public:
         return term;
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final { checker.lookup(identifier_); }
 };
 
 class ASTTypeAlias final : public ASTNode, public ASTTemplateTarget {
@@ -1195,10 +1218,12 @@ public:
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_alias(identifier_, type_);
     }
-    void check_types(TypeChecker& checker) final { checker.lookup_type(identifier_); }
     ASTNode* as_node() noexcept final { return this; }
     std::string_view get_template_name() const noexcept final { return identifier_; }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final { checker.lookup_type(identifier_); }
 };
 
 class ASTIfStatement final : public ASTNode {
@@ -1214,18 +1239,21 @@ public:
     ) noexcept
         : ASTNode(loc), condition_(condition), if_block_(if_block), else_block_(else_block) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& if_scope = Scope::anonymous(scope, &if_block_);
+        Scope& if_scope = Scope::anonymous(scope, this, &if_block_);
         for (auto& stmt : if_block_) {
             stmt->collect_symbols(if_scope, sema);
         }
         if (!else_block_.empty()) {
-            Scope& else_scope = Scope::anonymous(scope, &else_block_);
+            Scope& else_scope = Scope::anonymous(scope, this, &else_block_);
             for (auto& stmt : else_block_) {
                 stmt->collect_symbols(else_scope, sema);
             }
         }
     }
-    void check_types(TypeChecker& checker) final {
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final {
         checker.enter(&if_block_);
         std::ignore = condition_->eval_term(checker, &BooleanType::instance, false).subject;
         for (auto& stmt : if_block_) {
@@ -1240,7 +1268,6 @@ public:
             checker.exit();
         }
     }
-    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
 class ASTForStatement final : public ASTNode {
@@ -1280,7 +1307,7 @@ public:
           increment_(nullptr),
           body_(body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& local_scope = Scope::anonymous(scope, &body_);
+        Scope& local_scope = Scope::anonymous(scope, this);
         if (initializer_) {
             initializer_->collect_symbols(local_scope, sema);
         }
@@ -1288,8 +1315,11 @@ public:
             stmt->collect_symbols(local_scope, sema);
         }
     }
-    void check_types(TypeChecker& checker) final {
-        checker.enter(&body_);
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final {
+        TypeChecker::Guard guard(checker, this);
         if (initializer_) {
             initializer_->check_types(checker);
         }
@@ -1302,9 +1332,7 @@ public:
         for (auto& stmt : body_) {
             stmt->check_types(checker);
         }
-        checker.exit();
     }
-    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
 class ASTContinueStatement final : public ASTNode {
@@ -1324,12 +1352,16 @@ public:
 class ASTReturnStatement final : public ASTNode {
 public:
     ASTExpression* const expr_;
+
+public:
     ASTReturnStatement(const Location& loc, ASTExpression* expr = nullptr) noexcept
         : ASTNode(loc), expr_(expr) {}
-    void check_types(TypeChecker& checker) final {
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final {
         if (expr_) std::ignore = expr_->eval_term(checker, nullptr, false).subject;
     }
-    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
 class ASTFunctionParameter final : public ASTRuntimeSymbolDeclaration {
@@ -1380,18 +1412,12 @@ public:
           is_no_body_(is_no_body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_function(identifier_, this);
-        Scope& local_scope = Scope::anonymous(scope, &body_);
+        Scope& local_scope = Scope::anonymous(scope, this);
         for (auto& param : parameters_) {
             local_scope.add_variable(param->identifier_, param);
         }
         for (auto& stmt : body_) {
             stmt->collect_symbols(local_scope, sema);
-        }
-    }
-    void check_types(TypeChecker& checker) final {
-        TypeChecker::Guard guard(checker, &body_);
-        for (auto& stmt : body_) {
-            stmt->check_types(checker);
         }
     }
     bool is_static() const noexcept {
@@ -1415,6 +1441,14 @@ public:
         return TypeRegistry::get<FunctionType>(params, return_type);
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final {
+        TypeChecker::Guard guard(checker, this);
+        for (auto& stmt : body_) {
+            stmt->check_types(checker);
+        }
+    }
 };
 
 class ASTConstructorDestructorDefinition final : public ASTNode {
@@ -1432,18 +1466,12 @@ public:
     ) noexcept
         : ASTNode(loc), is_constructor_(is_constructor), parameters_(parameters), body_(body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& local_scope = Scope::anonymous(scope, &body_);
+        Scope& local_scope = Scope::anonymous(scope, this);
         for (auto& param : parameters_) {
             local_scope.add_variable(param->identifier_, param);
         }
         for (auto& stmt : body_) {
             stmt->collect_symbols(local_scope, sema);
-        }
-    }
-    void check_types(TypeChecker& checker) final {
-        TypeChecker::Guard guard(checker, &body_);
-        for (auto& stmt : body_) {
-            stmt->check_types(checker);
         }
     }
     FunctionObject get_func_obj(TypeChecker& checker, const Type* owner_type) const noexcept {
@@ -1462,6 +1490,14 @@ public:
     }
 
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final {
+        TypeChecker::Guard guard(checker, this);
+        for (auto& stmt : body_) {
+            stmt->check_types(checker);
+        }
+    }
 };
 
 class ASTClassSignature final : public ASTHiddenTypeExpr {
@@ -1470,7 +1506,7 @@ public:
 
 public:
     ASTClassSignature(const ASTClassDefinition* owner) noexcept : owner_(owner) {}
-    void eval_type_impl(TypeChecker& checker, TypeResolution& out, bool) const noexcept final;
+    void do_eval_type(TypeChecker& checker, TypeResolution& out, bool) const noexcept final;
 
 private:
     const Type* resolve_base(TypeChecker& checker) const noexcept;
@@ -1536,7 +1572,10 @@ public:
             func->collect_symbols(class_scope, sema);
         }
     }
-    void check_types(TypeChecker& checker) final {
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final {
         checker.lookup_type(identifier_);  // trigger self type injection
         TypeChecker::Guard guard(checker, this);
         for (auto& field : fields_) {
@@ -1552,7 +1591,6 @@ public:
             func->check_types(checker);
         }
     }
-    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
 class ASTNamespaceDefinition final : public ASTNode {
@@ -1570,14 +1608,16 @@ public:
         }
         scope.add_namespace(identifier_, namespace_scope);
     }
-    void check_types(TypeChecker& checker) final {
+    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+
+private:
+    void do_check_types(TypeChecker& checker) final {
         checker.enter(this);
         for (auto& item : items_) {
             item->check_types(checker);
         }
         checker.exit();
     }
-    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
 class ASTTemplateParameter final : public ASTNode {
@@ -1623,7 +1663,6 @@ public:
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_template(identifier_, this);
     }
-    void check_types(TypeChecker& checker) final {}
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
 
@@ -1675,15 +1714,16 @@ inline Term TemplateFamily::instantiate(
     TypeChecker::Guard guard(checker, &template_scope);
     primary_->target_node_->collect_symbols(template_scope, checker.sema_);
     primary_->target_node_->check_types(checker);
-    const ScopeValue* unevaluated = template_scope[primary_->identifier_];
-    if (auto alias = unevaluated->get<const ASTExpression*>()) {
-        TypeResolution resolved;
-        alias->eval_type(checker, resolved);
-        return Term::type(resolved.get());
-    } else {
-        /// TODO:
-        return Term::unknown();
-    }
+    // const ScopeValue* unevaluated = template_scope[primary_->identifier_];
+    // if (auto alias = unevaluated->get<const ASTExpression*>()) {
+    //     TypeResolution resolved;
+    //     alias->eval_type(checker, resolved);
+    //     return Term::type(resolved.get());
+    // } else {
+    //     /// TODO:
+    //     return Term::unknown();
+    // }
+    return checker.lookup_term(primary_->identifier_);
 }
 
 inline TypeResolution TypeChecker::lookup_type(std::string_view identifier) {
@@ -1726,6 +1766,9 @@ inline Term TypeChecker::lookup_term(std::string_view identifier) {
     if (auto term = value->get<Term*>()) {
         return *term;
     } else if (auto alias = value->get<const ASTExpression*>()) {
+        if (auto it = type_cache_.find({scope, identifier}); it != type_cache_.end()) {
+            return Term::type(it->second);
+        }
         Guard guard(*this, scope);
         TypeResolution out;
         alias->eval_type(*this, out);
@@ -1751,7 +1794,7 @@ inline Term TypeChecker::lookup_term(std::string_view identifier) {
     }
 }
 
-inline void ASTClassSignature::eval_type_impl(
+inline void ASTClassSignature::do_eval_type(
     TypeChecker& checker, TypeResolution& out, bool
 ) const noexcept {
     InstanceType* incomplete_class = new InstanceType(owner_->identifier_);

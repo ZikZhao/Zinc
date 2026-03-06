@@ -132,6 +132,8 @@ public:
         constexpr std::size_t index = IndexV<T>;
         return ((ptr_ & mask) == index) ? reinterpret_cast<T>(ptr_ & ~mask) : nullptr;
     }
+
+    const void* get() const noexcept { return reinterpret_cast<const void*>(ptr_ & ~mask); }
 };
 
 class GlobalMemory {

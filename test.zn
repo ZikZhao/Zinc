@@ -16,3 +16,11 @@ class MyClass<T: type> {
 fn add<T: type>(a: T, b: T) -> T {
     return a + b;
 }
+
+fn max<T: type>(a: T, b: T) -> T {
+    if (a > b) {
+        return a;
+    } else {
+        return b;
+    }
+}

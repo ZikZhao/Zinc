@@ -462,7 +462,7 @@ public:
             return std::strong_ordering::equal;
         }
         assumed_equal.insert(std::minmax(this, other));
-        return compare_impl(other, assumed_equal);
+        return do_compare(other, assumed_equal);
     }
 
     bool assignable_from(const Type* source) const noexcept;
@@ -470,11 +470,11 @@ public:
     virtual Value* default_construct() const noexcept = 0;
 
 protected:
-    virtual std::strong_ordering compare_impl(
+    virtual std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept = 0;
 
-    virtual bool assignable_from_impl(const Type* source) const noexcept = 0;
+    virtual bool do_assignable_from(const Type* source) const noexcept = 0;
 };
 
 class PrimitiveType : public Type {
@@ -483,7 +483,7 @@ protected:
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final { return true; }
 
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         return this <=> other;
@@ -503,7 +503,7 @@ private:
 
 public:
     std::string_view repr() const final { return "unknown"; }
-    bool assignable_from_impl(const Type* source) const noexcept final { return true; }
+    bool do_assignable_from(const Type* source) const noexcept final { return true; }
     Value* default_construct() const noexcept final;
 };
 
@@ -515,7 +515,7 @@ public:
 public:
     AnyType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "any"; }
-    bool assignable_from_impl(const Type* source) const noexcept final { return true; }
+    bool do_assignable_from(const Type* source) const noexcept final { return true; }
     Value* default_construct() const noexcept final;
 };
 
@@ -527,7 +527,7 @@ public:
 public:
     NullptrType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "nullptr"; }
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         /// No variable can have null type except null literal
         UNREACHABLE();
     }
@@ -559,7 +559,7 @@ public:
     std::string_view repr() const final {
         return GlobalMemory::format_view("{}{}", is_signed_ ? "i" : "u", bits_);
     }
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         const IntegerType* other_int = source->dyn_cast<IntegerType>();
         return other_int && (other_int->bits_ == 0 || (this->is_signed_ == other_int->is_signed_ &&
                                                        this->bits_ >= other_int->bits_));
@@ -582,7 +582,7 @@ public:
         assert(bits == 0 || bits == 32 || bits == 64);
     }
     std::string_view repr() const final { return GlobalMemory::format_view("f{}", bits_); }
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         const FloatType* other_float = source->dyn_cast<FloatType>();
         return other_float && (other_float->bits_ == 0 || this->bits_ >= other_float->bits_);
     }
@@ -597,7 +597,7 @@ public:
 public:
     BooleanType() noexcept : PrimitiveType(kind) {}
     std::string_view repr() const final { return "bool"; }
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         return source->dyn_cast<BooleanType>() != nullptr;
     }
     Value* default_construct() const noexcept final;
@@ -638,7 +638,7 @@ public:
     Value* default_construct() const noexcept final;
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const FunctionType* other_func = other->cast<FunctionType>();
@@ -655,7 +655,7 @@ protected:
         return return_type_->compare(other_func->return_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const noexcept final;
+    bool do_assignable_from(const Type* source) const noexcept final;
 };
 
 class ArrayType final : public Type {
@@ -680,7 +680,7 @@ public:
     Value* default_construct() const noexcept final;
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const ArrayType* other_array = other->cast<ArrayType>();
@@ -690,7 +690,7 @@ protected:
         return element_type_->compare(other_array->element_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         const ArrayType* other_array = source->dyn_cast<ArrayType>();
         return other_array && element_type_->assignable_from(other_array->element_type_) &&
                (size_ == 0 || size_ == other_array->size_);
@@ -757,7 +757,7 @@ public:
     }
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const StructType* other_struct = other->cast<StructType>();
@@ -778,7 +778,7 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         // (a,b,c) is assignable to (a,b)
         // i.e., source must have at least all fields of this
         const StructType* other_struct = source->dyn_cast<StructType>();
@@ -818,14 +818,14 @@ public:
     Value* default_construct() const noexcept final { UNREACHABLE(); }
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         /// TODO:
         return std::strong_ordering::equal;
     }
 
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         /// TODO:
         return false;
     }
@@ -888,13 +888,13 @@ public:
     }
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         return this <=> other;
     }
 
-    bool assignable_from_impl(const Type* other) const noexcept final { return this == other; }
+    bool do_assignable_from(const Type* other) const noexcept final { return this == other; }
 };
 
 class MutableType final : public Type {
@@ -918,14 +918,14 @@ public:
     Value* default_construct() const noexcept final;
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const MutableType* other_mut = other->cast<MutableType>();
         return target_type_->compare(other_mut->target_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         const MutableType* other_mut = source->dyn_cast<MutableType>();
         return other_mut && target_type_->assignable_from(other_mut->target_type_);
     }
@@ -957,7 +957,7 @@ public:
     }
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const ReferenceType* other_ref = other->cast<ReferenceType>();
@@ -967,7 +967,7 @@ protected:
         return referenced_type_->compare(other_ref->referenced_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         const ReferenceType* other_ref = source->dyn_cast<ReferenceType>();
         return other_ref && (is_moved_ == other_ref->is_moved_) &&
                referenced_type_->assignable_from(other_ref->referenced_type_);
@@ -994,14 +994,14 @@ public:
     Value* default_construct() const noexcept final;
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const PointerType* other_ptr = other->cast<PointerType>();
         return pointed_type_->compare(other_ptr->pointed_type_, assumed_equal);
     }
 
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         const PointerType* other_ptr = source->dyn_cast<PointerType>();
         return (other_ptr && pointed_type_->assignable_from(other_ptr->pointed_type_)) ||
                source->kind_ == Kind::Nullptr;
@@ -1064,7 +1064,7 @@ public:
     Value* default_construct() const noexcept final;
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const IntersectionType* other_intersection = other->cast<IntersectionType>();
@@ -1081,7 +1081,7 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         // (a & b & c) is assignable to (a & b)
         // i.e., source supports at least all the function overloads of this
         if (const IntersectionType* other_intersection = source->dyn_cast<IntersectionType>()) {
@@ -1160,7 +1160,7 @@ public:
     Value* default_construct() const noexcept final;
 
 protected:
-    std::strong_ordering compare_impl(
+    std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const UnionType* other_union = other->cast<UnionType>();
@@ -1177,7 +1177,7 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool assignable_from_impl(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source) const noexcept final {
         // (a | b) is assignable to (a | b | c)
         // i.e., source must be assignable to at least one of the types in this
         if (const UnionType* other_union = source->dyn_cast<UnionType>()) {
@@ -1859,18 +1859,18 @@ inline const Type* Term::effective_type() const noexcept {
 }
 
 inline bool Type::assignable_from(const Type* source) const noexcept {
-    assert(!(this == source) || assignable_from_impl(source));
+    assert(!(this == source) || do_assignable_from(source));
     if (this == source) {
         return true;
     }
     if (kind_ != source->kind_) {
         if (auto mut = source->dyn_cast<MutableType>()) {
-            return assignable_from_impl(mut->target_type_);
+            return do_assignable_from(mut->target_type_);
         } else if (auto ref = source->dyn_cast<ReferenceType>()) {
-            return assignable_from_impl(ref->referenced_type_);
+            return do_assignable_from(ref->referenced_type_);
         }
     }
-    return assignable_from_impl(source);
+    return do_assignable_from(source);
 }
 
 inline UnknownType UnknownType::instance;
@@ -1909,7 +1909,7 @@ inline BooleanType BooleanType::instance;
 
 inline Value* BooleanType::default_construct() const noexcept { return new BooleanValue(false); }
 
-inline bool FunctionType::assignable_from_impl(const Type* source) const noexcept {
+inline bool FunctionType::do_assignable_from(const Type* source) const noexcept {
     // (Base) => Derived is assignable to (Derived) => Base
     // i.e., parameters are contravariant, return type is covariant
     if (const FunctionType* func_other = source->dyn_cast<FunctionType>()) {

@@ -57,7 +57,8 @@ int main(int argc, char* argv[]) {
     auto [scope, sema] = get_root(sources, importer);
     root->collect_symbols(scope, sema);
 
-    TypeChecker checker(scope, sema);
+    DependencyGraph dep_graph;
+    TypeChecker checker(scope, dep_graph, sema);
     root->check_types(checker);
 
     bool has_error = Diagnostic::print(sources);
