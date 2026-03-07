@@ -23,7 +23,7 @@ public:
 };
 
 std::pair<Scope&, MemberAccessHandler> get_root(
-    SourceManager& sources, ImportManager<ASTRoot>& importer
+    SourceManager& sources, ImportManager<ASTRoot>& importer, const ASTRoot* root
 ) {
     static auto [std_scope, std_sema] = [&]() {
         ASTBuilder builder(*sources.load_std(), importer);
@@ -33,7 +33,7 @@ std::pair<Scope&, MemberAccessHandler> get_root(
         root->collect_symbols(scope, sema);
         return std::pair{&scope, sema};
     }();
-    return {Scope::root(*std_scope), std_sema};
+    return {Scope::root(*std_scope, root), std_sema};
 }
 
 int main(int argc, char* argv[]) {
@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    auto [scope, sema] = get_root(sources, importer);
+    auto [scope, sema] = get_root(sources, importer, root);
     root->collect_symbols(scope, sema);
 
     DependencyGraph dep_graph;

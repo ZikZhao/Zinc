@@ -3,6 +3,11 @@ fn main() -> i32 {
     return x.method1(10);
 }
 
+fn g() -> i32 {
+    let x = MyClass<i32>(42);
+    return x.method1(10);
+}
+
 class MyClass<T: type> {
     let value: T;
     init(self: &Self, value: T) {

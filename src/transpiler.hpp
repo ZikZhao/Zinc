@@ -135,6 +135,7 @@ class Transpiler {
 
 public:
     struct State {
+        bool in_template_context = false;
         GlobalMemory::String prefix;
         GlobalMemory::FlatSet<std::string_view> niebloids;
         GlobalMemory::FlatMap<const ASTStructType*, std::size_t> structurals;
@@ -286,7 +287,7 @@ inline int transpile_all(ASTNode* root, SourceManager& sources, const Dependency
 
 inline void ASTRoot::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     transpiler.section(Section::Includes) << "#include \"pch.hpp\"";
-    for (const auto& child : statements_) {
+    for (const auto& child : transpiler.iterate(this, statements_)) {
         child->transpile(transpiler, cursor);
         cursor.commit();
     }
@@ -615,32 +616,46 @@ inline void ASTFunctionDefinition::transpile(
         "{}{}{}", transpiler.state_.prefix, will_mangle ? "$" : "", identifier_
     );
 
-    if (!is_main_) {
-        return_type_->transpile(transpiler, cursor);
-        cursor << (will_mangle ? " $" : " ") << identifier_ << "(";
-        const char* sep = "";
-        for (size_t index = is_static_ ? 0 : 1; index < parameters_.size(); index++) {
-            cursor << sep;
-            parameters_[index]->transpile(transpiler, cursor);
-            sep = ", ";
-        }
-        cursor << ")";
-        if (!is_static_) {
-            cursor << " ";
-            parameters_[0]->transpile_qualifiers(transpiler, cursor);
-        }
-        cursor << ";";
+    if (is_main_) {
+        transpile_definition(transpiler);
+        return;
+    }
 
-        if (is_static_ && transpiler.state_.niebloids.insert(identifier_).second) {
-            cursor.commit() << "constexpr auto " << identifier_
-                            << " = [](auto&&... args) { return $" << identifier_
-                            << "(std::forward<decltype(args)>(args)...); };";
-        }
+    return_type_->transpile(transpiler, cursor);
+    cursor << (will_mangle ? " $" : " ") << identifier_ << "(";
+    const char* sep = "";
+    for (size_t index = is_static_ ? 0 : 1; index < parameters_.size(); index++) {
+        cursor << sep;
+        parameters_[index]->transpile(transpiler, cursor);
+        sep = ", ";
+    }
+    cursor << ")";
+    if (!is_static_) {
+        cursor << " ";
+        parameters_[0]->transpile_qualifiers(transpiler, cursor);
     }
 
     if (is_decl_only_) {
+        cursor << ";";
         return;
+    } else if (transpiler.state_.in_template_context) {
+        transpile_body(transpiler, cursor);
+    } else {
+        cursor << ";";
+        transpile_definition(transpiler);
     }
+
+    // if (is_static_ && transpiler.state_.niebloids.insert(identifier_).second) {
+    //     cursor.commit() << "constexpr auto " << identifier_ << " = [](auto&&... args) { return $"
+    //                     << identifier_ << "(std::forward<decltype(args)>(args)...); };";
+    // }
+}
+
+inline void ASTFunctionDefinition::transpile_definition(Transpiler& transpiler) const noexcept {
+    bool will_mangle = !is_main_ && is_static_;
+    GlobalMemory::String scoped_identifier = GlobalMemory::format(
+        "{}{}{}", transpiler.state_.prefix, will_mangle ? "$" : "", identifier_
+    );
 
     Cursor def_cursor = transpiler.section(Section::Implementation);
     if (is_main_) {
@@ -663,13 +678,20 @@ inline void ASTFunctionDefinition::transpile(
         parameters_[0]->transpile_qualifiers(transpiler, def_cursor);
         def_cursor << " ";
     }
-    def_cursor << "{";
+
+    transpile_body(transpiler, def_cursor);
+}
+
+inline void ASTFunctionDefinition::transpile_body(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    cursor << "{";
     for (const auto& stmt : transpiler.iterate(this, body_)) {
-        Cursor stmt_cursor = def_cursor.open_child(&body_);
+        Cursor stmt_cursor = cursor.open_child(&body_);
         stmt->transpile(transpiler, stmt_cursor);
         stmt_cursor.commit();
     }
-    def_cursor.collapse("}");
+    cursor.collapse("}");
 }
 
 inline void ASTConstructorDestructorDefinition::transpile(
@@ -682,8 +704,19 @@ inline void ASTConstructorDestructorDefinition::transpile(
         param->transpile(transpiler, cursor);
         sep = ", ";
     }
-    cursor << ");";
+    cursor << ")";
 
+    if (transpiler.state_.in_template_context) {
+        transpile_body(transpiler, cursor);
+    } else {
+        cursor << ";";
+        transpile_definition(transpiler, classname);
+    }
+}
+
+inline void ASTConstructorDestructorDefinition::transpile_definition(
+    Transpiler& transpiler, std::string_view classname
+) const noexcept {
     Cursor def_cursor = transpiler.section(Section::Implementation);
     def_cursor << "inline ";
     def_cursor << classname << "::";
@@ -691,18 +724,26 @@ inline void ASTConstructorDestructorDefinition::transpile(
         def_cursor << "~";
     }
     def_cursor << classname << "(";
-    sep = "";
+    const char* sep = "";
     for (const auto& param : parameters_ | std::views::drop(1)) {
         def_cursor << sep;
         param->transpile(transpiler, def_cursor);
         sep = ", ";
     }
-    def_cursor << ") {";
+    def_cursor << ")";
+
+    transpile_body(transpiler, def_cursor);
+}
+
+inline void ASTConstructorDestructorDefinition::transpile_body(
+    Transpiler& transpiler, Cursor& cursor
+) const noexcept {
+    cursor << "{";
     for (const auto& stmt : transpiler.iterate(this, body_)) {
-        Cursor stmt_cursor = def_cursor.open_child(&body_);
+        Cursor stmt_cursor = cursor.open_child(&body_);
         stmt->transpile(transpiler, stmt_cursor);
     }
-    def_cursor.collapse("}");
+    cursor.collapse("}");
 }
 
 inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -776,5 +817,7 @@ inline void ASTTemplateDefinition::transpile(
         cursor << ")";
     }
 
+    bool prev_state = std::exchange(transpiler.state_.in_template_context, true);
     target_node_->transpile(transpiler, cursor);
+    transpiler.state_.in_template_context = prev_state;
 }

@@ -1,0 +1,11 @@
+CompileFlags:
+  Remove:
+    - "-include"
+    - "*/cmake_pch.hxx"
+    - "-Winvalid-pch"
+    - "-fsanitize=*"
+    - "-fno-omit-frame-pointer"
+    - "-fdiagnostics-color=always"
+
+Index:
+  Background: Build

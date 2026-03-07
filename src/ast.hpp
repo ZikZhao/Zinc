@@ -74,20 +74,20 @@ class Scope final : public GlobalMemory::MonotonicAllocated {
     friend class TypeChecker;
 
 public:
-    static Scope& root(Scope& std_scope) {
-        Scope* scope = new Scope();
+    static Scope& root(Scope& std_scope, const ASTNode* root) {
+        Scope* scope = new Scope(nullptr, root);
         scope->add_namespace("std", std_scope);
         return *scope;
     }
 
     static Scope& make(Scope& parent, const ASTNode* origin) {
-        Scope* scope = new Scope(parent, origin);
+        Scope* scope = new Scope(&parent, origin);
         parent.children_.insert({origin, scope});
         return *scope;
     }
 
     static Scope& make_unlinked(Scope& parent, const ASTNode* origin) {
-        Scope* scope = new Scope(parent, origin);
+        Scope* scope = new Scope(&parent, origin);
         return *scope;
     }
 
@@ -101,7 +101,7 @@ public:
     const Type* self_type_ = nullptr;
 
 private:
-    Scope(Scope& parent, const ASTNode* origin) noexcept : parent_(&parent), origin_(origin) {}
+    Scope(Scope* parent, const ASTNode* origin) noexcept : parent_(parent), origin_(origin) {}
 
 public:
     Scope() noexcept = default;
@@ -1454,6 +1454,8 @@ public:
         return TypeRegistry::get<FunctionType>(params, return_type);
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+    void transpile_definition(Transpiler& transpiler) const noexcept;
+    void transpile_body(Transpiler& transpiler, Cursor& cursor) const noexcept;
 
 private:
     void do_check_types(TypeChecker& checker) final {
@@ -1502,9 +1504,12 @@ public:
         return TypeRegistry::get<FunctionType>(params, owner_type);
     }
 
+    using ASTNode::transpile;
     void transpile(
         Transpiler& transpiler, Cursor& cursor, std::string_view classname
     ) const noexcept;
+    void transpile_definition(Transpiler& transpiler, std::string_view classname) const noexcept;
+    void transpile_body(Transpiler& transpiler, Cursor& cursor) const noexcept;
 
 private:
     void do_check_types(TypeChecker& checker) final {
