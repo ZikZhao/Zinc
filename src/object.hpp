@@ -20,6 +20,7 @@ enum class Kind : std::uint16_t {
     Pointer,
     Intersection,
     Union,
+    Overload,
     Template,
 };
 
@@ -1700,53 +1701,31 @@ public:
 
 class FunctionOverloadSetValue final : public Value {
 public:
-    static constexpr Kind kind = Kind::Intersection;
+    static constexpr Kind kind = Kind::Overload;
 
 public:
-    const Type* type_;
     GlobalMemory::Vector<FunctionObject> overloads_;
 
 public:
     FunctionOverloadSetValue(GlobalMemory::Vector<FunctionObject> overloads) noexcept
-        : Value(kind), type_(compute_type(overloads)), overloads_(std::move(overloads)) {}
+        : Value(kind), overloads_(std::move(overloads)) {}
     std::string_view repr() const final {
         return GlobalMemory::format_view(
             "function overload set with {} overloads", overloads_.size()
         );
     }
-    const Type* get_type() const noexcept final { return type_; }
+    const Type* get_type() const noexcept final {
+        /// TODO:
+        return nullptr;
+    }
     FunctionOverloadSetValue* clone() const noexcept final {
-        return new FunctionOverloadSetValue(*this);
+        return new FunctionOverloadSetValue(overloads_);
     }
     FunctionOverloadSetValue* resolve_to(const Type* target) const final {
-        if (target && !target->assignable_from(get_type())) {
-            throw UnlocatedProblem::make<TypeMismatchError>(
-                "function overload set", target->repr()
-            );
-        }
-        return new FunctionOverloadSetValue(*this);
+        /// TODO:
+        return nullptr;
     }
-    void assign_from(Value* source) final {
-        FunctionOverloadSetValue* set_source = source->cast<FunctionOverloadSetValue>();
-        this->overloads_ = set_source->overloads_;
-    }
-
-private:
-    const Type* compute_type(const GlobalMemory::Vector<FunctionObject>& overloads) const noexcept {
-        if (overloads.size() == 1) {
-            return overloads[0]->dyn_type() ? overloads[0]->cast<Type>()
-                                            : overloads[0]->cast<Value>()->get_type();
-        } else {
-            GlobalMemory::Vector<const Type*> types;
-            for (FunctionObject overload : overloads) {
-                types.push_back(
-                    overload->dyn_type() ? overload->cast<Type>()
-                                         : overload->cast<Value>()->get_type()
-                );
-            }
-            return TypeRegistry::get<IntersectionType>(types);
-        }
-    }
+    void assign_from(Value* source) final { UNREACHABLE(); }
 };
 
 inline bool TypeRegistry::TypeComparator::operator()(

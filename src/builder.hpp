@@ -156,8 +156,8 @@ private:
         last_visited_ = new ASTIfStatement(
             loc(ctx),
             static_cast<ASTExpression*>(transform(ctx->condition_)),
-            transform_list(ctx->then_),
-            transform_list(ctx->else_)
+            static_cast<ASTLocalBlock*>(transform(ctx->if_)),
+            static_cast<ASTLocalBlock*>(transform(ctx->else_))
         );
         return {};
     }

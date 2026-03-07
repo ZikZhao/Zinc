@@ -80,44 +80,33 @@ public:
         return *scope;
     }
 
-    static Scope& anonymous(Scope& parent, const ASTNode* origin, const void* key = nullptr) {
-        Scope* scope = new Scope(parent, origin, "");
-        parent.children_.insert({key ? key : origin, scope});
-        return *scope;
-    }
-
-    static Scope& named(Scope& parent, const ASTNode* origin, std::string_view name) {
-        Scope* scope = new Scope(parent, origin, name);
+    static Scope& make(Scope& parent, const ASTNode* origin) {
+        Scope* scope = new Scope(parent, origin);
         parent.children_.insert({origin, scope});
         return *scope;
     }
 
+    static Scope& make_unlinked(Scope& parent, const ASTNode* origin) {
+        Scope* scope = new Scope(parent, origin);
+        return *scope;
+    }
+
 private:
-    Scope* parent_ = nullptr;
     GlobalMemory::FlatMap<const void*, Scope*> children_;
     GlobalMemory::FlatMap<std::string_view, ScopeValue> identifiers_;
-    const Type* self_type_ = nullptr;
 
 public:
-    const ASTNode* origin_ = nullptr;
-    std::string_view prefix_;
+    Scope* const parent_ = nullptr;
+    const ASTNode* const origin_ = nullptr;
+    const Type* self_type_ = nullptr;
 
 private:
-    Scope(Scope& parent, const ASTNode* origin, std::string_view name) noexcept
-        : parent_(&parent), origin_(origin) {
-        if (name.empty()) {
-            prefix_ = parent.prefix_;
-        } else {
-            prefix_ = GlobalMemory::format_view("{}{}::", parent.prefix_, name);
-        }
-    }
+    Scope(Scope& parent, const ASTNode* origin) noexcept : parent_(&parent), origin_(origin) {}
 
 public:
     Scope() noexcept = default;
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
-
-    Scope* parent() const noexcept { return parent_; }
 
     void add_template_argument(std::string_view identifier, Term type) {
         auto [_, inserted] = identifiers_.insert({identifier, new Term(type)});
@@ -194,15 +183,15 @@ public:
 class DependencyGraph final {
 public:
     struct Edge {
-        const ASTNode* user;
         const ASTNode* provider;
+        const ASTNode* user;
     };
     struct EdgeLess {
         bool operator()(const Edge& lhs, const Edge& rhs) const noexcept {
-            if (lhs.user != rhs.user) {
-                return lhs.user < rhs.user;
+            if (lhs.provider != rhs.provider) {
+                return lhs.provider < rhs.provider;
             }
-            return lhs.provider < rhs.provider;
+            return lhs.user < rhs.user;
         }
     };
 
@@ -211,9 +200,39 @@ private:
 
 public:
     void add_edge(const ASTNode* origin, const ASTNode* user, const ASTNode* provider) noexcept {
-        origin_map_[origin].insert({user, provider});
+        origin_map_[origin].insert({provider, user});
     }
     void add_edge(const ASTNode* origin, const ASTNode* user, ScopeValue provider) noexcept;
+    bool has_origin(const ASTNode* origin) const noexcept { return origin_map_.contains(origin); }
+    std::generator<const ASTNode*> iterate(const ASTNode* origin) const noexcept {
+        assert(origin_map_.contains(origin));
+        GlobalMemory::FlatMap<const ASTNode*, std::size_t> provider_count;
+        for (const Edge& edge : origin_map_.at(origin)) {
+            std::ignore = provider_count[edge.provider];
+            provider_count[edge.user]++;
+        }
+        GlobalMemory::Vector<const ASTNode*> ready;
+        for (auto [node, count] : provider_count) {
+            if (count == 0) {
+                ready.push_back(node);
+            }
+        }
+        std::reverse(ready.begin(), ready.end());
+        while (!ready.empty()) {
+            const ASTNode* node = ready.back();
+            ready.pop_back();
+            co_yield node;
+            for (const Edge& edge : origin_map_.at(origin)) {
+                if (edge.provider == node) {
+                    std::size_t& count = provider_count[edge.user];
+                    count--;
+                    if (count == 0) {
+                        ready.push_back(edge.user);
+                    }
+                }
+            }
+        }
+    }
 };
 
 class TypeChecker final {
@@ -256,11 +275,6 @@ public:
 
     bool is_at_top_level() const noexcept { return current_scope_->parent_ == nullptr; }
 
-    void set_self_type(const Type* type) noexcept {
-        assert(current_scope_->self_type_ == nullptr);
-        current_scope_->self_type_ = type;
-    }
-
     const Type* self_type() const noexcept {
         auto current = current_scope_;
         do {
@@ -294,7 +308,7 @@ public:
                 return {scope, &it->second};
             }
             user = scope->origin_;
-            scope = scope->parent();
+            scope = scope->parent_;
         }
         return {nullptr, nullptr};
     }
@@ -374,7 +388,7 @@ public:
     ASTLocalBlock(const Location& loc, std::span<ASTNode*> statements) noexcept
         : ASTNode(loc), statements_(statements) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& local_scope = Scope::anonymous(scope, this);
+        Scope& local_scope = Scope::make(scope, this);
         for (auto& stmt : statements_) {
             stmt->collect_symbols(local_scope, sema);
         }
@@ -1236,40 +1250,32 @@ private:
 
 class ASTIfStatement final : public ASTNode {
 public:
-    ASTExpression* const condition_;
-    const std::span<ASTNode*> if_block_;
-    const std::span<ASTNode*> else_block_;
+    ASTExpression* condition_;
+    ASTLocalBlock* if_block_;
+    ASTLocalBlock* else_block_;
     ASTIfStatement(
         const Location& loc,
         ASTExpression* condition,
-        std::span<ASTNode*> if_block,
-        std::span<ASTNode*> else_block = {}
+        ASTLocalBlock* if_block,
+        ASTLocalBlock* else_block
     ) noexcept
         : ASTNode(loc), condition_(condition), if_block_(if_block), else_block_(else_block) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& if_scope = Scope::anonymous(scope, this, &if_block_);
-        for (auto& stmt : if_block_) {
-            stmt->collect_symbols(if_scope, sema);
-        }
-        if (!else_block_.empty()) {
-            Scope& else_scope = Scope::anonymous(scope, this, &else_block_);
-            for (auto& stmt : else_block_) {
-                stmt->collect_symbols(else_scope, sema);
-            }
+        Scope& condition_scope = Scope::make(scope, this);
+        if_block_->collect_symbols(condition_scope, sema);
+        if (else_block_) {
+            else_block_->collect_symbols(condition_scope, sema);
         }
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
 private:
     void do_check_types(TypeChecker& checker) final {
-        {
-            TypeChecker::Guard guard(checker, &if_block_);
-            std::ignore = condition_->eval_term(checker, &BooleanType::instance, false).subject;
-            check_types_loop(checker, if_block_);
-        }
-        if (!else_block_.empty()) {
-            TypeChecker::Guard guard(checker, &else_block_);
-            check_types_loop(checker, else_block_);
+        TypeChecker::Guard guard(checker, this);
+        std::ignore = condition_->eval_term(checker, &BooleanType::instance, false).subject;
+        if_block_->check_types(checker);
+        if (else_block_) {
+            else_block_->check_types(checker);
         }
     }
 };
@@ -1311,7 +1317,7 @@ public:
           increment_(nullptr),
           body_(body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& local_scope = Scope::anonymous(scope, this);
+        Scope& local_scope = Scope::make(scope, this);
         if (initializer_) {
             initializer_->collect_symbols(local_scope, sema);
         }
@@ -1390,8 +1396,9 @@ public:
     ASTExpression* return_type_;
     std::span<ASTNode*> body_;
     bool is_const_;
-    bool declared_static_;
-    bool is_no_body_;
+    bool is_static_;
+    bool is_decl_only_;
+    bool is_main_ = false;
 
 public:
     ASTFunctionDefinition(
@@ -1401,8 +1408,8 @@ public:
         ASTExpression* return_type,
         std::span<ASTNode*> body,
         bool is_const,
-        bool declared_static,
-        bool is_no_body
+        bool is_static,
+        bool is_decl_only
     ) noexcept
         : ASTCompileTimeConstruct(loc),
           identifier_(identifier),
@@ -1410,20 +1417,24 @@ public:
           return_type_(return_type),
           body_(body),
           is_const_(is_const),
-          declared_static_(declared_static),
-          is_no_body_(is_no_body) {}
+          is_static_(is_static),
+          is_decl_only_(is_decl_only) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_function(identifier_, this);
-        Scope& local_scope = Scope::anonymous(scope, this);
+        if (scope.self_type_ == nullptr ||
+            (parameters_.size() ? parameters_[0]->identifier_ != "self" : true)) {
+            is_static_ = true;
+        }
+        if (is_static_ && scope.parent_ == nullptr && identifier_ == "main") {
+            is_main_ = true;
+        }
+        Scope& local_scope = Scope::make(scope, this);
         for (auto& param : parameters_) {
             local_scope.add_variable(param->identifier_, param);
         }
         for (auto& stmt : body_) {
             stmt->collect_symbols(local_scope, sema);
         }
-    }
-    bool is_static() const noexcept {
-        return declared_static_ || parameters_.empty() || parameters_[0]->identifier_ != "self";
     }
     FunctionObject get_func_obj(TypeChecker& checker) const noexcept {
         bool any_error = false;
@@ -1468,7 +1479,7 @@ public:
     ) noexcept
         : ASTNode(loc), is_constructor_(is_constructor), parameters_(parameters), body_(body) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& local_scope = Scope::anonymous(scope, this);
+        Scope& local_scope = Scope::make(scope, this);
         for (auto& param : parameters_) {
             local_scope.add_variable(param->identifier_, param);
         }
@@ -1491,7 +1502,9 @@ public:
         return TypeRegistry::get<FunctionType>(params, owner_type);
     }
 
-    void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
+    void transpile(
+        Transpiler& transpiler, Cursor& cursor, std::string_view classname
+    ) const noexcept;
 
 private:
     void do_check_types(TypeChecker& checker) final {
@@ -1563,7 +1576,8 @@ public:
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         auto signature = new ASTClassSignature(this);
         scope.add_alias(identifier_, signature);
-        Scope& class_scope = Scope::named(scope, this, identifier_);
+        Scope& class_scope = Scope::make(scope, this);
+        class_scope.self_type_ = reinterpret_cast<const Type*>(1);
         for (auto& ctor : constructors_) {
             ctor->collect_symbols(class_scope, sema);
         }
@@ -1573,6 +1587,7 @@ public:
         for (auto& func : functions_) {
             func->collect_symbols(class_scope, sema);
         }
+        class_scope.self_type_ = nullptr;
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 
@@ -1604,7 +1619,7 @@ public:
     ) noexcept
         : ASTCompileTimeConstruct(loc), identifier_(identifier), items_(items) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
-        Scope& namespace_scope = Scope::named(scope, this, identifier_);
+        Scope& namespace_scope = Scope::make(scope, this);
         for (auto& item : items_) {
             item->collect_symbols(namespace_scope, sema);
         }
@@ -1661,6 +1676,8 @@ public:
           target_node_(target_node) {}
     void collect_symbols(Scope& scope, MemberAccessHandler& sema) final {
         scope.add_template(identifier_, this);
+        Scope& template_scope = Scope::make(scope, this);
+        target_node_->collect_symbols(template_scope, sema);
     }
     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
 };
@@ -1672,7 +1689,8 @@ class ASTTemplateSpecialization final : public ASTNode {};
 inline Scope& TemplateFamily::specialization_resolution(
     TypeChecker& checker, std::span<Term> arguments
 ) const noexcept {
-    Scope& instantiation_scope = Scope::anonymous(*checker.current_scope(), nullptr);
+    /// TODO: set correct origin as primary/specialization scopes
+    Scope& instantiation_scope = Scope::make_unlinked(*checker.current_scope(), nullptr);
     for (const ASTTemplateSpecialization* specialization : specializations_) {
         // if (specialization->match(checker, arguments)) {
         //     specialization->instantiate(checker, arguments)->merge_into(out_scope);
@@ -1729,20 +1747,20 @@ inline void DependencyGraph::add_edge(
     const ASTNode* origin, const ASTNode* user, ScopeValue provider
 ) noexcept {
     if (auto alias = provider.get<const ASTExpression*>()) {
-        origin_map_[origin].insert({user, alias});
+        origin_map_[origin].insert({alias, user});
     } else if (auto decl = provider.get<const ASTRuntimeSymbolDeclaration*>()) {
-        origin_map_[origin].insert({user, decl});
+        origin_map_[origin].insert({decl, user});
     } else if (auto func = provider.get<GlobalMemory::Vector<FunctionOverloadDecl>*>()) {
         /// TODO:
         // origin_map_[origin].insert({user, func});
     } else if (auto temp = provider.get<TemplateFamily*>()) {
-        origin_map_[origin].insert({user, temp->primary_});
+        origin_map_[origin].insert({temp->primary_, user});
         for (const ASTTemplateSpecialization* specialization : temp->specializations_) {
-            origin_map_[origin].insert({specialization, temp->primary_});
-            origin_map_[origin].insert({user, specialization});
+            origin_map_[origin].insert({temp->primary_, specialization});
+            origin_map_[origin].insert({specialization, user});
         }
     } else if (auto scope = provider.get<const Scope*>()) {
-        origin_map_[origin].insert({user, scope->origin_});
+        origin_map_[origin].insert({scope->origin_, user});
     }
 }
 
@@ -1835,7 +1853,8 @@ inline void ASTClassSignature::do_eval_type(
     InstanceType* incomplete_class = new InstanceType(owner_->identifier_);
     out = incomplete_class;
     TypeChecker::Guard guard(checker, owner_);
-    checker.set_self_type(incomplete_class);
+    assert(checker.current_scope()->self_type_ == nullptr);
+    checker.current_scope()->self_type_ = incomplete_class;
     const Type* base = resolve_base(checker);
     std::span<const Type*> interfaces = resolve_interfaces(checker);
     FunctionOverloadSetValue* constructors = resolve_constructors(checker, out);
@@ -1930,7 +1949,7 @@ inline GlobalMemory::FlatMap<std::string_view, FunctionOverloadSetValue*>
 ASTClassSignature::resolve_methods(TypeChecker& checker) const noexcept {
     GlobalMemory::Vector non_static_functions =
         owner_->functions_ |
-        std::views::filter([](const auto& func_def) { return !func_def->is_static(); }) |
+        std::views::filter([](const auto& func_def) { return !func_def->is_static_; }) |
         GlobalMemory::collect<GlobalMemory::Vector<const ASTFunctionDefinition*>>();
     std::ranges::sort(non_static_functions, [](const auto& a, const auto& b) {
         return a->identifier_ < b->identifier_;

@@ -63,7 +63,7 @@ int main(int argc, char* argv[]) {
 
     bool has_error = Diagnostic::print(sources);
     if (!has_error) {
-        return transpile_all(root, sources, checker);
+        return transpile_all(root, sources, dep_graph);
     } else {
         return EXIT_FAILURE;
     }

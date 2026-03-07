@@ -45,10 +45,8 @@ declaration_statement:
 		OP_SEMICOLON # ConstDecl;
 
 if_statement:
-	KW_IF OP_LPAREN condition_ = expr OP_RPAREN OP_LBRACE (
-		then_ += statement
-	)* OP_RBRACE (
-		KW_ELSE OP_LBRACE (else_ += statement)* OP_RBRACE
+	KW_IF OP_LPAREN condition_ = expr OP_RPAREN if_ = local_block (
+		KW_ELSE else_ = local_block
 	)?;
 
 for_statement:
