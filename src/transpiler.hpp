@@ -19,115 +19,51 @@ enum class Section {
     __len__,
 };
 
-class BufferTree {
-public:
-    struct Node : public GlobalMemory::MonotonicAllocated {
-        GlobalMemory::String content;
-        GlobalMemory::Vector<const Node*> children;
-        const void* scope;
-        Node* parent;
-    };
-
-public:
-    static inline const Node newline{.content = "", .scope = nullptr, .parent = nullptr};
-
-private:
-    Node* root_;
-    GlobalMemory::FlatMap<const void*, Node*> scope_map_;
-
-public:
-    BufferTree() noexcept : root_{new Node{.scope = nullptr, .parent = nullptr}} {}
-
-    Node& root() noexcept { return *root_; }
-    const Node& root() const noexcept { return *root_; }
-
-    void add(const void* scope, Node* node) noexcept {
-        assert(scope != nullptr);
-        scope_map_.insert({scope, node});
-    }
-
-    Node& find(const Scope* scope) noexcept {
-        auto get_path = [](this auto&& self, const Scope* current) -> std::generator<const void*> {
-            if (current->parent_) {
-                for (const void* step : self(current->parent_)) {
-                    co_yield step;
-                }
-            }
-            co_yield current;
-        };
-        Node* current = root_;
-        for (const void* step : get_path(scope)) {
-            auto it = scope_map_.find(step);
-            if (it == scope_map_.end()) {
-                Node* new_node = new Node{.scope = step, .parent = current};
-                scope_map_.insert({step, new_node});
-                current = new_node;
-            } else {
-                current = it->second;
-            }
-        }
-        return *current;
-    }
-};
-
 class Cursor {
 private:
-    using Node = BufferTree::Node;
-
-private:
-    BufferTree& tree_;
-    Node* target_;
+    GlobalMemory::String& target_;
+    GlobalMemory::String buffer_;
+    std::size_t indent_level_ = 0;
+    bool at_line_start_ = true;
 
 public:
-    explicit Cursor(BufferTree& tree) noexcept
-        : tree_(tree), target_(new Node{.scope = nullptr, .parent = &tree.root()}) {}
+    explicit Cursor(GlobalMemory::String& target) noexcept : target_(target) {}
 
-    Cursor(BufferTree& tree, Node& target) noexcept : tree_(tree), target_(&target) {}
-
-    Cursor(const Cursor& other) noexcept
-        : tree_(other.tree_),
-          target_(new Node{.scope = other.target_->scope, .parent = other.target_->parent}) {}
-
-    ~Cursor() noexcept { commit(); }
+    ~Cursor() noexcept { target_ += buffer_; }
 
     Cursor& operator<<(auto&& args) noexcept {
-        std::format_to(
-            std::back_inserter(target_->content), "{}", std::forward<decltype(args)>(args)
-        );
-        return *this;
-    }
-
-    Cursor& commit() noexcept {
-        if (!target_->content.empty()) {
-            target_->parent->children.push_back(target_);
-            target_ = new Node{.scope = nullptr, .parent = target_->parent};
+        if (at_line_start_) {
+            for (std::size_t i = 0; i < indent_level_; ++i) {
+                buffer_ += "    ";
+            }
+            at_line_start_ = false;
         }
+        std::format_to(std::back_inserter(buffer_), "{}", std::forward<decltype(args)>(args));
         return *this;
     }
 
-    Cursor open_child(const void* scope) noexcept {
-        target_->scope = scope;
-        Node* new_child = new Node{.scope = nullptr, .parent = target_};
-        tree_.add(scope, target_);
-        return Cursor(tree_, *new_child);
+    Cursor& flush() noexcept {
+        target_ += buffer_;
+        buffer_.clear();
+        return *this;
     }
 
     Cursor& newline() noexcept {
-        assert(target_->content.empty());
-        target_->parent->children.push_back(&BufferTree::newline);
+        buffer_ += "\n";
+        at_line_start_ = true;
         return *this;
     }
 
-    Cursor& collapse(std::string_view trailing) noexcept {
-        if (target_->children.empty()) {
-            *this << trailing;
-        } else {
-            commit() << trailing;
-        }
+    Cursor& indent() noexcept {
+        ++indent_level_;
         return *this;
     }
 
-    void clear() noexcept { target_->content.clear(); }
+    Cursor& dedent() noexcept {
+        assert(indent_level_ > 0);
+        --indent_level_;
+        return *this;
+    }
 };
 
 class Transpiler {
@@ -145,7 +81,7 @@ public:
 
 private:
     const SourceManager::File& file_;
-    std::array<BufferTree, static_cast<std::size_t>(Section::__len__)> sections_;
+    std::array<GlobalMemory::String, static_cast<std::size_t>(Section::__len__)> sections_;
 
 public:
     State state_;
@@ -155,17 +91,17 @@ public:
     Transpiler(const SourceManager::File& file, const DependencyGraph& dep_graph) noexcept
         : file_(file), dep_graph_(dep_graph) {}
 
-    Cursor root() noexcept { return Cursor(sections_[static_cast<std::size_t>(Section::Main)]); }
-
     Cursor section(Section section) noexcept {
         return Cursor(sections_[static_cast<std::size_t>(section)]);
     }
 
     std::generator<const ASTNode*> iterate(
-        const ASTNode* origin, const std::span<ASTNode*>& fallback
+        const ASTNode* origin,
+        const std::span<ASTNode*>& fallback,
+        GlobalMemory::FlatSet<const ASTNode*> fixed = {}
     ) const noexcept {
         if (dep_graph_.has_origin(origin)) {
-            for (const ASTNode* stmt : dep_graph_.iterate(origin)) {
+            for (const ASTNode* stmt : dep_graph_.iterate(origin, fixed)) {
                 co_yield stmt;
             }
         } else {
@@ -191,28 +127,8 @@ public:
 
 private:
     void output(std::ostream& os, Section section, std::string_view title) const noexcept {
-        const BufferTree& tree = sections_[static_cast<std::size_t>(section)];
-        if (tree.root().children.empty()) {
-            return;
-        }
-        os << "\n\n/* ---------- " << title << " ---------- */\n\n";
-        const char* sep = "";
-        for (const BufferTree::Node* child : tree.root().children) {
-            os << sep;
-            output(os, *child, 0);
-            sep = (child->children.size() == 0 && child->content != no_lint_pragma) ? "\n\n" : "\n";
-        }
-    }
-
-    void output(std::ostream& os, const BufferTree::Node& node, std::size_t indent) const noexcept {
-        for (std::size_t i = 0; i < indent; i++) {
-            os << "    ";
-        }
-        os << node.content;
-        for (const BufferTree::Node* child : node.children) {
-            os << "\n";
-            output(os, *child, indent + 1);
-        }
+        os << "\n// ---------- " << title << " ----------\n\n";
+        os << sections_[static_cast<std::size_t>(section)];
     }
 };
 
@@ -252,9 +168,9 @@ inline int transpile_all(ASTNode* root, SourceManager& sources, const Dependency
     }
 
     Transpiler transpiler(sources[0], dep_graph);
-    Cursor cursor = transpiler.root();
+    Cursor cursor = transpiler.section(Section::Main);
     root->transpile(transpiler, cursor);
-    cursor.commit();
+    cursor.flush();
     transpiler.flush();
     Diagnostic::message(
         GlobalMemory::format_view("Transformed {} modules to './out'", sources.files.size())
@@ -289,18 +205,18 @@ inline void ASTRoot::transpile(Transpiler& transpiler, Cursor& cursor) const noe
     transpiler.section(Section::Includes) << "#include \"pch.hpp\"";
     for (const auto& child : transpiler.iterate(this, statements_)) {
         child->transpile(transpiler, cursor);
-        cursor.commit();
+        cursor.newline();
     }
 }
 
 inline void ASTLocalBlock::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    cursor.commit() << "{";
-    Cursor local_cursor = cursor.open_child(this);
+    cursor << "{";
+    cursor.indent();
     for (const auto& stmt : transpiler.iterate(this, statements_)) {
-        stmt->transpile(transpiler, local_cursor);
-        local_cursor.commit();
+        stmt->transpile(transpiler, cursor);
     }
-    cursor.collapse("}");
+    cursor.dedent() << "}";
+    cursor.newline();
 }
 
 inline void ASTHiddenTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -360,18 +276,17 @@ inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) c
 }
 
 inline void ASTMemberAccess::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    // if (auto self = dynamic_cast<ASTSelfExpr*>(target_); self && !self->is_type_) {
-    //     cursor << "this->" << member_;
-    //     return;
-    // } else if (auto identifier = dynamic_cast<ASTIdentifier*>(target_)) {
-    //     const ScopeValue* symbol = transpiler.checker().lookup(identifier->str_).second;
-    //     cursor << identifier->str_ << (symbol && symbol->get<const Scope*>() ? "::" :
-    //     ".")
-    //            << member_;
-    // } else {
-    //     target_->transpile(transpiler, cursor);
-    //     cursor << "." << member_;
-    // }
+    if (auto self = dynamic_cast<ASTSelfExpr*>(target_); self && !self->is_type_) {
+        cursor << "this->" << member_;
+        return;
+    } else if (auto identifier = dynamic_cast<ASTIdentifier*>(target_)) {
+        const ScopeValue* symbol = transpiler.checker().lookup(identifier->str_).second;
+        cursor << identifier->str_ << (symbol && symbol->get<const Scope*>() ? "::" : ".")
+               << member_;
+    } else {
+        target_->transpile(transpiler, cursor);
+        cursor << "." << member_;
+    }
 }
 
 inline void ASTFieldInitialization::transpile(
@@ -488,10 +403,8 @@ inline void ASTStructType::transpile(Transpiler& transpiler, Cursor& cursor) con
         Cursor def_cursor = cursor;
         def_cursor << "struct " << struct_name << " {";
         for (const auto& field : fields_) {
-            Cursor field_cursor = def_cursor.open_child(field);
-            field->transpile(transpiler, field_cursor);
+            field->transpile(transpiler, def_cursor);
         }
-        def_cursor.collapse("};");
     }
 }
 
@@ -570,11 +483,10 @@ inline void ASTForStatement::transpile(Transpiler& transpiler, Cursor& cursor) c
     cursor << "; ";
     increment_->transpile(transpiler, cursor);
     cursor << ") {";
-    Cursor local_cursor = cursor.open_child(this);
     for (const auto& stmt : body_) {
         /// TODO: refactor to local block
-        stmt->transpile(transpiler, local_cursor);
-        local_cursor.commit();
+        stmt->transpile(transpiler, cursor);
+        cursor.newline();
     }
     cursor << "}";
 }
@@ -646,7 +558,9 @@ inline void ASTFunctionDefinition::transpile(
     }
 
     // if (is_static_ && transpiler.state_.niebloids.insert(identifier_).second) {
-    //     cursor.commit() << "constexpr auto " << identifier_ << " = [](auto&&... args) { return $"
+    //     cursor.newline() << "constexpr auto " << identifier_ << " = [](auto&&... args) {
+    //     return
+    //     $"
     //                     << identifier_ << "(std::forward<decltype(args)>(args)...); };";
     // }
 }
@@ -660,7 +574,7 @@ inline void ASTFunctionDefinition::transpile_definition(Transpiler& transpiler) 
     Cursor def_cursor = transpiler.section(Section::Implementation);
     if (is_main_) {
         def_cursor << no_lint_pragma;
-        def_cursor.commit();
+        def_cursor.newline();
     } else {
         def_cursor << "inline ";
     }
@@ -676,7 +590,6 @@ inline void ASTFunctionDefinition::transpile_definition(Transpiler& transpiler) 
     def_cursor << ") ";
     if (!is_static_) {
         parameters_[0]->transpile_qualifiers(transpiler, def_cursor);
-        def_cursor << " ";
     }
 
     transpile_body(transpiler, def_cursor);
@@ -685,13 +598,14 @@ inline void ASTFunctionDefinition::transpile_definition(Transpiler& transpiler) 
 inline void ASTFunctionDefinition::transpile_body(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
-    cursor << "{";
-    for (const auto& stmt : transpiler.iterate(this, body_)) {
-        Cursor stmt_cursor = cursor.open_child(&body_);
-        stmt->transpile(transpiler, stmt_cursor);
-        stmt_cursor.commit();
+    cursor << " {";
+    cursor.indent().newline();
+    auto fixed = parameters_ | GlobalMemory::collect<GlobalMemory::FlatSet<const ASTNode*>>();
+    for (const auto& stmt : transpiler.iterate(this, body_, fixed)) {
+        stmt->transpile(transpiler, cursor);
     }
-    cursor.collapse("}");
+    cursor.dedent() << "}";
+    cursor.newline();
 }
 
 inline void ASTConstructorDestructorDefinition::transpile(
@@ -738,46 +652,52 @@ inline void ASTConstructorDestructorDefinition::transpile_definition(
 inline void ASTConstructorDestructorDefinition::transpile_body(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
-    cursor << "{";
-    for (const auto& stmt : transpiler.iterate(this, body_)) {
-        Cursor stmt_cursor = cursor.open_child(&body_);
-        stmt->transpile(transpiler, stmt_cursor);
+    cursor << " {";
+    cursor.indent().newline();
+    auto fixed = parameters_ | GlobalMemory::collect<GlobalMemory::FlatSet<const ASTNode*>>();
+    for (const auto& stmt : transpiler.iterate(this, body_, fixed)) {
+        stmt->transpile(transpiler, cursor);
     }
-    cursor.collapse("}");
+    cursor.dedent() << "}";
+    cursor.newline();
 }
 
 inline void ASTClassDefinition::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
     cursor << "struct " << identifier_ << " {";
+    cursor.indent().newline();
 
     for (const auto& field_decl : fields_) {
-        Cursor local_cursor = cursor.open_child(this);
-        field_decl->declared_type_->transpile(transpiler, local_cursor);
-        local_cursor << " " << field_decl->identifier_ << ";";
+        field_decl->declared_type_->transpile(transpiler, cursor);
+        cursor << " " << field_decl->identifier_ << ";";
+        cursor.newline();
     }
     for (const auto& ctor : constructors_) {
-        Cursor local_cursor = cursor.open_child(this);
-        ctor->transpile(transpiler, local_cursor, identifier_);
+        ctor->transpile(transpiler, cursor, identifier_);
+        cursor.newline();
     }
     if (destructor_) {
-        Cursor local_cursor = cursor.open_child(this);
-        destructor_->transpile(transpiler, local_cursor, identifier_);
+        destructor_->transpile(transpiler, cursor, identifier_);
+        cursor.newline();
     }
     for (const auto& func : functions_) {
-        Cursor local_cursor = cursor.open_child(this);
-        func->transpile(transpiler, local_cursor);
+        func->transpile(transpiler, cursor);
+        cursor.newline();
     }
-    cursor.collapse("};");
+    cursor.dedent() << "};";
+    cursor.newline();
 }
 
 inline void ASTNamespaceDefinition::transpile(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
     cursor << "namespace " << identifier_ << " {";
-    Cursor local_cursor = cursor.open_child(this);
+    cursor.indent().newline();
     for (const auto& item : transpiler.iterate(this, items_)) {
-        item->transpile(transpiler, local_cursor);
-        local_cursor.commit();
+        item->transpile(transpiler, cursor);
+        cursor.newline();
     }
+    cursor.dedent() << "}";
+    cursor.newline();
 }
 
 inline void ASTTemplateParameter::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
@@ -804,6 +724,7 @@ inline void ASTTemplateDefinition::transpile(
         sep = ", ";
     }
     cursor << ">";
+    cursor.newline();
     auto constrainted_types = parameters_ | std::views::filter([](const auto& param) {
                                   return !param->is_nttp_ && param->constraint_;
                               });

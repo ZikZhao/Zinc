@@ -204,7 +204,9 @@ public:
     }
     void add_edge(const ASTNode* origin, const ASTNode* user, ScopeValue provider) noexcept;
     bool has_origin(const ASTNode* origin) const noexcept { return origin_map_.contains(origin); }
-    std::generator<const ASTNode*> iterate(const ASTNode* origin) const noexcept {
+    std::generator<const ASTNode*> iterate(
+        const ASTNode* origin, GlobalMemory::FlatSet<const ASTNode*> fixed
+    ) const noexcept {
         assert(origin_map_.contains(origin));
         GlobalMemory::FlatMap<const ASTNode*, std::size_t> provider_count;
         for (const Edge& edge : origin_map_.at(origin)) {
@@ -221,14 +223,17 @@ public:
         while (!ready.empty()) {
             const ASTNode* node = ready.back();
             ready.pop_back();
-            co_yield node;
-            for (const Edge& edge : origin_map_.at(origin)) {
-                if (edge.provider == node) {
-                    std::size_t& count = provider_count[edge.user];
-                    count--;
-                    if (count == 0) {
-                        ready.push_back(edge.user);
-                    }
+            if (!fixed.contains(node)) {
+                co_yield node;
+            }
+            auto range = std::ranges::equal_range(
+                origin_map_.at(origin), node, std::less{}, &Edge::provider
+            );
+            for (const Edge& edge : range) {
+                std::size_t& count = provider_count[edge.user];
+                count--;
+                if (count == 0) {
+                    ready.push_back(edge.user);
                 }
             }
         }

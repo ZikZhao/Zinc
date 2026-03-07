@@ -550,6 +550,25 @@ public:
         return it != keys_.end() && !Comp{}(key, *it);
     }
 
+    // Erase by key - returns number of elements removed (0 or 1)
+    std::size_t erase(const Key& key) {
+        auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
+        if (it == keys_.end() || Comp{}(key, *it)) {
+            return 0;
+        }
+        keys_.erase(it);
+        return 1;
+    }
+
+    // Erase single element by iterator - returns iterator to next element
+    iterator erase(const_iterator pos) { return keys_.erase(pos); }
+
+    // Erase range [first, last) - returns iterator to next element after erased range
+    iterator erase(const_iterator first, const_iterator last) { return keys_.erase(first, last); }
+
+    // Clear all elements
+    void clear() noexcept { keys_.clear(); }
+
     std::strong_ordering operator<=>(const FlatSet<Key, Comp>& other) const noexcept {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
