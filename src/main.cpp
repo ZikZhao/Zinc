@@ -6,7 +6,9 @@
 #include "object.hpp"
 #include "operations.hpp"
 #include "source.hpp"
+#include "symbol_collect.hpp"
 #include "transpiler.hpp"
+#include "type_check.hpp"
 
 class ThreadGuard {
 public:
@@ -30,7 +32,7 @@ std::pair<Scope&, MemberAccessHandler> get_root(
         ASTRoot* root = builder();
         static Scope scope;
         MemberAccessHandler sema;
-        root->collect_symbols(scope, sema);
+        SymbolCollectVisitor(scope, sema)(root);
         return std::pair{&scope, sema};
     }();
     return {Scope::root(*std_scope, root), std_sema};
@@ -55,11 +57,12 @@ int main(int argc, char* argv[]) {
     }
 
     auto [scope, sema] = get_root(sources, importer, root);
-    root->collect_symbols(scope, sema);
+    SymbolCollectVisitor(scope, sema)(root);
 
     DependencyGraph dep_graph;
     TypeChecker checker(scope, dep_graph, sema);
-    root->check_types(checker);
+    TypeCheckVisitor type_checker(checker);
+    type_checker(root);
 
     bool has_error = Diagnostic::print(sources);
     if (!has_error) {

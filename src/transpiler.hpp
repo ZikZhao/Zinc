@@ -276,17 +276,17 @@ inline void ASTBinaryOp<Op>::transpile(Transpiler& transpiler, Cursor& cursor) c
 }
 
 inline void ASTMemberAccess::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    if (auto self = dynamic_cast<ASTSelfExpr*>(target_); self && !self->is_type_) {
-        cursor << "this->" << member_;
-        return;
-    } else if (auto identifier = dynamic_cast<ASTIdentifier*>(target_)) {
-        const ScopeValue* symbol = transpiler.checker().lookup(identifier->str_).second;
-        cursor << identifier->str_ << (symbol && symbol->get<const Scope*>() ? "::" : ".")
-               << member_;
-    } else {
-        target_->transpile(transpiler, cursor);
-        cursor << "." << member_;
-    }
+    // if (auto self = dynamic_cast<ASTSelfExpr*>(target_); self && !self->is_type_) {
+    //     cursor << "this->" << member_;
+    //     return;
+    // } else if (auto identifier = dynamic_cast<ASTIdentifier*>(target_)) {
+    //     const ScopeValue* symbol = transpiler.checker().lookup(identifier->str_).second;
+    //     cursor << identifier->str_ << (symbol && symbol->get<const Scope*>() ? "::" : ".")
+    //            << member_;
+    // } else {
+    //     target_->transpile(transpiler, cursor);
+    //     cursor << "." << member_;
+    // }
 }
 
 inline void ASTFieldInitialization::transpile(
