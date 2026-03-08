@@ -67,11 +67,9 @@ public:
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
 
-    void add_template_argument(std::string_view identifier, Term type) {
-        auto [_, inserted] = identifiers_.insert({identifier, new Term(type)});
-        if (!inserted) {
-            throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
-        }
+    void add_template_argument(std::string_view identifier, Term term) {
+        auto [_, inserted] = identifiers_.insert({identifier, new Term(term)});
+        assert(inserted);
     }
 
     void add_alias(std::string_view identifier, const ASTExprVariant* expr) {
@@ -174,7 +172,7 @@ public:
         Scope& local_scope = Scope::make(current_scope_, node);
         SymbolCollector local_visitor(local_scope, sema_);
         for (auto& stmt : node->statements_) {
-            (*this)(stmt);
+            local_visitor(stmt);
         }
     }
 
@@ -234,7 +232,7 @@ public:
         }
         SymbolCollector local_visitor(local_scope, sema_);
         for (auto& stmt : node->body_) {
-            (*this)(stmt);
+            local_visitor(stmt);
         }
     }
 
@@ -247,7 +245,7 @@ public:
         }
         SymbolCollector local_visitor(local_scope, sema_);
         for (auto& stmt : node->body_) {
-            (*this)(stmt);
+            local_visitor(stmt);
         }
     }
 
@@ -258,13 +256,13 @@ public:
         class_scope.self_type_ = reinterpret_cast<const Type*>(1);
         SymbolCollector class_visitor(class_scope, sema_);
         for (auto& ctor : node->constructors_) {
-            (*this)(&ctor);
+            class_visitor(ctor);
         }
         if (node->destructor_) {
-            (*this)(node->destructor_);
+            class_visitor(node->destructor_);
         }
         for (auto& func : node->functions_) {
-            (*this)(&func);
+            class_visitor(func);
         }
         class_scope.self_type_ = nullptr;
     }
@@ -274,7 +272,7 @@ public:
         Scope& namespace_scope = Scope::make(current_scope_, node);
         SymbolCollector namespace_visitor(namespace_scope, sema_);
         for (auto& item : node->items_) {
-            (*this)(item);
+            namespace_visitor(item);
         }
         current_scope_.add_namespace(node->identifier_, namespace_scope);
     }
@@ -282,8 +280,5 @@ public:
     // Templates
     void operator()(const ASTTemplateDefinition* node) noexcept {
         current_scope_.add_template(node->identifier_, *node);
-        Scope& template_scope = Scope::make(current_scope_, node);
-        SymbolCollector template_visitor(template_scope, sema_);
-        (*this)(node->target_node_);
     }
 };

@@ -22,7 +22,7 @@ protected:
     Problem() = delete;
     Problem(Severity severity, Location location, std::string_view message)
         : severity_(severity), location_(location), message_(message) {}
-    std::generator<Problem> sub_problems() const noexcept { co_return; }
+    auto sub_problems() const noexcept -> std::generator<Problem> { co_return; }
 };
 
 class NameError : public Problem {

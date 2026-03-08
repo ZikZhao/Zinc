@@ -38,10 +38,10 @@
 #define UNREACHABLE() std::unreachable()
 #else
 #define UNREACHABLE()     \
-    do {                  \
+    {                     \
         assert(false);    \
         std::terminate(); \
-    } while (0)
+    }
 #endif
 
 #pragma clang diagnostic ignored "-Wmissing-braces"

@@ -74,40 +74,12 @@ public:
 
     Term lookup_term(std::string_view identifier);
 
-    TypeResolution lookup_type_instatiation(
-        std::string_view identifier, std::span<Term> arguments
-    ) {
-        // auto [scope, value] = lookup(identifier);
-        // if (!value) {
-        //     throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
-        // }
-        // if (auto family = value->get<TemplateFamily*>()) {
-        //     Guard guard(*this, scope);
-        //     Term result = family->instantiate(*this, arguments);
-        //     if (!result.is_type()) {
-        //         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
-        //     }
-        //     return result.get_type();
-        // } else {
-        //     /// TODO: better error reporting
-        //     throw;
-        // }
-    }
+    Term lookup_instantiation(std::string_view identifier, std::span<Term> args);
 
-    Term lookup_term_instatiation(std::string_view identifier, std::span<Term> arguments) {
-        // auto [scope, value] = lookup(identifier);
-        // if (!value) {
-        //     throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
-        // }
-        // if (auto family = value->get<TemplateFamily*>()) {
-        //     Guard guard(*this, scope);
-        //     Term result = family->instantiate(*this, arguments);
-        //     return result;
-        // } else {
-        //     /// TODO: better error reporting
-        //     throw;
-        // }
-    }
+private:
+    bool validate_instantiation(const ASTTemplateDefinition& primary, std::span<Term> args);
+
+    Scope& specialization_resolution(const TemplateFamily& family, std::span<Term> args);
 };
 
 class TypeContextEvaluator {
@@ -169,12 +141,12 @@ public:
 
     template <typename ASTUnaryOpType>
         requires requires {
-            typename ASTUnaryOpType::Op;
+            ASTUnaryOpType::opcode;
             std::declval<ASTUnaryOpType>().expr_;
         }
     void operator()(const ASTUnaryOpType* node) {
         TypeResolution expr_result;
-        node->expr_->eval_type(checker_, expr_result);
+        TypeContextEvaluator{checker_, expr_result, false}(node->expr_);
         try {
             out_ = TypeResolution(checker_.sema_.eval_type_op(ASTUnaryOpType::opcode, expr_result));
         } catch (UnlocatedProblem& e) {
@@ -185,15 +157,15 @@ public:
 
     template <typename ASTBinaryOpType>
         requires requires {
-            typename ASTBinaryOpType::Op;
+            ASTBinaryOpType::opcode;
             std::declval<ASTBinaryOpType>().left_;
             std::declval<ASTBinaryOpType>().right_;
         }
     void operator()(const ASTBinaryOpType* node) {
         TypeResolution left_result;
-        node->left_->eval_type(checker_, left_result);
+        TypeContextEvaluator{checker_, left_result}(node->left_);
         TypeResolution right_result;
-        node->right_->eval_type(checker_, right_result);
+        TypeContextEvaluator{checker_, right_result}(node->right_);
         try {
             out_ = checker_.sema_.eval_type_op(ASTBinaryOpType::opcode, left_result, right_result);
         } catch (UnlocatedProblem& e) {
@@ -288,6 +260,10 @@ public:
         TypeRegistry::get_at<PointerType>(out_, expr_type);
     }
 
+    void operator()(const ASTTemplateInstantiation* node) {
+        /// TODO:
+    }
+
     void operator()(const auto* node) {
         /// TODO:
     }
@@ -365,18 +341,18 @@ public:
 
     template <typename ASTUnaryOpType>
         requires requires {
-            typename ASTUnaryOpType::Op;
+            ASTUnaryOpType::opcode;
             std::declval<ASTUnaryOpType>().expr_;
         }
     TermWithReceiver operator()(const ASTUnaryOpType* node) {
         Term expr_term =
             ValueContextEvaluator{checker_, expected_, require_comptime_}(node->expr_).subject;
-        return {checker_.sema_.eval_value_op(ASTUnaryOpType::Op::opcode, expr_term), {}};
+        return {checker_.sema_.eval_value_op(ASTUnaryOpType::opcode, expr_term), {}};
     }
 
     template <typename ASTBinaryOpType>
         requires requires {
-            typename ASTBinaryOpType::Op;
+            ASTBinaryOpType::opcode;
             std::declval<ASTBinaryOpType>().left_;
             std::declval<ASTBinaryOpType>().right_;
         }
@@ -387,16 +363,23 @@ public:
             ValueContextEvaluator{checker_, expected_, require_comptime_}(node->right_).subject;
         try {
             return {
-                checker_.sema_.eval_value_op(ASTBinaryOpType::Op::opcode, left_term, right_term), {}
+                checker_.sema_.eval_value_op(ASTBinaryOpType::opcode, left_term, right_term), {}
             };
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location_);
-            return {Term::unknown(), {}};
+            return {.subject = Term::unknown(), .receiver = {}};
         }
     }
 
     TermWithReceiver operator()(const ASTMemberAccess* node) {
-        /// TODO:
+        if (auto identifier = std::get_if<ASTIdentifier*>(&node->target_)) {
+            return eval_namesapce_access(node, (*identifier)->str_);
+        } else {
+            Term subject_term =
+                ValueContextEvaluator{checker_, expected_, require_comptime_}(node->target_)
+                    .subject;
+            return eval_instance_access(node, subject_term, node->members_);
+        }
     }
 
     TermWithReceiver operator()(const ASTStructInitialization* node) {
@@ -445,9 +428,68 @@ public:
         }
     }
 
-    TermWithReceiver operator()(const auto* node) {}
+    TermWithReceiver operator()(const ASTTemplateInstantiation* node) {
+        GlobalMemory::Vector<Term> args_terms =
+            node->arguments_ | std::views::transform([&](ASTExprVariant arg) {
+                return ValueContextEvaluator{checker_, nullptr, require_comptime_}(arg).subject;
+            }) |
+            GlobalMemory::collect<GlobalMemory::Vector<Term>>();
+        return {checker_.lookup_instantiation(node->template_name_, args_terms), {}};
+    }
+
+    TermWithReceiver operator()(const auto* node) { UNREACHABLE(); }
 
 private:
+    TermWithReceiver eval_namesapce_access(const ASTMemberAccess* node, std::string_view subject) {
+        auto [_, subject_value] = checker_.lookup(subject);
+        auto scope_ptr = subject_value->get<const Scope*>();
+        if (!scope_ptr) {
+            return eval_instance_access(node, checker_.lookup_term(subject), node->members_);
+        }
+        std::span<std::string_view> members = node->members_;
+        while (!members.empty()) {
+            std::string_view member = members.front();
+            auto next = (*scope_ptr)[member];
+            if (!next) {
+                throw UnlocatedProblem::make<UndeclaredIdentifierError>(member);
+                return {Term::unknown(), {}};
+            }
+            if (auto next_scope = next->get<const Scope*>()) {
+                scope_ptr = next_scope;
+                members = members.subspan(1);
+            } else if (auto next_term = next->get<Term*>()) {
+                if (members.size()) {
+                    return eval_instance_access(node, *next_term, members);
+                } else {
+                    return {*next_term, {}};
+                }
+            } else {
+                UNREACHABLE();
+            }
+        }
+        /// TODO: evaluates to namespace is invalid
+        throw;
+    }
+
+    TermWithReceiver eval_instance_access(
+        const ASTMemberAccess* node, Term current_term, std::span<std::string_view> members
+    ) {
+        Term subject;
+        if (current_term.is_unknown()) {
+            return {Term::unknown(), {}};
+        }
+        for (std::string_view member : members) {
+            try {
+                subject = current_term;
+                current_term = checker_.sema_.eval_access(current_term, member);
+            } catch (UnlocatedProblem& e) {
+                e.report_at(node->location_);
+                return {Term::unknown(), {}};
+            }
+        }
+        return {current_term, subject};
+    }
+
     Value* eval_struct_initialization(const ASTStructInitialization* node) {
         GlobalMemory::Vector<std::pair<std::string_view, Value*>> inits =
             node->field_inits_ | std::views::transform([&](const ASTFieldInitialization& init) {
@@ -600,9 +642,6 @@ inline TypeResolution TypeChecker::lookup_type(std::string_view identifier) {
             throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
         }
         return term->get_type();
-    } else if (!value->get<const ASTExprVariant*>()) {
-        /// TODO: template instantiation
-        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
     }
     // Check cache
     auto [it_id_cache, inserted] = type_cache_.insert({{scope, identifier}, TypeResolution()});
@@ -610,9 +649,14 @@ inline TypeResolution TypeChecker::lookup_type(std::string_view identifier) {
         return it_id_cache->second;
     }
     // Cache miss; resolve
-    auto type_alias = value->get<const ASTExprVariant*>();
     Guard guard(*this, scope);
-    TypeContextEvaluator{*this, it_id_cache->second}(*type_alias);
+    if (auto type_alias = value->get<const ASTExprVariant*>()) {
+        TypeContextEvaluator{*this, it_id_cache->second}(*type_alias);
+    } else if (auto class_def = value->get<const ASTClassDefinition*>()) {
+        TypeContextEvaluator{*this, it_id_cache->second}(class_def);
+    } else {
+        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
+    }
     // Ignore incomplete types in cache to prevent type interning bypassed
     if (TypeRegistry::is_type_incomplete(it_id_cache->second)) {
         const Type* incomplete_type = it_id_cache->second;
@@ -638,6 +682,11 @@ inline Term TypeChecker::lookup_term(std::string_view identifier) {
         TypeResolution out;
         TypeContextEvaluator{*this, out}(*alias);
         return Term::type(out);
+    } else if (auto class_def = value->get<const ASTClassDefinition*>()) {
+        return Term::type(lookup_type(class_def->identifier_));
+    } else if (auto var_init = value->get<const VariableInitialization*>()) {
+        ASTExprVariant var_init_expr = *reinterpret_cast<const ASTExprVariant*>(var_init);
+        return ValueContextEvaluator{*this, nullptr, false}(var_init_expr).subject;
     } else if (auto func = value->get<GlobalMemory::Vector<FunctionOverloadDecl>*>()) {
         // Guard guard(*this, scope);
         // GlobalMemory::Vector<FunctionObject> func_vec =
@@ -655,4 +704,72 @@ inline Term TypeChecker::lookup_term(std::string_view identifier) {
         /// TODO: throw
         assert(false);
     }
+}
+
+inline Term TypeChecker::lookup_instantiation(std::string_view name, std::span<Term> args) {
+    auto [scope, value] = lookup(name);
+    if (!scope) {
+        throw UnlocatedProblem::make<UndeclaredIdentifierError>(name);
+    }
+    if (auto temp = value->get<TemplateFamily*>()) {
+        Guard guard(*this, scope);
+        if (validate_instantiation(temp->primary_, args)) {
+            Scope& instantiation_scope = specialization_resolution(*temp, args);
+            SymbolCollector{instantiation_scope, sema_}(temp->primary_.target_node_);
+            Guard inner_guard(*this, &instantiation_scope);
+            TypeCheckVisitor{*this}(temp->primary_.target_node_);
+            return lookup_term(temp->primary_.identifier_);
+        }
+    } else {
+        throw;
+    }
+}
+
+inline bool TypeChecker::validate_instantiation(
+    const ASTTemplateDefinition& primary, std::span<Term> args
+) {
+    if (primary.parameters_.size() != args.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < args.size(); i++) {
+        const auto& param = primary.parameters_[i];
+        if (args[i].is_type() == param.is_nttp_) {
+            return false;
+        }
+        if (args[i].is_type()) {
+            /// TODO: type constraint validation
+        } else {
+            if (!std::holds_alternative<std::monostate>(param.constraint_)) {
+                Term constraint_term =
+                    ValueContextEvaluator{*this, nullptr, false}(param.constraint_).subject;
+                if (constraint_term.is_type()) {
+                    if (!constraint_term.get_type()->assignable_from(args[i].get_type())) {
+                        return false;
+                    }
+                } else {
+                    if (auto satisfies = constraint_term.get_comptime()->dyn_cast<BooleanValue>()) {
+                        if (!satisfies) return false;
+                    } else {
+                        /// invalid constriant
+                        throw;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+inline Scope& TypeChecker::specialization_resolution(
+    const TemplateFamily& family, std::span<Term> args
+) {
+    for (const auto& specialization : family.specializations_) {
+        /// TODO:
+    }
+    Scope& inst_scope = Scope::make_unlinked(*current_scope_, nullptr);
+    Guard guard(*this, &inst_scope);
+    for (size_t i = 0; i < args.size(); i++) {
+        inst_scope.add_template_argument(family.primary_.parameters_[i].identifier_, args[i]);
+    }
+    return inst_scope;
 }

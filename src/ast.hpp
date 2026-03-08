@@ -17,51 +17,51 @@ struct ASTParenExpr;
 struct ASTConstant;
 struct ASTSelfExpr;
 struct ASTIdentifier;
-template <typename Op>
+template <OperatorCode op>
 struct ASTUnaryOp;
-template <typename Op>
+template <OperatorCode op>
 struct ASTBinaryOp;
 
-using ASTAddOp = ASTBinaryOp<OperatorFunctors::Add>;
-using ASTSubtractOp = ASTBinaryOp<OperatorFunctors::Subtract>;
-using ASTNegateOp = ASTUnaryOp<OperatorFunctors::Negate>;
-using ASTMultiplyOp = ASTBinaryOp<OperatorFunctors::Multiply>;
-using ASTDivideOp = ASTBinaryOp<OperatorFunctors::Divide>;
-using ASTRemainderOp = ASTBinaryOp<OperatorFunctors::Remainder>;
-using ASTIncrementOp = ASTUnaryOp<OperatorFunctors::Increment>;
-using ASTDecrementOp = ASTUnaryOp<OperatorFunctors::Decrement>;
+using ASTAddOp = ASTBinaryOp<OperatorCode::Add>;
+using ASTSubtractOp = ASTBinaryOp<OperatorCode::Subtract>;
+using ASTNegateOp = ASTUnaryOp<OperatorCode::Negate>;
+using ASTMultiplyOp = ASTBinaryOp<OperatorCode::Multiply>;
+using ASTDivideOp = ASTBinaryOp<OperatorCode::Divide>;
+using ASTRemainderOp = ASTBinaryOp<OperatorCode::Remainder>;
+using ASTIncrementOp = ASTUnaryOp<OperatorCode::Increment>;
+using ASTDecrementOp = ASTUnaryOp<OperatorCode::Decrement>;
 
-using ASTEqualOp = ASTBinaryOp<OperatorFunctors::Equal>;
-using ASTNotEqualOp = ASTBinaryOp<OperatorFunctors::NotEqual>;
-using ASTLessThanOp = ASTBinaryOp<OperatorFunctors::LessThan>;
-using ASTLessEqualOp = ASTBinaryOp<OperatorFunctors::LessEqual>;
-using ASTGreaterThanOp = ASTBinaryOp<OperatorFunctors::GreaterThan>;
-using ASTGreaterEqualOp = ASTBinaryOp<OperatorFunctors::GreaterEqual>;
+using ASTEqualOp = ASTBinaryOp<OperatorCode::Equal>;
+using ASTNotEqualOp = ASTBinaryOp<OperatorCode::NotEqual>;
+using ASTLessThanOp = ASTBinaryOp<OperatorCode::LessThan>;
+using ASTLessEqualOp = ASTBinaryOp<OperatorCode::LessEqual>;
+using ASTGreaterThanOp = ASTBinaryOp<OperatorCode::GreaterThan>;
+using ASTGreaterEqualOp = ASTBinaryOp<OperatorCode::GreaterEqual>;
 
-using ASTLogicalAndOp = ASTBinaryOp<OperatorFunctors::LogicalAnd>;
-using ASTLogicalOrOp = ASTBinaryOp<OperatorFunctors::LogicalOr>;
-using ASTLogicalNotOp = ASTUnaryOp<OperatorFunctors::LogicalNot>;
+using ASTLogicalAndOp = ASTBinaryOp<OperatorCode::LogicalAnd>;
+using ASTLogicalOrOp = ASTBinaryOp<OperatorCode::LogicalOr>;
+using ASTLogicalNotOp = ASTUnaryOp<OperatorCode::LogicalNot>;
 
-using ASTBitwiseAndOp = ASTBinaryOp<OperatorFunctors::BitwiseAnd>;
-using ASTBitwiseOrOp = ASTBinaryOp<OperatorFunctors::BitwiseOr>;
-using ASTBitwiseXorOp = ASTBinaryOp<OperatorFunctors::BitwiseXor>;
-using ASTBitwiseNotOp = ASTUnaryOp<OperatorFunctors::BitwiseNot>;
-using ASTLeftShiftOp = ASTBinaryOp<OperatorFunctors::LeftShift>;
-using ASTRightShiftOp = ASTBinaryOp<OperatorFunctors::RightShift>;
+using ASTBitwiseAndOp = ASTBinaryOp<OperatorCode::BitwiseAnd>;
+using ASTBitwiseOrOp = ASTBinaryOp<OperatorCode::BitwiseOr>;
+using ASTBitwiseXorOp = ASTBinaryOp<OperatorCode::BitwiseXor>;
+using ASTBitwiseNotOp = ASTUnaryOp<OperatorCode::BitwiseNot>;
+using ASTLeftShiftOp = ASTBinaryOp<OperatorCode::LeftShift>;
+using ASTRightShiftOp = ASTBinaryOp<OperatorCode::RightShift>;
 
-using ASTAssignOp = ASTBinaryOp<OperatorFunctors::Assign>;
-using ASTAddAssignOp = ASTBinaryOp<OperatorFunctors::AddAssign>;
-using ASTSubtractAssignOp = ASTBinaryOp<OperatorFunctors::SubtractAssign>;
-using ASTMultiplyAssignOp = ASTBinaryOp<OperatorFunctors::MultiplyAssign>;
-using ASTDivideAssignOp = ASTBinaryOp<OperatorFunctors::DivideAssign>;
-using ASTRemainderAssignOp = ASTBinaryOp<OperatorFunctors::RemainderAssign>;
-using ASTLogicalAndAssignOp = ASTBinaryOp<OperatorFunctors::LogicalAndAssign>;
-using ASTLogicalOrAssignOp = ASTBinaryOp<OperatorFunctors::LogicalOrAssign>;
-using ASTBitwiseAndAssignOp = ASTBinaryOp<OperatorFunctors::BitwiseAndAssign>;
-using ASTBitwiseOrAssignOp = ASTBinaryOp<OperatorFunctors::BitwiseOrAssign>;
-using ASTBitwiseXorAssignOp = ASTBinaryOp<OperatorFunctors::BitwiseXorAssign>;
-using ASTLeftShiftAssignOp = ASTBinaryOp<OperatorFunctors::LeftShiftAssign>;
-using ASTRightShiftAssignOp = ASTBinaryOp<OperatorFunctors::RightShiftAssign>;
+using ASTAssignOp = ASTBinaryOp<OperatorCode::Assign>;
+using ASTAddAssignOp = ASTBinaryOp<OperatorCode::AddAssign>;
+using ASTSubtractAssignOp = ASTBinaryOp<OperatorCode::SubtractAssign>;
+using ASTMultiplyAssignOp = ASTBinaryOp<OperatorCode::MultiplyAssign>;
+using ASTDivideAssignOp = ASTBinaryOp<OperatorCode::DivideAssign>;
+using ASTRemainderAssignOp = ASTBinaryOp<OperatorCode::RemainderAssign>;
+using ASTLogicalAndAssignOp = ASTBinaryOp<OperatorCode::LogicalAndAssign>;
+using ASTLogicalOrAssignOp = ASTBinaryOp<OperatorCode::LogicalOrAssign>;
+using ASTBitwiseAndAssignOp = ASTBinaryOp<OperatorCode::BitwiseAndAssign>;
+using ASTBitwiseOrAssignOp = ASTBinaryOp<OperatorCode::BitwiseOrAssign>;
+using ASTBitwiseXorAssignOp = ASTBinaryOp<OperatorCode::BitwiseXorAssign>;
+using ASTLeftShiftAssignOp = ASTBinaryOp<OperatorCode::LeftShiftAssign>;
+using ASTRightShiftAssignOp = ASTBinaryOp<OperatorCode::RightShiftAssign>;
 
 struct ASTMemberAccess;
 struct ASTFieldInitialization;
@@ -295,13 +295,15 @@ struct ASTIdentifier final : public ASTExpression {
     std::string_view str_;
 };
 
-template <typename Op>
+template <OperatorCode op>
 struct ASTUnaryOp final : public ASTExpression {
+    static constexpr OperatorCode opcode = op;
     ASTExprVariant expr_;
 };
 
-template <typename Op>
+template <OperatorCode op>
 struct ASTBinaryOp final : public ASTExpression {
+    static constexpr OperatorCode opcode = op;
     ASTExprVariant left_;
     ASTExprVariant right_;
 };

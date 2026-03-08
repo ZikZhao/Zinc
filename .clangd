@@ -9,3 +9,8 @@ CompileFlags:
 
 Index:
   Background: Build
+
+Diagnostics:
+  ClangTidy:
+    Add: [bugprone-*, modernize-*, performance-*, cppcoreguidelines-*]
+    FastCheckFilter: None

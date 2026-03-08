@@ -33,7 +33,7 @@ protected:
     StdSetType s_set;
 
 protected:
-    Key key(int seed) {
+    auto key(int seed) -> Key {
         if constexpr (std::is_same_v<Key, int>) {
             return seed;
         } else if constexpr (std::is_same_v<Key, std::string>) {
@@ -638,10 +638,10 @@ class ComparableUniquePtr : public std::unique_ptr<T> {
 public:
     using std::unique_ptr<T>::unique_ptr;
     using std::unique_ptr<T>::operator=;
-    std::strong_ordering operator<=>(const ComparableUniquePtr& other) const {
+    auto operator<=>(const ComparableUniquePtr& other) const -> std::strong_ordering {
         return *this->get() <=> *other.get();
     }
-    bool operator==(const ComparableUniquePtr& other) const { return *this->get() == *other.get(); }
+    auto operator==(const ComparableUniquePtr& other) const -> bool { return *this->get() == *other.get(); }
 };
 
 using SetTestTypes = ::testing::Types<

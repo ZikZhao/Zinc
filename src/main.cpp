@@ -23,9 +23,9 @@ public:
     }
 };
 
-std::pair<Scope&, MemberAccessHandler> get_root(
+auto get_root(
     SourceManager& sources, ImportManager<ASTRoot>& importer, const ASTRoot* root
-) {
+) -> std::pair<Scope&, MemberAccessHandler> {
     static auto [std_scope, std_sema] = [&]() {
         ASTBuilder builder(*sources.load_std(), importer);
         ASTRoot* root = builder();
@@ -37,7 +37,7 @@ std::pair<Scope&, MemberAccessHandler> get_root(
     return {Scope::root(*std_scope, root), std_sema};
 }
 
-int main(int argc, char* argv[]) {
+auto main(int argc, char* argv[]) -> int {
     if (argc != 2) {
         std::cerr << "Usage: " << argv[0] << " <input.zn>" << std::endl;
         return EXIT_FAILURE;
