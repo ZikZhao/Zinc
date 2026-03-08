@@ -531,8 +531,10 @@ public:
 
     void operator()(const ASTForStatement* node) noexcept {
         TypeChecker::Guard guard(checker_, node);
-        if (!std::holds_alternative<std::monostate>(node->initializer_)) {
-            (*this)(node->initializer_);
+        if (node->initializer_decl_) {
+            ValueContextEvaluator{checker_, nullptr, false}(node->initializer_decl_);
+        } else if (!std::holds_alternative<std::monostate>(node->initializer_expr_)) {
+            ValueContextEvaluator{checker_, nullptr, false}(node->initializer_expr_);
         }
         if (!std::holds_alternative<std::monostate>(node->condition_)) {
             ValueContextEvaluator{checker_, &BooleanType::instance, false}(node->condition_);

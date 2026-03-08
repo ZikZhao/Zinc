@@ -207,11 +207,13 @@ public:
     void operator()(const ASTForStatement* node) noexcept {
         Scope& local_scope = Scope::make(current_scope_, node);
         SymbolCollector local_visitor(local_scope, sema_);
-        if (!std::holds_alternative<std::monostate>(node->initializer_)) {
-            (*this)(node->initializer_);
+        if (node->initializer_decl_) {
+            local_visitor(node->initializer_decl_);
+        } else if (!std::holds_alternative<std::monostate>(node->initializer_expr_)) {
+            local_visitor(node->initializer_expr_);
         }
         /// TODO: refactor to local scope
-        (*this)(&node->body_);
+        local_visitor(&node->body_);
     }
 
     // Functions

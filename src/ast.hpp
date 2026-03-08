@@ -606,7 +606,8 @@ struct ASTIfStatement final : public ASTNode {
 };
 
 struct ASTForStatement final : public ASTNode {
-    ASTNodeVariant initializer_;  // Declaration or expression
+    ASTDeclaration* initializer_decl_;
+    ASTExprVariant initializer_expr_;
     ASTExprVariant condition_;
     ASTExprVariant increment_;
     ASTLocalBlock* body_;
