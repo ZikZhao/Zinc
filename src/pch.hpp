@@ -44,6 +44,8 @@
     } while (0)
 #endif
 
+#pragma clang diagnostic ignored "-Wmissing-braces"
+
 // IWYU pragma: end_exports
 
 using namespace std::literals::string_view_literals;
@@ -200,6 +202,11 @@ public:
         }
     };
 
+    struct MonotonicAllocated {
+        static void* operator new(std::size_t size) { return GlobalMemory::alloc_raw(size); }
+        static void operator delete(void* ptr, std::size_t size) {}
+    };
+
     template <typename T>
     using Vector = std::vector<T, Allocator<T>>;
 
@@ -238,13 +245,7 @@ public:
     template <typename T>
     static constexpr std::span<T> alloc_array(std::size_t n) {
         void* ptr = monotonic()->allocate(n * sizeof(T), alignof(T));
-        if constexpr (std::is_trivially_default_constructible_v<T>) {
-            return std::span<T>(static_cast<T*>(ptr), n);
-        } else {
-            T* typed_ptr = static_cast<T*>(ptr);
-            std::uninitialized_default_construct(typed_ptr, typed_ptr + n);
-            return std::span<T>(typed_ptr, n);
-        }
+        return std::span<T>(static_cast<T*>(ptr), n);
     }
 
     template <typename T, typename... Args>
@@ -326,12 +327,6 @@ public:
         result[input.size() * 2 + 2] = '\0';
         return std::string_view(result.data(), input.size() * 2 + 3);
     }
-
-public:
-    struct MonotonicAllocated {
-        static void* operator new(std::size_t size) { return GlobalMemory::alloc_raw(size); }
-        static void operator delete(void* ptr, std::size_t size) {}
-    };
 
 public:
     GlobalMemory() = delete;

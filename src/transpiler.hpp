@@ -408,17 +408,17 @@ inline void ASTStructType::transpile(Transpiler& transpiler, Cursor& cursor) con
     }
 }
 
-inline void ASTMutableTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    expr_->transpile(transpiler, cursor);
+inline void ASTMutableType::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    inner_->transpile(transpiler, cursor);
 }
 
-inline void ASTReferenceTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    expr_->transpile(transpiler, cursor);
+inline void ASTReferenceType::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    inner_->transpile(transpiler, cursor);
     cursor << "&";
 }
 
-inline void ASTPointerTypeExpr::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
-    expr_->transpile(transpiler, cursor);
+inline void ASTPointerType::transpile(Transpiler& transpiler, Cursor& cursor) const noexcept {
+    inner_->transpile(transpiler, cursor);
     cursor << "*";
 }
 
@@ -516,7 +516,7 @@ inline void ASTFunctionParameter::transpile(Transpiler& transpiler, Cursor& curs
 inline void ASTFunctionParameter::transpile_qualifiers(
     Transpiler& transpiler, Cursor& cursor
 ) const noexcept {
-    auto ref_node = static_cast<ASTReferenceTypeExpr*>(type_);
+    auto ref_node = static_cast<ASTReferenceType*>(type_);
     /// TODO: handle value category
 }
 

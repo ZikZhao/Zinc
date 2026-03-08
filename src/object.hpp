@@ -368,6 +368,11 @@ public:
     Value* get_comptime() const noexcept { return is_comptime() ? value_ : nullptr; }
 };
 
+struct TermWithReceiver {
+    Term subject;
+    Term receiver;
+};
+
 class Object : public GlobalMemory::MonotonicAllocated {
 public:
     Kind kind_;

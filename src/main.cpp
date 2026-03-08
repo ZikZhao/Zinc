@@ -7,7 +7,6 @@
 #include "operations.hpp"
 #include "source.hpp"
 #include "symbol_collect.hpp"
-#include "transpiler.hpp"
 #include "type_check.hpp"
 
 class ThreadGuard {
@@ -32,7 +31,7 @@ std::pair<Scope&, MemberAccessHandler> get_root(
         ASTRoot* root = builder();
         static Scope scope;
         MemberAccessHandler sema;
-        SymbolCollectVisitor(scope, sema)(root);
+        SymbolCollector{scope, sema}(root);
         return std::pair{&scope, sema};
     }();
     return {Scope::root(*std_scope, root), std_sema};
@@ -57,17 +56,16 @@ int main(int argc, char* argv[]) {
     }
 
     auto [scope, sema] = get_root(sources, importer, root);
-    SymbolCollectVisitor(scope, sema)(root);
+    SymbolCollector symbol_collector(scope, sema);
+    symbol_collector(root);
 
-    DependencyGraph dep_graph;
-    TypeChecker checker(scope, dep_graph, sema);
-    TypeCheckVisitor type_checker(checker);
-    type_checker(root);
+    TypeChecker checker(scope, sema);
+    TypeCheckVisitor{checker}(root);
 
-    bool has_error = Diagnostic::print(sources);
-    if (!has_error) {
-        return transpile_all(root, sources, dep_graph);
-    } else {
-        return EXIT_FAILURE;
-    }
+    // bool has_error = Diagnostic::print(sources);
+    // if (!has_error) {
+    //     return transpile_all(root, sources, dep_graph);
+    // } else {
+    //     return EXIT_FAILURE;
+    // }
 }

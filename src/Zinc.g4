@@ -54,9 +54,7 @@ for_statement:
 		init_decl_ = declaration_statement
 		| init_expr_ = expr_statement
 		| OP_SEMICOLON
-	) condition_ = expr? OP_SEMICOLON update_ = expr? OP_RPAREN OP_LBRACE (
-		body_ += statement
-	)* OP_RBRACE;
+	) condition_ = expr? OP_SEMICOLON update_ = expr? OP_RPAREN body_ = local_block;
 
 break_statement: KW_BREAK OP_SEMICOLON;
 
