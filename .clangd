@@ -13,4 +13,11 @@ Index:
 Diagnostics:
   ClangTidy:
     Add: [bugprone-*, modernize-*, performance-*, cppcoreguidelines-*]
+    Remove: [
+      bugprone-easily-swappable-parameters,
+      cppcoreguidelines-pro-type-union-access,
+      cppcoreguidelines-avoid-const-or-ref-data-members,
+      cppcoreguidelines-owning-memory,
+      cppcoreguidelines-avoid-magic-numbers,
+    ]
     FastCheckFilter: None

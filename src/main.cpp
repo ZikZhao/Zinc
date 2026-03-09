@@ -15,6 +15,10 @@ public:
         TypeRegistry::instance.emplace();
         Diagnostic::instance.emplace();
     }
+    ThreadGuard(const ThreadGuard&) = delete;
+    ThreadGuard(ThreadGuard&&) = delete;
+    auto operator=(const ThreadGuard&) -> ThreadGuard& = delete;
+    auto operator=(ThreadGuard&&) -> ThreadGuard& = delete;
     ~ThreadGuard() {
         GlobalMemory::monotonic()->release();
         GlobalMemory::pool()->release();
@@ -23,15 +27,14 @@ public:
     }
 };
 
-auto get_root(
-    SourceManager& sources, ImportManager<ASTRoot>& importer, const ASTRoot* root
-) -> std::pair<Scope&, MemberAccessHandler> {
+auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer, const ASTRoot* root)
+    -> std::pair<Scope&, MemberAccessHandler> {
     static auto [std_scope, std_sema] = [&]() {
         ASTBuilder builder(*sources.load_std(), importer);
-        ASTRoot* root = builder();
+        ASTRoot* std_root = builder();
         static Scope scope;
         MemberAccessHandler sema;
-        SymbolCollector{scope, sema}(root);
+        SymbolCollector{scope, sema}(std_root);
         return std::pair{&scope, sema};
     }();
     return {Scope::root(*std_scope, root), std_sema};
@@ -39,7 +42,7 @@ auto get_root(
 
 auto main(int argc, char* argv[]) -> int {
     if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <input.zn>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <input.zn>\n";
         return EXIT_FAILURE;
     }
 

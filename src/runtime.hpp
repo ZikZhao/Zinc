@@ -144,7 +144,7 @@ public:
         }
     }
     ~$PolyFunctionImpl() { destory(); }
-    constexpr bool is_sbo() const noexcept {
+    constexpr auto is_sbo() const noexcept -> bool {
         return static_cast<const void*>(interface_) == static_cast<const void*>(sbo_buffer_);
     }
     constexpr void destory() noexcept {

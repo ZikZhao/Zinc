@@ -23,7 +23,7 @@ public:
     std::vector<File> files;
 
 public:
-    File* load(std::string_view input_path) noexcept {
+    auto load(std::string_view input_path) noexcept -> File* {
         GlobalMemory::String path =
             std::filesystem::canonical(input_path)
                 .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
@@ -47,7 +47,7 @@ public:
         return &files.back();
     }
 
-    File* load_std() noexcept {
+    auto load_std() noexcept -> File* {
         static File std_file = [&]() {
             GlobalMemory::String content(std_d_zn_str());
             std::vector<std::size_t> line_offsets = compute_line_offsets(content);
@@ -61,13 +61,13 @@ public:
         return &std_file;
     }
 
-    const File& operator[](std::size_t id) const noexcept {
+    auto operator[](std::size_t id) const noexcept -> const File& {
         assert(id < file_id_map_.size());
         return files[id];
     }
 
 private:
-    std::vector<std::size_t> compute_line_offsets(std::string_view content) noexcept {
+    auto compute_line_offsets(std::string_view content) noexcept -> std::vector<std::size_t> {
         std::vector<std::size_t> offsets;
         offsets.push_back(0);
         for (std::size_t i = 0; i < content.size(); ++i) {
@@ -92,7 +92,7 @@ private:
 public:
     ImportManager(SourceManager& sources) noexcept : sources_(sources) {}
 
-    std::shared_future<ResultType> import(std::string_view path, CallbackType callback) {
+    auto import(std::string_view path, CallbackType callback) -> std::shared_future<ResultType> {
         std::lock_guard lock(mutex_);
         if (auto it = map_.find(path); it != map_.end()) {
             return it->second;

@@ -3,7 +3,7 @@
 
 #include "diagnosis.hpp"
 
-enum class Kind : std::uint16_t {
+enum class Kind : std::uint8_t {
     Unknown,
     Any,
     Nullptr,
@@ -24,14 +24,13 @@ enum class Kind : std::uint16_t {
     Template,
 };
 
-enum class ValueCategory {
+enum class ValueCategory : std::uint8_t {
     Right,
     Left,
     Expiring,
 };
 
 class Scope;
-class Cursor;
 
 class Object;
 
@@ -90,7 +89,7 @@ private:
 
 public:
     /// Checks if the child type is complete. If not, adds a dependency edge and returns false.
-    bool check_dependency(const Type* parent, const Type*& child) noexcept {
+    auto check_dependency(const Type* parent, const Type*& child) noexcept -> bool {
         if (!is_type_complete(child)) {
             edges_.push_back({parent, child, &child});
             return false;
@@ -98,7 +97,7 @@ public:
         return true;
     }
 
-    GlobalMemory::Vector<Edge> extract_cycles(const Type* target) noexcept {
+    auto extract_cycles(const Type* target) noexcept -> GlobalMemory::Vector<Edge> {
         std::span<Edge> span = edges_;
         GlobalMemory::FlatSet<const Type*> visited{target};
         auto span_pivot = [&](this auto&& self,
@@ -135,12 +134,12 @@ public:
         edges_.push_back({parent, child, nullptr});
     }
 
-    bool is_parent(const Type* parent) const noexcept {
+    auto is_parent(const Type* parent) const noexcept -> bool {
         return std::ranges::any_of(edges_, [&](const Edge& edge) { return edge.parent == parent; });
     }
 
 private:
-    bool is_type_complete(const Type* type) const noexcept {
+    auto is_type_complete(const Type* type) const noexcept -> bool {
         for (const Edge& edge : edges_) {
             if (edge.parent == type) {
                 return false;
@@ -163,49 +162,45 @@ private:
 public:
     TypeResolution() noexcept : ptr_(0) {};
 
-    TypeResolution(const Type* type) noexcept : ptr_(reinterpret_cast<std::uintptr_t>(type)) {}
+    TypeResolution(const Type* type) noexcept : ptr_(std::bit_cast<std::uintptr_t>(type)) {}
 
     template <TypeClass T>
     TypeResolution(std::type_identity<T> identity) noexcept
-        : ptr_(reinterpret_cast<std::uintptr_t>(GlobalMemory::alloc_raw(identity)) | flag) {}
+        : ptr_(std::bit_cast<std::uintptr_t>(GlobalMemory::alloc_raw(identity)) | flag) {}
 
     template <TypeClass T>
     TypeResolution& operator=(std::type_identity<T> identity) noexcept {
-        ptr_ = reinterpret_cast<std::uintptr_t>(GlobalMemory::alloc_raw(identity)) | flag;
+        ptr_ = std::bit_cast<std::uintptr_t>(GlobalMemory::alloc_raw(identity)) | flag;
         return *this;
     }
 
     template <std::derived_from<Type> T>
     operator const T*() const noexcept {
-        return static_cast<const T*>(reinterpret_cast<const Type*>(ptr_ & ~flag));
+        return static_cast<const T*>(std::bit_cast<const Type*>(ptr_ & ~flag));
     }
 
-    const Type* get() const noexcept { return reinterpret_cast<const Type*>(ptr_ & ~flag); }
+    auto get() const noexcept -> const Type* { return std::bit_cast<const Type*>(ptr_ & ~flag); }
 
-    const Type* operator->() const noexcept { return get(); }
+    auto operator->() const noexcept -> const Type* { return get(); }
 
-    bool is_sized() const noexcept { return (ptr_ & flag) == 0; }
+    auto is_sized() const noexcept -> bool { return (ptr_ & flag) == 0; }
 
 private:
     template <TypeClass T>
         requires(!std::is_same_v<T, InstanceType>)
-    T* construct(auto&&... args) noexcept {
+    auto construct(auto&&... args) noexcept -> T* {
         assert(ptr_ && !is_sized());
-        std::construct_at(
-            reinterpret_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...
-        );
+        std::construct_at(std::bit_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...);
         ptr_ &= ~flag;
-        return reinterpret_cast<T*>(ptr_);
+        return std::bit_cast<T*>(ptr_);
     }
 
     template <std::same_as<InstanceType> T>
-    T* reconstruct(auto&&... args) noexcept {
+    auto reconstruct(auto&&... args) noexcept -> T* {
         assert(ptr_ && is_sized());
-        std::destroy_at(reinterpret_cast<T*>(ptr_ & ~flag));
-        std::construct_at(
-            reinterpret_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...
-        );
-        return reinterpret_cast<T*>(ptr_);
+        std::destroy_at(std::bit_cast<T*>(ptr_ & ~flag));
+        std::construct_at(std::bit_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...);
+        return std::bit_cast<T*>(ptr_);
     }
 };
 
@@ -262,19 +257,19 @@ public:
         requires(
             !TypeInTupleV<T, std::tuple<AnyType, NullptrType, IntegerType, FloatType, BooleanType>>
         )
-    static const T* get(auto&&... args) noexcept {
+    static auto get(auto&&... args) noexcept -> const T* {
         TypeResolution out = std::type_identity<T>();
         get_at<T>(out, std::forward<decltype(args)>(args)...);
         return static_cast<const T*>(out);
     }
 
-    static const Type* get_unknown() noexcept;
+    static auto get_unknown() noexcept -> const Type*;
 
     static void add_ref_dependency(const Type* parent, const Type* child) noexcept {
         instance->graph_.add_ref_dependency(parent, child);
     }
 
-    static bool is_type_incomplete(const Type* type) noexcept {
+    static auto is_type_incomplete(const Type* type) noexcept -> bool {
         return instance->graph_.is_parent(type);
     }
 
@@ -307,11 +302,11 @@ private:
         }
     }
 
-    std::pair<const Type*, bool> dispatch_pool(const Type* type) noexcept;
+    auto dispatch_pool(const Type* type) noexcept -> std::pair<const Type*, bool>;
 
-    const Type* simplify_recursive_type(
+    auto simplify_recursive_type(
         GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges, const Type* type
-    ) noexcept;
+    ) noexcept -> const Type*;
 
 public:
     TypeRegistry() noexcept = default;
@@ -319,19 +314,23 @@ public:
 
 class Term : public GlobalMemory::MonotonicAllocated {
 public:
-    enum class Category {
+    enum class Category : std::uint8_t {
         Type,      // a type -> const Type*
         Comptime,  // a compile-time value -> Value*
         Runtime,   // a runtime value -> const Type*
     };
 
 public:
-    static Term unknown() noexcept;
-    static Term prvalue(auto* ptr) noexcept { return Term(ptr, ValueCategory::Right); }
-    static Term lvalue(auto* ptr) noexcept { return Term(ptr, ValueCategory::Left); }
-    static Term xvalue(auto* ptr) noexcept { return Term(ptr, ValueCategory::Expiring); }
-    static Term type(const Type* type) noexcept { return Term(type); }
-    static Term forward_like(const Term& source, auto* ptr) noexcept {
+    static auto unknown() noexcept -> Term;
+    static auto prvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Right); }
+    static auto lvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Left); }
+    static auto lvalue(Term term) noexcept -> Term {
+        assert(!term.is_type());
+        return Term(term.ptr_, term.category_, ValueCategory::Left);
+    }
+    static auto xvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Expiring); }
+    static auto type(const Type* type) noexcept -> Term { return Term(type); }
+    static auto forward_like(const Term& source, auto* ptr) noexcept -> Term {
         assert(!source.is_type());
         return Term(ptr, source.value_category());
     }
@@ -347,25 +346,28 @@ private:
 
 private:
     explicit Term(const Object* obj) noexcept;
-    explicit Term(const Type* type) noexcept : type_(type), category_(Category::Type) {}
+    explicit Term(const Type* type) noexcept
+        : type_(type), category_(Category::Type), value_category_(ValueCategory::Right) {}
     Term(const Type* type, ValueCategory value_category) noexcept
         : type_(type), category_(Category::Runtime), value_category_(value_category) {}
     Term(Value* value, ValueCategory value_category) noexcept
         : value_(value), category_(Category::Comptime), value_category_(value_category) {}
+    Term(const Object* obj, Category category, ValueCategory value_category) noexcept
+        : ptr_(obj), category_(category), value_category_(value_category) {}
 
 public:
     Term() noexcept = default;
 
     operator bool() const noexcept { return ptr_ != nullptr; }
-    const Object* operator->() const noexcept { return ptr_; }
-    const Type* effective_type() const noexcept;
-    ValueCategory value_category() const noexcept { return value_category_; }
+    auto operator->() const noexcept -> const Object* { return ptr_; }
+    auto effective_type() const noexcept -> const Type*;
+    auto value_category() const noexcept -> ValueCategory { return value_category_; }
 
-    bool is_unknown() const noexcept;
-    bool is_type() const noexcept { return category_ == Category::Type; }
-    bool is_comptime() const noexcept { return category_ == Category::Comptime; }
-    const Type* get_type() const noexcept { return is_type() ? type_ : nullptr; }
-    Value* get_comptime() const noexcept { return is_comptime() ? value_ : nullptr; }
+    auto is_unknown() const noexcept -> bool;
+    auto is_type() const noexcept -> bool { return category_ == Category::Type; }
+    auto is_comptime() const noexcept -> bool { return category_ == Category::Comptime; }
+    auto get_type() const noexcept -> const Type* { return is_type() ? type_ : nullptr; }
+    auto get_comptime() const noexcept -> Value* { return is_comptime() ? value_ : nullptr; }
 };
 
 struct TermWithReceiver {
@@ -382,6 +384,7 @@ private:
 
 public:
     Object(Kind kind, bool is_type) noexcept : kind_(kind), is_type_(is_type) {}
+    virtual ~Object() = default;
 
     auto dyn_type(this auto& self)
         requires std::same_as<std::remove_cvref_t<decltype(self)>, Object>
@@ -439,8 +442,6 @@ public:
         }
         return static_cast<ResultType>(&self);
     }
-
-    virtual ~Object() = default;
 
     virtual std::string_view repr() const = 0;
 };
@@ -883,7 +884,7 @@ public:
         assert(false);
     }
 
-    const Type* get_attr(std::string_view name) const {
+    auto get_attr(std::string_view name) const -> const Type* {
         auto it = attrs_.find(name);
         if (it == attrs_.end()) {
             throw UnlocatedProblem::make<AttributeError>(
@@ -1041,8 +1042,8 @@ private:
         }
         return buffer;
     }
-    static std::span<const Type*> flatten(const Type* left, const Type* right) {
-        const Type* types[] = {left, right};
+    static auto flatten(const Type* left, const Type* right) -> std::span<const Type*> {
+        std::array types = {left, right};
         return flatten(std::span<const Type*>(types));
     }
 
@@ -1138,7 +1139,7 @@ private:
         return buffer;
     }
     static std::span<const Type*> flatten(const Type* left, const Type* right) {
-        const Type* types[] = {left, right};
+        std::array types = {left, right};
         return flatten(std::span<const Type*>(types));
     }
 
@@ -1208,7 +1209,7 @@ protected:
 class Value : public Object {
 public:
     template <ValueClass V>
-    static Value* from_literal(std::string_view literal) {
+    static auto from_literal(std::string_view literal) -> Value* {
         if constexpr (std::is_same_v<V, NullptrValue>) {
             assert(literal == "nullptr");
             return new V();
@@ -1491,7 +1492,7 @@ public:
     FunctionValue* clone() const noexcept final { UNREACHABLE(); }
     FunctionValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
     void assign_from(Value* source) final { UNREACHABLE(); }
-    Term invoke(std::span<Term> args) const { return callback_(args); }
+    auto invoke(std::span<Term> args) const -> Term { return callback_(args); }
 };
 
 class ArrayValue final : public Value {
@@ -1612,7 +1613,7 @@ public:
         InstanceValue* instance_source = source->cast<InstanceValue>();
         this->attrs_ = instance_source->attrs_;
     }
-    Value* get_attr(std::string_view attr) noexcept { return attrs_.at(attr); }
+    auto get_attr(std::string_view attr) noexcept -> Value* { return attrs_.at(attr); }
 };
 
 class MutableValue final : public Value {

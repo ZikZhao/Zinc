@@ -130,17 +130,22 @@ public:
 
     template <typename T>
         requires(IsCandidate<T>)
-    T get() const noexcept {
+    auto get() const noexcept -> T {
         constexpr std::size_t index = IndexV<T>;
         return ((ptr_ & mask) == index) ? reinterpret_cast<T>(ptr_ & ~mask) : nullptr;
     }
 
-    const void* get() const noexcept { return reinterpret_cast<const void*>(ptr_ & ~mask); }
+    auto get() const noexcept -> const void* { return reinterpret_cast<const void*>(ptr_ & ~mask); }
 };
 
 class GlobalMemory {
 private:
-    static std::pmr::memory_resource* global_heap() noexcept {
+    /// Used by TTP deduction for range collectors only
+    template <typename ElementType>
+    using DynamicSpan = std::span<ElementType, std::dynamic_extent>;
+
+private:
+    static auto global_heap() noexcept -> std::pmr::memory_resource* {
         // static std::pmr::monotonic_buffer_resource resource(std::pmr::new_delete_resource());
         constexpr std::pmr::pool_options pool_opts{
             .largest_required_pool_block = 4 * 1024 * 1024,  // 4 MB
@@ -152,12 +157,12 @@ private:
     }
 
 public:
-    static std::pmr::monotonic_buffer_resource* monotonic() noexcept {
+    static auto monotonic() noexcept -> std::pmr::monotonic_buffer_resource* {
         static thread_local std::pmr::monotonic_buffer_resource resource(128 * 1024, global_heap());
         return &resource;
     }
 
-    static std::pmr::unsynchronized_pool_resource* pool() noexcept {
+    static auto pool() noexcept -> std::pmr::unsynchronized_pool_resource* {
         constexpr std::pmr::pool_options pool_opts{
             .largest_required_pool_block = 4 * 1024,  // 4 KB
         };
@@ -178,7 +183,7 @@ public:
         template <typename U>
         Allocator(const Allocator<U>&) noexcept {}
 
-        T* allocate(std::size_t n) {
+        auto allocate(std::size_t n) -> T* {
             return static_cast<T*>(pool()->allocate(n * sizeof(T), alignof(T)));
         }
 
@@ -197,13 +202,15 @@ public:
         }
 
         template <typename U>
-        bool operator!=(const Allocator<U>&) const noexcept {
+        auto operator!=(const Allocator<U>&) const noexcept -> bool {
             return false;
         }
     };
 
     struct MonotonicAllocated {
-        static void* operator new(std::size_t size) { return GlobalMemory::alloc_raw(size); }
+        static auto operator new(std::size_t size) noexcept -> void* {
+            return GlobalMemory::alloc_raw(size);
+        }
         static void operator delete(void* ptr, std::size_t size) {}
     };
 
@@ -232,7 +239,7 @@ public:
     }
 
     template <typename T>
-    static T* alloc_raw(std::type_identity<T>) {
+    static auto alloc_raw(std::type_identity<T>) -> T* {
         return static_cast<T*>(alloc_raw(sizeof(T), alignof(T)));
     }
 
@@ -259,62 +266,69 @@ public:
     }
 
 private:
-    template <typename T>
+    template <typename Container>
+        requires requires { typename Container::value_type; }
     class RangeCollector {
-        template <std::ranges::input_range R>
-        friend T operator|(R&& range, RangeCollector) {
-            if constexpr (requires { T(std::from_range, std::forward<R>(range)); }) {
-                return T(std::from_range, std::forward<R>(range));
+        template <std::ranges::input_range Range>
+        friend auto operator|(Range&& range, RangeCollector) -> Container {
+            if constexpr (requires { Container(std::from_range, std::forward<Range>(range)); }) {
+                return Container(std::from_range, std::forward<Range>(range));
             } else {
-                auto common = range | std::views::common;
-                return T(common.begin(), common.end());
+                auto common = std::forward<Range>(range) | std::views::common;
+                return Container(common.begin(), common.end());
             }
         }
     };
 
-    template <typename E>
-    class RangeCollector<std::span<E>> {
-        template <std::ranges::input_range R>
-        friend std::span<E> operator|(R&& range, RangeCollector) {
-            static_assert(std::is_same_v<std::ranges::range_value_t<R>, E>);
-            if constexpr (std::ranges::sized_range<R>) {
-                std::span span = alloc_array<E>(std::ranges::size(range));
-                std::ranges::uninitialized_copy(std::forward<R>(range), span);
-                return span;
+    template <template <typename...> typename ContainerTemplate>
+    class DeducingRangeCollector {
+        template <std::ranges::input_range Range>
+        friend auto operator|(Range&& range, DeducingRangeCollector<ContainerTemplate>) {
+            using ElementType = std::ranges::range_value_t<Range>;
+            if constexpr (requires { typename ContainerTemplate<int, int>::mapped_type; }) {
+                static_assert(requires { typename ElementType::first_type; });
+                return std::forward<Range>(range) | RangeCollector<ContainerTemplate<
+                                                        typename ElementType::first_type,
+                                                        typename ElementType::second_type>>{};
             } else {
-                GlobalMemory::Vector<E> temp;
-                for (auto&& item : range) {
-                    temp.push_back(std::forward<decltype(item)>(item));
-                }
-                std::span span = alloc_array<E>(temp.size());
-                std::ranges::uninitialized_move(temp, span);
-                return span;
+                return std::forward<Range>(range) |
+                       RangeCollector<ContainerTemplate<ElementType>>{};
             }
         }
     };
 
 public:
-    template <typename T>
+    template <typename Container>
     static constexpr auto collect() {
-        return RangeCollector<T>{};
+        return RangeCollector<Container>{};
+    }
+
+    template <template <typename> typename ContainerTemplate>
+    static constexpr auto collect() {
+        return DeducingRangeCollector<ContainerTemplate>{};
+    }
+
+    template <template <typename, typename> typename ContainerTemplate>
+    static constexpr auto collect() {
+        return DeducingRangeCollector<ContainerTemplate>{};
     }
 
     template <typename... Args>
-    static GlobalMemory::String format(std::format_string<Args...> fmt, Args&&... args) {
+    static auto format(std::format_string<Args...> fmt, Args&&... args) -> GlobalMemory::String {
         GlobalMemory::String result;
         std::format_to(std::back_inserter(result), fmt, std::forward<Args>(args)...);
         return result;
     }
 
     template <typename... Args>
-    static std::string_view format_view(std::format_string<Args...> fmt, Args&&... args) {
+    static auto format_view(std::format_string<Args...> fmt, Args&&... args) -> std::string_view {
         std::size_t size = std::formatted_size(fmt, std::forward<Args>(args)...);
         std::span<char> result = alloc_array<char>(size);
         std::format_to(result.begin(), fmt, std::forward<Args>(args)...);
         return std::string_view(result.data(), result.size());
     }
 
-    static std::string_view hex_string(std::string_view input) {
+    static auto hex_string(std::string_view input) -> std::string_view {
         constexpr char hex_chars[] = "0123456789ABCDEF";
         std::span<char> result = alloc_array<char>(input.size() * 2 + 3);
         for (std::size_t i = 0; i < input.size(); ++i) {
@@ -330,6 +344,29 @@ public:
 
 public:
     GlobalMemory() = delete;
+};
+
+template <>
+constexpr auto GlobalMemory::collect<std::span>() {
+    return DeducingRangeCollector<DynamicSpan>{};
+}
+
+template <typename ElementType>
+class GlobalMemory::RangeCollector<std::span<ElementType>> {
+    template <std::ranges::input_range Range>
+    friend auto operator|(Range&& range, RangeCollector) -> std::span<ElementType> {
+        if constexpr (std::ranges::sized_range<Range>) {
+            std::span span = alloc_array<ElementType>(std::ranges::size(range));
+            std::ranges::uninitialized_copy(range, span);
+            return span;
+        } else {
+            GlobalMemory::Vector<ElementType> temp;
+            std::ranges::copy(std::forward<Range>(range), std::back_inserter(temp));
+            std::span span = alloc_array<ElementType>(temp.size());
+            std::ranges::uninitialized_move(temp, span);
+            return span;
+        }
+    }
 };
 
 template <typename Key, typename Value, typename Comp>
@@ -384,9 +421,9 @@ public:
         data_ = std::move(unsorted);
     }
 
-    constexpr std::size_t size() const noexcept { return data_.size(); }
+    constexpr auto size() const noexcept -> std::size_t { return data_.size(); }
 
-    std::pair<iterator, bool> insert(std::pair<Key, Value> pair) {
+    auto insert(std::pair<Key, Value> pair) -> std::pair<iterator, bool> {
         auto it = std::lower_bound(data_.begin(), data_.end(), pair.first, CompareFirst{});
         if (it != data_.end() && !Comp{}(pair.first, it->first)) {
             return {it, false};
@@ -395,13 +432,13 @@ public:
     }
 
     template <typename... Args>
-    std::pair<iterator, bool> emplace(Args&&... args) {
+    auto emplace(Args&&... args) -> std::pair<iterator, bool> {
         return insert(std::pair<Key, Value>(std::forward<Args>(args)...));
     }
 
-    iterator erase(iterator pos) { return data_.erase(pos); }
+    auto erase(iterator pos) -> iterator { return data_.erase(pos); }
 
-    size_type erase(const Key& key) {
+    auto erase(const Key& key) -> size_type {
         auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
         if (it != data_.end() && !Comp{}(key, it->first)) {
             data_.erase(it);
@@ -410,7 +447,7 @@ public:
         return 0;
     }
 
-    iterator find(const Key& key) {
+    auto find(const Key& key) -> iterator {
         auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
         if (it == data_.end() || Comp{}(key, it->first)) {
             return this->end();
@@ -418,7 +455,7 @@ public:
         return it;
     }
 
-    const_iterator find(const Key& key) const {
+    auto find(const Key& key) const -> const_iterator {
         auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
         if (it == data_.end() || Comp{}(key, it->first)) {
             return this->end();
@@ -426,12 +463,12 @@ public:
         return it;
     }
 
-    bool contains(const Key& key) const {
+    auto contains(const Key& key) const -> bool {
         auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
         return it != data_.end() && !Comp{}(key, it->first);
     }
 
-    Value& at(const Key& key) {
+    auto at(const Key& key) -> Value& {
         auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
         if (it == data_.end() || Comp{}(key, it->first)) {
             throw std::out_of_range("Key not found in GlobalMemory::FlatMap");
@@ -439,7 +476,7 @@ public:
         return it->second;
     }
 
-    const Value& at(const Key& key) const {
+    auto at(const Key& key) const -> const Value& {
         auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
         if (it == data_.end() || Comp{}(key, it->first)) {
             throw std::out_of_range("Key not found in GlobalMemory::FlatMap");
@@ -447,7 +484,7 @@ public:
         return it->second;
     }
 
-    Value& operator[](const Key& key) {
+    auto operator[](const Key& key) -> Value& {
         auto it = std::lower_bound(data_.begin(), data_.end(), key, CompareFirst{});
         if (it == data_.end() || Comp{}(key, it->first)) {
             it = data_.insert(it, value_type{key, Value{}});
@@ -455,18 +492,19 @@ public:
         return it->second;
     }
 
-    iterator begin() noexcept { return data_.begin(); }
-    iterator end() noexcept { return data_.end(); }
-    const_iterator begin() const noexcept { return data_.begin(); }
-    const_iterator end() const noexcept { return data_.end(); }
+    auto begin() noexcept -> iterator { return data_.begin(); }
+    auto end() noexcept -> iterator { return data_.end(); }
+    auto begin() const noexcept -> const_iterator { return data_.begin(); }
+    auto end() const noexcept -> const_iterator { return data_.end(); }
 
-    std::strong_ordering operator<=>(const FlatMap<Key, Value, Comp>& other) const noexcept {
+    auto operator<=>(const FlatMap<Key, Value, Comp>& other) const noexcept
+        -> std::strong_ordering {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
     }
 
-    bool operator==(const FlatMap<Key, Value, Comp>& other) const noexcept {
+    auto operator==(const FlatMap<Key, Value, Comp>& other) const noexcept -> bool {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
 };
@@ -506,47 +544,47 @@ public:
     }
     FlatSet(std::initializer_list<Key> init) : FlatSet(std::from_range, init) {}
 
-    typename Vector<Key>::iterator begin() noexcept { return keys_.begin(); }
-    typename Vector<Key>::const_iterator begin() const noexcept { return keys_.begin(); }
-    typename Vector<Key>::iterator end() noexcept { return keys_.end(); }
-    typename Vector<Key>::const_iterator end() const noexcept { return keys_.end(); }
+    auto begin() noexcept -> typename Vector<Key>::iterator { return keys_.begin(); }
+    auto begin() const noexcept -> typename Vector<Key>::const_iterator { return keys_.begin(); }
+    auto end() noexcept -> typename Vector<Key>::iterator { return keys_.end(); }
+    auto end() const noexcept -> typename Vector<Key>::const_iterator { return keys_.end(); }
 
-    bool empty() const noexcept { return keys_.empty(); }
-    std::size_t size() const noexcept { return keys_.size(); }
+    auto empty() const noexcept -> bool { return keys_.empty(); }
+    auto size() const noexcept -> std::size_t { return keys_.size(); }
 
-    std::pair<iterator, bool> insert(const Key& key) {
+    auto insert(const Key& key) -> std::pair<iterator, bool> {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it != keys_.end() && !Comp{}(key, *it)) {
             return {it, false};
         }
         return {keys_.emplace(it, key), true};
     }
-    std::pair<iterator, bool> emplace(auto&&... args) {
+    auto emplace(auto&&... args) -> std::pair<iterator, bool> {
         Key key = Key(std::forward<decltype(args)>(args)...);
         return this->insert(std::move(key));
     }
 
-    iterator find(const Key& key) {
+    auto find(const Key& key) -> iterator {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || Comp{}(key, *it)) {
             return end();
         }
         return it;
     }
-    const_iterator find(const Key& key) const {
+    auto find(const Key& key) const -> const_iterator {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || Comp{}(key, *it)) {
             return this->end();
         }
         return it;
     }
-    bool contains(const Key& key) const {
+    auto contains(const Key& key) const -> bool {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         return it != keys_.end() && !Comp{}(key, *it);
     }
 
     // Erase by key - returns number of elements removed (0 or 1)
-    std::size_t erase(const Key& key) {
+    auto erase(const Key& key) -> std::size_t {
         auto it = std::lower_bound(keys_.begin(), keys_.end(), key, Comp{});
         if (it == keys_.end() || Comp{}(key, *it)) {
             return 0;
@@ -556,33 +594,35 @@ public:
     }
 
     // Erase single element by iterator - returns iterator to next element
-    iterator erase(const_iterator pos) { return keys_.erase(pos); }
+    auto erase(const_iterator pos) -> iterator { return keys_.erase(pos); }
 
     // Erase range [first, last) - returns iterator to next element after erased range
-    iterator erase(const_iterator first, const_iterator last) { return keys_.erase(first, last); }
+    auto erase(const_iterator first, const_iterator last) -> iterator {
+        return keys_.erase(first, last);
+    }
 
     // Clear all elements
     void clear() noexcept { keys_.clear(); }
 
-    std::strong_ordering operator<=>(const FlatSet<Key, Comp>& other) const noexcept {
+    auto operator<=>(const FlatSet<Key, Comp>& other) const noexcept -> std::strong_ordering {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
     }
-    bool operator==(const FlatSet<Key, Comp>& other) const noexcept {
+    auto operator==(const FlatSet<Key, Comp>& other) const noexcept -> bool {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
 
-    bool is_superset_of(const FlatSet<Key, Comp>& other) const noexcept {
+    auto is_superset_of(const FlatSet<Key, Comp>& other) const noexcept -> bool {
         return std::includes(this->begin(), this->end(), other.begin(), other.end(), Comp{});
     }
-    bool is_proper_superset_of(const FlatSet<Key, Comp>& other) const noexcept {
+    auto is_proper_superset_of(const FlatSet<Key, Comp>& other) const noexcept -> bool {
         return this->size() > other.size() && is_superset_of(other);
     }
-    bool is_subset_of(const FlatSet<Key, Comp>& other) const noexcept {
+    auto is_subset_of(const FlatSet<Key, Comp>& other) const noexcept -> bool {
         return other.is_superset_of(*this);
     }
-    bool is_proper_subset_of(const FlatSet<Key, Comp>& other) const noexcept {
+    auto is_proper_subset_of(const FlatSet<Key, Comp>& other) const noexcept -> bool {
         return this->size() < other.size() && is_subset_of(other);
     }
 };
@@ -617,10 +657,10 @@ public:
         }
     }
 
-    constexpr std::size_t size() const noexcept { return entries_.size(); }
-    constexpr bool empty() const noexcept { return entries_.empty(); }
+    constexpr auto size() const noexcept -> std::size_t { return entries_.size(); }
+    constexpr auto empty() const noexcept -> bool { return entries_.empty(); }
 
-    iterator insert(std::pair<K, V> pair) {
+    auto insert(std::pair<K, V> pair) -> iterator {
         auto compare = [](const value_type& a, const value_type& b) {
             return C{}(a.first, b.first);
         };
@@ -629,11 +669,11 @@ public:
     }
 
     template <typename... Args>
-    iterator emplace(const K& key, Args&&... args) {
+    auto emplace(const K& key, Args&&... args) -> iterator {
         return insert(std::pair<K, V>(key, V(std::forward<Args>(args)...)));
     }
 
-    iterator find(const K& key) {
+    auto find(const K& key) -> iterator {
         auto compare = [&key](const value_type& entry) { return C{}(entry.first, key); };
         auto it = std::lower_bound(
             entries_.begin(), entries_.end(), key, [](const value_type& entry, const K& k) {
@@ -646,7 +686,7 @@ public:
         return it;
     }
 
-    const_iterator find(const K& key) const {
+    auto find(const K& key) const -> const_iterator {
         auto it = std::lower_bound(
             entries_.begin(), entries_.end(), key, [](const value_type& entry, const K& k) {
                 return C{}(entry.first, k);
@@ -658,7 +698,7 @@ public:
         return it;
     }
 
-    std::pair<iterator, iterator> equal_range(const K& key) {
+    auto equal_range(const K& key) -> std::pair<iterator, iterator> {
         auto lower_compare = [](const value_type& entry, const K& k) {
             return C{}(entry.first, k);
         };
@@ -670,7 +710,7 @@ public:
         return {lower, upper};
     }
 
-    std::pair<const_iterator, const_iterator> equal_range(const K& key) const {
+    auto equal_range(const K& key) const -> std::pair<const_iterator, const_iterator> {
         auto lower_compare = [](const value_type& entry, const K& k) {
             return C{}(entry.first, k);
         };
@@ -682,12 +722,12 @@ public:
         return {lower, upper};
     }
 
-    std::size_t count(const K& key) const {
+    auto count(const K& key) const -> std::size_t {
         auto [lower, upper] = equal_range(key);
         return std::distance(lower, upper);
     }
 
-    bool contains(const K& key) const {
+    auto contains(const K& key) const -> bool {
         auto it = std::lower_bound(
             entries_.begin(), entries_.end(), key, [](const value_type& entry, const K& k) {
                 return C{}(entry.first, k);
@@ -696,9 +736,9 @@ public:
         return it != entries_.end() && !C{}(key, it->first);
     }
 
-    iterator erase(iterator pos) { return entries_.erase(pos); }
+    auto erase(iterator pos) -> iterator { return entries_.erase(pos); }
 
-    std::size_t erase(const K& key) {
+    auto erase(const K& key) -> std::size_t {
         auto [lower, upper] = equal_range(key);
         std::size_t count = std::distance(lower, upper);
         if (count > 0) {
@@ -709,12 +749,12 @@ public:
 
     void clear() noexcept { entries_.clear(); }
 
-    iterator begin() noexcept { return entries_.begin(); }
-    iterator end() noexcept { return entries_.end(); }
-    const_iterator begin() const noexcept { return entries_.begin(); }
-    const_iterator end() const noexcept { return entries_.end(); }
+    auto begin() noexcept -> iterator { return entries_.begin(); }
+    auto end() noexcept -> iterator { return entries_.end(); }
+    auto begin() const noexcept -> const_iterator { return entries_.begin(); }
+    auto end() const noexcept -> const_iterator { return entries_.end(); }
 
-    std::strong_ordering operator<=>(const MultiMap<K, V, C>& other) const noexcept {
+    auto operator<=>(const MultiMap<K, V, C>& other) const noexcept -> std::strong_ordering {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
@@ -750,10 +790,10 @@ private:
         }
     }
 
-    bool is_zero() const noexcept { return digits_.size() == 1 && digits_[0] == 0; }
+    auto is_zero() const noexcept -> bool { return digits_.size() == 1 && digits_[0] == 0; }
 
     // Compare absolute values: -1 if |this| < |other|, 0 if equal, 1 if |this| > |other|
-    int compare_abs(const BigInt& other) const noexcept {
+    auto compare_abs(const BigInt& other) const noexcept -> int {
         if (digits_.size() != other.digits_.size()) {
             return digits_.size() < other.digits_.size() ? -1 : 1;
         }
@@ -766,7 +806,7 @@ private:
     }
 
     // Add absolute values (ignores signs)
-    static BigInt add_abs(const BigInt& a, const BigInt& b) {
+    static auto add_abs(const BigInt& a, const BigInt& b) -> BigInt {
         BigInt result;
         result.digits_.clear();
         const std::size_t max_size = std::max(a.digits_.size(), b.digits_.size());
@@ -785,7 +825,7 @@ private:
     }
 
     // Subtract absolute values: |a| - |b|, assumes |a| >= |b|
-    static BigInt sub_abs(const BigInt& a, const BigInt& b) {
+    static auto sub_abs(const BigInt& a, const BigInt& b) -> BigInt {
         BigInt result;
         result.digits_.clear();
         result.digits_.reserve(a.digits_.size());
@@ -807,7 +847,7 @@ private:
     }
 
     // Multiply by a single digit
-    BigInt mul_digit(std::uint32_t d) const {
+    auto mul_digit(std::uint32_t d) const -> BigInt {
         if (d == 0 || is_zero()) return BigInt(0ul);
         BigInt result;
         result.digits_.clear();
@@ -826,7 +866,7 @@ private:
     }
 
     // Shift left by n digits (multiply by 2^(32*n))
-    BigInt shift_digits_left(std::size_t n) const {
+    auto shift_digits_left(std::size_t n) const -> BigInt {
         if (is_zero()) return *this;
         BigInt result;
         result.digits_.clear();
@@ -842,7 +882,7 @@ private:
     }
 
     // Division helper: divides |this| by |divisor|, returns {quotient, remainder}
-    std::pair<BigInt, BigInt> div_mod_abs(const BigInt& divisor) const {
+    auto div_mod_abs(const BigInt& divisor) const -> std::pair<BigInt, BigInt> {
         if (divisor.is_zero()) {
             throw std::domain_error("Division by zero");
         }
@@ -940,7 +980,7 @@ public:
     }
 
     // Convert to string representation
-    GlobalMemory::String to_string() const {
+    auto to_string() const -> GlobalMemory::String {
         if (is_zero()) return GlobalMemory::String("0");
 
         GlobalMemory::String result;
@@ -959,7 +999,7 @@ public:
     }
 
     // Comparison operators
-    std::strong_ordering operator<=>(const BigInt& other) const noexcept {
+    auto operator<=>(const BigInt& other) const noexcept -> std::strong_ordering {
         if (is_negative_ != other.is_negative_) {
             return is_negative_ ? std::strong_ordering::less : std::strong_ordering::greater;
         }
@@ -970,12 +1010,12 @@ public:
         return std::strong_ordering::equal;
     }
 
-    bool operator==(const BigInt& other) const noexcept {
+    auto operator==(const BigInt& other) const noexcept -> bool {
         return is_negative_ == other.is_negative_ && digits_ == other.digits_;
     }
 
     // Unary operators
-    BigInt operator-() const {
+    auto operator-() const -> BigInt {
         BigInt result = *this;
         if (!result.is_zero()) {
             result.is_negative_ = !result.is_negative_;
@@ -983,16 +1023,16 @@ public:
         return result;
     }
 
-    BigInt operator+() const { return *this; }
+    auto operator+() const -> BigInt { return *this; }
 
-    BigInt abs() const {
+    auto abs() const -> BigInt {
         BigInt result = *this;
         result.is_negative_ = false;
         return result;
     }
 
     // Arithmetic operators
-    BigInt operator+(const BigInt& other) const {
+    auto operator+(const BigInt& other) const -> BigInt {
         if (is_negative_ == other.is_negative_) {
             BigInt result = add_abs(*this, other);
             result.is_negative_ = is_negative_;
@@ -1199,18 +1239,18 @@ public:
     }
 
     // Bitwise NOT (returns -(n+1) for mathematical consistency)
-    BigInt operator~() const { return -(*this) - BigInt(1ul); }
+    auto operator~() const -> BigInt { return -(*this) - BigInt(1ul); }
 
-    BigInt& operator&=(const BigInt& other) { return *this = *this & other; }
-    BigInt& operator|=(const BigInt& other) { return *this = *this | other; }
-    BigInt& operator^=(const BigInt& other) { return *this = *this ^ other; }
+    auto operator&=(const BigInt& other) -> BigInt& { return *this = *this & other; }
+    auto operator|=(const BigInt& other) -> BigInt& { return *this = *this | other; }
+    auto operator^=(const BigInt& other) -> BigInt& { return *this = *this ^ other; }
 
     // Utility functions
-    bool is_negative() const noexcept { return is_negative_; }
-    bool is_positive() const noexcept { return !is_negative_ && !is_zero(); }
+    auto is_negative() const noexcept -> bool { return is_negative_; }
+    auto is_positive() const noexcept -> bool { return !is_negative_ && !is_zero(); }
 
     // Get the number of bits needed to represent this number
-    std::size_t bit_length() const noexcept {
+    auto bit_length() const noexcept -> std::size_t {
         if (is_zero()) return 0;
         std::size_t bits = (digits_.size() - 1) * 32;
         std::uint32_t top = digits_.back();
@@ -1222,7 +1262,7 @@ public:
     }
 
     // Test if a specific bit is set (0-indexed from LSB)
-    bool test_bit(std::size_t pos) const noexcept {
+    auto test_bit(std::size_t pos) const noexcept -> bool {
         std::size_t digit_idx = pos / 32;
         std::size_t bit_idx = pos % 32;
         if (digit_idx >= digits_.size()) return false;
@@ -1230,7 +1270,7 @@ public:
     }
 
     // Set a specific bit
-    BigInt& set_bit(std::size_t pos) {
+    auto set_bit(std::size_t pos) -> BigInt& {
         if (is_negative_) {
             throw std::domain_error("set_bit requires non-negative number");
         }
@@ -1244,7 +1284,7 @@ public:
     }
 
     // Clear a specific bit
-    BigInt& clear_bit(std::size_t pos) {
+    auto clear_bit(std::size_t pos) -> BigInt& {
         if (is_negative_) {
             throw std::domain_error("clear_bit requires non-negative number");
         }
@@ -1258,7 +1298,7 @@ public:
     }
 
     // Power function
-    static BigInt pow(const BigInt& base, std::uint64_t exp) {
+    static auto pow(const BigInt& base, std::uint64_t exp) -> BigInt {
         if (exp == 0) return BigInt(1ul);
         BigInt result(1ul);
         BigInt b = base;
@@ -1271,7 +1311,7 @@ public:
     }
 
     // GCD using binary GCD algorithm
-    static BigInt gcd(BigInt a, BigInt b) {
+    static auto gcd(BigInt a, BigInt b) -> BigInt {
         a.is_negative_ = false;
         b.is_negative_ = false;
 
@@ -1322,7 +1362,7 @@ public:
     // Asserts that sign compatibility is checked by caller (negative BigInt cannot go into
     // unsigned)
     template <std::integral T>
-    bool fits_in(T& out) const noexcept {
+    auto fits_in(T& out) const noexcept -> bool {
         if constexpr (std::is_unsigned_v<T>) {
             constexpr std::size_t target_bits = sizeof(T) * 8;
             if (is_negative_ || (bit_length() > target_bits)) return false;
@@ -1397,7 +1437,7 @@ public:
 
     // Overload that just checks without writing
     template <std::integral T>
-    bool fits_in() const noexcept {
+    auto fits_in() const noexcept -> bool {
         T dummy;
         return fits_in(dummy);
     }

@@ -7,7 +7,7 @@ class Problem {
     friend class Diagnostic;
 
 public:
-    enum class Severity {
+    enum class Severity : std::uint8_t {
         Info,
         Warning,
         Error,
@@ -329,7 +329,7 @@ private:
 public:
     static void report(Problem&& problem) { instance->problems_.push_back(std::move(problem)); }
 
-    static bool print(SourceManager& sources) {
+    static auto print(SourceManager& sources) -> bool {
         std::lock_guard lock(print_mutex_);
         std::size_t error_count = 0;
         std::size_t warning_count = 0;
@@ -380,7 +380,7 @@ private:
         SourceManager& sources, const Problem& problem, std::size_t indent = 0
     ) {
         std::string_view prefix;
-        const char* colour;
+        const char* colour = nullptr;
         switch (problem.severity_) {
         case Problem::Severity::Info:
             prefix = "INFO";
@@ -506,7 +506,7 @@ class UnlocatedProblem : std::runtime_error {
 public:
     template <typename T, typename... Args>
         requires std::is_base_of_v<Problem, T> && std::is_constructible_v<T, Location, Args...>
-    static UnlocatedProblem make(Args&&... args) {
+    static auto make(Args&&... args) -> UnlocatedProblem {
         std::move_only_function<void(Location) &&> callback =
             [... params = std::forward<Args>(args)](Location loc) {
                 Diagnostic::report(T(loc, std::move(params)...));

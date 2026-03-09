@@ -4,7 +4,6 @@
 #include "ZincBaseVisitor.h"
 #include "ZincLexer.h"
 #include "ZincParser.h"
-#include "antlr4-runtime.h"
 #include "ast.hpp"
 #include "builtins.hpp"
 #include "object.hpp"
@@ -15,7 +14,7 @@ public:
     bool has_error = false;
 
 public:
-    virtual void syntaxError(
+    void syntaxError(
         antlr4::Recognizer* recognizer,
         antlr4::Token* offendingSymbol,
         size_t line,
@@ -32,10 +31,11 @@ private:
     template <typename T>
     struct cast {
         template <typename U>
-        friend auto operator|(U&& value, cast) {
+        friend auto operator|(U&& value, cast) -> T {
             if constexpr (requires { std::declval<U>().operator[]; }) {
-                return value | std::views::transform([](auto& elem) { return std::get<T>(elem); }) |
-                       GlobalMemory::collect<std::span<T>>();
+                return std::forward<U>(value) |
+                       std::views::transform([](auto& elem) -> T { return std::get<T>(elem); }) |
+                       GlobalMemory::collect<std::span>();
             } else {
                 return std::get<T>(std::forward<U>(value));
             }
@@ -47,7 +47,7 @@ private:
     ImportManager<ASTRoot>& importer_;
 
 private:
-    Location loc(const antlr4::ParserRuleContext* ctx) noexcept {
+    auto loc(const antlr4::ParserRuleContext* ctx) noexcept -> Location {
         assert(ctx != nullptr);
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
@@ -59,24 +59,24 @@ private:
         return location;
     }
 
-    std::string_view text(const antlr4::ParserRuleContext* ctx) noexcept {
+    auto text(const antlr4::ParserRuleContext* ctx) noexcept -> std::string_view {
         assert(ctx != nullptr);
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
         std::size_t begin_offset = start->getStartIndex();
         std::size_t end_offset = stop->getStopIndex() + 1;
-        return std::string_view(file_.content.data() + begin_offset, end_offset - begin_offset);
+        return {file_.content.data() + begin_offset, end_offset - begin_offset};
     }
 
-    std::string_view text(const antlr4::Token* token) noexcept {
+    auto text(const antlr4::Token* token) noexcept -> std::string_view {
         assert(token != nullptr);
         std::size_t begin_offset = token->getStartIndex();
         std::size_t end_offset = token->getStopIndex() + 1;
-        return std::string_view(file_.content.data() + begin_offset, end_offset - begin_offset);
+        return {file_.content.data() + begin_offset, end_offset - begin_offset};
     }
 
     template <typename R>
-    R visit(auto* ctx) {
+    auto visit(auto* ctx) -> R {
         if constexpr (std::is_default_constructible_v<R>) {
             return ctx ? std::any_cast<R>(ZincBaseVisitor::visit(ctx)) : R{};
         } else {
@@ -85,17 +85,17 @@ private:
         }
     }
 
-    ASTNodeVariant visit(auto* ctx) { return visit<ASTNodeVariant>(ctx); }
+    auto visit(auto* ctx) -> ASTNodeVariant { return visit<ASTNodeVariant>(ctx); }
 
-    ASTExprVariant visit_expr(auto* ctx) { return visit<ASTExprVariant>(ctx); }
+    auto visit_expr(auto* ctx) -> ASTExprVariant { return visit<ASTExprVariant>(ctx); }
 
     template <typename R>
-    std::span<R> visit_list(const auto& contexts) {
+    auto visit_list(const auto& contexts) -> std::span<R> {
         return contexts | std::views::transform([&](auto* ctx) { return visit<R>(ctx); }) |
                GlobalMemory::collect<std::span<R>>();
     }
 
-    std::span<ASTNodeVariant> visit_list(const auto& contexts) {
+    auto visit_list(const auto& contexts) -> std::span<ASTNodeVariant> {
         return visit_list<ASTNodeVariant>(contexts);
     }
 
@@ -107,16 +107,16 @@ private:
         }
     }
 
-    std::shared_future<ASTRoot> import_module(std::string_view path) {
+    auto import_module(std::string_view path) -> std::shared_future<ASTRoot> {
         return importer_.import(path, [this](const SourceManager::File& file) {
-            return std::move(*ASTBuilder(file, importer_)());
+            return *ASTBuilder(file, importer_)();
         });
     }
 
 public:
     ASTBuilder(const SourceManager::File& file, ImportManager<ASTRoot>& importer) noexcept
         : file_(file), importer_(importer) {}
-    ASTRoot* operator()() noexcept {
+    auto operator()() noexcept -> ASTRoot* {
         antlr4::ANTLRInputStream input(file_.content.data(), file_.content.size());
         ZincLexer lexer(&input);
         antlr4::CommonTokenStream tokens(&lexer);
@@ -132,24 +132,24 @@ public:
     }
 
 private:
-    antlrcpp::Any visitProgram(ZincParser::ProgramContext* ctx) noexcept final {
+    auto visitProgram(ZincParser::ProgramContext* ctx) noexcept -> antlrcpp::Any final {
         return as_variant(new ASTRoot{loc(ctx), visit_list(ctx->statements_)});
     }
-    antlrcpp::Any visitTop_level_statement(
-        ZincParser::Top_level_statementContext* ctx
-    ) noexcept final {
+    auto visitTop_level_statement(ZincParser::Top_level_statementContext* ctx) noexcept
+        -> antlrcpp::Any final {
         return visit(ctx->children[0]);
     }
-    antlrcpp::Any visitStatement(ZincParser::StatementContext* ctx) noexcept final {
+    auto visitStatement(ZincParser::StatementContext* ctx) noexcept -> antlrcpp::Any final {
         return visit(ctx->children[0]);
     }
-    antlrcpp::Any visitLocal_block(ZincParser::Local_blockContext* ctx) noexcept final {
+    auto visitLocal_block(ZincParser::Local_blockContext* ctx) noexcept -> antlrcpp::Any final {
         return as_variant(new ASTLocalBlock{loc(ctx), visit_list(ctx->statements_)});
     }
-    antlrcpp::Any visitExpr_statement(ZincParser::Expr_statementContext* ctx) noexcept final {
+    auto visitExpr_statement(ZincParser::Expr_statementContext* ctx) noexcept
+        -> antlrcpp::Any final {
         return as_variant(new ASTExpressionStatement{loc(ctx), visit_expr(ctx->expr())});
     }
-    antlrcpp::Any visitLetDecl(ZincParser::LetDeclContext* ctx) noexcept final {
+    auto visitLetDecl(ZincParser::LetDeclContext* ctx) noexcept -> antlrcpp::Any final {
         return as_variant(new ASTDeclaration{
             loc(ctx),
             text(ctx->identifier_),
@@ -159,7 +159,7 @@ private:
             false
         });
     }
-    antlrcpp::Any visitConstDecl(ZincParser::ConstDeclContext* ctx) noexcept final {
+    auto visitConstDecl(ZincParser::ConstDeclContext* ctx) noexcept -> antlrcpp::Any final {
         return as_variant(new ASTDeclaration{
             loc(ctx),
             text(ctx->identifier_),
@@ -169,7 +169,7 @@ private:
             true
         });
     }
-    antlrcpp::Any visitIf_statement(ZincParser::If_statementContext* ctx) noexcept final {
+    auto visitIf_statement(ZincParser::If_statementContext* ctx) noexcept -> antlrcpp::Any final {
         return as_variant(new ASTIfStatement{
             loc(ctx),
             visit_expr(ctx->condition_),
@@ -177,7 +177,7 @@ private:
             visit(ctx->else_) | cast<ASTLocalBlock*>{},
         });
     }
-    antlrcpp::Any visitFor_statement(ZincParser::For_statementContext* ctx) noexcept final {
+    auto visitFor_statement(ZincParser::For_statementContext* ctx) noexcept -> antlrcpp::Any final {
         return as_variant(new ASTForStatement{
             loc(ctx),
             visit(ctx->init_decl_) | cast<ASTDeclaration*>(),
@@ -187,25 +187,25 @@ private:
             visit(ctx->body_) | cast<ASTLocalBlock*>{},
         });
     }
-    antlrcpp::Any visitBreak_statement(ZincParser::Break_statementContext* ctx) noexcept final {
+    auto visitBreak_statement(ZincParser::Break_statementContext* ctx) noexcept
+        -> antlrcpp::Any final {
         return as_variant(new ASTBreakStatement{loc(ctx)});
     }
-    antlrcpp::Any visitContinue_statement(
-        ZincParser::Continue_statementContext* ctx
-    ) noexcept final {
+    auto visitContinue_statement(ZincParser::Continue_statementContext* ctx) noexcept
+        -> antlrcpp::Any final {
         return as_variant(new ASTContinueStatement{loc(ctx)});
     }
-    antlrcpp::Any visitReturn_statement(ZincParser::Return_statementContext* ctx) noexcept final {
+    auto visitReturn_statement(ZincParser::Return_statementContext* ctx) noexcept
+        -> antlrcpp::Any final {
         return as_variant(new ASTReturnStatement{loc(ctx), visit_expr(ctx->expr_)});
     }
-    antlrcpp::Any visitType_alias(ZincParser::Type_aliasContext* ctx) noexcept final {
+    auto visitType_alias(ZincParser::Type_aliasContext* ctx) noexcept -> antlrcpp::Any final {
         return as_variant(
             new ASTTypeAlias{loc(ctx), text(ctx->identifier_), visit_expr(ctx->type_)}
         );
     }
-    antlrcpp::Any visitFunction_definition(
-        ZincParser::Function_definitionContext* ctx
-    ) noexcept final {
+    auto visitFunction_definition(ZincParser::Function_definitionContext* ctx) noexcept
+        -> antlrcpp::Any final {
         std::span parameters = visit_list<ASTFunctionParameter>(ctx->parameters_);
         std::string_view identifier = text(ctx->identifier_);
         ASTExprVariant return_type = visit_expr(ctx->return_type_);
@@ -230,7 +230,7 @@ private:
         }
         return as_variant(function_def);
     }
-    antlrcpp::Any visitSelfParam(ZincParser::SelfParamContext* ctx) noexcept final {
+    auto visitSelfParam(ZincParser::SelfParamContext* ctx) noexcept -> antlrcpp::Any final {
         return ASTFunctionParameter{loc(ctx), "self", visit_expr(ctx->type_)};
     }
     antlrcpp::Any visitNormalParam(ZincParser::NormalParamContext* ctx) noexcept final {
@@ -266,7 +266,7 @@ private:
             GlobalMemory::collect<std::span<ASTClassDefinition*>>();
         if (destructors.size() > 1) {
             /// TODO: thread safety
-            Diagnostic::report(DuplicateDestructorError(destructors[1]->location_));
+            Diagnostic::report(DuplicateDestructorError(destructors[1]->location));
         }
         auto class_def = new ASTClassDefinition{
             loc(ctx),

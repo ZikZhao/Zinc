@@ -7,18 +7,15 @@
 using FunctionOverloadDecl =
     PointerVariant<const ASTFunctionDefinition*, const ASTTemplateDefinition*>;
 
-class TemplateFamily : public GlobalMemory::MonotonicAllocated {
-public:
-    const ASTTemplateDefinition& primary_;
-    GlobalMemory::Vector<const ASTTemplateSpecialization*> specializations_;
-
-public:
-    TemplateFamily(const ASTTemplateDefinition& primary) noexcept : primary_(primary) {}
+struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
+    const ASTTemplateDefinition& primary;
+    GlobalMemory::Vector<const ASTTemplateSpecialization*> specializations;
 };
 
-/// Dummy type to distinguish variable declarations and comptime declarations from type aliases and
-/// class definitions in ScopeValue. Cast back to ASTExprVariant when needed.
-struct alignas(8) VariableInitialization {};
+struct VariableInitialization : public GlobalMemory::MonotonicAllocated {
+    ASTExprVariant type;
+    ASTExprVariant value;
+};
 
 using ScopeValue = PointerVariant<
     Term*,                                        // type/comptime (from template)
@@ -33,19 +30,19 @@ class Scope final : public GlobalMemory::MonotonicAllocated {
     friend class TypeChecker;
 
 public:
-    static Scope& root(Scope& std_scope, const ASTNode* root) {
+    static auto root(Scope& std_scope, const ASTNode* root) -> Scope& {
         Scope* scope = new Scope(nullptr, root);
         scope->add_namespace("std", std_scope);
         return *scope;
     }
 
-    static Scope& make(Scope& parent, const ASTNode* origin) {
+    static auto make(Scope& parent, const ASTNode* origin) -> Scope& {
         Scope* scope = new Scope(&parent, origin);
         parent.children_.insert({origin, scope});
         return *scope;
     }
 
-    static Scope& make_unlinked(Scope& parent, const ASTNode* origin) {
+    static auto make_unlinked(Scope& parent, const ASTNode* origin) -> Scope& {
         Scope* scope = new Scope(&parent, origin);
         return *scope;
     }
@@ -108,7 +105,8 @@ public:
     }
 
     void add_template(std::string_view identifier, const ASTTemplateDefinition& definition) {
-        auto [_, inserted] = identifiers_.insert({identifier, new TemplateFamily(definition)});
+        auto [_, inserted] =
+            identifiers_.insert({identifier, new TemplateFamily{.primary = definition}});
         if (!inserted) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
@@ -125,7 +123,7 @@ public:
         if (!family) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
-        family->specializations_.push_back(specialization);
+        family->specializations.push_back(specialization);
     }
 
     void add_namespace(std::string_view identifier, Scope& scope) {
@@ -135,7 +133,7 @@ public:
         }
     }
 
-    const ScopeValue* operator[](std::string_view identifier) const noexcept {
+    auto operator[](std::string_view identifier) const noexcept -> const ScopeValue* {
         auto it = identifiers_.find(identifier);
         if (it != identifiers_.end()) {
             return &it->second;
@@ -163,7 +161,7 @@ public:
 
     // Root and blocks
     void operator()(const ASTRoot* node) noexcept {
-        for (auto& child : node->statements_) {
+        for (auto& child : node->statements) {
             (*this)(child);
         }
     }
@@ -171,7 +169,7 @@ public:
     void operator()(const ASTLocalBlock* node) noexcept {
         Scope& local_scope = Scope::make(current_scope_, node);
         SymbolCollector local_visitor(local_scope, sema_);
-        for (auto& stmt : node->statements_) {
+        for (auto& stmt : node->statements) {
             local_visitor(stmt);
         }
     }
@@ -180,88 +178,91 @@ public:
     void operator()(const ASTDeclaration* node) noexcept {
         try {
             current_scope_.add_variable(
-                node->identifier_, reinterpret_cast<const VariableInitialization*>(&node->expr_)
+                node->identifier,
+                new VariableInitialization{.type = node->declared_type, .value = node->expr}
             );
         } catch (UnlocatedProblem& e) {
-            e.report_at(node->location_);
+            e.report_at(node->location);
         }
     }
 
     void operator()(const ASTTypeAlias* node) noexcept {
-        current_scope_.add_alias(node->identifier_, &node->type_);
+        current_scope_.add_alias(node->identifier, &node->type);
     }
 
     // Statements
     void operator()(const ASTIfStatement* node) noexcept {
         Scope& condition_scope = Scope::make(current_scope_, node);
         SymbolCollector condition_visitor(condition_scope, sema_);
-        condition_visitor(node->condition_);
-        condition_visitor(&node->if_block_);
-        if (node->else_block_) {
-            condition_visitor(node->else_block_);
+        condition_visitor(node->condition);
+        condition_visitor(&node->if_block);
+        if (node->else_block) {
+            condition_visitor(node->else_block);
         }
     }
 
     void operator()(const ASTForStatement* node) noexcept {
         Scope& local_scope = Scope::make(current_scope_, node);
         SymbolCollector local_visitor(local_scope, sema_);
-        if (node->initializer_decl_) {
-            local_visitor(node->initializer_decl_);
-        } else if (!std::holds_alternative<std::monostate>(node->initializer_expr_)) {
-            local_visitor(node->initializer_expr_);
+        if (node->initializer_decl) {
+            local_visitor(node->initializer_decl);
+        } else if (!std::holds_alternative<std::monostate>(node->initializer_expr)) {
+            local_visitor(node->initializer_expr);
         }
         /// TODO: refactor to local scope
-        local_visitor(&node->body_);
+        local_visitor(&node->body);
     }
 
     // Functions
-    void operator()(const ASTFunctionDefinition* node) noexcept {
-        current_scope_.add_function(node->identifier_, node);
+    void operator()(ASTFunctionDefinition* node) noexcept {
+        current_scope_.add_function(node->identifier, node);
         if (current_scope_.self_type_ == nullptr ||
-            (node->parameters_.size() ? node->parameters_[0].identifier_ != "self" : true)) {
-            const_cast<ASTFunctionDefinition*>(node)->is_static_ = true;
+            (node->parameters.size() ? node->parameters[0].identifier != "self" : true)) {
+            node->is_static = true;
         }
-        if (node->is_static_ && current_scope_.parent_ == nullptr && node->identifier_ == "main") {
-            const_cast<ASTFunctionDefinition*>(node)->is_main_ = true;
+        if (node->is_static && current_scope_.parent_ == nullptr && node->identifier == "main") {
+            node->is_main = true;
         }
         Scope& local_scope = Scope::make(current_scope_, node);
-        for (auto& param : node->parameters_) {
+        for (auto& param : node->parameters) {
             local_scope.add_variable(
-                param.identifier_, reinterpret_cast<const VariableInitialization*>(&param.type_)
+                param.identifier,
+                new VariableInitialization{.type = param.type, .value = std::monostate{}}
             );
         }
         SymbolCollector local_visitor(local_scope, sema_);
-        for (auto& stmt : node->body_) {
+        for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
     }
 
     void operator()(const ASTConstructorDestructorDefinition* node) noexcept {
         Scope& local_scope = Scope::make(current_scope_, node);
-        for (auto& param : node->parameters_) {
+        for (auto& param : node->parameters) {
             local_scope.add_variable(
-                param.identifier_, reinterpret_cast<const VariableInitialization*>(&param.type_)
+                param.identifier,
+                new VariableInitialization{.type = param.type, .value = std::monostate{}}
             );
         }
         SymbolCollector local_visitor(local_scope, sema_);
-        for (auto& stmt : node->body_) {
+        for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
     }
 
     // Classes
     void operator()(const ASTClassDefinition* node) noexcept {
-        current_scope_.add_class(node->identifier_, node);
+        current_scope_.add_class(node->identifier, node);
         Scope& class_scope = Scope::make(current_scope_, node);
         class_scope.self_type_ = reinterpret_cast<const Type*>(1);
         SymbolCollector class_visitor(class_scope, sema_);
-        for (auto& ctor : node->constructors_) {
+        for (auto& ctor : node->constructors) {
             class_visitor(ctor);
         }
-        if (node->destructor_) {
-            class_visitor(node->destructor_);
+        if (node->destructor) {
+            class_visitor(node->destructor);
         }
-        for (auto& func : node->functions_) {
+        for (auto& func : node->functions) {
             class_visitor(func);
         }
         class_scope.self_type_ = nullptr;
@@ -271,14 +272,14 @@ public:
     void operator()(const ASTNamespaceDefinition* node) noexcept {
         Scope& namespace_scope = Scope::make(current_scope_, node);
         SymbolCollector namespace_visitor(namespace_scope, sema_);
-        for (auto& item : node->items_) {
+        for (auto& item : node->items) {
             namespace_visitor(item);
         }
-        current_scope_.add_namespace(node->identifier_, namespace_scope);
+        current_scope_.add_namespace(node->identifier, namespace_scope);
     }
 
     // Templates
     void operator()(const ASTTemplateDefinition* node) noexcept {
-        current_scope_.add_template(node->identifier_, *node);
+        current_scope_.add_template(node->identifier, *node);
     }
 };

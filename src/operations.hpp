@@ -4,7 +4,7 @@
 #include "diagnosis.hpp"
 #include "object.hpp"
 
-enum class OperatorCode : std::uint16_t {
+enum class OperatorCode : std::uint8_t {
     Add,
     Subtract,
     Negate,
@@ -55,7 +55,7 @@ enum OperatorGroup : std::uint8_t {
     UnaryBitwise,
 };
 
-constexpr OperatorGroup GetOperatorGroup(OperatorCode opcode) {
+constexpr auto GetOperatorGroup(OperatorCode opcode) -> OperatorGroup {
     switch (opcode) {
     case OperatorCode::Add:
     case OperatorCode::Subtract:
@@ -104,7 +104,7 @@ constexpr OperatorGroup GetOperatorGroup(OperatorCode opcode) {
     }
 };
 
-constexpr OperatorCode GetAssignmentEquivalent(OperatorCode opcode) {
+constexpr auto GetAssignmentEquivalent(OperatorCode opcode) -> OperatorCode {
     switch (opcode) {
     case OperatorCode::AddAssign:
         return OperatorCode::Add;
@@ -135,7 +135,7 @@ constexpr OperatorCode GetAssignmentEquivalent(OperatorCode opcode) {
     }
 }
 
-constexpr std::string_view GetOperatorString(OperatorCode opcode) {
+constexpr auto GetOperatorString(OperatorCode opcode) -> std::string_view {
     switch (opcode) {
     case OperatorCode::Add:
         return "+";
@@ -217,7 +217,7 @@ constexpr std::string_view GetOperatorString(OperatorCode opcode) {
 namespace PrimitiveOperations {
 
 template <OperatorGroup G>
-auto apply_op(OperatorCode opcode, auto left, auto right) {
+auto apply_op(OperatorCode opcode, const auto& left, const auto& right) {
     if constexpr (G == OperatorGroup::Arithmetic) {
         switch (opcode) {
         case OperatorCode::Add:
@@ -229,7 +229,7 @@ auto apply_op(OperatorCode opcode, auto left, auto right) {
         case OperatorCode::Divide:
             return left / right;
         case OperatorCode::Remainder:
-            if constexpr (std::is_same_v<decltype(left), BigInt>) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(left)>, BigInt>) {
                 return left % right;
             } else {
                 return std::fmod(left, right);
@@ -280,7 +280,7 @@ auto apply_op(OperatorCode opcode, auto left, auto right) {
 }
 
 template <OperatorGroup G>
-auto apply_op(OperatorCode opcode, auto value) {
+auto apply_op(OperatorCode opcode, const auto& value) {
     if constexpr (G == OperatorGroup::UnaryArithmetic) {
         switch (opcode) {
         case OperatorCode::Negate:
@@ -303,7 +303,7 @@ auto apply_op(OperatorCode opcode, auto value) {
     }
 }
 
-inline Value* integer_op(OperatorCode opcode, Value* left, Value* right) {
+inline auto integer_op(OperatorCode opcode, Value* left, Value* right) -> Value* {
     IntegerValue* left_int = left->cast<IntegerValue>();
     IntegerValue* right_int = right->cast<IntegerValue>();
     bool extended = left_int->type_->bits_ > 32 || right_int->type_->bits_ > 32;
@@ -327,7 +327,7 @@ inline Value* integer_op(OperatorCode opcode, Value* left, Value* right) {
     }
 }
 
-inline Value* integer_op(OperatorCode opcode, Value* left) {
+inline auto integer_op(OperatorCode opcode, Value* left) -> Value* {
     IntegerValue* left_int = left->cast<IntegerValue>();
     bool extended = left_int->type_->bits_ > 32;
     switch (GetOperatorGroup(opcode)) {
@@ -346,7 +346,7 @@ inline Value* integer_op(OperatorCode opcode, Value* left) {
     }
 }
 
-inline Value* float_op(OperatorCode opcode, Value* left, Value* right) {
+inline auto float_op(OperatorCode opcode, Value* left, Value* right) -> Value* {
     FloatValue* left_float = left->cast<FloatValue>();
     FloatValue* right_float = right->cast<FloatValue>();
     switch (GetOperatorGroup(opcode)) {
@@ -364,7 +364,7 @@ inline Value* float_op(OperatorCode opcode, Value* left, Value* right) {
     }
 }
 
-inline Value* float_op(OperatorCode opcode, Value* left) {
+inline auto float_op(OperatorCode opcode, Value* left) -> Value* {
     FloatValue* left_float = left->cast<FloatValue>();
     switch (GetOperatorGroup(opcode)) {
     case OperatorGroup::UnaryArithmetic:
@@ -377,7 +377,7 @@ inline Value* float_op(OperatorCode opcode, Value* left) {
     }
 }
 
-inline BooleanValue* boolean_op(OperatorCode opcode, Value* left, Value* right) {
+inline auto boolean_op(OperatorCode opcode, Value* left, Value* right) -> BooleanValue* {
     /// TODO: support equality comparison between booleans
     BooleanValue* left_bool = left->cast<BooleanValue>();
     BooleanValue* right_bool = right->cast<BooleanValue>();
@@ -391,7 +391,7 @@ inline BooleanValue* boolean_op(OperatorCode opcode, Value* left, Value* right) 
     }
 }
 
-inline BooleanValue* boolean_op(OperatorCode opcode, Value* left) {
+inline auto boolean_op(OperatorCode opcode, Value* left) -> BooleanValue* {
     BooleanValue* left_bool = left->cast<BooleanValue>();
     switch (GetOperatorGroup(opcode)) {
     case OperatorGroup::UnaryLogical:
@@ -401,7 +401,7 @@ inline BooleanValue* boolean_op(OperatorCode opcode, Value* left) {
     }
 }
 
-inline Value* assignment_op(OperatorCode opcode, Value* left, Value* right) {
+inline auto assignment_op(OperatorCode opcode, Value* left, Value* right) -> Value* {
     if (opcode == OperatorCode::Assign) {
         left->assign_from(right);
     } else {
@@ -434,14 +434,13 @@ private:
     GlobalMemory::MultiMap<OperatorCode, FunctionObject (*)(const Type*, const Type*)> templates_;
 
 public:
-    const Type* eval_type_op(
-        OperatorCode opcode, const Type* left, const Type* right = nullptr
-    ) const {
+    auto eval_type_op(OperatorCode opcode, const Type* left, const Type* right = nullptr) const
+        -> const Type* {
         /// TODO: implement type-level operations
         return nullptr;
     }
 
-    Term eval_value_op(OperatorCode opcode, Term left, Term right = {}) {
+    auto eval_value_op(OperatorCode opcode, Term left, Term right = {}) -> Term {
         bool left_is_mutable = false;
         Term decayed_left = value_decay(left, &left_is_mutable);
         Term decayed_right = value_decay(right);
@@ -495,7 +494,7 @@ public:
     }
 
 protected:
-    Term value_decay(Term term, bool* is_mutable = nullptr) const {
+    auto value_decay(Term term, bool* is_mutable = nullptr) const -> Term {
         if (!term) return term;
         if (term.is_type()) return term;
 
@@ -518,7 +517,8 @@ protected:
     }
 
 private:
-    FunctionObject try_instantiate(OperatorCode opcode, const Type* left, const Type* right) const {
+    auto try_instantiate(OperatorCode opcode, const Type* left, const Type* right) const
+        -> FunctionObject {
         // User-defined operator templates
         auto range = templates_.equal_range(opcode);
         for (auto it = range.first; it != range.second; ++it) {
@@ -530,7 +530,8 @@ private:
         return nullptr;
     }
 
-    Term eval_primitive_op(OperatorCode opcode, Term left, Term right, bool left_is_mutable) const {
+    auto eval_primitive_op(OperatorCode opcode, Term left, Term right, bool left_is_mutable) const
+        -> Term {
         const Type* left_type = left.effective_type();
         Kind left_kind = left->kind_;
         Kind right_kind = right ? right->kind_ : Kind::Unknown;
@@ -661,7 +662,7 @@ private:
 
 class MemberAccessHandler final : public OperationHandler {
 public:
-    Term eval_access(Term object, std::string_view member) {
+    auto eval_access(Term object, std::string_view member) -> Term {
         bool is_mutable = false;
         object = value_decay(object, &is_mutable);
         if (object.is_type()) {
@@ -684,7 +685,7 @@ public:
         }
     }
 
-    Term eval_call(Term callee, std::span<Term> args) {
+    auto eval_call(Term callee, std::span<Term> args) -> Term {
         if (callee.is_unknown()) {
             return Term::unknown();
         }
@@ -713,7 +714,7 @@ public:
     }
 
 private:
-    Term callee_decay(Term term) const {
+    auto callee_decay(Term term) const -> Term {
         if (term.is_type()) {
             if (auto cls_type = term->dyn_cast<InstanceType>()) {
                 return Term::prvalue(cls_type->constructors_);
@@ -724,7 +725,7 @@ private:
         return term;
     }
 
-    Term wrap_in_mutable(Term term) const {
+    auto wrap_in_mutable(Term term) const -> Term {
         if (auto value = term.get_comptime()) {
             return Term::forward_like(
                 term, new MutableValue(TypeRegistry::get<MutableType>(term.effective_type()), value)
@@ -734,7 +735,7 @@ private:
         }
     }
 
-    Term struct_access(Term object, std::string_view member) {
+    auto struct_access(Term object, std::string_view member) -> Term {
         if (auto struct_type = object->dyn_cast<StructType>()) {
             auto attr_it = struct_type->fields_.find(member);
             if (attr_it != struct_type->fields_.end()) {
@@ -750,7 +751,7 @@ private:
         return {};
     }
 
-    Term instance_access(Term object, std::string_view member) {
+    auto instance_access(Term object, std::string_view member) -> Term {
         if (auto instance_type = object->cast<InstanceType>()) {
             auto method_it = instance_type->methods_.find(member);
             if (method_it != instance_type->methods_.end()) {
@@ -774,7 +775,7 @@ private:
         return {};
     }
 
-    GlobalMemory::Vector<FunctionObject> list_overloads(Term func) const {
+    auto list_overloads(Term func) const -> GlobalMemory::Vector<FunctionObject> {
         if (func.is_type()) return {};
         if (auto overload_set = func->dyn_cast<FunctionOverloadSetValue>()) {
             return overload_set->overloads_;
@@ -790,7 +791,7 @@ private:
         }
     }
 
-    const Type* category_decay(Term obj) const {
+    auto category_decay(Term obj) const -> const Type* {
         if (obj.is_type()) {
             /// TODO: throw type is not a valid argument error
             return &UnknownType::instance;
@@ -805,14 +806,14 @@ private:
         }
     }
 
-    GlobalMemory::Vector<const Type*> extract_arg_types(std::span<Term> args) const {
+    auto extract_arg_types(std::span<Term> args) const -> GlobalMemory::Vector<const Type*> {
         return args | std::views::transform([this](Term arg) { return category_decay(arg); }) |
                GlobalMemory::collect<GlobalMemory::Vector<const Type*>>();
     }
 
-    FunctionObject overload_resolution(
+    auto overload_resolution(
         const GlobalMemory::Vector<FunctionObject>& overloads, std::span<const Type*> arg_types
-    ) const {
+    ) const -> FunctionObject {
         FunctionObject best_candidate = nullptr;
         for (FunctionObject candidate : overloads) {
             const FunctionType* func_type = candidate->dyn_cast<FunctionType>();
@@ -838,7 +839,7 @@ private:
     }
 };
 
-constexpr std::string_view OperatorCodeToString(OperatorCode opcode) {
+constexpr auto OperatorCodeToString(OperatorCode opcode) -> std::string_view {
     switch (opcode) {
     case OperatorCode::Add:
         return "+";
