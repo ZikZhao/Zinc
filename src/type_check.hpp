@@ -410,6 +410,7 @@ private:
     }
 };
 
+/// TODO: expected parameter is not working
 class ValueContextEvaluator {
 private:
     TypeChecker& checker_;
@@ -527,21 +528,45 @@ public:
         }
     }
 
+    auto operator()(const ASTFieldInitialization* node) -> Term {
+        Term value_term =
+            ValueContextEvaluator{checker_, expected_, require_comptime_}(node->value).subject;
+        if (require_comptime_ && !value_term.is_comptime()) {
+            Diagnostic::report(NotConstantExpressionError(node->location));
+            return Term::unknown();
+        }
+        return value_term;
+    }
+
     auto operator()(const ASTStructInitialization* node) -> TermWithReceiver {
-        // GlobalMemory::Vector<std::pair<std::string_view, const Type*>> inits =
-        //     field_inits_ | std::views::transform([&](ASTFieldInitialization* init) {
-        //         std::pair<std::string_view, Term> field = init->eval(checker);
-        //         return std::pair<std::string_view, const Type*>{
-        //             field.first, field.second.effective_type()
-        //         };
-        //     }) |
-        //     GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, const
-        //     Type*>>>();
-        // try {
-        //     struct_type->validate(inits);
-        // } catch (UnlocatedProblem& e) {
-        //     e.report_at(location);
-        // }
+        // check duplications in advance
+        GlobalMemory::FlatMap inits =
+            node->field_inits |
+            std::views::transform(
+                [&](const ASTFieldInitialization& init) -> std::pair<std::string_view, Term> {
+                    return {
+                        init.identifier,
+                        ValueContextEvaluator{checker_, nullptr, require_comptime_}(init.value)
+                            .subject
+                    };
+                }
+            ) |
+            GlobalMemory::collect<GlobalMemory::FlatMap>();
+        GlobalMemory::FlatMap init_types =
+            inits |
+            std::views::transform([](const auto& init) -> std::pair<std::string_view, const Type*> {
+                return {init.first, init.second.effective_type()};
+            }) |
+            GlobalMemory::collect<GlobalMemory::FlatMap>();
+        try {
+            TypeResolution struct_type;
+            TypeContextEvaluator{checker_, struct_type}(node->struct_type);
+            struct_type->cast<StructType>()->validate(init_types);
+            return {.subject = Term::prvalue(struct_type.get()), .receiver = {}};
+        } catch (UnlocatedProblem& e) {
+            e.report_at(node->location);
+            return {.subject = Term::unknown(), .receiver = {}};
+        }
     }
 
     auto operator()(const ASTFunctionCall* node) -> TermWithReceiver {
@@ -639,40 +664,42 @@ private:
         return {.subject = current_term, .receiver = receiver};
     }
 
-    auto eval_struct_initialization(const ASTStructInitialization* node) -> Value* {
-        GlobalMemory::Vector<std::pair<std::string_view, Value*>> inits =
-            node->field_inits | std::views::transform([&](const ASTFieldInitialization& init) {
-                Term value_term =
-                    ValueContextEvaluator{checker_, nullptr, require_comptime_}(init.value).subject;
-                if (!value_term.is_comptime()) {
-                    Diagnostic::report(NotConstantExpressionError(init.location));
-                    return std::pair<std::string_view, Value*>{
-                        init.identifier, &UnknownValue::instance
-                    };
-                }
-                return std::pair<std::string_view, Value*>{
-                    init.identifier, value_term.get_comptime()
-                };
-            }) |
-            GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, Value*>>>();
-        GlobalMemory::Vector<std::pair<std::string_view, const Type*>> types =
-            inits | std::views::transform([&](const auto& init) {
-                return std::pair<std::string_view, const Type*>{
-                    init.first, init.second->get_type()
-                };
-            }) |
-            GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, const Type*>>>();
-        // try {
-        //     // struct_type->validate(types);
-        // } catch (UnlocatedProblem& e) {
-        //     e.report_at(node->location);
-        //     return &UnknownValue::instance;
-        // }
-        // return new StructValue(
-        //     struct_type,
-        //     inits | GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, Value*>>()
-        // );
-    }
+    // auto eval_struct_initialization(const ASTStructInitialization* node) -> Value* {
+    //     GlobalMemory::Vector<std::pair<std::string_view, Value*>> inits =
+    //         node->field_inits | std::views::transform([&](const ASTFieldInitialization& init) {
+    //             Term value_term =
+    //                 ValueContextEvaluator{checker_, nullptr,
+    //                 require_comptime_}(init.value).subject;
+    //             if (!value_term.is_comptime()) {
+    //                 Diagnostic::report(NotConstantExpressionError(init.location));
+    //                 return std::pair<std::string_view, Value*>{
+    //                     init.identifier, &UnknownValue::instance
+    //                 };
+    //             }
+    //             return std::pair<std::string_view, Value*>{
+    //                 init.identifier, value_term.get_comptime()
+    //             };
+    //         }) |
+    //         GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, Value*>>>();
+    //     GlobalMemory::Vector<std::pair<std::string_view, const Type*>> types =
+    //         inits | std::views::transform([&](const auto& init) {
+    //             return std::pair<std::string_view, const Type*>{
+    //                 init.first, init.second->get_type()
+    //             };
+    //         }) |
+    //         GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, const
+    //         Type*>>>();
+    //     // try {
+    //     //     // struct_type->validate(types);
+    //     // } catch (UnlocatedProblem& e) {
+    //     //     e.report_at(node->location);
+    //     //     return &UnknownValue::instance;
+    //     // }
+    //     // return new StructValue(
+    //     //     struct_type,
+    //     //     inits | GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, Value*>>()
+    //     // );
+    // }
 };
 
 class TypeCheckVisitor {

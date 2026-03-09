@@ -217,6 +217,9 @@ public:
     template <typename T>
     using Vector = std::vector<T, Allocator<T>>;
 
+    template <typename K, typename C = std::less<K>>
+    using Set = std::set<K, C, Allocator<K>>;
+
     template <typename K, typename V, typename C = std::less<K>>
     using Map = std::map<K, V, C, Allocator<std::pair<const K, V>>>;
 

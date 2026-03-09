@@ -76,7 +76,7 @@ concept ValueClass = std::derived_from<V, Value> && !std::is_abstract_v<V>;
 using FunctionObject = const Object*;  // either FunctionType or FunctionValue
 using FunctionOverloadVector = GlobalMemory::Vector<FunctionObject>;
 
-class TypeDependencyGraph {
+class RecursiveTypeDependencyGraph {
 public:
     struct Edge {
         const Type* parent;
@@ -206,6 +206,7 @@ private:
 
 class TypeRegistry {
     friend class ThreadGuard;
+    friend class TypeCodeGen;
 
 private:
     struct TypeComparator {
@@ -274,7 +275,7 @@ public:
     }
 
 private:
-    TypeDependencyGraph graph_;
+    RecursiveTypeDependencyGraph graph_;
     std::tuple<
         TypeSet<FunctionType>,
         TypeSet<ArrayType>,
@@ -285,6 +286,7 @@ private:
         TypeSet<IntersectionType>,
         TypeSet<UnionType>>
         types_;
+    GlobalMemory::Vector<InstanceType*> instance_types_;
     GlobalMemory::FlatMap<std::type_index, Type*> builtin_types_;
 
 private:
@@ -305,7 +307,7 @@ private:
     auto dispatch_pool(const Type* type) noexcept -> std::pair<const Type*, bool>;
 
     auto simplify_recursive_type(
-        GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges, const Type* type
+        GlobalMemory::Vector<RecursiveTypeDependencyGraph::Edge> active_edges, const Type* type
     ) noexcept -> const Type*;
 
 public:
@@ -454,7 +456,7 @@ public:
     Type* dyn_type() = delete;
     Value* dyn_value() = delete;
 
-    virtual bool can_intern(TypeDependencyGraph& graph) noexcept = 0;
+    virtual bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept = 0;
 
     std::strong_ordering compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
@@ -488,7 +490,7 @@ class PrimitiveType : public Type {
 protected:
     PrimitiveType(Kind kind) noexcept : Type(kind) {}
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final { return true; }
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final { return true; }
 
     std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
@@ -629,7 +631,7 @@ public:
         return GlobalMemory::format_view("({}) -> {}", params_repr, return_type_->repr());
     }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final {
         bool has_incomplete_child = false;
         for (const Type*& param_type : parameters_) {
             if (!graph.check_dependency(this, param_type)) {
@@ -680,7 +682,7 @@ public:
         return GlobalMemory::format_view("{}[]", element_type_->repr());
     }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final {
         return graph.check_dependency(this, element_type_);
     }
 
@@ -720,7 +722,7 @@ public:
         return {};
     }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final {
         bool has_incomplete_child = false;
         for (auto field : fields_) {
             if (!graph.check_dependency(this, field.second)) {
@@ -817,7 +819,7 @@ public:
         return {};
     }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final {
         /// TODO:
         return true;
     }
@@ -877,7 +879,7 @@ public:
 
     std::string_view repr() const override { return GlobalMemory::format_view("{}", identifier_); }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
 
     Value* default_construct() const noexcept final {
         /// TODO:
@@ -918,7 +920,7 @@ public:
         return GlobalMemory::format_view("mut {}", target_type_->repr());
     }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final {
         return !graph.is_parent(this) && graph.check_dependency(this, target_type_);
     }
 
@@ -955,7 +957,7 @@ public:
         );
     }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final {
         return !graph.is_parent(this) && graph.check_dependency(this, referenced_type_);
     }
 
@@ -994,7 +996,7 @@ public:
         return GlobalMemory::format_view("*{}", pointed_type_->repr());
     }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final {
         return !graph.is_parent(this) && graph.check_dependency(this, pointed_type_);
     }
 
@@ -1059,7 +1061,7 @@ public:
         return {};
     }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final {
         for (const Type*& type : types_) {
             if (!graph.check_dependency(this, type)) {
                 return false;
@@ -1155,7 +1157,7 @@ public:
         return {};
     }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
+    bool can_intern(RecursiveTypeDependencyGraph& graph) noexcept final {
         for (const Type*& type : types_) {
             if (!graph.check_dependency(this, type)) {
                 return false;
@@ -1793,13 +1795,14 @@ inline std::pair<const Type*, bool> TypeRegistry::dispatch_pool(const Type* type
 }
 
 inline const Type* TypeRegistry::simplify_recursive_type(
-    GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges, const Type* type
+    GlobalMemory::Vector<RecursiveTypeDependencyGraph::Edge> active_edges, const Type* type
 ) noexcept {
     GlobalMemory::FlatSet<const Type*, TypeComparator> unique_types;
     GlobalMemory::FlatSet<const Type*> visited_types{type};
-    std::ignore = [&](this auto&& self,
-                      const Type* child,
-                      std::span<TypeDependencyGraph::Edge> subspan) -> decltype(subspan)::iterator {
+    std::ignore =
+        [&](this auto&& self,
+            const Type* child,
+            std::span<RecursiveTypeDependencyGraph::Edge> subspan) -> decltype(subspan)::iterator {
         auto pivot = std::partition(subspan.begin(), subspan.end(), [&](const auto& edge) {
             return edge.child != child;
         });

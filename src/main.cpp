@@ -2,6 +2,7 @@
 
 #include "ast.hpp"
 #include "builder.hpp"
+#include "codegen.hpp"
 #include "diagnosis.hpp"
 #include "object.hpp"
 #include "operations.hpp"
@@ -65,10 +66,8 @@ auto main(int argc, char* argv[]) -> int {
     TypeChecker checker(scope, sema);
     TypeCheckVisitor{checker}(root);
 
-    // bool has_error = Diagnostic::print(sources);
-    // if (!has_error) {
-    //     return transpile_all(root, sources, dep_graph);
-    // } else {
-    //     return EXIT_FAILURE;
-    // }
+    bool has_error = Diagnostic::print(sources);
+    if (has_error) return EXIT_FAILURE;
+
+    return codegen(sources);
 }

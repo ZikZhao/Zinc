@@ -159,7 +159,7 @@ expr:
 	| target_ = expr OP_DOT member_ = identifier template_args_ = instantiation_list	#
 		TemplateMemberAccessExpr
 	| struct_ = type OP_LBRACE (
-		inits_ += field_init (OP_COMMA inits_ += field_init)*
+		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
 	)? OP_RBRACE								# StructInitExpr
 	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr;
 
@@ -187,7 +187,7 @@ type:
 	| identifier_ = identifier										# IdentifierType
 	| identifier_ = identifier template_args_ = instantiation_list	# TemplateTypeInstantiation
 	| OP_LBRACE (
-		fields_ += field_decl* (OP_COMMA fields_ += field_decl)
+		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
 	)? OP_RBRACE # StructType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*

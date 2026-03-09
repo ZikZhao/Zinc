@@ -1,5 +1,6 @@
 fn main() -> i32 {
     let x = MyClass<i32>(42);
+    let y = Point { x: 1.0, y: 2.0 };
     return x.method1(10);
 }
 
@@ -29,3 +30,15 @@ fn max<T: type>(a: T, b: T) -> T {
         return b;
     }
 }
+
+type Rect = {
+    lt: Point,
+    rb: Point,
+};
+
+type Point = {
+    x: f64,
+    y: f64,
+    z: (f64, f64) -> f64,
+    a: *Point,
+};
