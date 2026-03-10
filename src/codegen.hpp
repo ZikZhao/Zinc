@@ -2,6 +2,7 @@
 #include "pch.hpp"
 
 #include "object.hpp"
+#include "type_check.hpp"
 
 static auto format_ptr(const void* ptr) -> std::string_view {
     thread_local std::array<char, sizeof(void*) * 2> buffer;
@@ -14,6 +15,11 @@ static auto format_ptr(const void* ptr) -> std::string_view {
     );
     return {buffer.data(), buffer.size()};
 }
+
+struct VariantGetter {
+    auto operator()(std::monostate) const noexcept -> const void* { UNREACHABLE(); }
+    auto operator()(const void* ptr) const noexcept -> const void* { return ptr; }
+};
 
 class TypeSorter {
 private:
@@ -241,6 +247,192 @@ public:
         }
         /// TODO: methods with instantiations
         definitions_ += "};\n";
+    }
+};
+
+class CodeGen final {
+private:
+    using Environment = GlobalMemory::FlatMap<const ASTExpression*, std::string_view>;
+
+    class Guard {
+    private:
+        CodeGen& codegen_;
+        const Scope* prev_scope;
+        const Environment* prev_env;
+
+    public:
+        Guard(CodeGen& codegen, const Scope* scope) noexcept
+            : codegen_(codegen),
+              prev_scope(std::exchange(codegen.current_scope_, scope)),
+              prev_env(std::exchange(codegen.current_env_, &codegen.scope_envs_.at(scope))) {}
+        Guard(const Guard&) = delete;
+        Guard(Guard&&) = delete;
+        auto operator=(const Guard&) = delete;
+        auto operator=(Guard&&) = delete;
+        ~Guard() noexcept {
+            codegen_.current_scope_ = prev_scope;
+            codegen_.current_env_ = prev_env;
+        }
+    };
+
+private:
+    std::ofstream& stream_;
+    const GlobalMemory::FlatMap<const Scope*, Environment>& scope_envs_;
+    const Scope* current_scope_;
+    const Environment* current_env_;
+
+public:
+    CodeGen(
+        std::ofstream& stream, decltype(scope_envs_) scope_envs, const Scope* current_scope
+    ) noexcept
+        : stream_(stream),
+          scope_envs_(scope_envs),
+          current_scope_(current_scope),
+          current_env_(&scope_envs_.at(current_scope_)) {}
+
+    auto operator()(ASTNodeVariant variant) -> void { return std::visit(*this, variant); }
+
+    auto operator()(ASTExprVariant variant) -> void {
+        std::visit(
+            [&]<typename T>(T node) -> void {
+                if constexpr (std::is_convertible_v<T, const ASTExpression*>) {
+                    if (auto it = current_env_->find(node); it != current_env_->end()) {
+                        stream_ << it->second;
+                        return;
+                    }
+                }
+                return std::visit(*this, variant);
+            },
+            variant
+        );
+    }
+
+    auto operator()(std::monostate) -> void { UNREACHABLE(); }
+
+    auto operator()(const auto*) -> void { UNREACHABLE(); }
+
+    auto operator()(const ASTFunctionDefinition* node) -> void {
+        stream_ << "auto " << node->identifier << "(";
+        const char* sep = "";
+        for (const auto& param : node->parameters) {
+            stream_ << sep << param.identifier
+                    << format_ptr(std::visit(VariantGetter{}, param.type));
+            sep = ", ";
+        }
+        stream_ << ") -> " << format_ptr(std::visit(VariantGetter{}, node->return_type)) << " {\n";
+        // Guard guard(*this, node);
+        for (const ASTNodeVariant& child : node->body) {
+            (*this)(child);
+        }
+        stream_ << "}\n";
+    }
+
+    auto operator()(const ASTLocalBlock* node) -> void {
+        for (const ASTNodeVariant& child : node->statements) {
+            (*this)(child);
+        }
+    }
+
+    auto operator()(const ASTParenExpr* node) -> void {
+        stream_ << "(";
+        (*this)(node->inner);
+        stream_ << ")";
+    }
+
+    auto operator()(const ASTConstant* node) -> void {
+        /// TODO:
+        // stream_ << node->value;
+    }
+
+    auto operator()(const ASTSelfExpr* node) -> void {
+        stream_ << (node->is_type ? "decltype(*this)" : "(*this)");
+    }
+
+    auto operator()(const ASTIdentifier* node) -> void { stream_ << node->str; }
+
+    template <ASTUnaryOpClass Op>
+    auto operator()(const Op* node) -> void {
+        /// TODO: postfix unary ops
+        stream_ << GetOperatorString(Op::opcode);
+        (*this)(node->expr);
+    }
+
+    template <ASTBinaryOpClass Op>
+    auto operator()(const Op* node) -> void {
+        (*this)(node->left);
+        stream_ << " " << GetOperatorString(Op::opcode) << " ";
+        (*this)(node->right);
+    }
+
+    auto operator()(const ASTMemberAccess* node) -> void {
+        (*this)(node->target);
+        for (std::string_view member : node->members) {
+            stream_ << "." << member;
+        }
+    }
+
+    auto operator()(const ASTStructInitialization* node) -> void {
+        stream_ << "{\n";
+        for (const ASTFieldInitialization& field_init : node->field_inits) {
+            stream_ << "." << field_init.identifier << " = ";
+            (*this)(field_init.value);
+            stream_ << ",\n";
+        }
+        stream_ << "}";
+    }
+
+    auto operator()(const ASTFunctionCall* node) -> void {
+        (*this)(node->function);
+        stream_ << "(";
+        const char* sep = "";
+        for (const ASTExprVariant& arg : node->arguments) {
+            stream_ << sep;
+            (*this)(arg);
+            sep = ", ";
+        }
+        stream_ << ")";
+    }
+
+    auto operator()(const ASTExpressionStatement* node) -> void {
+        (*this)(node->expr);
+        stream_ << ";\n";
+    }
+
+    auto operator()(const ASTDeclaration* node) -> void {
+        stream_ << format_ptr(std::visit(VariantGetter{}, node->declared_type)) << " "
+                << node->identifier << ";\n";
+    }
+
+    auto operator()(const ASTIfStatement* node) -> void {
+        stream_ << "if (";
+        (*this)(node->condition);
+        stream_ << ") \n";
+        (*this)(node->if_block);
+        stream_ << "\n";
+        if (node->else_block) {
+            stream_ << "else \n";
+            (*this)(node->else_block);
+            stream_ << "\n";
+        }
+    }
+
+    auto operator()(const ASTForStatement* node) -> void {
+        stream_ << "for (";
+        if (node->initializer_decl) {
+            (*this)(node->initializer_decl);
+        } else if (nonnull(node->initializer_expr)) {
+            (*this)(node->initializer_expr);
+        }
+        stream_ << "; ";
+        if (nonnull(node->condition)) {
+            (*this)(node->condition);
+        }
+        stream_ << "; ";
+        if (nonnull(node->increment)) {
+            (*this)(node->increment);
+        }
+        stream_ << ") \n";
+        (*this)(node->body);
     }
 };
 

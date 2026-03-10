@@ -29,12 +29,12 @@ flowchart LR
         TC --> BC
     end
 
-    subgraph P3 [Transpilation]
-        Transpiler[Transpiler] --> CPP(C++20 Source)
+    subgraph P3 [CodeGen]
+        CodeGen[CodeGen] --> CPP(C++20 Source)
     end
 
     AST --> SC
-    BC --> Transpiler
+    BC --> CodeGen
 ```
 
 #### 3. Language Comparison
@@ -129,6 +129,12 @@ flowchart LR
 
   To enhance diagnostic utility, the type system implements a robust error recovery mechanism. Instead of aborting upon the first semantic failure, the compiler reports the error and injects a sentinel `UnknownType` or `UnknownValue` (depending on the context) as results. These sentinels are designed to silently propagate through upstream operations: any expression interacting with an 'Unknown' operand evaluates to 'Unknown' without emitting further diagnostics. This strategy effectively suppresses cascading false positives (spurious errors) stemming from the initial fault, while preserving the compiler's ability to continue analyzing independent code sections and report multiple genuine errors in a single pass.
 
+- ==**Embracing Monomorphization: Demoting C++ to an Intermediate Representation (IR)**==
+
+   To bridge the vast semantic gap between the source and target languages, the compiler's backend architecture underwent a decisive refactoring: fully embracing monomorphization and completely abandoning the initial strategy of direct mapping via the C++ template system. Early attempts to preserve C++ templates—intended to maintain the readability of the generated code—posed severe theoretical obstacles when implementing modern language features. Specifically, enforcing strict type interning for structural types within template-dependent contexts is incredibly difficult at the C++ level, and C++'s current metaprogramming capabilities are insufficient to support the static reflection planned for Zinc. Furthermore, Zinc's lazy type declaration mechanism requires the dynamic construction of a cascading dependency graph. Forcing the retention of local scopes while handling hoisted cross-scope accesses would make topological sorting during code generation excessively complex.
+
+   By demoting C++ to a pure compile-time Intermediate Representation (IR), the current CodeGen pipeline now performs explicit instantiation and **Type Hoisting** for all generics prior to emission. This decision yields significant architectural advantages: globally unified type lifting entirely eliminates scope shadowing issues, making precise topological sorting and the strict separation of forward declarations from definitions trivial. The generation phase now simply emits the lowered, monomorphized AST—stripped of all non-runtime constructs and replaced with mangled identifiers—directly into the output stream. Concurrently, by eliminating complex template instantiations and overload resolution branches, the parsing speed of the downstream C++ compiler is theoretically improved. The accepted trade-off is the complete loss of human readability in the generated source, increased source code volume, and restricting interoperability to a one-way FFI (Zinc can call C++, but C++ cannot easily invoke highly mangled Zinc code). Ultimately, this compromise completely removes the limitations that the target language's abstraction boundaries previously placed on Zinc's core semantic expression.
+
 #### 5. Development Checkpoints (Milestones)
 
 The development is structured into granular phases to ensure stability before introducing advanced static analysis features.
@@ -138,10 +144,10 @@ The development is structured into granular phases to ensure stability before in
 | **P1**    | **Core Infrastructure**  | Done        | PMR Memory model, Async File/Module Loading, ANTLR4 Integration. |
 | **P2**    | **Basic Semantics**      | Done        | Primitive Types, Symbol Collection, Type Checker, Diagnostic System. |
 | **P3**    | **Control Flow & Ops**   | Done        | Control flow (if/for), Operator Overloading via `OperationHandler`. |
-| **P4**    | **Transpilation**        | In Progress | Emitting C++20 code based on semantic analysis results.      |
-| **P5**    | **Classes & Namespaces** | In Progress | Struct/Class layouts, Member resolution, Namespace scoping.  |
+| **P4**    | **CodeGen**              | In Progress | Emitting C++20 code based on semantic analysis results.      |
+| **P5**    | **Classes & Namespaces** | Done        | Struct/Class layouts, Member resolution, Namespace scoping.  |
 | **P6**    | **Static Safety**        | In Progress | Borrow Checker                                               |
-| **P7**    | **Metaprogramming**      | Planned     | Template inference and expansion (LSP support if time permits). |
+| **P7**    | **Metaprogramming**      | In Progress | Template inference and expansion (LSP support if time permits). |
 
 #### 6. Concrete Implementation
 
@@ -165,20 +171,27 @@ The development is structured into granular phases to ensure stability before in
 
   I have overhauled the internal representation of integer values, moving from a tagged union of int64, uint64, and string_view to a unified BigInt implementation. This provides infinite precision for compile-time evaluation; users can now write complex integer expressions as long as the final result fits within the target container. This transition eliminates the overhead of repeatedly tag-checking during integer processing and removes concerns regarding intermediate overflows during constant folding.
 
+- ==**Architectural Decoupling: Modern Visitor Pattern & POD AST**==
+
+  The Abstract Syntax Tree (AST) has undergone a comprehensive refactoring, transitioning from a traditional Object-Oriented paradigm to a Plain Old Data (POD) and Visitor-based architecture. Previously, embedding phase-specific logic (such as symbol collection, type checking, and evaluation) directly into AST nodes created a heavily coupled "God header," tangling the syntax representation with auxiliary systems like `Scope` and `TypeChecker`. In compiler design, AST structures are fundamentally stable, whereas the operations performed on them (e.g., semantic passes, pattern matching, linting) scale continuously. Decoupling the data from these operations allows for infinite extensibility. Furthermore, managing traversal context as member variables within the Visitor objects eliminates the overhead of passing context singletons through the compiler's hot paths.
+
+  Crucially, rather than relying on the classic OOP double-dispatch pattern—which demands tedious `accept`/`visit` boilerplate and rigid return types (often forcing the use of type-erased wrappers like `std::any`, as seen in ANTLR's generated visitors)—this transpiler leverages modern C++'s `std::variant` and `std::visit`. This approach replaces runtime virtual polymorphism with compile-time static dispatch. It elegantly satisfies the DRY (Don't Repeat Yourself) principle: because `std::visit` resolves the best matching overload at compile time, a single visitor implementation can naturally fall back to base-class or generic overloads to simulate default behaviors. This achieves highly efficient, pattern-matching-like AST traversal while maintaining strict type safety and zero vtable overhead.
+
 #### 7. Remaining Goals
 
-1. Template Syntax
-2. Deferred Static Analysis on Template Instantiation
-3. Built-in Types (by declaration file)
-4. Borrow Checker: Lexical and Statement-level Lifetimes
-5. Borrow Checker: Return Type Lifetime Annotations
-6. Array Type, Vector Type, Intersection and Union of Dynamic Struct Type
-7. Completing Built-in Types
-8. Method Reference
-9. Metaprogramming: Built-in Predicates
-10. Metaprogramming: Concepts (Traits)
-11. ==Template: Variadic Parameters==
-12. ==Abbreviated Function Templates by `auto` keyword==
-13. Module System
-14. ==Class Template Argument Deduction (CTAD): by in-class deduction guide==
-15. ==String Literals As Types==
+1. ~~Template Syntax~~
+2. ~~Deferred Static Analysis on Template Instantiation~~
+3. ==Monomorphization==
+4. Built-in Types (by declaration file)
+5. Borrow Checker: Lexical and Statement-level Lifetimes
+6. Borrow Checker: Return Type Lifetime Annotations
+7. Array Type, Vector Type, Intersection and Union of Dynamic Struct Type
+8. Completing Built-in Types
+9. Method Reference
+10. Metaprogramming: Built-in Predicates
+11. Metaprogramming: Concepts (Traits)
+12. ==Template: Variadic Parameters==
+13. ==Abbreviated Function Templates by `auto` keyword==
+14. Module System
+15. ==Class Template Argument Deduction (CTAD): by in-class deduction guide==
+16. ==String Literals As Types==

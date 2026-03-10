@@ -6,13 +6,11 @@
 #include "source.hpp"
 
 struct ASTNode;
-struct ASTCompileTimeConstruct;
 struct ASTRoot;
 struct ASTLocalBlock;
 
 struct ASTExpression;
 struct ASTExplicitTypeExpr;
-struct ASTHiddenTypeExpr;
 struct ASTParenExpr;
 struct ASTConstant;
 struct ASTSelfExpr;
@@ -76,7 +74,6 @@ struct ASTPointerType;
 struct ASTTemplateInstantiation;
 struct ASTTemplateMemberAccessInstantiation;
 struct ASTExpressionStatement;
-struct ASTRuntimeSymbolDeclaration;
 struct ASTDeclaration;
 struct ASTFieldDeclaration;
 struct ASTTypeAlias;
@@ -88,7 +85,6 @@ struct ASTReturnStatement;
 struct ASTFunctionParameter;
 struct ASTFunctionDefinition;
 struct ASTConstructorDestructorDefinition;
-struct ASTClassSignature;
 struct ASTClassDefinition;
 struct ASTNamespaceDefinition;
 struct ASTTemplateParameter;
@@ -100,11 +96,8 @@ using ASTNodeVariant = std::variant<
     std::monostate,
     // Base classes
     ASTNode*,
-    ASTCompileTimeConstruct*,
-    ASTRuntimeSymbolDeclaration*,
     ASTExpression*,
     ASTExplicitTypeExpr*,
-    ASTHiddenTypeExpr*,
     // Root and blocks
     ASTRoot*,
     ASTLocalBlock*,
@@ -193,7 +186,6 @@ using ASTExprVariant = std::variant<
     // Base classes
     ASTExpression*,
     ASTExplicitTypeExpr*,
-    ASTHiddenTypeExpr*,
     // Basic expressions
     ASTParenExpr*,
     ASTConstant*,
@@ -253,20 +245,29 @@ using ASTExprVariant = std::variant<
     ASTReferenceType*,
     ASTPointerType*,
     ASTTemplateInstantiation*,
-    ASTTemplateMemberAccessInstantiation*,
-    // Special
-    ASTClassSignature*>;
+    ASTTemplateMemberAccessInstantiation*>;
 
 constexpr auto nonnull(auto&& variant) -> bool {
     return !std::holds_alternative<std::monostate>(std::forward<decltype(variant)>(variant));
 }
 
+template <typename T>
+concept ASTUnaryOpClass = requires(T node) {
+    { T::opcode } -> std::convertible_to<OperatorCode>;
+    { node.expr } -> std::convertible_to<ASTExprVariant>;
+};
+
+template <typename T>
+concept ASTBinaryOpClass = requires(T node) {
+    { T::opcode } -> std::convertible_to<OperatorCode>;
+    { node.left } -> std::convertible_to<ASTExprVariant>;
+    { node.right } -> std::convertible_to<ASTExprVariant>;
+};
+
 struct ASTNode : public GlobalMemory::MonotonicAllocated {
     Location location;
     ASTNode(const Location& loc) noexcept : location(loc) {}
 };
-
-struct ASTCompileTimeConstruct : public ASTNode {};
 
 struct ASTLocalBlock final : public ASTNode {
     std::span<ASTNodeVariant> statements;
@@ -279,9 +280,6 @@ struct ASTRoot final : public ASTNode {
 struct ASTExpression : public ASTNode {};
 
 struct ASTExplicitTypeExpr : public ASTExpression {};
-
-/// A hidden type expression that does not appear in source code
-struct ASTHiddenTypeExpr : public ASTExplicitTypeExpr {};
 
 struct ASTParenExpr final : public ASTExpression {
     ASTExprVariant inner;
@@ -325,58 +323,6 @@ struct ASTFieldInitialization final : public ASTNode {
 struct ASTStructInitialization final : public ASTExpression {
     ASTExprVariant struct_type;
     std::span<ASTFieldInitialization> field_inits;
-
-    // Value* eval_comptime(TypeChecker& checker, const StructType* struct_type) const noexcept {
-    //     GlobalMemory::Vector<std::pair<std::string_view, Value*>> inits =
-    //         field_inits_ | std::views::transform([&](ASTFieldInitialization* init) {
-    //             std::pair<std::string_view, Term> field = init->eval(checker);
-    //             if (!field.second.is_comptime()) {
-    //                 Diagnostic::report(NotConstantExpressionError(init->location));
-    //                 return std::pair<std::string_view, Value*>{
-    //                     field.first, &UnknownValue::instance
-    //                 };
-    //             }
-    //             return std::pair<std::string_view, Value*>{
-    //                 field.first, field.second.get_comptime()
-    //             };
-    //         }) |
-    //         GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, Value*>>>();
-    //     GlobalMemory::Vector<std::pair<std::string_view, const Type*>> types =
-    //         inits | std::views::transform([&](const auto& init) {
-    //             return std::pair<std::string_view, const Type*>{
-    //                 init.first, init.second->get_type()
-    //             };
-    //         }) |
-    //         GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, const
-    //         Type*>>>();
-    //     try {
-    //         struct_type->validate(types);
-    //     } catch (UnlocatedProblem& e) {
-    //         e.report_at(location);
-    //         return &UnknownValue::instance;
-    //     }
-    //     return new StructValue(
-    //         struct_type,
-    //         inits | GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, Value*>>()
-    //     );
-    // }
-
-    // void check_fields(TypeChecker& checker, const StructType* struct_type) const noexcept {
-    //     GlobalMemory::Vector<std::pair<std::string_view, const Type*>> inits =
-    //         field_inits_ | std::views::transform([&](ASTFieldInitialization* init) {
-    //             std::pair<std::string_view, Term> field = init->eval(checker);
-    //             return std::pair<std::string_view, const Type*>{
-    //                 field.first, field.second.effective_type()
-    //             };
-    //         }) |
-    //         GlobalMemory::collect<GlobalMemory::Vector<std::pair<std::string_view, const
-    //         Type*>>>();
-    //     try {
-    //         struct_type->validate(inits);
-    //     } catch (UnlocatedProblem& e) {
-    //         e.report_at(location);
-    //     }
-    // }
 };
 
 struct ASTFunctionCall final : public ASTExpression {
@@ -492,48 +438,9 @@ struct ASTDeclaration final : public ASTNode {
     ASTExprVariant expr;
     bool is_mutable;
     bool is_constant;
-
-    // public:
-    //     ASTDeclaration(
-    //         const Location& loc,
-    //         std::string_view identifier,
-    //         ASTExpression* declared_type,
-    //         ASTExpression* expr,
-    //         bool is_mutable,
-    //         bool is_constant
-    //     ) noexcept
-    //         : ASTRuntimeSymbolDeclaration(loc),
-    //           identifier_(identifier),
-    //           declared_type_(declared_type),
-    //           expr_(expr),
-    //           is_mutable_(is_mutable),
-    //           is_constant_(is_constant) {
-    //         assert(declared_type || expr);
-    //         assert(!(is_mutable_ && is_constant_));
-    //     }
-    //     Term eval_init(TypeChecker& checker) const noexcept final {
-    //         TypeResolution declared_type;
-    //         if (declared_type_) {
-    //             declared_type_->eval_type(checker, declared_type);
-    //         }
-    //         Term term = Term::lvalue(declared_type.get());
-    //         if (expr_) {
-    //             Term expr_term = expr_->eval_term(checker, declared_type, is_constant_).subject;
-    //             if (is_constant_) {
-    //                 term = Term::lvalue(expr_term.get_comptime());
-    //             } else if (!declared_type_) {
-    //                 term = Term::lvalue(expr_term.effective_type());
-    //             }
-    //         }
-    //         return term;
-    //     }
-    //     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
-
-    // protected:
-    //     void do_accept(ASTVisitor& visitor) const final;
 };
 
-struct ASTTypeAlias final : public ASTCompileTimeConstruct {
+struct ASTTypeAlias final : public ASTNode {
     std::string_view identifier;
     ASTExprVariant type;
 };
@@ -573,26 +480,7 @@ struct ASTFunctionDefinition final : public ASTNode {
     bool is_const;
     bool is_static;
     bool is_decl_only;
-    bool is_main = false;
-
-    // FunctionObject get_func_obj(TypeChecker& checker) const noexcept {
-    //     bool any_error = false;
-    //     std::span params = parameters_ |
-    //                        std::views::transform([&](ASTFunctionParameter* param) -> const Type*
-    //                        {
-    //                            TypeResolution param_type;
-    //                            param->type_->eval_type(checker, param_type);
-    //                            return param_type;
-    //                        }) |
-    //                        GlobalMemory::collect<std::span<const Type*>>();
-    //     if (any_error) {
-    //         return TypeRegistry::get_unknown();
-    //     }
-    //     TypeResolution return_type;
-    //     return_type_->eval_type(checker, return_type);
-    //     /// TODO: handle constexpr functions
-    //     return TypeRegistry::get<FunctionType>(params, return_type);
-    // }
+    bool is_main = false;  // Updated by SymbolCollector
 };
 
 struct ASTConstructorDestructorDefinition final : public ASTNode {
@@ -601,7 +489,7 @@ struct ASTConstructorDestructorDefinition final : public ASTNode {
     std::span<ASTNodeVariant> body;
 };
 
-struct ASTClassDefinition final : public ASTCompileTimeConstruct {
+struct ASTClassDefinition final : public ASTNode {
     std::string_view identifier;
     std::string_view extends;
     std::span<std::string_view> implements;
@@ -613,7 +501,7 @@ struct ASTClassDefinition final : public ASTCompileTimeConstruct {
     std::span<ASTClassDefinition*> classes;
 };
 
-struct ASTNamespaceDefinition final : public ASTCompileTimeConstruct {
+struct ASTNamespaceDefinition final : public ASTNode {
     std::string_view identifier;
     std::span<ASTNodeVariant> items;
 };
@@ -625,7 +513,7 @@ struct ASTTemplateParameter final : public ASTNode {
     ASTExprVariant default_value;
 };
 
-struct ASTTemplateDefinition final : public ASTCompileTimeConstruct {
+struct ASTTemplateDefinition final : public ASTNode {
     std::string_view identifier;
     std::span<ASTTemplateParameter> parameters;
     ASTNodeVariant target_node;

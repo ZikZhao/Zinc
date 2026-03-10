@@ -115,8 +115,6 @@ public:
 
     void operator()(const ASTExplicitTypeExpr* node) { UNREACHABLE(); }
 
-    void operator()(const ASTHiddenTypeExpr* node) { UNREACHABLE(); }
-
     void operator()(const ASTParenExpr* node) { (*this)(node->inner); }
 
     void operator()(const ASTConstant* node) {
@@ -149,35 +147,26 @@ public:
         out_ = result;
     }
 
-    template <typename ASTUnaryOpType>
-        requires requires {
-            ASTUnaryOpType::opcode;
-            std::declval<ASTUnaryOpType>().expr;
-        }
-    void operator()(const ASTUnaryOpType* node) {
+    template <ASTUnaryOpClass Op>
+    void operator()(const Op* node) {
         TypeResolution expr_result;
         TypeContextEvaluator{checker_, expr_result, false}(node->expr);
         try {
-            out_ = TypeResolution(checker_.sema_.eval_type_op(ASTUnaryOpType::opcode, expr_result));
+            out_ = TypeResolution(checker_.sema_.eval_type_op(Op::opcode, expr_result));
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
             out_ = TypeRegistry::get_unknown();
         }
     }
 
-    template <typename ASTBinaryOpType>
-        requires requires {
-            ASTBinaryOpType::opcode;
-            std::declval<ASTBinaryOpType>().left;
-            std::declval<ASTBinaryOpType>().right;
-        }
-    void operator()(const ASTBinaryOpType* node) {
+    template <ASTBinaryOpClass Op>
+    void operator()(const Op* node) {
         TypeResolution left_result;
         TypeContextEvaluator{checker_, left_result}(node->left);
         TypeResolution right_result;
         TypeContextEvaluator{checker_, right_result}(node->right);
         try {
-            out_ = checker_.sema_.eval_type_op(ASTBinaryOpType::opcode, left_result, right_result);
+            out_ = checker_.sema_.eval_type_op(Op::opcode, left_result, right_result);
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
             out_ = TypeRegistry::get_unknown();
@@ -481,35 +470,22 @@ public:
         }
     }
 
-    template <typename ASTUnaryOpType>
-        requires requires {
-            ASTUnaryOpType::opcode;
-            std::declval<ASTUnaryOpType>().expr;
-        }
-    auto operator()(const ASTUnaryOpType* node) -> TermWithReceiver {
+    template <ASTUnaryOpClass Op>
+    auto operator()(const Op* node) -> TermWithReceiver {
         Term expr_term =
             ValueContextEvaluator{checker_, expected_, require_comptime_}(node->expr).subject;
-        return {
-            .subject = checker_.sema_.eval_value_op(ASTUnaryOpType::opcode, expr_term),
-            .receiver = {}
-        };
+        return {.subject = checker_.sema_.eval_value_op(Op::opcode, expr_term), .receiver = {}};
     }
 
-    template <typename ASTBinaryOpType>
-        requires requires {
-            ASTBinaryOpType::opcode;
-            std::declval<ASTBinaryOpType>().left;
-            std::declval<ASTBinaryOpType>().right;
-        }
-    auto operator()(const ASTBinaryOpType* node) -> TermWithReceiver {
+    template <ASTBinaryOpClass Op>
+    auto operator()(const Op* node) -> TermWithReceiver {
         Term left_term =
             ValueContextEvaluator{checker_, expected_, require_comptime_}(node->left).subject;
         Term right_term =
             ValueContextEvaluator{checker_, expected_, require_comptime_}(node->right).subject;
         try {
             return {
-                .subject =
-                    checker_.sema_.eval_value_op(ASTBinaryOpType::opcode, left_term, right_term),
+                .subject = checker_.sema_.eval_value_op(Op::opcode, left_term, right_term),
                 .receiver = {}
             };
         } catch (UnlocatedProblem& e) {
