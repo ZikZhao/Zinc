@@ -10,21 +10,38 @@ public:
     class Guard final {
     private:
         TypeChecker& checker_;
-        Scope* prev_;
+        Scope* prev_scope_;
+        const Type* prev_self_type_ = checker_.self_type_;
+        bool prev_in_constructor_ = std::exchange(checker_.in_constructor_, false);
 
     public:
         Guard(TypeChecker& checker, Scope* scope) noexcept
-            : checker_(checker), prev_(std::exchange(checker.current_scope_, scope)) {}
-        Guard(TypeChecker& checker, const void* child) noexcept
+            : checker_(checker), prev_scope_(std::exchange(checker.current_scope_, scope)) {}
+        Guard(TypeChecker& checker, const void* child, const Type* self_type = nullptr) noexcept
             : checker_(checker),
-              prev_(
-                  std::exchange(checker.current_scope_, checker.current_scope_->children_.at(child))
-              ) {}
+              prev_scope_(std::exchange(checker.current_scope_,
+                  checker.current_scope_->children_.at(child))) {
+            if (self_type) {
+                checker_.self_type_ = self_type;
+            }
+        }
+        Guard(TypeChecker& checker,
+            const void* child,
+            const ASTConstructorDestructorDefinition* func) noexcept
+            : checker_(checker),
+              prev_scope_(std::exchange(checker.current_scope_,
+                  checker.current_scope_->children_.at(child))) {
+            checker.in_constructor_ = func->is_constructor;
+        }
         Guard(const Guard&) = delete;
         Guard(Guard&&) = delete;
         auto operator=(const Guard&) = delete;
         auto operator=(Guard&&) = delete;
-        ~Guard() noexcept { checker_.current_scope_ = prev_; }
+        ~Guard() noexcept {
+            checker_.current_scope_ = prev_scope_;
+            checker_.self_type_ = prev_self_type_;
+            checker_.in_constructor_ = prev_in_constructor_;
+        }
     };
 
 private:
@@ -33,6 +50,8 @@ private:
 
 public:
     MemberAccessHandler& sema_;
+    const Type* self_type_ = nullptr;
+    bool in_constructor_ = false;
 
 public:
     TypeChecker(Scope& root, MemberAccessHandler& sema) noexcept
@@ -40,17 +59,8 @@ public:
 
     auto current_scope() noexcept -> Scope* { return current_scope_; }
 
-    auto is_at_top_level() const noexcept -> bool { return current_scope_->parent_ == nullptr; }
-
-    auto self_type() const noexcept -> const Type* {
-        auto current = current_scope_;
-        do {
-            if (current->self_type_) {
-                return current->self_type_;
-            }
-            current = current->parent_;
-        } while (current);
-        return nullptr;
+    [[nodiscard]] auto is_at_top_level() const noexcept -> bool {
+        return current_scope_->parent_ == nullptr;
     }
 
     auto operator[](std::string_view identifier) const noexcept -> const ScopeValue* {
@@ -66,7 +76,7 @@ public:
     auto get_func_obj(const ASTConstructorDestructorDefinition* node, const Type* class_type)
         -> FunctionObject;
 
-    auto lookup(std::string_view identifier) const noexcept
+    [[nodiscard]] auto lookup(std::string_view identifier) const noexcept
         -> std::pair<Scope*, const ScopeValue*> {
         Scope* scope = current_scope_;
         while (scope) {
@@ -99,9 +109,9 @@ private:
     bool require_complete_;
 
 public:
-    TypeContextEvaluator(
-        TypeChecker& checker, TypeResolution& out, bool require_complete = true
-    ) noexcept
+    TypeContextEvaluator(TypeChecker& checker,
+        TypeResolution& out,
+        bool require_complete = true) noexcept
         : checker_(checker), out_(out), require_complete_(require_complete) {}
 
     void operator()(const ASTExprVariant& expr_variant) {
@@ -127,11 +137,10 @@ public:
             Diagnostic::report(SymbolCategoryMismatchError(node->location, false));
             out_ = TypeRegistry::get_unknown();
         } else {
-            const Type* self_type = checker_.self_type();
-            if (!self_type) {
+            if (!checker_.self_type_) {
                 /// TODO: throw not in class error
             }
-            out_ = self_type;
+            out_ = checker_.self_type_;
         }
     }
 
@@ -192,8 +201,7 @@ public:
     void operator()(const ASTFunctionType* node) {
         out_ = std::type_identity<FunctionType>();
         bool any_error = false;
-        std::span<const Type*> param_types =
-            node->parameter_types |
+        std::span<const Type*> param_types = node->parameter_types |
             std::views::transform([&](ASTExprVariant param_expr) -> const Type* {
                 TypeResolution param_type;
                 TypeContextEvaluator{checker_, param_type}(param_expr);
@@ -211,15 +219,13 @@ public:
 
     void operator()(const ASTStructType* node) {
         out_ = std::type_identity<StructType>();
-        GlobalMemory::FlatMap<std::string_view, const Type*> field_map =
-            node->fields |
-            std::views::transform(
-                [&](const ASTFieldDeclaration& decl) -> std::pair<std::string_view, const Type*> {
-                    TypeResolution field_type;
-                    TypeContextEvaluator{checker_, field_type}(decl.type);
-                    return {decl.identifier, field_type};
-                }
-            ) |
+        GlobalMemory::FlatMap<std::string_view, const Type*> field_map = node->fields |
+            std::views::transform([&](const ASTFieldDeclaration& decl)
+                                      -> std::pair<std::string_view, const Type*> {
+                TypeResolution field_type;
+                TypeContextEvaluator{checker_, field_type}(decl.type);
+                return {decl.identifier, field_type};
+            }) |
             GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, const Type*>>();
         try {
             TypeRegistry::get_at<StructType>(out_, field_map);
@@ -260,11 +266,8 @@ public:
     }
 
     void operator()(const ASTClassDefinition* node) {
-        auto* incomplete_class = new InstanceType(node->identifier);
-        out_ = incomplete_class;
-        TypeChecker::Guard guard(checker_, node);
-        assert(checker_.current_scope()->self_type_ == nullptr);
-        checker_.current_scope()->self_type_ = incomplete_class;
+        out_ = new InstanceType(node->identifier);
+        TypeChecker::Guard guard(checker_, node, out_);
         const Type* base = resolve_base(node);
         std::span<const Type*> interfaces = resolve_interfaces(node);
         FunctionOverloadSetValue* constructors = resolve_constructors(node, out_);
@@ -272,17 +275,8 @@ public:
         GlobalMemory::FlatMap<std::string_view, const Type*> attrs = resolve_attrs(node);
         GlobalMemory::FlatMap<std::string_view, FunctionOverloadSetValue*> methods =
             resolve_methods(node);
-        TypeRegistry::get_at<InstanceType>(
-            out_,
-            checker_.current_scope(),
-            node->identifier,
-            base,
-            interfaces,
-            constructors,
-            destructor,
-            std::move(attrs),
-            std::move(methods)
-        );
+        TypeRegistry::get_at<InstanceType>(out_, checker_.current_scope(), node->identifier, base,
+            interfaces, constructors, destructor, std::move(attrs), std::move(methods));
     }
 
     void operator()(const ASTTemplateInstantiation* node) {
@@ -329,17 +323,16 @@ private:
             return type->cast<InterfaceType>();
         };
         return node->implements | std::views::transform(get_interface_type) |
-               GlobalMemory::collect<std::span>();
+            GlobalMemory::collect<std::span>();
     }
 
     auto resolve_constructors(const ASTClassDefinition* node, const Type* class_type) const noexcept
         -> FunctionOverloadSetValue* {
-        return new FunctionOverloadSetValue(
-            node->constructors | std::views::transform([&](const auto& ctor) {
+        return new FunctionOverloadSetValue(node->constructors |
+            std::views::transform([&](const auto& ctor) {
                 return checker_.get_func_obj(ctor, class_type);
             }) |
-            GlobalMemory::collect<GlobalMemory::Vector<FunctionObject>>()
-        );
+            GlobalMemory::collect<GlobalMemory::Vector<FunctionObject>>());
     }
 
     auto resolve_destructor(const ASTClassDefinition* node) const noexcept -> FunctionObject {
@@ -352,50 +345,38 @@ private:
     auto resolve_attrs(const ASTClassDefinition* node) const noexcept
         -> GlobalMemory::FlatMap<std::string_view, const Type*> {
         return node->fields |
-               std::views::transform(
-                   [&](
-                       const ASTDeclaration* field_decl
-                   ) -> std::pair<std::string_view, const Type*> {
-                       TypeResolution field_type;
-                       TypeContextEvaluator{checker_, field_type}(field_decl->declared_type);
-                       return {field_decl->identifier, field_type};
-                   }
-               ) |
-               GlobalMemory::collect<GlobalMemory::FlatMap>();
+            std::views::transform([&](const ASTDeclaration* field_decl)
+                                      -> std::pair<std::string_view, const Type*> {
+                TypeResolution field_type;
+                TypeContextEvaluator{checker_, field_type}(field_decl->declared_type);
+                return {field_decl->identifier, field_type};
+            }) |
+            GlobalMemory::collect<GlobalMemory::FlatMap>();
     }
 
     auto resolve_methods(const ASTClassDefinition* node) const noexcept
         -> GlobalMemory::FlatMap<std::string_view, FunctionOverloadSetValue*> {
-        GlobalMemory::Vector non_static_functions =
-            node->functions | std::views::filter([](const ASTFunctionDefinition* func_def) -> bool {
+        GlobalMemory::Vector non_static_functions = node->functions |
+            std::views::filter([](const ASTFunctionDefinition* func_def) -> bool {
                 return !func_def->is_static;
             }) |
             GlobalMemory::collect<GlobalMemory::Vector>();
-        std::ranges::sort(
-            non_static_functions,
+        std::ranges::sort(non_static_functions,
             [](const ASTFunctionDefinition* a, const ASTFunctionDefinition* b) -> bool {
                 return a->identifier < b->identifier;
-            }
-        );
-        std::ranges::unique(
-            non_static_functions,
+            });
+        std::ranges::unique(non_static_functions,
             [](const ASTFunctionDefinition* a, const ASTFunctionDefinition* b) -> bool {
                 return a->identifier == b->identifier;
-            }
-        );
+            });
         return non_static_functions |
-               std::views::transform(
-                   [&](
-                       const ASTFunctionDefinition* func_def
-                   ) -> std::pair<std::string_view, FunctionOverloadSetValue*> {
-                       Term result = checker_.lookup_term(func_def->identifier);
-                       return {
-                           func_def->identifier,
-                           result.get_comptime()->cast<FunctionOverloadSetValue>()
-                       };
-                   }
-               ) |
-               GlobalMemory::collect<GlobalMemory::FlatMap>();
+            std::views::transform([&](const ASTFunctionDefinition* func_def)
+                                      -> std::pair<std::string_view, FunctionOverloadSetValue*> {
+                Term result = checker_.lookup_term(func_def->identifier);
+                return {
+                    func_def->identifier, result.get_comptime()->cast<FunctionOverloadSetValue>()};
+            }) |
+            GlobalMemory::collect<GlobalMemory::FlatMap>();
     }
 };
 
@@ -407,9 +388,9 @@ private:
     bool require_comptime_;
 
 public:
-    ValueContextEvaluator(
-        TypeChecker& checker, const Type* expected, bool require_comptime
-    ) noexcept
+    ValueContextEvaluator(TypeChecker& checker,
+        const Type* expected,
+        bool require_comptime) noexcept
         : checker_(checker), expected_(expected), require_comptime_(require_comptime) {}
 
     auto operator()(const ASTExprVariant& variant) -> TermWithReceiver {
@@ -417,8 +398,7 @@ public:
                 [](auto node) -> bool {
                     return std::is_convertible_v<decltype(node), const ASTExplicitTypeExpr*>;
                 },
-                variant
-            )) {
+                variant)) {
             TypeResolution out;
             TypeContextEvaluator{checker_, out}(variant);
             return {.subject = Term::type(out), .receiver = {}};
@@ -450,7 +430,7 @@ public:
 
     auto operator()(const ASTSelfExpr* node) -> TermWithReceiver {
         if (node->is_type) {
-            return {.subject = Term::type(checker_.self_type()), .receiver = {}};
+            return {.subject = Term::type(checker_.self_type_), .receiver = {}};
         } else {
             return {.subject = checker_.lookup_term("self"), .receiver = {}};
         }
@@ -484,10 +464,8 @@ public:
         Term right_term =
             ValueContextEvaluator{checker_, expected_, require_comptime_}(node->right).subject;
         try {
-            return {
-                .subject = checker_.sema_.eval_value_op(Op::opcode, left_term, right_term),
-                .receiver = {}
-            };
+            return {.subject = checker_.sema_.eval_value_op(Op::opcode, left_term, right_term),
+                .receiver = {}};
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
             return {.subject = Term::unknown(), .receiver = {}};
@@ -515,30 +493,32 @@ public:
     }
 
     auto operator()(const ASTStructInitialization* node) -> TermWithReceiver {
-        // check duplications in advance
-        GlobalMemory::FlatMap inits =
-            node->field_inits |
-            std::views::transform(
-                [&](const ASTFieldInitialization& init) -> std::pair<std::string_view, Term> {
-                    return {
-                        init.identifier,
-                        ValueContextEvaluator{checker_, nullptr, require_comptime_}(init.value)
-                            .subject
-                    };
-                }
-            ) |
-            GlobalMemory::collect<GlobalMemory::FlatMap>();
-        GlobalMemory::FlatMap init_types =
-            inits |
-            std::views::transform([](const auto& init) -> std::pair<std::string_view, const Type*> {
-                return {init.first, init.second.effective_type()};
+        GlobalMemory::FlatMap inits = node->field_inits |
+            std::views::transform([&](const ASTFieldInitialization& init)
+                                      -> std::pair<std::string_view, Term> {
+                return {init.identifier,
+                    ValueContextEvaluator{checker_, nullptr, require_comptime_}(init.value)
+                        .subject};
             }) |
             GlobalMemory::collect<GlobalMemory::FlatMap>();
         try {
-            TypeResolution struct_type;
-            TypeContextEvaluator{checker_, struct_type}(node->struct_type);
-            struct_type->cast<StructType>()->validate(init_types);
-            return {.subject = Term::prvalue(struct_type.get()), .receiver = {}};
+            /// TODO: constexpr
+            const Type* type = nullptr;
+            if (nonnull(node->struct_type)) {
+                TypeResolution struct_type;
+                TypeContextEvaluator{checker_, struct_type}(node->struct_type);
+                type = struct_type;
+            } else if (auto* self = checker_.self_type_) {
+                type = self;
+            } else {
+                // throw UnlocatedProblem::make<SymbolCategoryMismatchError>(node->location, true);
+                throw;
+            }
+            if (type->dyn_cast<InstanceType>() && checker_.self_type_ != type) {
+                /// TODO: throw not in constructor error
+                throw;
+            }
+            return {.subject = StructType::construct(type, inits), .receiver = {}};
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
             return {.subject = Term::unknown(), .receiver = {}};
@@ -547,8 +527,8 @@ public:
 
     auto operator()(const ASTFunctionCall* node) -> TermWithReceiver {
         bool any_error = false;
-        GlobalMemory::Vector<Term> args_terms =
-            node->arguments | std::views::transform([&](ASTExprVariant arg) {
+        GlobalMemory::Vector<Term> args_terms = node->arguments |
+            std::views::transform([&](ASTExprVariant arg) {
                 Term arg_term =
                     ValueContextEvaluator{checker_, nullptr, require_comptime_}(arg).subject;
                 any_error |= arg_term.is_unknown();
@@ -557,10 +537,7 @@ public:
             GlobalMemory::collect<GlobalMemory::Vector<Term>>();
         auto [func, receiver] =
             ValueContextEvaluator{checker_, nullptr, require_comptime_}(node->function);
-        if (func.is_type()) {
-            Term instance = Term::lvalue(TypeRegistry::get<MutableType>(func.get_type()));
-            args_terms.insert(args_terms.begin(), instance);
-        } else if (receiver) {
+        if (receiver) {
             args_terms.insert(args_terms.begin(), receiver);
         }
         if (any_error) {
@@ -575,15 +552,13 @@ public:
     }
 
     auto operator()(const ASTTemplateInstantiation* node) -> TermWithReceiver {
-        GlobalMemory::Vector<Term> args_terms =
-            node->arguments | std::views::transform([&](ASTExprVariant arg) {
+        GlobalMemory::Vector<Term> args_terms = node->arguments |
+            std::views::transform([&](ASTExprVariant arg) {
                 return ValueContextEvaluator{checker_, nullptr, require_comptime_}(arg).subject;
             }) |
             GlobalMemory::collect<GlobalMemory::Vector<Term>>();
-        return {
-            .subject = checker_.lookup_instantiation(node->template_identifier, args_terms),
-            .receiver = {}
-        };
+        return {.subject = checker_.lookup_instantiation(node->template_identifier, args_terms),
+            .receiver = {}};
     }
 
     auto operator()(const auto* node) -> TermWithReceiver { UNREACHABLE(); }
@@ -621,9 +596,9 @@ private:
         throw;
     }
 
-    auto eval_instance_access(
-        const ASTMemberAccess* node, Term current_term, std::span<std::string_view> members
-    ) -> TermWithReceiver {
+    auto eval_instance_access(const ASTMemberAccess* node,
+        Term current_term,
+        std::span<std::string_view> members) -> TermWithReceiver {
         Term receiver = {};
         if (current_term.is_unknown()) {
             return {.subject = Term::unknown(), .receiver = {}};
@@ -757,15 +732,16 @@ public:
     }
 
     void operator()(const ASTConstructorDestructorDefinition* node) noexcept {
-        TypeChecker::Guard guard(checker_, node);
+        TypeChecker::Guard guard(checker_, node, node);
         for (auto& stmt : node->body) {
             (*this)(stmt);
         }
     }
 
     void operator()(const ASTClassDefinition* node) noexcept {
-        checker_.lookup_type(node->identifier);  // trigger self type injection
-        TypeChecker::Guard guard(checker_, node);
+        TypeResolution class_type =
+            checker_.lookup_type(node->identifier);  // trigger self type injection
+        TypeChecker::Guard guard(checker_, node, class_type);
         for (auto& field : node->fields) {
             (*this)(field);
         }
@@ -791,12 +767,12 @@ public:
 inline auto TypeChecker::get_func_obj(const ASTFunctionDefinition* node) -> FunctionObject {
     bool any_error = false;
     std::span params = node->parameters |
-                       std::views::transform([&](const ASTFunctionParameter& param) -> const Type* {
-                           TypeResolution param_type;
-                           TypeContextEvaluator{*this, param_type}(param.type);
-                           return param_type;
-                       }) |
-                       GlobalMemory::collect<std::span<const Type*>>();
+        std::views::transform([&](const ASTFunctionParameter& param) -> const Type* {
+            TypeResolution param_type;
+            TypeContextEvaluator{*this, param_type}(param.type);
+            return param_type;
+        }) |
+        GlobalMemory::collect<std::span<const Type*>>();
     if (any_error) {
         return TypeRegistry::get_unknown();
     }
@@ -806,17 +782,16 @@ inline auto TypeChecker::get_func_obj(const ASTFunctionDefinition* node) -> Func
     return TypeRegistry::get<FunctionType>(params, return_type);
 }
 
-inline auto TypeChecker::get_func_obj(
-    const ASTConstructorDestructorDefinition* node, const Type* class_type
-) -> FunctionObject {
+inline auto TypeChecker::get_func_obj(const ASTConstructorDestructorDefinition* node,
+    const Type* class_type) -> FunctionObject {
     bool any_error = false;
     std::span params = node->parameters |
-                       std::views::transform([&](const ASTFunctionParameter& param) -> const Type* {
-                           TypeResolution param_type;
-                           TypeContextEvaluator{*this, param_type}(param.type);
-                           return param_type;
-                       }) |
-                       GlobalMemory::collect<std::span<const Type*>>();
+        std::views::transform([&](const ASTFunctionParameter& param) -> const Type* {
+            TypeResolution param_type;
+            TypeContextEvaluator{*this, param_type}(param.type);
+            return param_type;
+        }) |
+        GlobalMemory::collect<std::span<const Type*>>();
     if (any_error) {
         return TypeRegistry::get_unknown();
     }
@@ -887,14 +862,13 @@ inline auto TypeChecker::lookup_term(std::string_view identifier) -> Term {
             return Term::lvalue(var_type.get());
         } else {
             assert(nonnull(var_init->value));
-            return Term::lvalue(
-                ValueContextEvaluator{*this, nullptr, false}(var_init->value).subject
-            );
+            return Term::lvalue(ValueContextEvaluator{*this, nullptr, false}(var_init->value)
+                    .subject);
         }
     } else if (auto func = value->get<GlobalMemory::Vector<FunctionOverloadDecl>*>()) {
         Guard guard(*this, scope);
-        GlobalMemory::Vector<FunctionObject> func_vec =
-            *func | std::views::transform([&](const FunctionOverloadDecl& func_decl) {
+        GlobalMemory::Vector<FunctionObject> func_vec = *func |
+            std::views::transform([&](const FunctionOverloadDecl& func_decl) {
                 if (auto func_def = func_decl.get<const ASTFunctionDefinition*>()) {
                     return get_func_obj(func_def);
                 } else {
@@ -929,9 +903,8 @@ inline auto TypeChecker::lookup_instantiation(std::string_view name, std::span<T
     }
 }
 
-inline auto TypeChecker::validate_instantiation(
-    const ASTTemplateDefinition& primary, std::span<Term> args
-) -> bool {
+inline auto TypeChecker::validate_instantiation(const ASTTemplateDefinition& primary,
+    std::span<Term> args) -> bool {
     if (primary.parameters.size() != args.size()) {
         return false;
     }
@@ -964,9 +937,8 @@ inline auto TypeChecker::validate_instantiation(
     return true;
 }
 
-inline auto TypeChecker::specialization_resolution(
-    const TemplateFamily& family, std::span<Term> args
-) -> Scope& {
+inline auto TypeChecker::specialization_resolution(const TemplateFamily& family,
+    std::span<Term> args) -> Scope& {
     for (const auto& specialization : family.specializations) {
         /// TODO:
     }

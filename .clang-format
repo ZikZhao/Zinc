@@ -2,7 +2,7 @@
 Language:        Cpp
 BasedOnStyle:  Google
 AccessModifierOffset: -4
-AlignAfterOpenBracket: BlockIndent
+AlignAfterOpenBracket: DontAlign
 AlignArrayOfStructures: None
 AlignConsecutiveAssignments:
   Enabled:         false
@@ -38,7 +38,7 @@ AlignConsecutiveShortCaseStatements:
   AcrossComments:  false
   AlignCaseColons: false
 AlignEscapedNewlines: Left
-AlignOperands:   Align
+AlignOperands:   DontAlign
 AlignTrailingComments:
   Kind:            Always
   OverEmptyLines:  0
@@ -59,7 +59,7 @@ AlwaysBreakBeforeMultilineStrings: true
 AlwaysBreakTemplateDeclarations: Yes
 AttributeMacros:
   - __capability
-BinPackArguments: false
+BinPackArguments: true
 BinPackParameters: false
 BitFieldColonSpacing: Both
 BraceWrapping:
@@ -174,7 +174,7 @@ PenaltyBreakAssignment: 2
 PenaltyBreakBeforeFirstCallParameter: 1
 PenaltyBreakComment: 300
 PenaltyBreakFirstLessLess: 120
-PenaltyBreakOpenParenthesis: 0
+PenaltyBreakOpenParenthesis: 1000
 PenaltyBreakScopeResolution: 500
 PenaltyBreakString: 1000
 PenaltyBreakTemplateDeclaration: 10

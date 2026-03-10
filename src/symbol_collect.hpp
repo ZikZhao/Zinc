@@ -54,7 +54,6 @@ private:
 public:
     Scope* const parent_ = nullptr;
     const ASTNode* const origin_ = nullptr;
-    const Type* self_type_ = nullptr;
 
 private:
     Scope(Scope* parent, const ASTNode* origin) noexcept : parent_(parent), origin_(origin) {}
@@ -174,6 +173,20 @@ public:
         }
     }
 
+    // Struct initialization
+    void operator()(const ASTStructInitialization* node) noexcept {
+        auto fields =
+            node->field_inits |
+            std::views::transform([&](const ASTFieldInitialization& init) -> std::string_view {
+                return init.identifier;
+            }) |
+            GlobalMemory::collect<GlobalMemory::Vector>();
+        std::ranges::sort(fields);
+        if (std::ranges::adjacent_find(fields) != fields.end()) {
+            throw UnlocatedProblem::make<DuplicateAttributeError>(fields.front());
+        }
+    }
+
     // Declarations
     void operator()(const ASTDeclaration* node) noexcept {
         try {
@@ -216,13 +229,6 @@ public:
     // Functions
     void operator()(ASTFunctionDefinition* node) noexcept {
         current_scope_.add_function(node->identifier, node);
-        if (current_scope_.self_type_ == nullptr ||
-            (node->parameters.size() ? node->parameters[0].identifier != "self" : true)) {
-            node->is_static = true;
-        }
-        if (node->is_static && current_scope_.parent_ == nullptr && node->identifier == "main") {
-            node->is_main = true;
-        }
         Scope& local_scope = Scope::make(current_scope_, node);
         for (auto& param : node->parameters) {
             local_scope.add_variable(
@@ -254,7 +260,6 @@ public:
     void operator()(const ASTClassDefinition* node) noexcept {
         current_scope_.add_class(node->identifier, node);
         Scope& class_scope = Scope::make(current_scope_, node);
-        class_scope.self_type_ = reinterpret_cast<const Type*>(1);
         SymbolCollector class_visitor(class_scope, sema_);
         for (auto& ctor : node->constructors) {
             class_visitor(ctor);
@@ -265,7 +270,6 @@ public:
         for (auto& func : node->functions) {
             class_visitor(func);
         }
-        class_scope.self_type_ = nullptr;
     }
 
     // Namespaces

@@ -11,8 +11,8 @@ fn g() -> i32 {
 
 class MyClass<T: type> {
     let value: T;
-    init(self: &Self, value: T) {
-        self.value = value;
+    init(value: T) {
+        return Self{ value: value };
     }
     fn method1(self: &Self, x: i32) -> T {
         return self.value;

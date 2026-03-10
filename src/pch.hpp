@@ -413,7 +413,7 @@ public:
         if constexpr (std::ranges::sized_range<R>) {
             unsorted.reserve(std::ranges::size(range));
         }
-        for (auto&& pair : range) {
+        for (auto&& pair : std::forward<R>(range)) {
             unsorted.push_back(std::forward<decltype(pair)>(pair));
         }
         std::sort(unsorted.begin(), unsorted.end(), CompareFirst{});
@@ -425,6 +425,8 @@ public:
     }
 
     constexpr auto size() const noexcept -> std::size_t { return data_.size(); }
+
+    constexpr auto empty() const noexcept -> bool { return data_.empty(); }
 
     auto insert(std::pair<Key, Value> pair) -> std::pair<iterator, bool> {
         auto it = std::lower_bound(data_.begin(), data_.end(), pair.first, CompareFirst{});
