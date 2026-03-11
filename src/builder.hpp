@@ -236,19 +236,18 @@ private:
     antlrcpp::Any visitNormalParam(ZincParser::NormalParamContext* ctx) noexcept final {
         return ASTFunctionParameter{loc(ctx), text(ctx->identifier_), visit_expr(ctx->type_)};
     }
-    antlrcpp::Any visitClass_definition(ZincParser::Class_definitionContext* ctx) noexcept final {
+    auto visitClass_definition(ZincParser::Class_definitionContext* ctx) noexcept
+        -> antlrcpp::Any final {
         std::span implements = ctx->implements_ |
                                std::views::transform([this](auto child) { return text(child); }) |
                                GlobalMemory::collect<std::span<std::string_view>>();
-        std::span<ASTConstructorDestructorDefinition*> constructors =
-            visit_list<ASTConstructorDestructorDefinition*>(ctx->constructor_);
-        std::span<ASTConstructorDestructorDefinition*> destructors =
-            visit_list<ASTConstructorDestructorDefinition*>(ctx->destructor_);
-        std::span<ASTDeclaration*> fields = visit_list(ctx->fields_) |
-                                            std::views::transform([](ASTNodeVariant node) {
-                                                return std::get<ASTDeclaration*>(node);
-                                            }) |
-                                            GlobalMemory::collect<std::span<ASTDeclaration*>>();
+        std::span constructors = visit_list<ASTConstructorDestructorDefinition*>(ctx->constructor_);
+        std::span destructors = visit_list<ASTConstructorDestructorDefinition*>(ctx->destructor_);
+        std::span fields = visit_list(ctx->fields_) |
+                           std::views::transform([](ASTNodeVariant node) -> ASTDeclaration* {
+                               return std::get<ASTDeclaration*>(node);
+                           }) |
+                           GlobalMemory::collect<std::span<ASTDeclaration*>>();
         std::span<ASTTypeAlias*> types = visit_list(ctx->types_) |
                                          std::views::transform([](ASTNodeVariant node) {
                                              return std::get<ASTTypeAlias*>(node);
@@ -304,86 +303,86 @@ private:
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
-        case ZincParser::OP_ASSIGN:
-            return as_variant(new ASTAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_ADD_ASSIGN:
-            return as_variant(new ASTAddAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_SUB_ASSIGN:
-            return as_variant(new ASTSubtractAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_MUL_ASSIGN:
-            return as_variant(new ASTMultiplyAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_DIV_ASSIGN:
-            return as_variant(new ASTDivideAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_REM_ASSIGN:
-            return as_variant(new ASTRemainderAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_AND_ASSIGN:
-            return as_variant(new ASTLogicalAndAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_OR_ASSIGN:
-            return as_variant(new ASTLogicalOrAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_BITAND_ASSIGN:
-            return as_variant(new ASTBitwiseAndAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_BITOR_ASSIGN:
-            return as_variant(new ASTBitwiseOrAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_BITXOR_ASSIGN:
-            return as_variant(new ASTBitwiseXorAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_LSHIFT_ASSIGN:
-            return as_variant(new ASTLeftShiftAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_RSHIFT_ASSIGN:
-            return as_variant(new ASTRightShiftAssignOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
+            case ZincParser::OP_ASSIGN:
+                return as_variant(new ASTAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_ADD_ASSIGN:
+                return as_variant(new ASTAddAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_SUB_ASSIGN:
+                return as_variant(new ASTSubtractAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_MUL_ASSIGN:
+                return as_variant(new ASTMultiplyAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_DIV_ASSIGN:
+                return as_variant(new ASTDivideAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_REM_ASSIGN:
+                return as_variant(new ASTRemainderAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_AND_ASSIGN:
+                return as_variant(new ASTLogicalAndAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_OR_ASSIGN:
+                return as_variant(new ASTLogicalOrAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_BITAND_ASSIGN:
+                return as_variant(new ASTBitwiseAndAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_BITOR_ASSIGN:
+                return as_variant(new ASTBitwiseOrAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_BITXOR_ASSIGN:
+                return as_variant(new ASTBitwiseXorAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_LSHIFT_ASSIGN:
+                return as_variant(new ASTLeftShiftAssignOp{loc(ctx), left, right});
+            case ZincParser::OP_RSHIFT_ASSIGN:
+                return as_variant(new ASTRightShiftAssignOp{loc(ctx), left, right});
+            default:
+                UNREACHABLE();
         }
     }
     antlrcpp::Any visitEqualityExpr(ZincParser::EqualityExprContext* ctx) noexcept final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
-        case ZincParser::OP_EQ:
-            return as_variant(new ASTEqualOp{loc(ctx), left, right});
-        case ZincParser::OP_NEQ:
-            return as_variant(new ASTNotEqualOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
+            case ZincParser::OP_EQ:
+                return as_variant(new ASTEqualOp{loc(ctx), left, right});
+            case ZincParser::OP_NEQ:
+                return as_variant(new ASTNotEqualOp{loc(ctx), left, right});
+            default:
+                UNREACHABLE();
         }
     }
     antlrcpp::Any visitRelationalExpr(ZincParser::RelationalExprContext* ctx) noexcept final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
-        case ZincParser::OP_LT:
-            return as_variant(new ASTLessThanOp{loc(ctx), left, right});
-        case ZincParser::OP_LTE:
-            return as_variant(new ASTLessEqualOp{loc(ctx), left, right});
-        case ZincParser::OP_GT:
-            return as_variant(new ASTGreaterThanOp{loc(ctx), left, right});
-        case ZincParser::OP_GTE:
-            return as_variant(new ASTGreaterEqualOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
+            case ZincParser::OP_LT:
+                return as_variant(new ASTLessThanOp{loc(ctx), left, right});
+            case ZincParser::OP_LTE:
+                return as_variant(new ASTLessEqualOp{loc(ctx), left, right});
+            case ZincParser::OP_GT:
+                return as_variant(new ASTGreaterThanOp{loc(ctx), left, right});
+            case ZincParser::OP_GTE:
+                return as_variant(new ASTGreaterEqualOp{loc(ctx), left, right});
+            default:
+                UNREACHABLE();
         }
     }
     antlrcpp::Any visitShiftExpr(ZincParser::ShiftExprContext* ctx) noexcept final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
-        case ZincParser::OP_LSHIFT:
-            return as_variant(new ASTLeftShiftOp{loc(ctx), left, right});
-        case ZincParser::OP_RSHIFT:
-            return as_variant(new ASTRightShiftOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
+            case ZincParser::OP_LSHIFT:
+                return as_variant(new ASTLeftShiftOp{loc(ctx), left, right});
+            case ZincParser::OP_RSHIFT:
+                return as_variant(new ASTRightShiftOp{loc(ctx), left, right});
+            default:
+                UNREACHABLE();
         }
     }
     antlrcpp::Any visitAdditiveExpr(ZincParser::AdditiveExprContext* ctx) noexcept final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
-        case ZincParser::OP_ADD:
-            return as_variant(new ASTAddOp{loc(ctx), left, right});
-        case ZincParser::OP_SUB:
-            return as_variant(new ASTSubtractOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
+            case ZincParser::OP_ADD:
+                return as_variant(new ASTAddOp{loc(ctx), left, right});
+            case ZincParser::OP_SUB:
+                return as_variant(new ASTSubtractOp{loc(ctx), left, right});
+            default:
+                UNREACHABLE();
         }
     }
     antlrcpp::Any visitMultiplicativeExpr(
@@ -392,31 +391,31 @@ private:
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
-        case ZincParser::OP_MUL:
-            return as_variant(new ASTMultiplyOp{loc(ctx), left, right});
-        case ZincParser::OP_DIV:
-            return as_variant(new ASTDivideOp{loc(ctx), left, right});
-        case ZincParser::OP_REM:
-            return as_variant(new ASTRemainderOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
+            case ZincParser::OP_MUL:
+                return as_variant(new ASTMultiplyOp{loc(ctx), left, right});
+            case ZincParser::OP_DIV:
+                return as_variant(new ASTDivideOp{loc(ctx), left, right});
+            case ZincParser::OP_REM:
+                return as_variant(new ASTRemainderOp{loc(ctx), left, right});
+            default:
+                UNREACHABLE();
         }
     }
     antlrcpp::Any visitUnaryExpr(ZincParser::UnaryExprContext* ctx) noexcept final {
         ASTExprVariant expr = visit_expr(ctx->expr_);
         switch (ctx->op_->getType()) {
-        case ZincParser::OP_INC:
-            return as_variant(new ASTIncrementOp{loc(ctx), expr});
-        case ZincParser::OP_DEC:
-            return as_variant(new ASTDecrementOp{loc(ctx), expr});
-        case ZincParser::OP_SUB:
-            return as_variant(new ASTNegateOp{loc(ctx), expr});
-        case ZincParser::OP_NOT:
-            return as_variant(new ASTLogicalNotOp{loc(ctx), expr});
-        case ZincParser::OP_BITNOT:
-            return as_variant(new ASTBitwiseNotOp{loc(ctx), expr});
-        default:
-            UNREACHABLE();
+            case ZincParser::OP_INC:
+                return as_variant(new ASTIncrementOp{loc(ctx), expr});
+            case ZincParser::OP_DEC:
+                return as_variant(new ASTDecrementOp{loc(ctx), expr});
+            case ZincParser::OP_SUB:
+                return as_variant(new ASTNegateOp{loc(ctx), expr});
+            case ZincParser::OP_NOT:
+                return as_variant(new ASTLogicalNotOp{loc(ctx), expr});
+            case ZincParser::OP_BITNOT:
+                return as_variant(new ASTBitwiseNotOp{loc(ctx), expr});
+            default:
+                UNREACHABLE();
         }
     }
     antlrcpp::Any visitConstExpr(ZincParser::ConstExprContext* ctx) noexcept final {
@@ -461,28 +460,28 @@ private:
     }
     antlrcpp::Any visitConstant(ZincParser::ConstantContext* ctx) noexcept final {
         switch (ctx->value_->getType()) {
-        case ZincParser::T_INT:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<IntegerValue>(text(ctx->value_))}
-            );
-        case ZincParser::T_FLOAT:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<FloatValue>(text(ctx->value_))}
-            );
-        case ZincParser::T_STRING:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<ArrayValue>(text(ctx->value_))}
-            );
-        case ZincParser::T_BOOL:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<BooleanValue>(text(ctx->value_))}
-            );
-        case ZincParser::KW_NULLPTR:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<NullptrValue>(text(ctx->value_))}
-            );
-        default:
-            UNREACHABLE();
+            case ZincParser::T_INT:
+                return as_variant(
+                    new ASTConstant{loc(ctx), Value::from_literal<IntegerValue>(text(ctx->value_))}
+                );
+            case ZincParser::T_FLOAT:
+                return as_variant(
+                    new ASTConstant{loc(ctx), Value::from_literal<FloatValue>(text(ctx->value_))}
+                );
+            case ZincParser::T_STRING:
+                return as_variant(
+                    new ASTConstant{loc(ctx), Value::from_literal<ArrayValue>(text(ctx->value_))}
+                );
+            case ZincParser::T_BOOL:
+                return as_variant(
+                    new ASTConstant{loc(ctx), Value::from_literal<BooleanValue>(text(ctx->value_))}
+                );
+            case ZincParser::KW_NULLPTR:
+                return as_variant(
+                    new ASTConstant{loc(ctx), Value::from_literal<NullptrValue>(text(ctx->value_))}
+                );
+            default:
+                UNREACHABLE();
         }
     }
     antlrcpp::Any visitSelfType(ZincParser::SelfTypeContext* ctx) noexcept final {
@@ -490,36 +489,37 @@ private:
     }
     antlrcpp::Any visitPrimitiveType(ZincParser::PrimitiveTypeContext* ctx) noexcept final {
         switch (ctx->primitive_->getType()) {
-        case ZincParser::KW_INT8:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i8_instance});
-        case ZincParser::KW_INT16:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i16_instance});
-        case ZincParser::KW_INT32:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i32_instance});
-        case ZincParser::KW_INT64:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i64_instance});
-        case ZincParser::KW_UINT8:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u8_instance});
-        case ZincParser::KW_UINT16:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u16_instance});
-        case ZincParser::KW_UINT32:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u32_instance});
-        case ZincParser::KW_UINT64:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u64_instance});
-        case ZincParser::KW_FLOAT32:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &FloatType::f32_instance});
-        case ZincParser::KW_FLOAT64:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &FloatType::f64_instance});
-        case ZincParser::KW_STRING:
-            /// TODO: write a new class to do
-            /// TODO: current implementation leads to memory violation (TypeRegistry::get needs
-            /// to be called on main thread)
-            // last_visited_ = new ASTPrimitiveType(loc(ctx), TypeRegistry::get<StringType>());
-            return nullptr;
-        case ZincParser::KW_BOOL:
-            return as_variant(new ASTPrimitiveType{loc(ctx), &BooleanType::instance});
-        default:
-            UNREACHABLE();
+            case ZincParser::KW_INT8:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i8_instance});
+            case ZincParser::KW_INT16:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i16_instance});
+            case ZincParser::KW_INT32:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i32_instance});
+            case ZincParser::KW_INT64:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i64_instance});
+            case ZincParser::KW_UINT8:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u8_instance});
+            case ZincParser::KW_UINT16:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u16_instance});
+            case ZincParser::KW_UINT32:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u32_instance});
+            case ZincParser::KW_UINT64:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u64_instance});
+            case ZincParser::KW_FLOAT32:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &FloatType::f32_instance});
+            case ZincParser::KW_FLOAT64:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &FloatType::f64_instance});
+            case ZincParser::KW_STRING:
+                /// TODO: write a new class to do
+                /// TODO: current implementation leads to memory violation
+                /// (TypeRegistry::get needs to be called on main thread)
+                // last_visited_ = new ASTPrimitiveType(loc(ctx),
+                // TypeRegistry::get<StringType>());
+                return nullptr;
+            case ZincParser::KW_BOOL:
+                return as_variant(new ASTPrimitiveType{loc(ctx), &BooleanType::instance});
+            default:
+                UNREACHABLE();
         }
     }
     antlrcpp::Any visitIdentifierType(ZincParser::IdentifierTypeContext* ctx) noexcept final {

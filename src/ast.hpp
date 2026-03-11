@@ -2,8 +2,46 @@
 #include "pch.hpp"
 
 #include "object.hpp"
-#include "operations.hpp"
-#include "source.hpp"
+
+enum class OperatorCode : std::uint8_t {
+    Add,
+    Subtract,
+    Negate,
+    Multiply,
+    Divide,
+    Remainder,
+    Increment,
+    Decrement,
+    Equal,
+    NotEqual,
+    LessThan,
+    LessEqual,
+    GreaterThan,
+    GreaterEqual,
+    LogicalAnd,
+    LogicalOr,
+    LogicalNot,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    BitwiseNot,
+    LeftShift,
+    RightShift,
+    Assign,
+    SIZE,
+    AddAssign,
+    SubtractAssign,
+    MultiplyAssign,
+    DivideAssign,
+    RemainderAssign,
+    LogicalAndAssign,
+    LogicalOrAssign,
+    BitwiseAndAssign,
+    BitwiseOrAssign,
+    BitwiseXorAssign,
+    LeftShiftAssign,
+    RightShiftAssign,
+};
 
 struct ASTNode;
 struct ASTRoot;
@@ -520,3 +558,172 @@ struct ASTTemplateDefinition final : public ASTNode {
 };
 
 struct ASTTemplateSpecialization final : public ASTNode {};
+
+enum class OperatorGroup : std::uint8_t {
+    Arithmetic,
+    Comparison,
+    Logical,
+    Bitwise,
+    Assignment,
+    UnaryArithmetic,
+    UnaryLogical,
+    UnaryBitwise,
+};
+
+constexpr auto GetOperatorGroup(OperatorCode opcode) -> OperatorGroup {
+    switch (opcode) {
+    case OperatorCode::Add:
+    case OperatorCode::Subtract:
+    case OperatorCode::Multiply:
+    case OperatorCode::Divide:
+    case OperatorCode::Remainder:
+        return OperatorGroup::Arithmetic;
+    case OperatorCode::Negate:
+    case OperatorCode::Increment:
+    case OperatorCode::Decrement:
+        return OperatorGroup::UnaryArithmetic;
+    case OperatorCode::Equal:
+    case OperatorCode::NotEqual:
+    case OperatorCode::LessThan:
+    case OperatorCode::LessEqual:
+    case OperatorCode::GreaterThan:
+    case OperatorCode::GreaterEqual:
+        return OperatorGroup::Comparison;
+    case OperatorCode::LogicalAnd:
+    case OperatorCode::LogicalOr:
+        return OperatorGroup::Logical;
+    case OperatorCode::LogicalNot:
+        return OperatorGroup::UnaryLogical;
+    case OperatorCode::BitwiseAnd:
+    case OperatorCode::BitwiseOr:
+    case OperatorCode::BitwiseXor:
+        return OperatorGroup::Bitwise;
+    case OperatorCode::BitwiseNot:
+        return OperatorGroup::UnaryBitwise;
+    case OperatorCode::Assign:
+    case OperatorCode::AddAssign:
+    case OperatorCode::SubtractAssign:
+    case OperatorCode::MultiplyAssign:
+    case OperatorCode::DivideAssign:
+    case OperatorCode::RemainderAssign:
+    case OperatorCode::LogicalAndAssign:
+    case OperatorCode::LogicalOrAssign:
+    case OperatorCode::BitwiseAndAssign:
+    case OperatorCode::BitwiseOrAssign:
+    case OperatorCode::BitwiseXorAssign:
+    case OperatorCode::LeftShiftAssign:
+    case OperatorCode::RightShiftAssign:
+        return OperatorGroup::Assignment;
+    default:
+        UNREACHABLE();
+    }
+};
+
+constexpr auto GetAssignmentEquivalent(OperatorCode opcode) -> OperatorCode {
+    switch (opcode) {
+    case OperatorCode::AddAssign:
+        return OperatorCode::Add;
+    case OperatorCode::SubtractAssign:
+        return OperatorCode::Subtract;
+    case OperatorCode::MultiplyAssign:
+        return OperatorCode::Multiply;
+    case OperatorCode::DivideAssign:
+        return OperatorCode::Divide;
+    case OperatorCode::RemainderAssign:
+        return OperatorCode::Remainder;
+    case OperatorCode::LogicalAndAssign:
+        return OperatorCode::LogicalAnd;
+    case OperatorCode::LogicalOrAssign:
+        return OperatorCode::LogicalOr;
+    case OperatorCode::BitwiseAndAssign:
+        return OperatorCode::BitwiseAnd;
+    case OperatorCode::BitwiseOrAssign:
+        return OperatorCode::BitwiseOr;
+    case OperatorCode::BitwiseXorAssign:
+        return OperatorCode::BitwiseXor;
+    case OperatorCode::LeftShiftAssign:
+        return OperatorCode::LeftShift;
+    case OperatorCode::RightShiftAssign:
+        return OperatorCode::RightShift;
+    default:
+        UNREACHABLE();
+    }
+}
+
+constexpr auto GetOperatorString(OperatorCode opcode) -> std::string_view {
+    switch (opcode) {
+    case OperatorCode::Add:
+        return "+";
+    case OperatorCode::Subtract:
+    case OperatorCode::Negate:
+        return "-";
+    case OperatorCode::Multiply:
+        return "*";
+    case OperatorCode::Divide:
+        return "/";
+    case OperatorCode::Remainder:
+        return "%";
+    case OperatorCode::Increment:
+        return "++";
+    case OperatorCode::Decrement:
+        return "--";
+    case OperatorCode::Equal:
+        return "==";
+    case OperatorCode::NotEqual:
+        return "!=";
+    case OperatorCode::LessThan:
+        return "<";
+    case OperatorCode::LessEqual:
+        return "<=";
+    case OperatorCode::GreaterThan:
+        return ">";
+    case OperatorCode::GreaterEqual:
+        return ">=";
+    case OperatorCode::LogicalAnd:
+        return "&&";
+    case OperatorCode::LogicalOr:
+        return "||";
+    case OperatorCode::LogicalNot:
+        return "!";
+    case OperatorCode::BitwiseAnd:
+        return "&";
+    case OperatorCode::BitwiseOr:
+        return "|";
+    case OperatorCode::BitwiseXor:
+        return "^";
+    case OperatorCode::BitwiseNot:
+        return "~";
+    case OperatorCode::LeftShift:
+        return "<<";
+    case OperatorCode::RightShift:
+        return ">>";
+    case OperatorCode::Assign:
+        return "=";
+    case OperatorCode::AddAssign:
+        return "+=";
+    case OperatorCode::SubtractAssign:
+        return "-=";
+    case OperatorCode::MultiplyAssign:
+        return "*=";
+    case OperatorCode::DivideAssign:
+        return "/=";
+    case OperatorCode::RemainderAssign:
+        return "%=";
+    case OperatorCode::LogicalAndAssign:
+        return "&&=";
+    case OperatorCode::LogicalOrAssign:
+        return "||=";
+    case OperatorCode::BitwiseAndAssign:
+        return "&=";
+    case OperatorCode::BitwiseOrAssign:
+        return "|=";
+    case OperatorCode::BitwiseXorAssign:
+        return "^=";
+    case OperatorCode::LeftShiftAssign:
+        return "<<=";
+    case OperatorCode::RightShiftAssign:
+        return ">>=";
+    default:
+        UNREACHABLE();
+    }
+}

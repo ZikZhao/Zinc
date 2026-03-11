@@ -4,12 +4,24 @@
 #include "object.hpp"
 #include "type_check.hpp"
 
-static auto format_ptr(const void* ptr) -> std::string_view {
+static auto type_hash(const void* ptr) -> std::string_view {
     thread_local std::array<char, sizeof(void*) * 2> buffer;
     std::format_to_n(
         buffer.begin(),
         buffer.size(),
         "t{:0{}X}",
+        std::bit_cast<std::uintptr_t>(ptr),
+        sizeof(void*) * 2
+    );
+    return {buffer.data(), buffer.size()};
+}
+
+static auto func_hash(const void* ptr) -> std::string_view {
+    thread_local std::array<char, sizeof(void*) * 2> buffer;
+    std::format_to_n(
+        buffer.begin(),
+        buffer.size(),
+        "f{:0{}X}",
         std::bit_cast<std::uintptr_t>(ptr),
         sizeof(void*) * 2
     );
@@ -156,7 +168,7 @@ public:
             break;
         case Kind::Struct:
         case Kind::Instance:
-            definitions_ += format_ptr(type);
+            definitions_ += type_hash(type);
             break;
         case Kind::Interface:
             /// TODO:
@@ -223,8 +235,8 @@ public:
     }
 
     void generate(const StructType* type) {
-        std::format_to(std::back_inserter(forward_declarations_), "struct {};\n", format_ptr(type));
-        std::format_to(std::back_inserter(definitions_), "struct {} {{\n", format_ptr(type));
+        std::format_to(std::back_inserter(forward_declarations_), "struct {};\n", type_hash(type));
+        std::format_to(std::back_inserter(definitions_), "struct {} {{\n", type_hash(type));
         for (const auto& [field_name, field_type] : type->fields_) {
             definitions_ += "    ";
             generate(field_type);
@@ -236,8 +248,8 @@ public:
     }
 
     void generate(const InstanceType* type) {
-        std::format_to(std::back_inserter(forward_declarations_), "struct {};\n", format_ptr(type));
-        std::format_to(std::back_inserter(definitions_), "struct {} {{\n", format_ptr(type));
+        std::format_to(std::back_inserter(forward_declarations_), "struct {};\n", type_hash(type));
+        std::format_to(std::back_inserter(definitions_), "struct {} {{\n", type_hash(type));
         for (const auto& [attr_name, attr_type] : type->attrs_) {
             definitions_ += "    ";
             generate(attr_type);
@@ -316,10 +328,10 @@ public:
         const char* sep = "";
         for (const auto& param : node->parameters) {
             stream_ << sep << param.identifier
-                    << format_ptr(std::visit(VariantGetter{}, param.type));
+                    << type_hash(std::visit(VariantGetter{}, param.type));
             sep = ", ";
         }
-        stream_ << ") -> " << format_ptr(std::visit(VariantGetter{}, node->return_type)) << " {\n";
+        stream_ << ") -> " << type_hash(std::visit(VariantGetter{}, node->return_type)) << " {\n";
         // Guard guard(*this, node);
         for (const ASTNodeVariant& child : node->body) {
             (*this)(child);
@@ -399,7 +411,7 @@ public:
     }
 
     auto operator()(const ASTDeclaration* node) -> void {
-        stream_ << format_ptr(std::visit(VariantGetter{}, node->declared_type)) << " "
+        stream_ << type_hash(std::visit(VariantGetter{}, node->declared_type)) << " "
                 << node->identifier << ";\n";
     }
 

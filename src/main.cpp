@@ -5,7 +5,6 @@
 #include "codegen.hpp"
 #include "diagnosis.hpp"
 #include "object.hpp"
-#include "operations.hpp"
 #include "source.hpp"
 #include "symbol_collect.hpp"
 #include "type_check.hpp"
@@ -28,7 +27,7 @@ public:
     }
 };
 
-auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer, const ASTRoot* root)
+auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer)
     -> std::pair<Scope&, MemberAccessHandler> {
     static auto [std_scope, std_sema] = [&]() {
         ASTBuilder builder(*sources.load_std(), importer);
@@ -38,7 +37,7 @@ auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer, const AS
         SymbolCollector{scope, sema}(std_root);
         return std::pair{&scope, sema};
     }();
-    return {Scope::root(*std_scope, root), std_sema};
+    return {Scope::root(*std_scope), std_sema};
 }
 
 auto main(int argc, char* argv[]) -> int {
@@ -59,11 +58,11 @@ auto main(int argc, char* argv[]) -> int {
         return EXIT_FAILURE;
     }
 
-    auto [scope, sema] = get_root(sources, importer, root);
+    auto [scope, sema] = get_root(sources, importer);
     SymbolCollector symbol_collector(scope, sema);
     symbol_collector(root);
 
-    TypeChecker checker(scope, sema);
+    TypeChecker checker(scope, std::move(sema));
     TypeCheckVisitor{checker}(root);
 
     bool has_error = Diagnostic::print(sources);
