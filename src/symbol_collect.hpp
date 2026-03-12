@@ -13,7 +13,8 @@ using FunctionOverloadDef = PointerVariant<
     const ASTTemplateDefinition*>;
 
 struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
-    Scope& scope;
+    Scope& decl_scope;
+    Scope* specialization_testing_scope;
     const ASTTemplateDefinition& primary;
     GlobalMemory::Vector<const ASTTemplateSpecialization*> specializations;
 };
@@ -33,6 +34,8 @@ using ScopeValue = PointerVariant<
     const Scope*>;                               // namespace
 
 class Scope final : public GlobalMemory::MonotonicAllocated {
+    friend class Sema;
+
 public:
     static auto root(Scope& std_scope) -> Scope& {
         auto* scope = new Scope(nullptr);
@@ -46,10 +49,12 @@ public:
         return *scope;
     }
 
-public:
+private:
     Scope* const parent_ = nullptr;
     GlobalMemory::FlatMap<const void*, Scope*> children_;
     GlobalMemory::FlatMap<std::string_view, ScopeValue> identifiers_;
+
+public:
     const Type* self_type_;
     bool in_constructor_;
 
@@ -64,9 +69,9 @@ public:
     auto operator=(Scope&&) -> Scope& = delete;
     ~Scope() noexcept = default;
 
-    void add_template_argument(std::string_view identifier, Term term) {
-        auto [_, inserted] = identifiers_.insert({identifier, new Term(term)});
-        assert(inserted);
+    void add_template_argument(std::string_view identifier, Term term) noexcept {
+        assert(!identifiers_.contains(identifier));
+        identifiers_.insert({identifier, new Term(term)});
     }
 
     void add_alias(std::string_view identifier, const ASTExprVariant* expr) {
@@ -106,7 +111,12 @@ public:
 
     void add_template(std::string_view identifier, const ASTTemplateDefinition& definition) {
         auto [_, inserted] = identifiers_.insert(
-            {identifier, new TemplateFamily{.scope = *this, .primary = definition}}
+            {identifier,
+             new TemplateFamily{
+                 .decl_scope = *this,
+                 .specialization_testing_scope = &Scope::make(*this),
+                 .primary = definition,
+             }}
         );
         if (!inserted) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
@@ -114,7 +124,7 @@ public:
     }
 
     void add_template(
-        std::string_view identifier, const ASTTemplateSpecialization* specialization
+        std::string_view identifier, const ASTTemplateSpecialization& specialization
     ) {
         auto it = identifiers_.find(identifier);
         if (it == identifiers_.end()) {
@@ -124,7 +134,7 @@ public:
         if (!family) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
-        family->specializations.push_back(specialization);
+        family->specializations.push_back(&specialization);
     }
 
     void add_namespace(std::string_view identifier, Scope& scope) {
@@ -141,9 +151,11 @@ public:
         }
         return nullptr;
     }
+
+    void clear() noexcept { identifiers_.clear(); }
 };
 
-using OperatorRegistry = GlobalMemory::MultiMap<OperatorCode, FunctionOverloadDef>;
+using OperatorRegistry = GlobalMemory::UnorderedMultiMap<OperatorCode, FunctionOverloadDef>;
 
 class SymbolCollector {
 private:
@@ -291,6 +303,10 @@ public:
 
     // Templates
     void operator()(const ASTTemplateDefinition* node) noexcept {
+        current_scope_.add_template(node->identifier, *node);
+    }
+
+    void operator()(const ASTTemplateSpecialization* node) noexcept {
         current_scope_.add_template(node->identifier, *node);
     }
 };

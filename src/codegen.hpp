@@ -332,7 +332,6 @@ public:
             sep = ", ";
         }
         stream_ << ") -> " << type_hash(std::visit(VariantGetter{}, node->return_type)) << " {\n";
-        // Guard guard(*this, node);
         for (const ASTNodeVariant& child : node->body) {
             (*this)(child);
         }

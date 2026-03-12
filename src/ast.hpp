@@ -494,7 +494,12 @@ struct ASTTemplateDefinition final : public ASTNode {
     ASTNodeVariant target_node;
 };
 
-struct ASTTemplateSpecialization final : public ASTNode {};
+struct ASTTemplateSpecialization final : public ASTNode {
+    std::string_view identifier;
+    std::span<ASTTemplateParameter> parameters;
+    std::span<ASTExprVariant> patterns;
+    ASTNodeVariant target_node;
+};
 
 enum class OperatorGroup : std::uint8_t {
     Arithmetic,

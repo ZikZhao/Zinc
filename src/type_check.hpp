@@ -374,56 +374,165 @@ private:
         }
     };
 
-private:
-    Sema& sema_;
-    GlobalMemory::MultiMap<const ASTTemplateDefinition*, std::pair<std::span<Term>, const Scope*>>
-        instantiations_;
+    struct SpecializationPrototype {
+        std::span<const Object*> patterns;
+        std::span<const Object*> skolems;
+    };
+
+    using TemplateArgs = std::span<const Object*>;
+
+    using AutoBindings = GlobalMemory::FlatMap<const Object*, const Object*>;
 
 private:
-    template <typename R, R (Sema::*Method)(std::string_view)>
-    inline auto instantiate(const TemplateFamily& family, std::span<Term> args) -> R {
-        Sema::Guard guard(sema_, family.scope);
-        if (!validate(family.primary, args)) {
-            if constexpr (std::is_same_v<R, Term>) {
-                return Term::unknown();
-            } else if constexpr (std::is_same_v<R, TypeResolution>) {
-                return {};
-            }
-        }
-        auto [inst_scope, target] = specialization_resolution(family, args);
-        Sema::Guard inner_guard(sema_, inst_scope);
-        sema_.deferred_analysis(inst_scope, target);
-        return (sema_.*Method)(family.primary.identifier);
-    }
+    Sema& sema_;
+    GlobalMemory::
+        UnorderedMultiMap<const ASTTemplateDefinition*, std::pair<TemplateArgs, const Object*>>
+            instantiations_;
+    GlobalMemory::UnorderedMap<const ASTTemplateSpecialization*, SpecializationPrototype>
+        pattern_cache_;
 
 public:
     TemplateHandler(Sema& sema) noexcept : sema_(sema) {}
 
     [[nodiscard]] auto is_template_about_type(const TemplateFamily& family) const noexcept -> bool;
 
-    auto instantiate_as_term(const TemplateFamily& family, std::span<Term> args) -> Term {
-        return instantiate<Term, &Sema::lookup_term>(family, args);
+    inline auto instantiate(TemplateFamily& family, std::span<Term> args) -> Term {
+        GlobalMemory::Vector<const Object*> unwrapped_args = unwrap(args);
+        Sema::Guard guard(sema_, family.decl_scope);
+        if (!validate(family.primary, unwrapped_args)) {
+            return Term::unknown();
+        }
+        auto [inst_scope, target] = specialization_resolution(family, unwrapped_args);
+        Sema::Guard inner_guard(sema_, *inst_scope);
+        sema_.deferred_analysis(*inst_scope, target);
+        Term result = sema_.lookup_term(family.primary.identifier);
+        if (result.is_type()) {
+            if (auto instance_type = result.get_type()->dyn_cast<InstanceType>()) {
+                instance_type->primary_template_ = &family.primary;
+                instance_type->template_args_ = unwrapped_args;
+            }
+        }
+        return result;
     }
 
-    auto instantiate_as_type(const TemplateFamily& family, std::span<Term> args) -> TypeResolution {
-        return instantiate<TypeResolution, &Sema::lookup_type>(family, args);
-    }
-
-    auto template_inference(const TemplateFamily& family, std::span<Term> args) -> std::span<Term>;
+    auto template_inference(TemplateFamily& family, std::span<Term> args) -> std::span<Term>;
 
 private:
-    auto validate(const ASTTemplateDefinition& primary, std::span<Term> args) -> bool;
-    auto specialization_resolution(const TemplateFamily& family, std::span<Term> args)
-        -> std::pair<Scope&, ASTNodeVariant>;
+    static auto unwrap(std::span<Term> args) -> GlobalMemory::Vector<const Object*> {
+        GlobalMemory::Vector<const Object*> result;
+        result.reserve(args.size());
+        for (Term arg : args) {
+            if (arg.is_type()) {
+                result.push_back(arg.get_type());
+            } else if (Value* value = arg.get_comptime()) {
+                result.push_back(value);
+            } else {
+                throw;
+            }
+        }
+        return result;
+    }
+
+    auto validate(const ASTTemplateDefinition& primary, TemplateArgs args) noexcept -> bool;
+
+    auto specialization_resolution(TemplateFamily& family, TemplateArgs args) noexcept
+        -> std::pair<Scope*, ASTNodeVariant>;
+
+    auto get_prototype(Scope& scope, const ASTTemplateSpecialization& specialization) noexcept
+        -> const SpecializationPrototype&;
+
+    [[nodiscard]] static auto compare_specialization(
+        const SpecializationPrototype& lhs, const SpecializationPrototype& rhs
+    ) noexcept -> std::partial_ordering {
+        bool lhs_better = false;
+        bool rhs_better = false;
+        for (size_t i = 0; i < lhs.patterns.size(); i++) {
+            std::partial_ordering result = compare_pattern(
+                {lhs.patterns[i], lhs.skolems[i]}, {rhs.patterns[i], rhs.skolems[i]}
+            );
+            if (result == std::partial_ordering::less) {
+                rhs_better = true;
+            } else if (result == std::partial_ordering::greater) {
+                lhs_better = true;
+            }
+        }
+        if (lhs_better && !rhs_better) {
+            return std::partial_ordering::greater;
+        } else if (!lhs_better && rhs_better) {
+            return std::partial_ordering::less;
+        } else if (!lhs_better && !rhs_better) {
+            return std::partial_ordering::equivalent;
+        } else {
+            return std::partial_ordering::unordered;
+        }
+    }
+
+    [[nodiscard]] static auto compare_pattern(
+        std::pair<const Object*, const Object*> lhs, std::pair<const Object*, const Object*> rhs
+    ) noexcept -> std::partial_ordering {
+        GlobalMemory::FlatMap<const Object*, const Object*> auto_bindings;
+        bool lhs_fits_rhs = rhs.first->pattern_match(lhs.second, auto_bindings);
+        bool rhs_fits_lhs = lhs.first->pattern_match(rhs.second, auto_bindings);
+        if (lhs_fits_rhs && !rhs_fits_lhs) {
+            return std::partial_ordering::greater;
+        } else if (!lhs_fits_rhs && rhs_fits_lhs) {
+            return std::partial_ordering::less;
+        } else if (!lhs_fits_rhs && !rhs_fits_lhs) {
+            return std::partial_ordering::unordered;
+        } else {
+            return std::partial_ordering::equivalent;
+        }
+    }
+
+    static auto fill_bindings(
+        const ASTTemplateSpecialization& specialization, const AutoBindings& bindings, Scope& scope
+    ) noexcept -> void {
+        auto at = [&](bool is_nttp, std::size_t index) -> const ASTTemplateParameter& {
+            size_t this_index = 0;
+            for (const auto& param : specialization.parameters) {
+                if (is_nttp == param.is_nttp) {
+                    if (this_index == index) {
+                        return param;
+                    }
+                    this_index++;
+                }
+            }
+            UNREACHABLE();
+        };
+        for (auto [auto_inst, value] : bindings) {
+            bool is_nttp = false;
+            size_t index = 0;
+            if (auto auto_type = auto_inst->dyn_cast<AutoType>()) {
+                index = auto_type->index_;
+            } else {
+                auto auto_value = auto_inst->cast<AutoValue>();
+                is_nttp = true;
+                index = auto_value->index_;
+            }
+            const ASTTemplateParameter& template_param = at(is_nttp, index);
+            scope.add_template_argument(template_param.identifier, Term::template_arg(value));
+        }
+    }
 };
 
 class OperationHandler final : public GlobalMemory::MonotonicAllocated {
 private:
     using Operation = std::tuple<OperatorCode, const Type*, const Type*>;
 
+    struct OperationHasher {
+        auto operator()(const Operation& op) const noexcept -> std::size_t {
+            auto [opcode, left_type, right_type] = op;
+            return hash_combine(
+                std::hash<OperatorCode>{}(opcode),
+                std::bit_cast<std::size_t>(left_type),
+                std::bit_cast<std::size_t>(right_type)
+            );
+        }
+    };
+
 private:
     Sema& sema_;
-    GlobalMemory::FlatMap<Operation, FunctionObject> map_;
+    GlobalMemory::UnorderedMap<Operation, FunctionObject, OperationHasher> map_;
 
 public:
     OperatorRegistry operators_;
@@ -776,8 +885,7 @@ private:
             return {func_value};
         } else if (auto overload_set = func->dyn_cast<FunctionOverloadSetValue>()) {
             return get_scope_func(
-                overload_set->scope_,
-                reinterpret_cast<const ScopeValue*>(overload_set->scope_value_)
+                overload_set->scope_, opaque_cast<const ScopeValue*>(overload_set->scope_value_)
             );
         } else {
             return {};
@@ -792,14 +900,20 @@ private:
         GlobalMemory::Vector<FunctionObject> overloads = list_normal_overloads(func);
         FunctionObject best_candidate = nullptr;
         ConversionRank best_rank = ConversionRank::NoMatch;
-        auto loop = [&](std::span<FunctionObject> candidates) -> void {
-            for (FunctionObject candidate : candidates) {
+        auto loop = [&](std::span<FunctionObject> candidates) -> std::size_t {
+            for (std::size_t i = 0; i < candidates.size(); ++i) {
+                FunctionObject candidate = candidates[i];
                 ConversionRank rank = validate(candidate, args);
+                if (rank == ConversionRank::NoMatch) {
+                    // remove non-viable candidate
+                    std::swap(candidates[i], candidates.back());
+                    candidates = candidates.subspan(0, candidates.size() - 1);
+                    --i;
+                    continue;
+                }
                 if (best_candidate == nullptr) {
-                    if (rank != ConversionRank::NoMatch) {
-                        best_candidate = candidate;
-                        best_rank = rank;
-                    }
+                    best_candidate = candidate;
+                    best_rank = rank;
                 } else {
                     std::partial_ordering order =
                         overload_partial_order(best_candidate, candidate, args);
@@ -809,31 +923,45 @@ private:
                     }
                 }
             }
+            return candidates.size();
         };
         // first, find the best non-template overload
-        loop(overloads);
+        std::size_t normal_count = loop(overloads);
+        overloads.resize(normal_count);
         // second, if no exact match, try template overloads
         if (best_rank != ConversionRank::Exact) {
-            std::ptrdiff_t begin = static_cast<std::ptrdiff_t>(overloads.size());
             list_template_overloads(overloads, func, args);
-            loop({std::next(overloads.begin(), begin), overloads.end()});
+            loop(
+                {std::next(overloads.begin(), static_cast<std::ptrdiff_t>(normal_count)),
+                 overloads.end()}
+            );
         }
         // third, re-iterate through all candidates to check for ambiguity
-        GlobalMemory::Vector<FunctionObject> ambiguities;
+        GlobalMemory::Vector<FunctionObject> ambiguous_candidates;
+        bool incomparable = false;
         if (best_candidate) {
             for (FunctionObject candidate : overloads) {
                 if (candidate == best_candidate) continue;
                 std::partial_ordering order =
                     overload_partial_order(best_candidate, candidate, args);
-                if (order == std::partial_ordering::unordered ||
-                    order == std::partial_ordering::equivalent) {
-                    ambiguities.push_back(candidate);
+                if (order == std::partial_ordering::equivalent) {
+                    ambiguous_candidates.push_back(candidate);
+                } else if (order == std::partial_ordering::unordered) {
+                    ambiguous_candidates.push_back(candidate);
+                    incomparable = true;
                 }
             }
         }
-        if (!ambiguities.empty()) {
+        if (!incomparable && ambiguous_candidates.size()) {
+            // if there are only equivalent candidates, choose nontemplate one if possible
+            auto it = std::ranges::find(overloads, ambiguous_candidates[0]);
+            if (std::distance(overloads.begin(), it) < static_cast<std::ptrdiff_t>(normal_count)) {
+                ambiguous_candidates.clear();
+            }
+        }
+        if (!ambiguous_candidates.empty()) {
             /// TODO: throw ambiguous call error, listing best_candidate and all candidates in
-            /// ambiguities
+            /// ambiguous_candidates
             return nullptr;
         }
         return best_candidate;
@@ -1208,10 +1336,23 @@ private:
     Sema& sema_;
     const Type* expected_;
     bool require_comptime_;
+    bool template_pattern_mode_;
+
+private:
+    ValueContextEvaluator(ValueContextEvaluator& other, const Type* expected) noexcept
+        : sema_(other.sema_),
+          expected_(expected),
+          require_comptime_(other.require_comptime_),
+          template_pattern_mode_(other.template_pattern_mode_) {}
 
 public:
-    ValueContextEvaluator(Sema& sema, const Type* expected, bool require_comptime) noexcept
-        : sema_(sema), expected_(expected), require_comptime_(require_comptime) {}
+    ValueContextEvaluator(
+        Sema& sema, const Type* expected, bool require_comptime, bool template_pattern_mode = false
+    ) noexcept
+        : sema_(sema),
+          expected_(expected),
+          require_comptime_(require_comptime),
+          template_pattern_mode_(template_pattern_mode) {}
 
     auto operator()(const ASTExprVariant& variant) -> TermWithReceiver {
         if (std::visit(
@@ -1273,8 +1414,7 @@ public:
 
     template <ASTUnaryOpClass Op>
     auto operator()(const Op* node) -> TermWithReceiver {
-        Term expr_term =
-            ValueContextEvaluator{sema_, expected_, require_comptime_}(node->expr).subject;
+        Term expr_term = ValueContextEvaluator{*this, nullptr}(node->expr).subject;
         return {
             .subject = sema_.operation_handler_->eval_value_op(Op::opcode, expr_term),
             .receiver = {}
@@ -1283,10 +1423,8 @@ public:
 
     template <ASTBinaryOpClass Op>
     auto operator()(const Op* node) -> TermWithReceiver {
-        Term left_term =
-            ValueContextEvaluator{sema_, expected_, require_comptime_}(node->left).subject;
-        Term right_term =
-            ValueContextEvaluator{sema_, expected_, require_comptime_}(node->right).subject;
+        Term left_term = ValueContextEvaluator{*this, nullptr}(node->left).subject;
+        Term right_term = ValueContextEvaluator{*this, nullptr}(node->right).subject;
         try {
             return {
                 .subject =
@@ -1303,15 +1441,13 @@ public:
         if (auto identifier = std::get_if<const ASTIdentifier*>(&node->target)) {
             return eval_namespace_access(node, (*identifier)->str);
         } else {
-            Term subject_term =
-                ValueContextEvaluator{sema_, expected_, require_comptime_}(node->target).subject;
+            Term subject_term = ValueContextEvaluator{*this, nullptr}(node->target).subject;
             return eval_instance_access(node, subject_term, node->members);
         }
     }
 
     auto operator()(const ASTFieldInitialization* node) -> Term {
-        Term value_term =
-            ValueContextEvaluator{sema_, expected_, require_comptime_}(node->value).subject;
+        Term value_term = ValueContextEvaluator{*this, nullptr}(node->value).subject;
         if (require_comptime_ && !value_term.is_comptime()) {
             Diagnostic::report(NotConstantExpressionError(node->location));
             return Term::unknown();
@@ -1325,8 +1461,7 @@ public:
             std::views::transform(
                 [&](const ASTFieldInitialization& init) -> std::pair<std::string_view, Term> {
                     return {
-                        init.identifier,
-                        ValueContextEvaluator{sema_, nullptr, require_comptime_}(init.value).subject
+                        init.identifier, ValueContextEvaluator{*this, nullptr}(init.value).subject
                     };
                 }
             ) |
@@ -1360,14 +1495,12 @@ public:
         bool any_error = false;
         GlobalMemory::Vector<Term> args_terms =
             node->arguments | std::views::transform([&](ASTExprVariant arg) {
-                Term arg_term =
-                    ValueContextEvaluator{sema_, nullptr, require_comptime_}(arg).subject;
+                Term arg_term = ValueContextEvaluator{*this, nullptr}(arg).subject;
                 any_error |= arg_term.is_unknown();
                 return arg_term;
             }) |
             GlobalMemory::collect<GlobalMemory::Vector<Term>>();
-        auto [func, receiver] =
-            ValueContextEvaluator{sema_, nullptr, require_comptime_}(node->function);
+        auto [func, receiver] = ValueContextEvaluator{*this, nullptr}(node->function);
         if (receiver) {
             args_terms.insert(args_terms.begin(), receiver);
         }
@@ -1396,12 +1529,24 @@ public:
         }
         GlobalMemory::Vector<Term> args_terms =
             node->arguments | std::views::transform([&](ASTExprVariant arg) {
-                return ValueContextEvaluator{sema_, nullptr, require_comptime_}(arg).subject;
+                return ValueContextEvaluator{*this, nullptr}(arg).subject;
             }) |
             GlobalMemory::collect<GlobalMemory::Vector<Term>>();
+        if (template_pattern_mode_ &&
+            std::holds_alternative<const ASTClassDefinition*>(family->primary.target_node)) {
+            return {
+                .subject = Term::type(new InstanceType(
+                    nullptr,
+                    family->primary.identifier,
+                    &family->primary,
+                    args_terms | std::views::transform(&Term::get) |
+                        GlobalMemory::collect<GlobalMemory::Vector<const Object*>>()
+                )),
+                .receiver = {}
+            };
+        }
         return {
-            .subject = sema_.template_handler_->instantiate_as_term(*family, args_terms),
-            .receiver = {}
+            .subject = sema_.template_handler_->instantiate(*family, args_terms), .receiver = {}
         };
     }
 
@@ -1495,7 +1640,14 @@ public:
         ValueContextEvaluator{sema_, nullptr, false}(node->expr);
     }
 
-    void operator()(const ASTDeclaration* node) noexcept { sema_.lookup(node->identifier); }
+    void operator()(const ASTDeclaration* node) noexcept {
+        if (nonnull(node->declared_type)) {
+            TypeResolution declared_type;
+            TypeContextEvaluator{sema_, declared_type}(node->declared_type);
+        } else if (!std::holds_alternative<std::monostate>(node->expr)) {
+            ValueContextEvaluator{sema_, nullptr, false}(node->expr);
+        }
+    }
 
     void operator()(const ASTTypeAlias* node) noexcept { sema_.lookup_type(node->identifier); }
 
@@ -1588,24 +1740,23 @@ inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void
     TypeCheckVisitor{*this}(variant);
 }
 
-inline auto TemplateHandler::validate(const ASTTemplateDefinition& primary, std::span<Term> args)
-    -> bool {
+inline auto TemplateHandler::validate(
+    const ASTTemplateDefinition& primary, TemplateArgs args
+) noexcept -> bool {
     if (primary.parameters.size() != args.size()) {
         return false;
     }
     for (size_t i = 0; i < args.size(); i++) {
         const auto& param = primary.parameters[i];
-        if (args[i].is_type() == param.is_nttp) {
+        if (static_cast<bool>(args[i]->dyn_value()) != param.is_nttp) {
             return false;
         }
-        if (args[i].is_type()) {
-            /// TODO: type constraint validation
-        } else {
+        if (param.is_nttp) {
             if (!std::holds_alternative<std::monostate>(param.constraint)) {
                 Term constraint_term =
                     ValueContextEvaluator{sema_, nullptr, false}(param.constraint).subject;
                 if (constraint_term.is_type()) {
-                    if (!constraint_term.get_type()->assignable_from(args[i].get_type())) {
+                    if (!constraint_term.get_type()->assignable_from(args[i]->cast<Type>())) {
                         return false;
                     }
                 } else {
@@ -1617,23 +1768,141 @@ inline auto TemplateHandler::validate(const ASTTemplateDefinition& primary, std:
                     }
                 }
             }
+        } else {
+            /// TODO: type constraint validation
         }
     }
     return true;
 }
 
 inline auto TemplateHandler::specialization_resolution(
-    const TemplateFamily& family, std::span<Term> args
-) -> std::pair<Scope&, ASTNodeVariant> {
-    for (const auto& specialization : family.specializations) {
-        /// TODO:
+    TemplateFamily& family, TemplateArgs args
+) noexcept -> std::pair<Scope*, ASTNodeVariant> {
+    // first, try to find a matching full specialization
+    for (const auto* specialization : family.specializations) {
+        if (specialization->parameters.size()) continue;
+        const auto& prototype = get_prototype(*sema_.current_scope_, *specialization);
+        for (size_t i = 0; i < args.size(); i++) {
+            static AutoBindings _;
+            assert(_.empty());
+            if (!prototype.patterns[i]->pattern_match(args[i], _)) {
+                goto next_full_specialization;
+            }
+        }
+        return {sema_.current_scope_, specialization->target_node};
+    next_full_specialization:;
     }
+    // second, try to find best matching partial specialization
+    std::size_t viable_count = family.specializations.size();
+    const ASTTemplateSpecialization* best_candidate = nullptr;
+    const SpecializationPrototype* best_candidate_prototype = nullptr;
+    AutoBindings best_auto_bindings;
+    for (size_t i = 0; i < viable_count; i++) {
+        const auto* specialization = family.specializations[i];
+        if (specialization->parameters.size() == 0) continue;
+        AutoBindings auto_bindings;
+        const auto& prototype = get_prototype(*sema_.current_scope_, *specialization);
+        for (size_t j = 0; j < args.size(); j++) {
+            if (!prototype.patterns[j]->pattern_match(args[j], auto_bindings)) {
+                viable_count--;
+                std::swap(family.specializations[i], family.specializations[viable_count]);
+                i--;
+                goto next_partial_specialization;
+            }
+        }
+        if (!best_candidate) {
+            best_candidate = specialization;
+            best_candidate_prototype = &prototype;
+            best_auto_bindings = std::move(auto_bindings);
+        } else {
+            std::partial_ordering better_than_best =
+                compare_specialization(*best_candidate_prototype, prototype);
+            if (better_than_best == std::partial_ordering::greater) {
+                best_candidate = specialization;
+                best_candidate_prototype = &prototype;
+                best_auto_bindings = std::move(auto_bindings);
+            }
+        }
+    next_partial_specialization:;
+    }
+    // third, re-iterate through all candidates to check for ambiguity
+    GlobalMemory::Vector<const ASTTemplateSpecialization*> ambiguous_candidates;
+    if (best_candidate) {
+        for (const auto* specialization : std::span(family.specializations.begin(), viable_count)) {
+            if (specialization == best_candidate) continue;
+            const auto& prototype = get_prototype(*sema_.current_scope_, *specialization);
+            std::partial_ordering better_than_best =
+                compare_specialization(*best_candidate_prototype, prototype);
+            if (better_than_best == std::partial_ordering::equivalent ||
+                better_than_best == std::partial_ordering::unordered) {
+                ambiguous_candidates.push_back(specialization);
+            }
+        }
+    }
+    if (!ambiguous_candidates.empty()) {
+        // Diagnostic::report(AmbiguousTemplateSpecializationError(
+        //     family.primary.identifier, best_candidate->location,
+        //     ambiguous_candidates | std::views::transform(&ASTTemplateSpecialization::location) |
+        //         GlobalMemory::collect<GlobalMemory::Vector>()
+        // ));
+        throw;
+        return {nullptr, std::monostate{}};
+    }
+    if (best_candidate) {
+        Scope& inst_scope = Scope::make(*sema_.current_scope_);
+        fill_bindings(*best_candidate, best_auto_bindings, inst_scope);
+        return {&inst_scope, best_candidate->target_node};
+    }
+    // last, fallback to primary template
     Scope& inst_scope = Scope::make(*sema_.current_scope_);
     Sema::Guard guard(sema_, inst_scope);
     for (size_t i = 0; i < args.size(); i++) {
-        inst_scope.add_template_argument(family.primary.parameters[i].identifier, args[i]);
+        inst_scope.add_template_argument(
+            family.primary.parameters[i].identifier, Term::template_arg(args[i])
+        );
     }
-    return {inst_scope, family.primary.target_node};
+    return {&inst_scope, family.primary.target_node};
+}
+
+inline auto TemplateHandler::get_prototype(
+    Scope& scope, const ASTTemplateSpecialization& specialization
+) noexcept -> const SpecializationPrototype& {
+    GlobalMemory::Vector<Object*> auto_instances = TypeRegistry::get_auto_instances(
+        specialization.parameters | std::views::transform(&ASTTemplateParameter::is_nttp)
+    );
+    Sema::Guard guard(sema_, scope);
+    auto [it, inserted] = pattern_cache_.insert({&specialization, SpecializationPrototype()});
+    if (!inserted) {
+        return it->second;
+    }
+    it->second.patterns = GlobalMemory::alloc_array<const Object*>(specialization.patterns.size());
+    it->second.skolems = GlobalMemory::alloc_array<const Object*>(specialization.patterns.size());
+    for (size_t i = 0; i < specialization.parameters.size(); i++) {
+        scope.add_template_argument(
+            specialization.parameters[i].identifier,
+            Term::template_arg(static_cast<Value*>(auto_instances[i]))
+        );
+    }
+    for (size_t i = 0; i < specialization.patterns.size(); i++) {
+        ValueContextEvaluator evaluator{sema_, nullptr, false, true};
+        it->second.patterns[i] = evaluator(specialization.patterns[i]).subject.get();
+    }
+    scope.clear();
+    for (const auto& param : specialization.parameters) {
+        scope.add_template_argument(
+            param.identifier,
+            Term::template_arg(
+                param.is_nttp ? static_cast<const Object*>(&UnknownValue::instance)
+                              : &UnknownType::instance
+            )
+        );
+    }
+    for (size_t i = 0; i < specialization.patterns.size(); i++) {
+        ValueContextEvaluator evaluator{sema_, nullptr, false, true};
+        it->second.skolems[i] = evaluator(specialization.patterns[i]).subject.get();
+    }
+    scope.clear();
+    return it->second;
 }
 
 inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload)

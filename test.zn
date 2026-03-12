@@ -1,11 +1,7 @@
 fn main() -> i32 {
     let x = MyClass<i32>(42);
-    let y = Point { x: 1.0, y: 2.0 };
-    return x.method1(10);
-}
-
-fn g() -> i32 {
-    let x = MyClass<i32>(42);
+    let y = MyClass<f64>(3.14);
+    let z = y.value2;
     return x.method1(10);
 }
 
@@ -19,8 +15,15 @@ class MyClass<T: type> {
     }
 }
 
-fn add<T: type>(a: T, b: T) -> T {
-    return a + b;
+specialize class MyClass<f64> {
+    let value: f64;
+    let value2: f64;
+    init(value: f64) {
+        return Self{ value: value };
+    }
+    fn method1(self: &Self, x: i32) -> f64 {
+        return self.value2;
+    }
 }
 
 fn max<T: type>(a: T, b: T) -> T {

@@ -82,6 +82,12 @@ constexpr auto opaque_cast(auto* ptr) {
     return reinterpret_cast<T>(ptr);
 }
 
+template <std::same_as<std::size_t>... Ts>
+auto hash_combine(std::size_t first, const Ts&... rest) noexcept -> std::size_t {
+    ((first ^= rest + 0x9e3779b9 + (first << 6) + (first >> 2)), ...);
+    return first;
+}
+
 template <typename... Ts>
     requires(std::is_pointer_v<Ts> && ...)
 class PointerVariant {
@@ -126,7 +132,7 @@ public:
 
     template <typename T>
         requires(IsConvertibleToCandidate<T>)
-    PointerVariant(T ptr) noexcept : ptr_(reinterpret_cast<std::uintptr_t>(ptr) | IndexV<T>) {
+    PointerVariant(T ptr) noexcept : ptr_(std::bit_cast<std::uintptr_t>(ptr) | IndexV<T>) {
         static_assert(
             alignof(T) >= sizeof...(Ts),
             "PointerVariant targets must have alignment >= sizeof...(Ts) to store the type tag."
@@ -138,10 +144,10 @@ public:
         requires(IsCandidate<T>)
     auto get() const noexcept -> T {
         constexpr std::size_t index = IndexV<T>;
-        return ((ptr_ & mask) == index) ? reinterpret_cast<T>(ptr_ & ~mask) : nullptr;
+        return ((ptr_ & mask) == index) ? std::bit_cast<T>(ptr_ & ~mask) : nullptr;
     }
 
-    auto get() const noexcept -> const void* { return reinterpret_cast<const void*>(ptr_ & ~mask); }
+    auto get() const noexcept -> const void* { return std::bit_cast<const void*>(ptr_ & ~mask); }
 };
 
 class GlobalMemory {
@@ -151,40 +157,20 @@ private:
     using DynamicSpan = std::span<ElementType, std::dynamic_extent>;
 
 private:
-    static auto global_resource() noexcept -> std::pmr::memory_resource* {
-        struct GlobalResource : std::pmr::memory_resource {
-            auto do_allocate(std::size_t bytes, std::size_t alignment) -> void* override {
-                std::size_t aligned_bytes = (bytes + alignment - 1) & ~(alignment - 1);
-                return std::aligned_alloc(alignment, aligned_bytes);
-            }
-            void do_deallocate(
-                void* p, std::size_t bytes, std::size_t alignment
-            ) noexcept override {
-                /// NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
-                std::free(p);
-            }
-            [[nodiscard]] auto do_is_equal(const memory_resource& other) const noexcept
-                -> bool override {
-                return this == &other;
-            }
-        };
-        static GlobalResource resource;
-        return &resource;
-    }
-
-    static auto synchronized_pool() noexcept -> std::pmr::memory_resource* {
-        // static std::pmr::monotonic_buffer_resource resource(std::pmr::new_delete_resource());
+    static auto global_pool() noexcept -> std::pmr::memory_resource* {
         constexpr std::pmr::pool_options pool_opts{
             .largest_required_pool_block = 4uz * 1024 * 1024,  // 4 MB
         };
-        static std::pmr::unsynchronized_pool_resource resource(pool_opts, global_resource());
+        static std::pmr::unsynchronized_pool_resource resource(
+            pool_opts, std::pmr::new_delete_resource()
+        );
         return &resource;
     }
 
 public:
     static auto monotonic() noexcept -> std::pmr::monotonic_buffer_resource* {
         static thread_local std::pmr::monotonic_buffer_resource resource(
-            128uz * 1024, synchronized_pool()
+            128uz * 1024, global_pool()
         );
         return &resource;
     }
@@ -194,7 +180,7 @@ public:
             .largest_required_pool_block = 4uz * 1024,  // 4 KB
         };
         static thread_local std::pmr::unsynchronized_pool_resource resource(
-            pool_opts, synchronized_pool()
+            pool_opts, global_pool()
         );
         return &resource;
     }
@@ -224,7 +210,7 @@ public:
         };
 
         template <typename U>
-        bool operator==(const Allocator<U>&) const noexcept {
+        auto operator==(const Allocator<U>&) const noexcept -> bool {
             return true;
         }
 
@@ -250,21 +236,25 @@ public:
     template <typename K, typename V, typename C = std::less<K>>
     using Map = std::map<K, V, C, Allocator<std::pair<const K, V>>>;
 
+    template <typename K, typename V, typename H = std::hash<K>, typename P = std::equal_to<K>>
+    using UnorderedMap = std::unordered_map<K, V, H, P, Allocator<std::pair<const K, V>>>;
+
     using String = std::basic_string<char, std::char_traits<char>, Allocator<char>>;
 
-    /// Flat map implementation in SoA style
     template <typename K, typename V, typename C = std::less<K>>
     class FlatMap;
 
-    /// Flat set implementation
     template <typename K, typename C = std::less<K>>
     class FlatSet;
 
-    /// Multi-map implementation in SoA style
-    template <typename K, typename V, typename C = std::less<K>>
-    class MultiMap;
+    template <typename K, typename V, typename H = std::hash<K>, typename P = std::equal_to<K>>
+    using UnorderedMultiMap = std::unordered_multimap<K, V, H, P, Allocator<std::pair<const K, V>>>;
 
-    static void* alloc_raw(std::size_t size, std::size_t align = alignof(std::max_align_t)) {
+    template <typename K, typename V, typename C = std::less<K>>
+    class FlatMultiMap;
+
+    static auto alloc_raw(std::size_t size, std::size_t align = alignof(std::max_align_t))
+        -> void* {
         return monotonic()->allocate(size, align);
     }
 
@@ -274,20 +264,20 @@ public:
     }
 
     template <typename T, typename... Args>
-    static constexpr T* alloc(Args&&... args) {
+    static constexpr auto alloc(Args&&... args) -> T* {
         void* ptr = monotonic()->allocate(sizeof(T), alignof(T));
         return new (ptr) T(std::forward<Args>(args)...);
     }
 
     template <typename T>
-    static constexpr std::span<T> alloc_array(std::size_t n) {
+    static constexpr auto alloc_array(std::size_t n) -> std::span<T> {
         void* ptr = monotonic()->allocate(n * sizeof(T), alignof(T));
         return std::span<T>(static_cast<T*>(ptr), n);
     }
 
     template <typename T, typename... Args>
         requires(std::is_same_v<T, Args> && ...)
-    static constexpr std::span<std::decay_t<T>> pack_array(T&& first, Args&&... rest) {
+    static constexpr auto pack_array(T&& first, Args&&... rest) -> std::span<std::decay_t<T>> {
         std::span span = alloc_array<std::decay_t<T>>(sizeof...(rest) + 1);
         std::size_t index = 0;
         span[0] = std::forward<T>(first);
@@ -355,32 +345,26 @@ public:
         std::size_t size = std::formatted_size(fmt, std::forward<Args>(args)...);
         std::span<char> result = alloc_array<char>(size);
         std::format_to(result.begin(), fmt, std::forward<Args>(args)...);
-        return std::string_view(result.data(), result.size());
+        return {result.data(), result.size()};
     }
 
     static auto hex_string(std::string_view input) -> std::string_view {
-        constexpr char hex_chars[] = "0123456789ABCDEF";
+        constexpr std::string_view hex_chars = "0123456789ABCDEF";
         std::span<char> result = alloc_array<char>(input.size() * 2 + 3);
         for (std::size_t i = 0; i < input.size(); ++i) {
-            unsigned char byte = static_cast<unsigned char>(input[i]);
+            auto byte = static_cast<unsigned char>(input[i]);
             result[i * 2 + 1] = hex_chars[(byte >> 4) & 0x0F];
             result[i * 2 + 2] = hex_chars[byte & 0x0F];
         }
         result[0] = '\"';
         result[input.size() * 2 + 1] = '\"';
         result[input.size() * 2 + 2] = '\0';
-        return std::string_view(result.data(), input.size() * 2 + 3);
+        return {result.data(), input.size() * 2 + 3};
     }
 
 public:
     GlobalMemory() = delete;
 };
-
-auto operator new(std::size_t size, std::align_val_t al) -> void* {
-    return GlobalMemory::alloc_raw(size, static_cast<std::size_t>(al));
-}
-
-void operator delete(void* ptr, std::align_val_t al) noexcept {}
 
 template <>
 constexpr auto GlobalMemory::collect<std::span>() {
@@ -460,6 +444,8 @@ public:
     constexpr auto size() const noexcept -> std::size_t { return data_.size(); }
 
     constexpr auto empty() const noexcept -> bool { return data_.empty(); }
+
+    constexpr auto clear() noexcept -> void { data_.clear(); }
 
     auto insert(std::pair<Key, Value> pair) -> std::pair<iterator, bool> {
         auto it = std::lower_bound(data_.begin(), data_.end(), pair.first, CompareFirst{});
@@ -560,14 +546,6 @@ private:
 
 public:
     FlatSet() noexcept = default;
-    FlatSet(FlatSet&& other) noexcept = default;
-    FlatSet& operator=(FlatSet&& other) noexcept = default;
-    FlatSet(const FlatSet& other) noexcept
-        requires std::is_nothrow_copy_constructible_v<Key>
-    = default;
-    FlatSet& operator=(const FlatSet& other) noexcept
-        requires std::is_nothrow_copy_constructible_v<Key>
-    = default;
     FlatSet(std::from_range_t, auto&& range) {
         Vector<Key> unsorted_keys;
         if constexpr (std::ranges::sized_range<decltype(range)>) {
@@ -666,7 +644,7 @@ public:
 };
 
 template <typename K, typename V, typename C>
-class GlobalMemory::MultiMap {
+class GlobalMemory::FlatMultiMap {
 public:
     using key_type = K;
     using mapped_type = V;
@@ -678,25 +656,16 @@ private:
     Vector<value_type> entries_;
 
 public:
-    MultiMap() noexcept = default;
-    MultiMap(MultiMap&& other) noexcept = default;
-    MultiMap& operator=(MultiMap&& other) noexcept = default;
-    MultiMap(const MultiMap& other) noexcept
-        requires std::is_nothrow_copy_constructible_v<K> && std::is_nothrow_copy_constructible_v<V>
-    = default;
-    MultiMap& operator=(const MultiMap& other) noexcept
-        requires std::is_nothrow_copy_constructible_v<K> && std::is_nothrow_copy_constructible_v<V>
-    = default;
-
-    MultiMap(std::initializer_list<std::pair<K, V>> init) {
+    FlatMultiMap() noexcept = default;
+    FlatMultiMap(std::initializer_list<std::pair<K, V>> init) {
         entries_.reserve(init.size());
         for (const auto& pair : init) {
             this->insert(pair);
         }
     }
 
-    constexpr auto size() const noexcept -> std::size_t { return entries_.size(); }
-    constexpr auto empty() const noexcept -> bool { return entries_.empty(); }
+    [[nodiscard]] constexpr auto size() const noexcept -> std::size_t { return entries_.size(); }
+    [[nodiscard]] constexpr auto empty() const noexcept -> bool { return entries_.empty(); }
 
     auto insert(std::pair<K, V> pair) -> iterator {
         auto compare = [](const value_type& a, const value_type& b) {
@@ -792,12 +761,12 @@ public:
     auto begin() const noexcept -> const_iterator { return entries_.begin(); }
     auto end() const noexcept -> const_iterator { return entries_.end(); }
 
-    auto operator<=>(const MultiMap<K, V, C>& other) const noexcept -> std::strong_ordering {
+    auto operator<=>(const FlatMultiMap<K, V, C>& other) const noexcept -> std::strong_ordering {
         return std::lexicographical_compare_three_way(
             this->begin(), this->end(), other.begin(), other.end()
         );
     }
-    bool operator==(const MultiMap<K, V, C>& other) const noexcept {
+    bool operator==(const FlatMultiMap<K, V, C>& other) const noexcept {
         return std::equal(this->begin(), this->end(), other.begin(), other.end());
     }
 };
@@ -813,6 +782,8 @@ class GlobalMemory::RangeCollector<GlobalMemory::String> {
 };
 
 class BigInt {
+    friend struct std::hash<BigInt>;
+
 private:
     GlobalMemory::Vector<std::uint32_t>
         digits_;  // Little-endian representation (least significant first)
@@ -986,11 +957,6 @@ public:
             }
         }
     }
-
-    BigInt(const BigInt& other) = default;
-    BigInt& operator=(const BigInt& other) = default;
-    BigInt(BigInt&& other) noexcept = default;
-    BigInt& operator=(BigInt&& other) noexcept = default;
 
     explicit BigInt(std::string_view str) : is_negative_(false) {
         if (str.empty()) {
@@ -1478,6 +1444,17 @@ public:
     auto fits_in() const noexcept -> bool {
         T dummy;
         return fits_in(dummy);
+    }
+};
+
+template <>
+struct std::hash<BigInt> {
+    auto operator()(const BigInt& value) const noexcept -> std::size_t {
+        std::size_t seed = std::hash<bool>{}(value.is_negative());
+        for (std::uint32_t digit : value.digits_) {
+            seed = hash_combine(seed, std::hash<std::uint32_t>{}(digit));
+        }
+        return seed;
     }
 };
 

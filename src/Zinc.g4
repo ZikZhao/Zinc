@@ -41,8 +41,10 @@ declaration_statement:
 	KW_LET identifier_ = T_IDENTIFIER KW_MUT? (
 		OP_COLON type_ = type
 	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON # LetDecl
-	| KW_CONST identifier_ = T_IDENTIFIER (OP_COLON type_ = type)? OP_ASSIGN value_ = expr
-		OP_SEMICOLON # ConstDecl;
+	| (specialize_list_ = specialize_parameter_list)? KW_CONST identifier_ = T_IDENTIFIER (
+		template_list_ = template_parameter_list
+		| instantiation_list_ = instantiation_list
+	)? (OP_COLON type_ = type)? OP_ASSIGN value_ = expr OP_SEMICOLON # ConstDecl;
 
 if_statement:
 	KW_IF OP_LPAREN condition_ = expr OP_RPAREN if_ = local_block (
@@ -63,7 +65,9 @@ continue_statement: KW_CONTINUE OP_SEMICOLON;
 return_statement: KW_RETURN expr_ = expr? OP_SEMICOLON;
 
 type_alias:
-	KW_TYPE identifier_ = T_IDENTIFIER OP_ASSIGN type_ = type OP_SEMICOLON;
+	KW_TYPE identifier_ = T_IDENTIFIER (
+		template_list_ = template_parameter_list
+	)? OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
 	KW_CONST? KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER (
@@ -77,23 +81,14 @@ function_definition:
 		| semi_ = OP_SEMICOLON
 	);
 
-specialized_function_definition:
-	spec_ = specialize_parameter_list KW_CONST? KW_STATIC? KW_FUNC OP_LPAREN (
-		parameters_ += parameter (
-			OP_COMMA parameters_ += parameter
-		)*
-	)? OP_RPAREN (OP_ARROW return_type_ = type)? (
-		OP_LBRACE body_ += statement* OP_RBRACE
-		| semi_ = OP_SEMICOLON
-	);
-
 parameter:
 	KW_SELF OP_COLON type_ = type						# SelfParam
 	| identifier_ = T_IDENTIFIER OP_COLON type_ = type	# NormalParam;
 
 class_definition:
-	KW_CLASS identifier_ = T_IDENTIFIER (
+	(specialize_list_ = specialize_parameter_list)? KW_CLASS identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
+		| instantiation_list_ = instantiation_list
 	)? (KW_EXTENDS extends_ = identifier)? (
 		KW_IMPLEMENTS implements_ += identifier (
 			OP_COMMA implements_ += identifier
@@ -218,10 +213,9 @@ template_parameter_list:
 	)* OP_GT;
 
 specialize_parameter_list:
-	KW_SPECIALIZE # FullSpecialize
-	| KW_SPECIALIZE OP_LT (
-		OP_COMMA parameters_ += template_parameter
-	)* OP_GT # PartialSpecialize;
+	KW_SPECIALIZE (
+		OP_LT (OP_COMMA parameters_ += template_parameter)+ OP_GT
+	)?;
 
 template_parameter:
 	identifier_ = T_IDENTIFIER OP_COLON KW_TYPE (
