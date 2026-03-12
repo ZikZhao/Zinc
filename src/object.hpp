@@ -1681,16 +1681,19 @@ public:
     }
 };
 
+/// for reinterpret_cast to ScopeValue
+struct OpaqueScopeValue;
+
 class FunctionOverloadSetValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Overload;
 
 public:
-    const Scope* scope_;       // scope defining the overload set
-    const void* scope_value_;  // points to scope record defining the overload set
+    Scope* scope_;                         // scope defining the overload set
+    const OpaqueScopeValue* scope_value_;  // points to scope record defining the overload set
 
 public:
-    FunctionOverloadSetValue(const Scope* scope, const void* scope_value) noexcept
+    FunctionOverloadSetValue(Scope* scope, const OpaqueScopeValue* scope_value) noexcept
         : Value(kind), scope_(scope), scope_value_(scope_value) {}
     std::string_view repr() const final { return "<function overload set>"; }
     const Type* get_type() const noexcept final {

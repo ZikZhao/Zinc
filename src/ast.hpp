@@ -132,158 +132,151 @@ struct ASTTemplateSpecialization;
 // All AST node types (base classes and final classes)
 using ASTNodeVariant = std::variant<
     std::monostate,
-    // Base classes
-    ASTNode*,
-    ASTExpression*,
-    ASTExplicitTypeExpr*,
     // Root and blocks
-    ASTRoot*,
-    ASTLocalBlock*,
+    const ASTRoot*,
+    const ASTLocalBlock*,
     // Expressions
-    ASTParenExpr*,
-    ASTConstant*,
-    ASTSelfExpr*,
-    ASTIdentifier*,
+    const ASTParenExpr*,
+    const ASTConstant*,
+    const ASTSelfExpr*,
+    const ASTIdentifier*,
     // Unary operators
-    ASTNegateOp*,
-    ASTIncrementOp*,
-    ASTDecrementOp*,
-    ASTLogicalNotOp*,
-    ASTBitwiseNotOp*,
+    const ASTNegateOp*,
+    const ASTIncrementOp*,
+    const ASTDecrementOp*,
+    const ASTLogicalNotOp*,
+    const ASTBitwiseNotOp*,
     // Binary operators - arithmetic
-    ASTAddOp*,
-    ASTSubtractOp*,
-    ASTMultiplyOp*,
-    ASTDivideOp*,
-    ASTRemainderOp*,
+    const ASTAddOp*,
+    const ASTSubtractOp*,
+    const ASTMultiplyOp*,
+    const ASTDivideOp*,
+    const ASTRemainderOp*,
     // Binary operators - comparison
-    ASTEqualOp*,
-    ASTNotEqualOp*,
-    ASTLessThanOp*,
-    ASTLessEqualOp*,
-    ASTGreaterThanOp*,
-    ASTGreaterEqualOp*,
+    const ASTEqualOp*,
+    const ASTNotEqualOp*,
+    const ASTLessThanOp*,
+    const ASTLessEqualOp*,
+    const ASTGreaterThanOp*,
+    const ASTGreaterEqualOp*,
     // Binary operators - logical
-    ASTLogicalAndOp*,
-    ASTLogicalOrOp*,
+    const ASTLogicalAndOp*,
+    const ASTLogicalOrOp*,
     // Binary operators - bitwise
-    ASTBitwiseAndOp*,
-    ASTBitwiseOrOp*,
-    ASTBitwiseXorOp*,
-    ASTLeftShiftOp*,
-    ASTRightShiftOp*,
+    const ASTBitwiseAndOp*,
+    const ASTBitwiseOrOp*,
+    const ASTBitwiseXorOp*,
+    const ASTLeftShiftOp*,
+    const ASTRightShiftOp*,
     // Binary operators - assignment
-    ASTAssignOp*,
-    ASTAddAssignOp*,
-    ASTSubtractAssignOp*,
-    ASTMultiplyAssignOp*,
-    ASTDivideAssignOp*,
-    ASTRemainderAssignOp*,
-    ASTLogicalAndAssignOp*,
-    ASTLogicalOrAssignOp*,
-    ASTBitwiseAndAssignOp*,
-    ASTBitwiseOrAssignOp*,
-    ASTBitwiseXorAssignOp*,
-    ASTLeftShiftAssignOp*,
-    ASTRightShiftAssignOp*,
+    const ASTAssignOp*,
+    const ASTAddAssignOp*,
+    const ASTSubtractAssignOp*,
+    const ASTMultiplyAssignOp*,
+    const ASTDivideAssignOp*,
+    const ASTRemainderAssignOp*,
+    const ASTLogicalAndAssignOp*,
+    const ASTLogicalOrAssignOp*,
+    const ASTBitwiseAndAssignOp*,
+    const ASTBitwiseOrAssignOp*,
+    const ASTBitwiseXorAssignOp*,
+    const ASTLeftShiftAssignOp*,
+    const ASTRightShiftAssignOp*,
     // Member access and calls
-    ASTMemberAccess*,
-    ASTStructInitialization*,
-    ASTFunctionCall*,
+    const ASTMemberAccess*,
+    const ASTStructInitialization*,
+    const ASTFunctionCall*,
     // Type expressions
-    ASTPrimitiveType*,
-    ASTFunctionType*,
-    ASTFieldDeclaration*,
-    ASTStructType*,
-    ASTMutableType*,
-    ASTReferenceType*,
-    ASTPointerType*,
-    ASTTemplateInstantiation*,
-    ASTTemplateMemberAccessInstantiation*,
+    const ASTPrimitiveType*,
+    const ASTFunctionType*,
+    const ASTFieldDeclaration*,
+    const ASTStructType*,
+    const ASTMutableType*,
+    const ASTReferenceType*,
+    const ASTPointerType*,
+    const ASTTemplateInstantiation*,
+    const ASTTemplateMemberAccessInstantiation*,
     // Statements
-    ASTExpressionStatement*,
-    ASTDeclaration*,
-    ASTTypeAlias*,
-    ASTIfStatement*,
-    ASTForStatement*,
-    ASTContinueStatement*,
-    ASTBreakStatement*,
-    ASTReturnStatement*,
+    const ASTExpressionStatement*,
+    const ASTDeclaration*,
+    const ASTTypeAlias*,
+    const ASTIfStatement*,
+    const ASTForStatement*,
+    const ASTContinueStatement*,
+    const ASTBreakStatement*,
+    const ASTReturnStatement*,
     // Functions and classes
-    ASTFunctionDefinition*,
-    ASTConstructorDestructorDefinition*,
-    ASTClassDefinition*,
-    ASTNamespaceDefinition*,
+    const ASTFunctionDefinition*,
+    const ASTConstructorDestructorDefinition*,
+    const ASTClassDefinition*,
+    const ASTNamespaceDefinition*,
     // Templates
-    ASTTemplateDefinition*,
-    ASTTemplateSpecialization*>;
+    const ASTTemplateDefinition*,
+    const ASTTemplateSpecialization*>;
 
 // All expression node types (all ASTExpression derivatives)
 using ASTExprVariant = std::variant<
     std::monostate,
-    // Base classes
-    ASTExpression*,
-    ASTExplicitTypeExpr*,
     // Basic expressions
-    ASTParenExpr*,
-    ASTConstant*,
-    ASTSelfExpr*,
-    ASTIdentifier*,
+    const ASTParenExpr*,
+    const ASTConstant*,
+    const ASTSelfExpr*,
+    const ASTIdentifier*,
     // Unary operators
-    ASTNegateOp*,
-    ASTIncrementOp*,
-    ASTDecrementOp*,
-    ASTLogicalNotOp*,
-    ASTBitwiseNotOp*,
+    const ASTNegateOp*,
+    const ASTIncrementOp*,
+    const ASTDecrementOp*,
+    const ASTLogicalNotOp*,
+    const ASTBitwiseNotOp*,
     // Binary operators - arithmetic
-    ASTAddOp*,
-    ASTSubtractOp*,
-    ASTMultiplyOp*,
-    ASTDivideOp*,
-    ASTRemainderOp*,
+    const ASTAddOp*,
+    const ASTSubtractOp*,
+    const ASTMultiplyOp*,
+    const ASTDivideOp*,
+    const ASTRemainderOp*,
     // Binary operators - comparison
-    ASTEqualOp*,
-    ASTNotEqualOp*,
-    ASTLessThanOp*,
-    ASTLessEqualOp*,
-    ASTGreaterThanOp*,
-    ASTGreaterEqualOp*,
+    const ASTEqualOp*,
+    const ASTNotEqualOp*,
+    const ASTLessThanOp*,
+    const ASTLessEqualOp*,
+    const ASTGreaterThanOp*,
+    const ASTGreaterEqualOp*,
     // Binary operators - logical
-    ASTLogicalAndOp*,
-    ASTLogicalOrOp*,
+    const ASTLogicalAndOp*,
+    const ASTLogicalOrOp*,
     // Binary operators - bitwise
-    ASTBitwiseAndOp*,
-    ASTBitwiseOrOp*,
-    ASTBitwiseXorOp*,
-    ASTLeftShiftOp*,
-    ASTRightShiftOp*,
+    const ASTBitwiseAndOp*,
+    const ASTBitwiseOrOp*,
+    const ASTBitwiseXorOp*,
+    const ASTLeftShiftOp*,
+    const ASTRightShiftOp*,
     // Binary operators - assignment
-    ASTAssignOp*,
-    ASTAddAssignOp*,
-    ASTSubtractAssignOp*,
-    ASTMultiplyAssignOp*,
-    ASTDivideAssignOp*,
-    ASTRemainderAssignOp*,
-    ASTLogicalAndAssignOp*,
-    ASTLogicalOrAssignOp*,
-    ASTBitwiseAndAssignOp*,
-    ASTBitwiseOrAssignOp*,
-    ASTBitwiseXorAssignOp*,
-    ASTLeftShiftAssignOp*,
-    ASTRightShiftAssignOp*,
+    const ASTAssignOp*,
+    const ASTAddAssignOp*,
+    const ASTSubtractAssignOp*,
+    const ASTMultiplyAssignOp*,
+    const ASTDivideAssignOp*,
+    const ASTRemainderAssignOp*,
+    const ASTLogicalAndAssignOp*,
+    const ASTLogicalOrAssignOp*,
+    const ASTBitwiseAndAssignOp*,
+    const ASTBitwiseOrAssignOp*,
+    const ASTBitwiseXorAssignOp*,
+    const ASTLeftShiftAssignOp*,
+    const ASTRightShiftAssignOp*,
     // Member access and calls
-    ASTMemberAccess*,
-    ASTStructInitialization*,
-    ASTFunctionCall*,
+    const ASTMemberAccess*,
+    const ASTStructInitialization*,
+    const ASTFunctionCall*,
     // Type expressions
-    ASTPrimitiveType*,
-    ASTFunctionType*,
-    ASTStructType*,
-    ASTMutableType*,
-    ASTReferenceType*,
-    ASTPointerType*,
-    ASTTemplateInstantiation*,
-    ASTTemplateMemberAccessInstantiation*>;
+    const ASTPrimitiveType*,
+    const ASTFunctionType*,
+    const ASTStructType*,
+    const ASTMutableType*,
+    const ASTReferenceType*,
+    const ASTPointerType*,
+    const ASTTemplateInstantiation*,
+    const ASTTemplateMemberAccessInstantiation*>;
 
 constexpr auto nonnull(auto&& variant) -> bool {
     return !std::holds_alternative<std::monostate>(std::forward<decltype(variant)>(variant));
@@ -402,68 +395,12 @@ struct ASTPointerType final : public ASTExplicitTypeExpr {
 struct ASTTemplateInstantiation final : public ASTExpression {
     std::string_view template_identifier;
     std::span<ASTExprVariant> arguments;
-
-    // public:
-    //     ASTTemplateInstantiation(
-    //         const Location& loc, std::string_view template_name, std::span<ASTExpression*>
-    //         arguments
-    //     ) noexcept
-    //         : ASTExpression(loc), template_name_(template_name), arguments_(arguments) {}
-    //     TermWithReceiver eval_term(
-    //         TypeChecker& checker, const Type* expected, bool comptime
-    //     ) const noexcept final {
-    //         GlobalMemory::Vector<Term> args_terms =
-    //             arguments_ | std::views::transform([&](ASTExpression* arg) {
-    //                 return arg->eval_term(checker, nullptr, comptime).subject;
-    //             }) |
-    //             GlobalMemory::collect<GlobalMemory::Vector<Term>>();
-    //         return {checker.lookup_term_instatiation(template_name_, args_terms), {}};
-    //     }
-    //     void transpile(Transpiler& transpiler, Cursor& cursor) const noexcept final;
-
-    // protected:
-    //     void do_accept(ASTVisitor& visitor) const final;
-
-    // private:
-    //     void do_eval_type(
-    //         TypeChecker& checker, TypeResolution& out, bool require_complete
-    //     ) const noexcept final {
-    //         GlobalMemory::Vector<Term> args_terms =
-    //             arguments_ | std::views::transform([&](ASTExpression* arg) {
-    //                 return arg->eval_term(checker, nullptr, false).subject;
-    //             }) |
-    //             GlobalMemory::collect<GlobalMemory::Vector<Term>>();
-    //         out = checker.lookup_type_instatiation(template_name_, args_terms);
-    //     }
 };
 
 struct ASTTemplateMemberAccessInstantiation final : public ASTExpression {
     ASTExprVariant target;
     std::string_view member;
     std::span<ASTExprVariant> arguments;
-
-    // public:
-    //     ASTTemplateMemberAccessInstantiation(
-    //         const Location& loc,
-    //         ASTExpression* target,
-    //         std::string_view member,
-    //         std::span<ASTExpression*> arguments
-    //     ) noexcept
-    //         : ASTExpression(loc), target_(target), member_(member), arguments_(arguments) {}
-    //     TermWithReceiver eval_term(
-    //         TypeChecker& checker, const Type* expected, bool comptime
-    //     ) const noexcept final {
-    //         // TODO
-    //         return {Term::unknown(), {}};
-    //     }
-
-    // protected:
-    //     void do_accept(ASTVisitor& visitor) const final;
-    //     void do_eval_type(
-    //         TypeChecker& checker, TypeResolution& out, bool require_complete
-    //     ) const noexcept final {
-    //         UNREACHABLE();
-    //     }
 };
 
 struct ASTExpressionStatement final : public ASTNode {
@@ -485,16 +422,16 @@ struct ASTTypeAlias final : public ASTNode {
 
 struct ASTIfStatement final : public ASTNode {
     ASTExprVariant condition;
-    ASTLocalBlock* if_block;
-    ASTLocalBlock* else_block;
+    const ASTLocalBlock* if_block;
+    const ASTLocalBlock* else_block;
 };
 
 struct ASTForStatement final : public ASTNode {
-    ASTDeclaration* initializer_decl;
+    const ASTDeclaration* initializer_decl;
     ASTExprVariant initializer_expr;
     ASTExprVariant condition;
     ASTExprVariant increment;
-    ASTLocalBlock* body;
+    const ASTLocalBlock* body;
 };
 
 struct ASTContinueStatement final : public ASTNode {};
@@ -531,12 +468,12 @@ struct ASTClassDefinition final : public ASTNode {
     std::string_view identifier;
     std::string_view extends;
     std::span<std::string_view> implements;
-    std::span<ASTConstructorDestructorDefinition*> constructors;
-    ASTConstructorDestructorDefinition* destructor;
-    std::span<ASTDeclaration*> fields;
-    std::span<ASTTypeAlias*> aliases;
-    std::span<ASTFunctionDefinition*> functions;
-    std::span<ASTClassDefinition*> classes;
+    std::span<const ASTConstructorDestructorDefinition*> constructors;
+    const ASTConstructorDestructorDefinition* destructor;
+    std::span<const ASTDeclaration*> fields;
+    std::span<const ASTTypeAlias*> aliases;
+    std::span<const ASTFunctionDefinition*> functions;
+    std::span<const ASTClassDefinition*> classes;
 };
 
 struct ASTNamespaceDefinition final : public ASTNode {

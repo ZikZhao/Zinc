@@ -76,6 +76,12 @@ struct IndexOfTypeInTuple<Target, Head, Tail...> {
 template <typename Target, typename... Ts>
 constexpr std::size_t IndexOfTypeInTupleV = IndexOfTypeInTuple<Target, Ts...>::value;
 
+template <typename T>
+constexpr auto opaque_cast(auto* ptr) {
+    /// NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    return reinterpret_cast<T>(ptr);
+}
+
 template <typename... Ts>
     requires(std::is_pointer_v<Ts> && ...)
 class PointerVariant {
@@ -145,29 +151,50 @@ private:
     using DynamicSpan = std::span<ElementType, std::dynamic_extent>;
 
 private:
-    static auto global_heap() noexcept -> std::pmr::memory_resource* {
+    static auto global_resource() noexcept -> std::pmr::memory_resource* {
+        struct GlobalResource : std::pmr::memory_resource {
+            auto do_allocate(std::size_t bytes, std::size_t alignment) -> void* override {
+                std::size_t aligned_bytes = (bytes + alignment - 1) & ~(alignment - 1);
+                return std::aligned_alloc(alignment, aligned_bytes);
+            }
+            void do_deallocate(
+                void* p, std::size_t bytes, std::size_t alignment
+            ) noexcept override {
+                /// NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
+                std::free(p);
+            }
+            [[nodiscard]] auto do_is_equal(const memory_resource& other) const noexcept
+                -> bool override {
+                return this == &other;
+            }
+        };
+        static GlobalResource resource;
+        return &resource;
+    }
+
+    static auto synchronized_pool() noexcept -> std::pmr::memory_resource* {
         // static std::pmr::monotonic_buffer_resource resource(std::pmr::new_delete_resource());
         constexpr std::pmr::pool_options pool_opts{
-            .largest_required_pool_block = 4 * 1024 * 1024,  // 4 MB
+            .largest_required_pool_block = 4uz * 1024 * 1024,  // 4 MB
         };
-        static std::pmr::unsynchronized_pool_resource resource(
-            pool_opts, std::pmr::new_delete_resource()
-        );
+        static std::pmr::unsynchronized_pool_resource resource(pool_opts, global_resource());
         return &resource;
     }
 
 public:
     static auto monotonic() noexcept -> std::pmr::monotonic_buffer_resource* {
-        static thread_local std::pmr::monotonic_buffer_resource resource(128 * 1024, global_heap());
+        static thread_local std::pmr::monotonic_buffer_resource resource(
+            128uz * 1024, synchronized_pool()
+        );
         return &resource;
     }
 
-    static auto pool() noexcept -> std::pmr::unsynchronized_pool_resource* {
+    static auto local_pool() noexcept -> std::pmr::unsynchronized_pool_resource* {
         constexpr std::pmr::pool_options pool_opts{
-            .largest_required_pool_block = 4 * 1024,  // 4 KB
+            .largest_required_pool_block = 4uz * 1024,  // 4 KB
         };
         static thread_local std::pmr::unsynchronized_pool_resource resource(
-            pool_opts, global_heap()
+            pool_opts, synchronized_pool()
         );
         return &resource;
     }
@@ -184,11 +211,11 @@ public:
         Allocator(const Allocator<U>&) noexcept {}
 
         auto allocate(std::size_t n) -> T* {
-            return static_cast<T*>(pool()->allocate(n * sizeof(T), alignof(T)));
+            return static_cast<T*>(local_pool()->allocate(n * sizeof(T), alignof(T)));
         }
 
         void deallocate(T* p, std::size_t n) noexcept {
-            pool()->deallocate(p, n * sizeof(T), alignof(T));
+            local_pool()->deallocate(p, n * sizeof(T), alignof(T));
         }
 
         template <typename U>
@@ -348,6 +375,12 @@ public:
 public:
     GlobalMemory() = delete;
 };
+
+auto operator new(std::size_t size, std::align_val_t al) -> void* {
+    return GlobalMemory::alloc_raw(size, static_cast<std::size_t>(al));
+}
+
+void operator delete(void* ptr, std::align_val_t al) noexcept {}
 
 template <>
 constexpr auto GlobalMemory::collect<std::span>() {

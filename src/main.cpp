@@ -21,23 +21,23 @@ public:
     auto operator=(ThreadGuard&&) -> ThreadGuard& = delete;
     ~ThreadGuard() {
         GlobalMemory::monotonic()->release();
-        GlobalMemory::pool()->release();
+        GlobalMemory::local_pool()->release();
         TypeRegistry::instance.reset();
         Diagnostic::instance.reset();
     }
 };
 
 auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer)
-    -> std::pair<Scope&, MemberAccessHandler> {
-    static auto [std_scope, std_sema] = [&]() {
+    -> std::pair<Scope&, OperatorRegistry> {
+    static auto [std_scope, std_operators] = [&]() {
         ASTBuilder builder(*sources.load_std(), importer);
-        ASTRoot* std_root = builder();
+        const ASTRoot* std_root = builder();
         static Scope scope;
-        MemberAccessHandler sema;
-        SymbolCollector{scope, sema}(std_root);
-        return std::pair{&scope, sema};
+        OperatorRegistry operators;
+        SymbolCollector{scope, operators}(std_root);
+        return std::pair{&scope, operators};
     }();
-    return {Scope::root(*std_scope), std_sema};
+    return {Scope::root(*std_scope), std_operators};
 }
 
 auto main(int argc, char* argv[]) -> int {
@@ -51,19 +51,19 @@ auto main(int argc, char* argv[]) -> int {
     SourceManager sources;
     ImportManager<ASTRoot> importer(sources);
     ASTBuilder builder(*sources.load(argv[1]), importer);
-    ASTRoot* root = builder();
+    const ASTRoot* root = builder();
 
     if (root == nullptr) {
         Diagnostic::error("Failed to parse input");
         return EXIT_FAILURE;
     }
 
-    auto [scope, sema] = get_root(sources, importer);
-    SymbolCollector symbol_collector(scope, sema);
+    auto [scope, operators] = get_root(sources, importer);
+    SymbolCollector symbol_collector(scope, operators);
     symbol_collector(root);
 
-    TypeChecker checker(scope, std::move(sema));
-    TypeCheckVisitor{checker}(root);
+    Sema sema{scope, std::move(operators)};
+    TypeCheckVisitor{sema}(root);
 
     bool has_error = Diagnostic::print(sources);
     if (has_error) return EXIT_FAILURE;

@@ -4,12 +4,16 @@
 #include "ast.hpp"
 #include "object.hpp"
 
-using FunctionOverloadDecl = PointerVariant<
+inline constexpr std::string_view constructor_symbol = "!";
+inline constexpr std::string_view destructor_symbol = "~";
+
+using FunctionOverloadDef = PointerVariant<
     const ASTFunctionDefinition*,
     const ASTConstructorDestructorDefinition*,
     const ASTTemplateDefinition*>;
 
 struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
+    Scope& scope;
     const ASTTemplateDefinition& primary;
     GlobalMemory::Vector<const ASTTemplateSpecialization*> specializations;
 };
@@ -20,13 +24,13 @@ struct VariableInitialization : public GlobalMemory::MonotonicAllocated {
 };
 
 using ScopeValue = PointerVariant<
-    Term*,                                        // type/comptime (from template)
-    const ASTExprVariant*,                        // type alias
-    const ASTClassDefinition*,                    // class definition
-    const VariableInitialization*,                // comptime/variable declaration
-    GlobalMemory::Vector<FunctionOverloadDecl>*,  // function overloads
-    TemplateFamily*,                              // template definition
-    const Scope*>;                                // namespace
+    Term*,                                       // type/comptime (from template)
+    const ASTExprVariant*,                       // type alias
+    const ASTClassDefinition*,                   // class definition
+    const VariableInitialization*,               // comptime/variable declaration
+    GlobalMemory::Vector<FunctionOverloadDef>*,  // function overloads
+    TemplateFamily*,                             // template definition
+    const Scope*>;                               // namespace
 
 class Scope final : public GlobalMemory::MonotonicAllocated {
 public:
@@ -86,23 +90,24 @@ public:
         }
     }
 
-    void add_function(std::string_view identifier, const ASTFunctionDefinition* expr) {
+    void add_function(std::string_view identifier, const auto* func) {
         if (auto it = identifiers_.find(identifier); it == identifiers_.end()) {
-            auto overloads = GlobalMemory::alloc<GlobalMemory::Vector<FunctionOverloadDecl>>();
-            overloads->push_back(expr);
+            auto overloads = GlobalMemory::alloc<GlobalMemory::Vector<FunctionOverloadDef>>();
+            overloads->push_back(func);
             identifiers_[identifier] = overloads;
         } else {
-            auto overloads = it->second.get<GlobalMemory::Vector<FunctionOverloadDecl>*>();
+            auto overloads = it->second.get<GlobalMemory::Vector<FunctionOverloadDef>*>();
             if (!overloads) {
                 throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
             }
-            overloads->push_back(expr);
+            overloads->push_back(func);
         }
     }
 
     void add_template(std::string_view identifier, const ASTTemplateDefinition& definition) {
-        auto [_, inserted] =
-            identifiers_.insert({identifier, new TemplateFamily{.primary = definition}});
+        auto [_, inserted] = identifiers_.insert(
+            {identifier, new TemplateFamily{.scope = *this, .primary = definition}}
+        );
         if (!inserted) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
@@ -138,96 +143,16 @@ public:
     }
 };
 
-class SemaInfrastructure {
-protected:
-    GlobalMemory::MultiMap<OperatorCode, FunctionOverloadDecl> operators_;
-
-public:
-    Scope* current_scope_;
-
-public:
-    auto register_operator(OperatorCode opcode, FunctionOverloadDecl operator_def) -> void {
-        operators_.insert({opcode, operator_def});
-    }
-
-    [[nodiscard]] auto lookup(std::string_view identifier) const noexcept
-        -> std::pair<Scope*, const ScopeValue*> {
-        Scope* scope = current_scope_;
-        while (scope) {
-            auto it = scope->identifiers_.find(identifier);
-            if (it != scope->identifiers_.end()) {
-                return {scope, &it->second};
-            }
-            scope = scope->parent_;
-        }
-        return {nullptr, nullptr};
-    }
-
-protected:
-    auto value_decay(Term term, bool* is_mutable = nullptr) const -> Term {
-        if (!term) return term;
-        if (term.is_type()) return term;
-
-        if (auto ref_value = term->dyn_cast<ReferenceValue>()) {
-            return value_decay(Term::lvalue(ref_value->referenced_value_), is_mutable);
-        } else if (auto ref_type = term->dyn_cast<ReferenceType>()) {
-            return value_decay(Term::lvalue(ref_type->referenced_type_), is_mutable);
-        } else if (auto ptr_value = term->dyn_cast<PointerValue>()) {
-            return value_decay(Term::lvalue(ptr_value->pointed_value_), is_mutable);
-        } else if (auto ptr_type = term->dyn_cast<PointerType>()) {
-            return value_decay(Term::lvalue(ptr_type->pointed_type_), is_mutable);
-        } else if (auto mut_type = term->dyn_cast<MutableType>()) {
-            if (is_mutable) *is_mutable = true;
-            return value_decay(Term::lvalue(mut_type->target_type_), is_mutable);
-        } else if (auto mut_value = term->dyn_cast<MutableValue>()) {
-            if (is_mutable) *is_mutable = false;
-            return value_decay(Term::lvalue(mut_value->value_), is_mutable);
-        }
-        return term;
-    }
-
-    [[nodiscard]] auto wrap_in_mutable(Term term) const -> Term {
-        if (auto value = term.get_comptime()) {
-            return Term::forward_like(
-                term, new MutableValue(TypeRegistry::get<MutableType>(term.effective_type()), value)
-            );
-        } else {
-            return Term::forward_like(term, TypeRegistry::get<MutableType>(term.effective_type()));
-        }
-    }
-
-    [[nodiscard]] auto apply_category(Term obj) const -> const Type* {
-        if (obj.is_type()) {
-            /// TODO: throw type is not a valid argument error
-            return &UnknownType::instance;
-        }
-        const Type* type = obj.effective_type();
-        if (obj.value_category() == ValueCategory::Left) {
-            return TypeRegistry::get<ReferenceType>(type, false);
-        } else if (obj.value_category() == ValueCategory::Expiring) {
-            return TypeRegistry::get<ReferenceType>(type, true);
-        } else {
-            return type;
-        }
-    }
-
-    [[nodiscard]] auto extract_arg_types(std::span<Term> args) const
-        -> GlobalMemory::Vector<const Type*> {
-        return args | std::views::transform([this](Term arg) -> const Type* {
-                   return apply_category(arg);
-               }) |
-               GlobalMemory::collect<GlobalMemory::Vector<const Type*>>();
-    }
-};
+using OperatorRegistry = GlobalMemory::MultiMap<OperatorCode, FunctionOverloadDef>;
 
 class SymbolCollector {
 private:
     Scope& current_scope_;
-    SemaInfrastructure& sema_;
+    OperatorRegistry& operators_;
 
 public:
-    SymbolCollector(Scope& scope, SemaInfrastructure& sema) noexcept
-        : current_scope_(scope), sema_(sema) {}
+    SymbolCollector(Scope& scope, OperatorRegistry& operators) noexcept
+        : current_scope_(scope), operators_(operators) {}
 
     void operator()(const ASTNodeVariant& variant) noexcept { std::visit(*this, variant); }
 
@@ -246,7 +171,7 @@ public:
 
     void operator()(const ASTLocalBlock* node) noexcept {
         Scope& local_scope = Scope::make(current_scope_, node);
-        SymbolCollector local_visitor(local_scope, sema_);
+        SymbolCollector local_visitor(local_scope, operators_);
         for (auto& stmt : node->statements) {
             local_visitor(stmt);
         }
@@ -285,7 +210,7 @@ public:
     // Statements
     void operator()(const ASTIfStatement* node) noexcept {
         Scope& condition_scope = Scope::make(current_scope_, node);
-        SymbolCollector condition_visitor(condition_scope, sema_);
+        SymbolCollector condition_visitor(condition_scope, operators_);
         condition_visitor(node->condition);
         condition_visitor(&node->if_block);
         if (node->else_block) {
@@ -295,7 +220,7 @@ public:
 
     void operator()(const ASTForStatement* node) noexcept {
         Scope& local_scope = Scope::make(current_scope_, node);
-        SymbolCollector local_visitor(local_scope, sema_);
+        SymbolCollector local_visitor(local_scope, operators_);
         if (node->initializer_decl) {
             local_visitor(node->initializer_decl);
         } else if (!std::holds_alternative<std::monostate>(node->initializer_expr)) {
@@ -306,7 +231,7 @@ public:
     }
 
     // Functions
-    void operator()(ASTFunctionDefinition* node) noexcept {
+    void operator()(const ASTFunctionDefinition* node) noexcept {
         current_scope_.add_function(node->identifier, node);
         Scope& local_scope = Scope::make(current_scope_, node);
         for (auto& param : node->parameters) {
@@ -315,13 +240,16 @@ public:
                 new VariableInitialization{.type = param.type, .value = std::monostate{}}
             );
         }
-        SymbolCollector local_visitor(local_scope, sema_);
+        SymbolCollector local_visitor(local_scope, operators_);
         for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
     }
 
     void operator()(const ASTConstructorDestructorDefinition* node) noexcept {
+        current_scope_.add_function(
+            node->is_constructor ? constructor_symbol : destructor_symbol, node
+        );
         Scope& local_scope = Scope::make(current_scope_, node);
         for (auto& param : node->parameters) {
             local_scope.add_variable(
@@ -329,7 +257,7 @@ public:
                 new VariableInitialization{.type = param.type, .value = std::monostate{}}
             );
         }
-        SymbolCollector local_visitor(local_scope, sema_);
+        SymbolCollector local_visitor(local_scope, operators_);
         for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
@@ -339,7 +267,7 @@ public:
     void operator()(const ASTClassDefinition* node) noexcept {
         current_scope_.add_class(node->identifier, node);
         Scope& class_scope = Scope::make(current_scope_, node);
-        SymbolCollector class_visitor(class_scope, sema_);
+        SymbolCollector class_visitor(class_scope, operators_);
         for (auto& ctor : node->constructors) {
             class_visitor(ctor);
         }
@@ -354,7 +282,7 @@ public:
     // Namespaces
     void operator()(const ASTNamespaceDefinition* node) noexcept {
         Scope& namespace_scope = Scope::make(current_scope_, node);
-        SymbolCollector namespace_visitor(namespace_scope, sema_);
+        SymbolCollector namespace_visitor(namespace_scope, operators_);
         for (auto& item : node->items) {
             namespace_visitor(item);
         }
