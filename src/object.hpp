@@ -1403,7 +1403,7 @@ public:
     Value* dyn_value() = delete;
     virtual const Type* get_type() const noexcept = 0;
     virtual Value* clone() const noexcept = 0;
-    virtual Value* resolve_to(const Type* target) const = 0;
+    virtual auto resolve_to(const Type* target) const -> Value* = 0;
     virtual void assign_from(Value* source) = 0;
     virtual auto hash_code() const noexcept -> std::size_t = 0;
 };
@@ -1502,12 +1502,12 @@ public:
         : Value(kind), type_(type), value_(std::move(value)) {
         assert(type && type != &IntegerType::untyped_instance);
     }
-    std::string_view repr() const final {
+    auto repr() const -> std::string_view final {
         return GlobalMemory::format_view("{}", value_.to_string());
     }
-    const IntegerType* get_type() const noexcept final { return type_; }
-    IntegerValue* clone() const noexcept final { return new IntegerValue(*this); }
-    IntegerValue* resolve_to(const Type* target) const final {
+    auto get_type() const noexcept -> const IntegerType* final { return type_; }
+    auto clone() const noexcept -> IntegerValue* final { return new IntegerValue(*this); }
+    auto resolve_to(const Type* target) const -> IntegerValue* final {
         if (target && !target->dyn_cast<IntegerType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("integer", target->repr());
         }
@@ -1613,12 +1613,12 @@ public:
     std::string_view repr() const final { return GlobalMemory::format_view("{}", value_); }
     const FloatType* get_type() const noexcept final { return type_; }
     FloatValue* clone() const noexcept final { return new FloatValue(*this); }
-    FloatValue* resolve_to(const Type* target) const final {
+    auto resolve_to(const Type* target) const -> FloatValue* final {
         if (target && !target->dyn_cast<FloatType>()) {
             throw UnlocatedProblem::make<TypeMismatchError>("float", target->repr());
         }
         if (target == nullptr) {
-            if (type_) {
+            if (type_ != &FloatType::untyped_instance) {
                 return new FloatValue(*this);
             }
             // default to double

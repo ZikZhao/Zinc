@@ -1,8 +1,14 @@
 fn main() -> i32 {
+    let x = A<i32>{ a: 42, b: true };
     let y = MyClass<f64>(3.14);
     let z = y.value2;
-    return z.method1(10);
+    return y.method1(10);
 }
+
+type A<T: type> = {
+    a: T,
+    b: bool,
+};
 
 class MyClass<T: type> {
     let value: T;

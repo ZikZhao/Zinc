@@ -433,7 +433,8 @@ private:
         if (auto type = obj->dyn_type()) {
             return Term::type(type);
         } else {
-            return Term::prvalue(obj->cast<Value>()->resolve_to(nullptr));
+            /// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+            return Term::prvalue(const_cast<Value*>(obj->cast<Value>()));
         }
     }
 
