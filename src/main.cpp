@@ -59,8 +59,7 @@ auto main(int argc, char* argv[]) -> int {
     }
 
     auto [scope, operators] = get_root(sources, importer);
-    SymbolCollector symbol_collector(scope, operators);
-    symbol_collector(root);
+    SymbolCollector{scope, operators}(root);
 
     Sema sema{scope, std::move(operators)};
     TypeCheckVisitor{sema}(root);

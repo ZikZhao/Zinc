@@ -14,7 +14,7 @@ using FunctionOverloadDef = PointerVariant<
 
 struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
     Scope& decl_scope;
-    Scope* specialization_testing_scope;
+    Scope& pattern_buildind_scope;
     const ASTTemplateDefinition& primary;
     GlobalMemory::Vector<const ASTTemplateSpecialization*> specializations;
 };
@@ -114,7 +114,7 @@ public:
             {identifier,
              new TemplateFamily{
                  .decl_scope = *this,
-                 .specialization_testing_scope = &Scope::make(*this),
+                 .pattern_buildind_scope = Scope::make(*this),
                  .primary = definition,
              }}
         );

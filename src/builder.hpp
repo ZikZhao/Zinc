@@ -299,6 +299,7 @@ private:
                 class_def->identifier,
                 visit<std::span<ASTTemplateParameter>>(ctx->specialize_list_),
                 visit<std::span<ASTExprVariant>>(ctx->instantiation_list_),
+                class_def
             });
         } else {
             return as_variant(class_def);
@@ -596,9 +597,8 @@ private:
         -> antlrcpp::Any final {
         return visit_list<ASTTemplateParameter>(ctx->parameters_);
     }
-    auto visitSpecialize_parameter_list(
-        ZincParser::Specialize_parameter_listContext* ctx
-    ) noexcept -> antlrcpp::Any final {
+    auto visitSpecialize_parameter_list(ZincParser::Specialize_parameter_listContext* ctx) noexcept
+        -> antlrcpp::Any final {
         return visit_list<ASTTemplateParameter>(ctx->parameters_);
     }
     auto visitTypeTemplateParam(ZincParser::TypeTemplateParamContext* ctx) noexcept

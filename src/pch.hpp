@@ -76,6 +76,14 @@ struct IndexOfTypeInTuple<Target, Head, Tail...> {
 template <typename Target, typename... Ts>
 constexpr std::size_t IndexOfTypeInTupleV = IndexOfTypeInTuple<Target, Ts...>::value;
 
+template <typename R, typename T>
+concept ForwardRange =
+    std::ranges::forward_range<R> && std::convertible_to<std::ranges::range_reference_t<R>, T>;
+
+template <typename R, typename T>
+concept RandomAccessRange = std::ranges::random_access_range<R> && std::ranges::sized_range<R> &&
+                            std::convertible_to<std::ranges::range_reference_t<R>, T>;
+
 template <typename T>
 constexpr auto opaque_cast(auto* ptr) {
     /// NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
@@ -366,11 +374,6 @@ public:
     GlobalMemory() = delete;
 };
 
-template <>
-constexpr auto GlobalMemory::collect<std::span>() {
-    return DeducingRangeCollector<DynamicSpan>{};
-}
-
 template <typename ElementType>
 class GlobalMemory::RangeCollector<std::span<ElementType>> {
     template <std::ranges::input_range Range>
@@ -388,6 +391,11 @@ class GlobalMemory::RangeCollector<std::span<ElementType>> {
         }
     }
 };
+
+template <>
+constexpr auto GlobalMemory::collect<std::span>() {
+    return DeducingRangeCollector<DynamicSpan>{};
+}
 
 template <typename Key, typename Value, typename Comp>
 class GlobalMemory::FlatMap {

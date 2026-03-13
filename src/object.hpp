@@ -343,7 +343,6 @@ public:
         return Term(ptr, source.category_, source.value_category_);
     }
     static auto type(const Type* type) noexcept -> Term { return Term(type); }
-    static auto template_arg(const Object* obj) noexcept -> Term;
 
 private:
     union {
@@ -377,6 +376,9 @@ public:
     [[nodiscard]] auto is_type() const noexcept -> bool { return category_ == Category::Type; }
     [[nodiscard]] auto is_comptime() const noexcept -> bool {
         return category_ == Category::Comptime;
+    }
+    [[nodiscard]] auto is_runtime() const noexcept -> bool {
+        return category_ == Category::Runtime;
     }
     [[nodiscard]] auto get_type() const noexcept -> const Type* {
         return is_type() ? type_ : nullptr;
@@ -924,7 +926,7 @@ public:
     std::span<const Type*> implements_;
     GlobalMemory::FlatMap<std::string_view, const Type*> attrs_;
     mutable const void* primary_template_;
-    mutable GlobalMemory::Vector<const Object*> template_args_;
+    mutable std::span<const Object*> template_args_;
 
 public:
     InstanceType(std::string_view identifier) : Type(kind), identifier_(identifier) {}
@@ -947,13 +949,13 @@ public:
         Scope* scope,
         std::string_view identifier,
         const void* primary_template,
-        GlobalMemory::Vector<const Object*> template_args
+        std::span<const Object*> template_args
     ) noexcept
         : Type(kind),
           scope_(scope),
           identifier_(identifier),
           primary_template_(primary_template),
-          template_args_(std::move(template_args)) {}
+          template_args_(template_args) {}
 
     std::string_view repr() const override { return GlobalMemory::format_view("{}", identifier_); }
 
@@ -2151,14 +2153,6 @@ inline const Type* TypeRegistry::simplify_recursive_type(
 
 inline auto Term::unknown() noexcept -> Term { return Term(&UnknownType::instance); }
 
-inline auto Term::template_arg(const Object* obj) noexcept -> Term {
-    if (obj->dyn_type()) {
-        return {obj, Category::Type, ValueCategory::Right};
-    } else {
-        return {obj, Category::Comptime, ValueCategory::Right};
-    }
-}
-
 inline auto Term::is_unknown() const noexcept -> bool { return ptr_->kind_ == Kind::Unknown; }
 
 inline auto Term::effective_type() const noexcept -> const Type* {
@@ -2356,8 +2350,9 @@ inline auto StructType::construct(
             throw UnlocatedProblem::make<TypeMismatchError>(
                 GlobalMemory::format_view("field '{}'", field_name), it->second->repr()
             );
+        } else {
+            init_types.erase(it);
         }
-        init_types.erase(it);
     }
     if (!init_types.empty()) {
         // throw UnlocatedProblem::make<UnrecognizedAttributeError>(init_types.begin()->first);

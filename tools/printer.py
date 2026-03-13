@@ -114,6 +114,72 @@ class FlatMapPrinter:
         return 'map'
 
 
+def _bit_ceil(n):
+    if n <= 1:
+        return 1
+    return 1 << (n - 1).bit_length()
+
+
+class PointerVariantPrinter:
+    """Pretty printer for PointerVariant<Ts...>
+    
+    Stores a pointer with the type index packed into the low bits.
+    Displays as 'ptr (index n)' and expands to the fields of the pointed-to type.
+    """
+
+    def __init__(self, val):
+        self.val = val
+
+    def _decode(self):
+        ptr_raw = int(self.val['ptr_'])
+
+        arg_types = []
+        n = 0
+        while True:
+            try:
+                arg_types.append(self.val.type.template_argument(n))
+                n += 1
+            except Exception:
+                break
+
+        num_types = len(arg_types)
+        mask = _bit_ceil(num_types) - 1
+        index = ptr_raw & mask
+        actual_ptr = ptr_raw & ~mask
+        return index, actual_ptr, arg_types
+
+    def to_string(self):
+        index, actual_ptr, arg_types = self._decode()
+        if actual_ptr == 0:
+            return "ptr (null)"
+        return f"ptr (index {index})"
+
+    def children(self):
+        index, actual_ptr, arg_types = self._decode()
+        if actual_ptr == 0 or index >= len(arg_types):
+            return
+
+        ptr_type = arg_types[index]  # already a pointer type (e.g. Foo*)
+        typed_ptr = gdb.Value(actual_ptr).cast(ptr_type)
+
+        try:
+            deref = typed_ptr.dereference()
+            try:
+                for field in deref.type.fields():
+                    if field.name:
+                        try:
+                            yield (field.name, deref[field.name])
+                        except Exception:
+                            pass
+            except Exception:
+                yield ('value', deref)
+        except Exception:
+            yield ('ptr', typed_ptr)
+
+    def display_hint(self):
+        return None
+
+
 class MultiMapPrinter:
     """Pretty printer for GlobalMemory::MultiMap"""
     
@@ -165,7 +231,10 @@ def build_pretty_printer():
     
     # MultiMap
     pp.add_printer('MultiMap', '^GlobalMemory::MultiMap<.*>$', MultiMapPrinter)
-    
+
+    # PointerVariant
+    pp.add_printer('PointerVariant', '^PointerVariant<.*>$', PointerVariantPrinter)
+
     return pp
 
 
@@ -178,5 +247,6 @@ gdb.write("  - TypeResolution\n")
 gdb.write("  - GlobalMemory::FlatSet\n")
 gdb.write("  - GlobalMemory::FlatMap\n")
 gdb.write("  - GlobalMemory::MultiMap\n")
+gdb.write("  - PointerVariant\n")
 gdb.write(f"Total global pretty printers: {len(gdb.pretty_printers)}\n")
 gdb.flush()

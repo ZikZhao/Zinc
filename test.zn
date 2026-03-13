@@ -1,8 +1,7 @@
 fn main() -> i32 {
-    let x = MyClass<i32>(42);
     let y = MyClass<f64>(3.14);
     let z = y.value2;
-    return x.method1(10);
+    return z.method1(10);
 }
 
 class MyClass<T: type> {

@@ -385,9 +385,9 @@ private:
 
 private:
     Sema& sema_;
-    GlobalMemory::
-        UnorderedMultiMap<const ASTTemplateDefinition*, std::pair<TemplateArgs, const Object*>>
-            instantiations_;
+    // GlobalMemory::UnorderedMap<std::pair<const ASTTemplateDefinition*, TemplateArgs>, const
+    // Object*>
+    //     instantiations_;
     GlobalMemory::UnorderedMap<const ASTTemplateSpecialization*, SpecializationPrototype>
         pattern_cache_;
 
@@ -397,19 +397,30 @@ public:
     [[nodiscard]] auto is_template_about_type(const TemplateFamily& family) const noexcept -> bool;
 
     inline auto instantiate(TemplateFamily& family, std::span<Term> args) -> Term {
-        GlobalMemory::Vector<const Object*> unwrapped_args = unwrap(args);
+        GlobalMemory::Vector transformed_args =
+            args | std::views::transform([](Term arg) -> const Object* {
+                if (auto* type = arg.get_type()) {
+                    return type;
+                } else if (auto* value = arg.get_comptime()) {
+                    return value->resolve_to(nullptr);
+                } else {
+                    throw;
+                }
+            }) |
+            GlobalMemory::collect<GlobalMemory::Vector>();
         Sema::Guard guard(sema_, family.decl_scope);
-        if (!validate(family.primary, unwrapped_args)) {
+        if (!validate(family.primary, transformed_args)) {
             return Term::unknown();
         }
-        auto [inst_scope, target] = specialization_resolution(family, unwrapped_args);
+        auto [inst_scope, target] = specialization_resolution(family, transformed_args);
         Sema::Guard inner_guard(sema_, *inst_scope);
         sema_.deferred_analysis(*inst_scope, target);
         Term result = sema_.lookup_term(family.primary.identifier);
         if (result.is_type()) {
             if (auto instance_type = result.get_type()->dyn_cast<InstanceType>()) {
                 instance_type->primary_template_ = &family.primary;
-                instance_type->template_args_ = unwrapped_args;
+                instance_type->template_args_ =
+                    transformed_args | GlobalMemory::collect<std::span>();
             }
         }
         return result;
@@ -418,19 +429,12 @@ public:
     auto template_inference(TemplateFamily& family, std::span<Term> args) -> std::span<Term>;
 
 private:
-    static auto unwrap(std::span<Term> args) -> GlobalMemory::Vector<const Object*> {
-        GlobalMemory::Vector<const Object*> result;
-        result.reserve(args.size());
-        for (Term arg : args) {
-            if (arg.is_type()) {
-                result.push_back(arg.get_type());
-            } else if (Value* value = arg.get_comptime()) {
-                result.push_back(value);
-            } else {
-                throw;
-            }
+    static auto as_term(const Object* obj) -> Term {
+        if (auto type = obj->dyn_type()) {
+            return Term::type(type);
+        } else {
+            return Term::prvalue(obj->cast<Value>()->resolve_to(nullptr));
         }
-        return result;
     }
 
     auto validate(const ASTTemplateDefinition& primary, TemplateArgs args) noexcept -> bool;
@@ -438,8 +442,9 @@ private:
     auto specialization_resolution(TemplateFamily& family, TemplateArgs args) noexcept
         -> std::pair<Scope*, ASTNodeVariant>;
 
-    auto get_prototype(Scope& scope, const ASTTemplateSpecialization& specialization) noexcept
-        -> const SpecializationPrototype&;
+    auto get_prototype(
+        Scope& pattern_scope, const ASTTemplateSpecialization& specialization
+    ) noexcept -> const SpecializationPrototype&;
 
     [[nodiscard]] static auto compare_specialization(
         const SpecializationPrototype& lhs, const SpecializationPrototype& rhs
@@ -510,7 +515,7 @@ private:
                 index = auto_value->index_;
             }
             const ASTTemplateParameter& template_param = at(is_nttp, index);
-            scope.add_template_argument(template_param.identifier, Term::template_arg(value));
+            scope.add_template_argument(template_param.identifier, as_term(value));
         }
     }
 };
@@ -843,8 +848,16 @@ public:
         if (callee.is_unknown()) {
             return Term::unknown();
         }
-        Term decayed = Sema::decay(callee);
-        FunctionObject overload = resolve_overload(decayed, args);
+        Term decayed_callee = Sema::decay(callee);
+        GlobalMemory::Vector transformed_args =
+            args | std::views::transform([](Term arg) -> Term {
+                if (auto value = arg.get_comptime()) {
+                    return Term::prvalue(value->resolve_to(nullptr));
+                }
+                return arg;
+            }) |
+            GlobalMemory::collect<GlobalMemory::Vector>();
+        FunctionObject overload = resolve_overload(decayed_callee, transformed_args);
         if (!overload) {
             /// TODO: throw no matching overload error
             throw;
@@ -903,7 +916,7 @@ private:
         auto loop = [&](std::span<FunctionObject> candidates) -> std::size_t {
             for (std::size_t i = 0; i < candidates.size(); ++i) {
                 FunctionObject candidate = candidates[i];
-                ConversionRank rank = validate(candidate, args);
+                ConversionRank rank = overload_rank(candidate, args);
                 if (rank == ConversionRank::NoMatch) {
                     // remove non-viable candidate
                     std::swap(candidates[i], candidates.back());
@@ -1002,7 +1015,7 @@ private:
         return NoMatch;
     }
 
-    [[nodiscard]] static auto validate(FunctionObject func, std::span<Term> arg_types)
+    [[nodiscard]] static auto overload_rank(FunctionObject func, std::span<Term> arg_types)
         -> ConversionRank {
         const FunctionType* func_type = get_func_type(func);
         if (func_type->parameters_.size() != arg_types.size()) {
@@ -1219,12 +1232,6 @@ public:
         sema_.current_scope_->self_type_ = out_;
         const Type* base = resolve_base(node);
         std::span<const Type*> interfaces = resolve_interfaces(node);
-        for (const auto* ctor : node->constructors) {
-            sema_.current_scope_->add_function(constructor_symbol, ctor);
-        }
-        if (node->destructor) {
-            sema_.current_scope_->add_function(destructor_symbol, node->destructor);
-        }
         GlobalMemory::FlatMap<std::string_view, const Type*> attrs = resolve_attrs(node);
         GlobalMemory::FlatMap<std::string_view, FunctionOverloadSetValue*> methods =
             resolve_methods(node);
@@ -1540,7 +1547,7 @@ public:
                     family->primary.identifier,
                     &family->primary,
                     args_terms | std::views::transform(&Term::get) |
-                        GlobalMemory::collect<GlobalMemory::Vector<const Object*>>()
+                        GlobalMemory::collect<std::span>()
                 )),
                 .receiver = {}
             };
@@ -1756,7 +1763,9 @@ inline auto TemplateHandler::validate(
                 Term constraint_term =
                     ValueContextEvaluator{sema_, nullptr, false}(param.constraint).subject;
                 if (constraint_term.is_type()) {
-                    if (!constraint_term.get_type()->assignable_from(args[i]->cast<Type>())) {
+                    if (!constraint_term.get_type()->assignable_from(
+                            args[i]->template cast<Type>()
+                        )) {
                         return false;
                     }
                 } else {
@@ -1781,7 +1790,7 @@ inline auto TemplateHandler::specialization_resolution(
     // first, try to find a matching full specialization
     for (const auto* specialization : family.specializations) {
         if (specialization->parameters.size()) continue;
-        const auto& prototype = get_prototype(*sema_.current_scope_, *specialization);
+        const auto& prototype = get_prototype(family.pattern_buildind_scope, *specialization);
         for (size_t i = 0; i < args.size(); i++) {
             static AutoBindings _;
             assert(_.empty());
@@ -1789,7 +1798,7 @@ inline auto TemplateHandler::specialization_resolution(
                 goto next_full_specialization;
             }
         }
-        return {sema_.current_scope_, specialization->target_node};
+        return {&Scope::make(*sema_.current_scope_), specialization->target_node};
     next_full_specialization:;
     }
     // second, try to find best matching partial specialization
@@ -1801,7 +1810,7 @@ inline auto TemplateHandler::specialization_resolution(
         const auto* specialization = family.specializations[i];
         if (specialization->parameters.size() == 0) continue;
         AutoBindings auto_bindings;
-        const auto& prototype = get_prototype(*sema_.current_scope_, *specialization);
+        const auto& prototype = get_prototype(family.pattern_buildind_scope, *specialization);
         for (size_t j = 0; j < args.size(); j++) {
             if (!prototype.patterns[j]->pattern_match(args[j], auto_bindings)) {
                 viable_count--;
@@ -1830,7 +1839,7 @@ inline auto TemplateHandler::specialization_resolution(
     if (best_candidate) {
         for (const auto* specialization : std::span(family.specializations.begin(), viable_count)) {
             if (specialization == best_candidate) continue;
-            const auto& prototype = get_prototype(*sema_.current_scope_, *specialization);
+            const auto& prototype = get_prototype(family.pattern_buildind_scope, *specialization);
             std::partial_ordering better_than_best =
                 compare_specialization(*best_candidate_prototype, prototype);
             if (better_than_best == std::partial_ordering::equivalent ||
@@ -1842,7 +1851,8 @@ inline auto TemplateHandler::specialization_resolution(
     if (!ambiguous_candidates.empty()) {
         // Diagnostic::report(AmbiguousTemplateSpecializationError(
         //     family.primary.identifier, best_candidate->location,
-        //     ambiguous_candidates | std::views::transform(&ASTTemplateSpecialization::location) |
+        //     ambiguous_candidates |
+        //     std::views::transform(&ASTTemplateSpecialization::location) |
         //         GlobalMemory::collect<GlobalMemory::Vector>()
         // ));
         throw;
@@ -1857,20 +1867,18 @@ inline auto TemplateHandler::specialization_resolution(
     Scope& inst_scope = Scope::make(*sema_.current_scope_);
     Sema::Guard guard(sema_, inst_scope);
     for (size_t i = 0; i < args.size(); i++) {
-        inst_scope.add_template_argument(
-            family.primary.parameters[i].identifier, Term::template_arg(args[i])
-        );
+        inst_scope.add_template_argument(family.primary.parameters[i].identifier, as_term(args[i]));
     }
     return {&inst_scope, family.primary.target_node};
 }
 
 inline auto TemplateHandler::get_prototype(
-    Scope& scope, const ASTTemplateSpecialization& specialization
+    Scope& pattern_scope, const ASTTemplateSpecialization& specialization
 ) noexcept -> const SpecializationPrototype& {
     GlobalMemory::Vector<Object*> auto_instances = TypeRegistry::get_auto_instances(
         specialization.parameters | std::views::transform(&ASTTemplateParameter::is_nttp)
     );
-    Sema::Guard guard(sema_, scope);
+    Sema::Guard guard(sema_, pattern_scope);
     auto [it, inserted] = pattern_cache_.insert({&specialization, SpecializationPrototype()});
     if (!inserted) {
         return it->second;
@@ -1878,20 +1886,19 @@ inline auto TemplateHandler::get_prototype(
     it->second.patterns = GlobalMemory::alloc_array<const Object*>(specialization.patterns.size());
     it->second.skolems = GlobalMemory::alloc_array<const Object*>(specialization.patterns.size());
     for (size_t i = 0; i < specialization.parameters.size(); i++) {
-        scope.add_template_argument(
-            specialization.parameters[i].identifier,
-            Term::template_arg(static_cast<Value*>(auto_instances[i]))
+        pattern_scope.add_template_argument(
+            specialization.parameters[i].identifier, as_term(static_cast<Value*>(auto_instances[i]))
         );
     }
     for (size_t i = 0; i < specialization.patterns.size(); i++) {
         ValueContextEvaluator evaluator{sema_, nullptr, false, true};
         it->second.patterns[i] = evaluator(specialization.patterns[i]).subject.get();
     }
-    scope.clear();
+    pattern_scope.clear();
     for (const auto& param : specialization.parameters) {
-        scope.add_template_argument(
+        pattern_scope.add_template_argument(
             param.identifier,
-            Term::template_arg(
+            as_term(
                 param.is_nttp ? static_cast<const Object*>(&UnknownValue::instance)
                               : &UnknownType::instance
             )
@@ -1901,7 +1908,7 @@ inline auto TemplateHandler::get_prototype(
         ValueContextEvaluator evaluator{sema_, nullptr, false, true};
         it->second.skolems[i] = evaluator(specialization.patterns[i]).subject.get();
     }
-    scope.clear();
+    pattern_scope.clear();
     return it->second;
 }
 
