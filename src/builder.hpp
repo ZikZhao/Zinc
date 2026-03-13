@@ -488,11 +488,25 @@ private:
         return visit_expr(ctx->identifier_);
     }
 
-    auto visitTemplateIdentifierExpr(ZincParser::TemplateIdentifierExprContext* ctx) noexcept
+    auto visitAccessChainExpr(ZincParser::AccessChainExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
-        return as_variant(new ASTTemplateInstantiation{
-            loc(ctx), text(ctx->identifier_), visit<std::span<ASTExprVariant>>(ctx->template_args_)
-        });
+        ASTExprVariant base = visit_expr(ctx->base_);
+        std::span members = ctx->members_ |
+                            std::views::transform([this](auto* member) { return text(member); }) |
+                            GlobalMemory::collect<std::span<std::string_view>>();
+        std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
+        return as_variant(new ASTAccessChain{loc(ctx), base, members, instantiation_list});
+    }
+
+    auto visitAccessChainExprAlternative(
+        ZincParser::AccessChainExprAlternativeContext* ctx
+    ) noexcept -> Any<ASTExprVariant> final {
+        ASTExprVariant base = visit_expr(ctx->base_);
+        std::span members = ctx->members_ |
+                            std::views::transform([this](auto* member) { return text(member); }) |
+                            GlobalMemory::collect<std::span<std::string_view>>();
+        std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
+        return as_variant(new ASTAccessChain{loc(ctx), base, members, instantiation_list});
     }
 
     auto visitCallExpr(ZincParser::CallExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
@@ -508,12 +522,11 @@ private:
         );
     }
 
-    auto visitMemberAccessExpr(ZincParser::MemberAccessExprContext* ctx) noexcept
+    auto visitAnonymousStructInitExpr(ZincParser::AnonymousStructInitExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
-        std::span members = ctx->members_ |
-                            std::views::transform([this](auto child) { return text(child); }) |
-                            GlobalMemory::collect<std::span<std::string_view>>();
-        return as_variant(new ASTMemberAccess{loc(ctx), visit_expr(ctx->target_), members});
+        return as_variant(new ASTStructInitialization{
+            loc(ctx), std::monostate{}, visit_list<ASTFieldInitialization>(ctx->inits_)
+        });
     }
 
     auto visitStructInitExpr(ZincParser::StructInitExprContext* ctx) noexcept
@@ -527,42 +540,12 @@ private:
         return as_variant(new ASTParenExpr{loc(ctx), visit_expr(ctx->inner_expr_)});
     }
 
-    auto visitIdentifier(ZincParser::IdentifierContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        return as_variant(new ASTIdentifier{loc(ctx), text(ctx)});
-    }
-
-    auto visitConstant(ZincParser::ConstantContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        switch (ctx->value_->getType()) {
-        case ZincParser::T_INT:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<IntegerValue>(text(ctx->value_))}
-            );
-        case ZincParser::T_FLOAT:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<FloatValue>(text(ctx->value_))}
-            );
-        case ZincParser::T_STRING:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<ArrayValue>(text(ctx->value_))}
-            );
-        case ZincParser::T_BOOL:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<BooleanValue>(text(ctx->value_))}
-            );
-        case ZincParser::KW_NULLPTR:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<NullptrValue>(text(ctx->value_))}
-            );
-        default:
-            UNREACHABLE();
-        }
-    }
-
-    auto visitSelfType(ZincParser::SelfTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
+    auto visitSelfTypeExpr(ZincParser::SelfTypeExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
         return as_variant(new ASTSelfExpr{loc(ctx), true});
     }
 
-    auto visitPrimitiveType(ZincParser::PrimitiveTypeContext* ctx) noexcept
+    auto visitPrimitiveTypeExpr(ZincParser::PrimitiveTypeExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         switch (ctx->primitive_->getType()) {
         case ZincParser::KW_INT8:
@@ -599,25 +582,14 @@ private:
         }
     }
 
-    auto visitIdentifierType(ZincParser::IdentifierTypeContext* ctx) noexcept
+    auto visitStructTypeExpr(ZincParser::StructTypeExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
-        return visit_expr(ctx->identifier_);
-    }
-
-    auto visitTemplateTypeInstantiation(ZincParser::TemplateTypeInstantiationContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return as_variant(new ASTTemplateInstantiation{
-            loc(ctx), text(ctx->identifier_), visit<std::span<ASTExprVariant>>(ctx->template_args_)
-        });
-    }
-
-    auto visitStructType(ZincParser::StructTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
         return as_variant(
             new ASTStructType{loc(ctx), visit_list<ASTFieldDeclaration>(ctx->fields_)}
         );
     }
 
-    auto visitFunctionType(ZincParser::FunctionTypeContext* ctx) noexcept
+    auto visitFunctionTypeExpr(ZincParser::FunctionTypeExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return as_variant(new ASTFunctionType{
             loc(ctx),
@@ -626,25 +598,52 @@ private:
         });
     }
 
-    auto visitMutableType(ZincParser::MutableTypeContext* ctx) noexcept
+    auto visitMutableTypeExpr(ZincParser::MutableTypeExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return as_variant(new ASTMutableType{loc(ctx), visit_expr(ctx->inner_type_)});
     }
 
-    auto visitReferenceType(ZincParser::ReferenceTypeContext* ctx) noexcept
+    auto visitReferenceTypeExpr(ZincParser::ReferenceTypeExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return as_variant(
             new ASTReferenceType{loc(ctx), visit_expr(ctx->inner_type_), ctx->KW_MOVE() != nullptr}
         );
     }
 
-    auto visitPointerType(ZincParser::PointerTypeContext* ctx) noexcept
+    auto visitPointerTypeExpr(ZincParser::PointerTypeExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return as_variant(new ASTPointerType{loc(ctx), visit_expr(ctx->inner_type_)});
     }
 
-    auto visitParenType(ZincParser::ParenTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        return visit_expr(ctx->inner_type_);
+    auto visitIdentifier(ZincParser::IdentifierContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        return as_variant(new ASTIdentifier{loc(ctx), text(ctx)});
+    }
+
+    auto visitConstant(ZincParser::ConstantContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        switch (ctx->value_->getType()) {
+        case ZincParser::T_INT:
+            return as_variant(
+                new ASTConstant{loc(ctx), Value::from_literal<IntegerValue>(text(ctx->value_))}
+            );
+        case ZincParser::T_FLOAT:
+            return as_variant(
+                new ASTConstant{loc(ctx), Value::from_literal<FloatValue>(text(ctx->value_))}
+            );
+        case ZincParser::T_STRING:
+            return as_variant(
+                new ASTConstant{loc(ctx), Value::from_literal<ArrayValue>(text(ctx->value_))}
+            );
+        case ZincParser::T_BOOL:
+            return as_variant(
+                new ASTConstant{loc(ctx), Value::from_literal<BooleanValue>(text(ctx->value_))}
+            );
+        case ZincParser::KW_NULLPTR:
+            return as_variant(
+                new ASTConstant{loc(ctx), Value::from_literal<NullptrValue>(text(ctx->value_))}
+            );
+        default:
+            UNREACHABLE();
+        }
     }
 
     auto visitField_decl(ZincParser::Field_declContext* ctx) noexcept
@@ -716,11 +715,8 @@ private:
 
     auto visitInstantiation_list(ZincParser::Instantiation_listContext* ctx) noexcept
         -> Any<std::span<ASTExprVariant>> final {
-        return visit_list<ASTExprVariant>(ctx->arguments_);
-    }
-
-    auto visitInstantiation_argument(ZincParser::Instantiation_argumentContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return ctx->type_ ? visit_expr(ctx->type_) : visit_expr(ctx->value_);
+        return ctx->arguments_ |
+               std::views::transform([this](auto* arg) { return visit_expr(arg); }) |
+               GlobalMemory::collect<std::span>();
     }
 };

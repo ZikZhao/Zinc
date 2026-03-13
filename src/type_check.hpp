@@ -335,13 +335,11 @@ public:
         return current_scope_->parent_ == nullptr;
     }
 
-    auto operator[](std::string_view identifier) const noexcept -> const ScopeValue* {
-        auto it = current_scope_->identifiers_.find(identifier);
-        if (it != current_scope_->identifiers_.end()) {
-            return &it->second;
-        }
-        return nullptr;
-    }
+    auto eval_type(std::string_view identifier, Scope& scope, const ScopeValue& value) noexcept
+        -> TypeResolution;
+
+    auto eval_term(std::string_view identifier, Scope& scope, const ScopeValue& value) noexcept
+        -> Term;
 
     auto lookup(std::string_view identifier) -> std::pair<Scope*, const ScopeValue*> {
         Scope* scope = current_scope_;
@@ -356,9 +354,21 @@ public:
     }
 
     /// TODO: injected class name by template
-    auto lookup_type(std::string_view identifier) -> TypeResolution;
+    auto lookup_type(std::string_view identifier) -> TypeResolution {
+        auto [scope, value] = lookup(identifier);
+        if (!scope) {
+            throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
+        }
+        return eval_type(identifier, *scope, *value);
+    }
 
-    auto lookup_term(std::string_view identifier) -> Term;
+    auto lookup_term(std::string_view identifier) -> Term {
+        auto [scope, value] = lookup(identifier);
+        if (!scope) {
+            throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
+        }
+        return eval_term(identifier, *scope, *value);
+    }
 };
 
 class TemplateHandler final : public GlobalMemory::MonotonicAllocated {
@@ -560,12 +570,13 @@ public:
         if (decayed_left->kind_ == Kind::Unknown ||
             (decayed_right && decayed_right->kind_ == Kind::Unknown)) {
             return Term::unknown();
-        } else if ((decayed_left->kind_ == Kind::Integer || decayed_left->kind_ == Kind::Float ||
-                    decayed_left->kind_ == Kind::Boolean) &&
-                   (right ? (decayed_right->kind_ == Kind::Integer ||
-                             decayed_right->kind_ == Kind::Float ||
-                             decayed_right->kind_ == Kind::Boolean)
-                          : true)) {
+        } else if (
+            (decayed_left->kind_ == Kind::Integer || decayed_left->kind_ == Kind::Float ||
+             decayed_left->kind_ == Kind::Boolean) &&
+            (right ? (decayed_right->kind_ == Kind::Integer ||
+                      decayed_right->kind_ == Kind::Float || decayed_right->kind_ == Kind::Boolean)
+                   : true)
+        ) {
             return eval_primitive_op(opcode, decayed_left, decayed_right, left_is_mutable);
         }
         /// TODO: check mutability for assignment operations
@@ -744,36 +755,74 @@ private:
 
 class AccessHandler final : public GlobalMemory::MonotonicAllocated {
 private:
+    using Symbol = std::variant<Term, Scope*, TemplateFamily*>;
+
+private:
     Sema& sema_;
 
 public:
     AccessHandler(Sema& sema) noexcept : sema_(sema) {}
 
-    auto eval_access(Term object, std::string_view member) -> Term {
-        Term decayed = sema_.decay(object);
-        if (decayed.is_type()) {
-            /// TODO: handle type member access
-            return {};
-        } else {
-            Term result{};
-            if (decayed->kind_ == Kind::Struct) {
-                result = struct_access(decayed, member);
-            } else if (decayed->kind_ == Kind::Instance) {
-                result = instance_access(decayed, member);
+    auto eval_access(
+        ASTExprVariant base,
+        std::span<std::string_view> members,
+        std::span<ASTExprVariant> instantiation_args
+    ) noexcept -> TermWithReceiver;
+
+private:
+    auto eval_next_access(Symbol& base, Term& receiver, std::string_view member) noexcept -> bool {
+        if (auto* term = std::get_if<Term>(&base)) {
+            if (auto* type = term->get_type()) {
+                // class static scope access
+                if (type->kind_ != Kind::Instance) {
+                    throw;
+                }
+                auto instance_type = type->cast<InstanceType>();
+                auto next = instance_type->scope_->find(member);
+                if (!next) {
+                    throw;
+                } else if (auto* namespace_scope = next->get<Scope*>()) {
+                    base = namespace_scope;
+                } else {
+                    base = sema_.eval_term(member, *instance_type->scope_, *next);
+                }
             } else {
-                throw UnlocatedProblem::make<OperationNotDefinedError>(
-                    ".", decayed->repr(), member
-                );
+                // value access
+                Term decayed = Sema::decay(*term);
+                Term result;
+                if (decayed->kind_ == Kind::Struct) {
+                    result = struct_access(decayed, member);
+                } else if (decayed->kind_ == Kind::Instance) {
+                    result = instance_access(decayed, member);
+                } else {
+                    throw UnlocatedProblem::make<OperationNotDefinedError>(
+                        ".", decayed->repr(), member
+                    );
+                }
+                if (!result) {
+                    /// TODO: throw member not found error
+                    throw;
+                }
+                receiver = *term;
+                base = sema_.is_mutable(*term) ? sema_.apply_mutable(result) : result;
             }
-            if (!result) {
-                /// TODO: throw member not found error
-                throw;
+            return true;
+        } else if (auto* namespace_scope = std::get_if<Scope*>(&base)) {
+            // namespace access
+            auto next = (*namespace_scope)->find(member);
+            if (!next) {
+                throw UnlocatedProblem::make<UndeclaredIdentifierError>(member);
+            } else if (auto* next_namespace = next->get<Scope*>()) {
+                base = next_namespace;
+            } else {
+                base = sema_.eval_term(member, **namespace_scope, *next);
             }
-            return sema_.is_mutable(object) ? sema_.apply_mutable(result) : result;
+            return true;
+        } else {
+            return false;
         }
     }
 
-private:
     auto struct_access(Term object, std::string_view member) -> Term {
         if (auto struct_type = object->dyn_cast<StructType>()) {
             auto attr_it = struct_type->fields_.find(member);
@@ -1141,10 +1190,6 @@ public:
         }
     }
 
-    void operator()(const ASTMemberAccess* node) {
-        /// TODO:
-    }
-
     void operator()(const ASTStructInitialization* node) {
         Diagnostic::report(SymbolCategoryMismatchError(node->location, true));
         out_ = TypeRegistry::get_unknown();
@@ -1239,10 +1284,6 @@ public:
         TypeRegistry::get_at<InstanceType>(
             out_, sema_.current_scope_, node->identifier, base, interfaces, std::move(attrs)
         );
-    }
-
-    void operator()(const ASTTemplateInstantiation* node) {
-        /// TODO:
     }
 
     void operator()(const auto* node) { UNREACHABLE(); }
@@ -1420,6 +1461,12 @@ public:
         }
     }
 
+    auto operator()(const ASTAccessChain* node) -> TermWithReceiver {
+        return sema_.access_handler_->eval_access(
+            node->base, node->members, node->instantiation_args
+        );
+    }
+
     template <ASTUnaryOpClass Op>
     auto operator()(const Op* node) -> TermWithReceiver {
         Term expr_term = ValueContextEvaluator{*this, nullptr}(node->expr).subject;
@@ -1442,15 +1489,6 @@ public:
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
             return {.subject = Term::unknown(), .receiver = {}};
-        }
-    }
-
-    auto operator()(const ASTMemberAccess* node) -> TermWithReceiver {
-        if (auto identifier = std::get_if<const ASTIdentifier*>(&node->target)) {
-            return eval_namespace_access(node, (*identifier)->str);
-        } else {
-            Term subject_term = ValueContextEvaluator{*this, nullptr}(node->target).subject;
-            return eval_instance_access(node, subject_term, node->members);
         }
     }
 
@@ -1523,94 +1561,7 @@ public:
         }
     }
 
-    auto operator()(const ASTTemplateInstantiation* node) -> TermWithReceiver {
-        auto [_, value] = sema_.lookup(node->template_identifier);
-        if (!value) {
-            Diagnostic::report(
-                UndeclaredIdentifierError(node->location, node->template_identifier)
-            );
-            return {.subject = Term::unknown(), .receiver = {}};
-        }
-        auto* family = value->get<TemplateFamily*>();
-        if (!family) {
-            return {.subject = Term::unknown(), .receiver = {}};
-        }
-        GlobalMemory::Vector<Term> args_terms =
-            node->arguments | std::views::transform([&](ASTExprVariant arg) {
-                return ValueContextEvaluator{*this, nullptr}(arg).subject;
-            }) |
-            GlobalMemory::collect<GlobalMemory::Vector<Term>>();
-        if (template_pattern_mode_ &&
-            std::holds_alternative<const ASTClassDefinition*>(family->primary.target_node)) {
-            return {
-                .subject = Term::type(new InstanceType(
-                    nullptr,
-                    family->primary.identifier,
-                    &family->primary,
-                    args_terms | std::views::transform(&Term::get) |
-                        GlobalMemory::collect<std::span>()
-                )),
-                .receiver = {}
-            };
-        }
-        return {
-            .subject = sema_.template_handler_->instantiate(*family, args_terms), .receiver = {}
-        };
-    }
-
     auto operator()(const auto* node) -> TermWithReceiver { UNREACHABLE(); }
-
-private:
-    auto eval_namespace_access(const ASTMemberAccess* node, std::string_view subject)
-        -> TermWithReceiver {
-        auto [_, subject_value] = sema_.lookup(subject);
-        auto scope_ptr = subject_value->get<const Scope*>();
-        if (!scope_ptr) {
-            return eval_instance_access(node, sema_.lookup_term(subject), node->members);
-        }
-        std::span<std::string_view> members = node->members;
-        while (!members.empty()) {
-            std::string_view member = members.front();
-            auto next = scope_ptr->find(member);
-            if (!next) {
-                throw UnlocatedProblem::make<UndeclaredIdentifierError>(member);
-                return {.subject = Term::unknown(), .receiver = {}};
-            }
-            if (auto next_scope = next->get<const Scope*>()) {
-                scope_ptr = next_scope;
-                members = members.subspan(1);
-            } else if (auto next_term = next->get<Term*>()) {
-                if (members.size()) {
-                    return eval_instance_access(node, *next_term, members);
-                } else {
-                    return {.subject = *next_term, .receiver = {}};
-                }
-            } else {
-                UNREACHABLE();
-            }
-        }
-        /// TODO: evaluates to namespace is invalid
-        throw;
-    }
-
-    auto eval_instance_access(
-        const ASTMemberAccess* node, Term current_term, std::span<std::string_view> members
-    ) -> TermWithReceiver {
-        Term receiver = {};
-        if (current_term.is_unknown()) {
-            return {.subject = Term::unknown(), .receiver = {}};
-        }
-        for (std::string_view member : members) {
-            try {
-                receiver = current_term;
-                current_term = sema_.access_handler_->eval_access(current_term, member);
-            } catch (UnlocatedProblem& e) {
-                e.report_at(node->location);
-                return {.subject = Term::unknown(), .receiver = {}};
-            }
-        }
-        return {.subject = current_term, .receiver = receiver};
-    }
 };
 
 class TypeCheckVisitor {
@@ -1913,6 +1864,59 @@ inline auto TemplateHandler::get_prototype(
     return it->second;
 }
 
+inline auto AccessHandler::eval_access(
+    ASTExprVariant base,
+    std::span<std::string_view> members,
+    std::span<ASTExprVariant> instantiation_args
+) noexcept -> TermWithReceiver {
+    Symbol base_symbol;
+    Term receiver;
+    if (auto* identifier_node = std::get_if<const ASTIdentifier*>(&base)) {
+        auto [scope, value] = sema_.lookup((*identifier_node)->str);
+        if (!scope) {
+            Diagnostic::report(
+                UndeclaredIdentifierError((*identifier_node)->location, (*identifier_node)->str)
+            );
+            base_symbol = Term::unknown();
+        } else if (auto* namespace_scope = value->get<Scope*>()) {
+            base_symbol = namespace_scope;
+        } else {
+            base_symbol = sema_.lookup_term((*identifier_node)->str);
+        }
+    } else {
+        base_symbol = ValueContextEvaluator{sema_, nullptr, false}(base).subject;
+    }
+    for (std::string_view member : members) {
+        if (!eval_next_access(base_symbol, receiver, member)) {
+            return {.subject = Term::unknown(), .receiver = {}};
+        }
+    }
+    if (std::holds_alternative<Scope*>(base_symbol)) {
+        throw;
+    }
+    if (!instantiation_args.empty()) {
+        if (!std::holds_alternative<TemplateFamily*>(base_symbol)) {
+            throw;
+        }
+        GlobalMemory::Vector arg_terms =
+            instantiation_args | std::views::transform([&](ASTExprVariant arg) {
+                return ValueContextEvaluator{sema_, nullptr, false}(arg).subject;
+            }) |
+            GlobalMemory::collect<GlobalMemory::Vector>();
+        return {
+            .subject = sema_.template_handler_->instantiate(
+                *std::get<TemplateFamily*>(base_symbol), arg_terms
+            ),
+            .receiver = {}
+        };
+    } else {
+        if (std::holds_alternative<TemplateFamily*>(base_symbol)) {
+            throw;
+        }
+        return {.subject = std::get<Term>(base_symbol), .receiver = receiver};
+    }
+}
+
 inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload)
     -> FunctionObject {
     Sema::Guard guard{sema_, *scope};
@@ -1947,26 +1951,25 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
     return TypeRegistry::get<FunctionType>(params, return_type);
 }
 
-inline auto Sema::lookup_type(std::string_view identifier) -> TypeResolution {
-    auto [scope, value] = lookup(identifier);
-    if (!scope) {
-        throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
-    } else if (auto term = value->get<Term*>()) {
+inline auto Sema::eval_type(
+    std::string_view identifier, Scope& scope, const ScopeValue& value
+) noexcept -> TypeResolution {
+    if (auto term = value.get<Term*>()) {
         if (!term->is_type()) {
             throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
         }
         return term->get_type();
     }
     // Check cache
-    auto [it_id_cache, inserted] = type_cache_.insert({{scope, identifier}, TypeResolution()});
+    auto [it_id_cache, inserted] = type_cache_.insert({{&scope, identifier}, TypeResolution()});
     if (!inserted) {
         return it_id_cache->second;
     }
     // Cache miss; resolve
-    Guard guard(*this, *scope);
-    if (auto type_alias = value->get<const ASTExprVariant*>()) {
+    Guard guard(*this, scope);
+    if (auto type_alias = value.get<const ASTExprVariant*>()) {
         TypeContextEvaluator{*this, it_id_cache->second}(*type_alias);
-    } else if (auto class_def = value->get<const ASTClassDefinition*>()) {
+    } else if (auto class_def = value.get<const ASTClassDefinition*>()) {
         TypeContextEvaluator{*this, it_id_cache->second}(class_def);
     } else {
         throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
@@ -1981,24 +1984,17 @@ inline auto Sema::lookup_type(std::string_view identifier) -> TypeResolution {
     }
 }
 
-inline auto Sema::lookup_term(std::string_view identifier) -> Term {
-    auto [scope, value] = lookup(identifier);
-    if (!scope) {
-        throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
-    }
-    if (auto term = value->get<Term*>()) {
+inline auto Sema::eval_term(
+    std::string_view identifier, Scope& scope, const ScopeValue& value
+) noexcept -> Term {
+    if (auto term = value.get<Term*>()) {
         return *term;
-    } else if (auto alias = value->get<const ASTExprVariant*>()) {
-        if (auto it = type_cache_.find({scope, identifier}); it != type_cache_.end()) {
-            return Term::type(it->second);
-        }
-        Guard guard(*this, *scope);
-        TypeResolution out;
-        TypeContextEvaluator{*this, out}(*alias);
+    } else if (value.get<const ASTExprVariant*>()) {
+        TypeResolution out = eval_type(identifier, scope, value);
         return Term::type(out);
-    } else if (auto class_def = value->get<const ASTClassDefinition*>()) {
+    } else if (auto class_def = value.get<const ASTClassDefinition*>()) {
         return Term::type(lookup_type(class_def->identifier));
-    } else if (auto var_init = value->get<const VariableInitialization*>()) {
+    } else if (auto var_init = value.get<const VariableInitialization*>()) {
         if (nonnull(var_init->type)) {
             TypeResolution var_type;
             TypeContextEvaluator{*this, var_type}(var_init->type);
@@ -2015,9 +2011,9 @@ inline auto Sema::lookup_term(std::string_view identifier) -> Term {
                 ValueContextEvaluator{*this, nullptr, false}(var_init->value).subject
             );
         }
-    } else if (value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+    } else if (value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
         return Term::prvalue(
-            new FunctionOverloadSetValue(scope, opaque_cast<const OpaqueScopeValue*>(value))
+            new FunctionOverloadSetValue(&scope, opaque_cast<const OpaqueScopeValue*>(&value))
         );
     } else {
         /// TODO: throw

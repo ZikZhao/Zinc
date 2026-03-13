@@ -4,6 +4,48 @@ options {
 	language = Cpp;
 }
 
+@parser::members {
+    bool isInstantiationList() {
+        // 如果当前面对的根本不是 '<'，直接返回 false
+        if (_input->LA(1) != ZincParser::OP_LT) {
+            return false;
+        }
+
+        int i = 1; 
+        int depth_paren = 0;   // () 深度
+        int depth_bracket = 0; // [] 深度
+        int depth_brace = 0;   // {} 深度
+        int depth_angle = 0;   // <> 深度
+
+        while (true) {
+            int type = _input->LA(i);
+            
+            // 遇到文件结束，或语句级分隔符，说明匹配失败
+            if (type == antlr4::Token::EOF || type == ZincParser::OP_SEMICOLON || type == ZincParser::OP_LBRACE) {
+                return false;
+            }
+
+            if (type == ZincParser::OP_LPAREN) depth_paren++;
+            else if (type == ZincParser::OP_RPAREN) depth_paren--;
+            else if (type == ZincParser::OP_LBRACKET) depth_bracket++;
+            else if (type == ZincParser::OP_RBRACKET) depth_bracket--;
+            
+            // 只有在普通的括号没有发生嵌套时，才处理尖括号
+            else if (depth_paren == 0 && depth_bracket == 0 && depth_brace == 0) {
+                if (type == ZincParser::OP_LT) {
+                    depth_angle++;
+                } else if (type == ZincParser::OP_GT) {
+                    depth_angle--;
+                    if (depth_angle == 0) {
+                        return true; // 找到了完美闭合的最外层 '>'
+                    }
+                }
+            }
+            i++;
+        }
+    }
+}
+
 program: statements_ += top_level_statement* EOF;
 
 top_level_statement:
@@ -39,12 +81,12 @@ expr_statement: expr_ = expr OP_SEMICOLON;
 
 declaration_statement:
 	KW_LET identifier_ = T_IDENTIFIER KW_MUT? (
-		OP_COLON type_ = type
+		OP_COLON type_ = expr
 	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON # LetDecl
 	| (specialize_list_ = specialize_parameter_list)? KW_CONST identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
 		| instantiation_list_ = instantiation_list
-	)? (OP_COLON type_ = type)? OP_ASSIGN value_ = expr OP_SEMICOLON # ConstDecl;
+	)? (OP_COLON type_ = expr)? OP_ASSIGN value_ = expr OP_SEMICOLON # ConstDecl;
 
 if_statement:
 	KW_IF OP_LPAREN condition_ = expr OP_RPAREN if_ = local_block (
@@ -67,7 +109,7 @@ return_statement: KW_RETURN expr_ = expr? OP_SEMICOLON;
 type_alias:
 	KW_TYPE identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
-	)? OP_ASSIGN type_ = type OP_SEMICOLON;
+	)? OP_ASSIGN type_ = expr OP_SEMICOLON;
 
 function_definition:
 	KW_CONST? KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER (
@@ -76,14 +118,14 @@ function_definition:
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
-	)? OP_RPAREN (OP_ARROW return_type_ = type)? (
+	)? OP_RPAREN (OP_ARROW return_type_ = expr)? (
 		OP_LBRACE body_ += statement* OP_RBRACE
 		| semi_ = OP_SEMICOLON
 	);
 
 parameter:
-	KW_SELF OP_COLON type_ = type						# SelfParam
-	| identifier_ = T_IDENTIFIER OP_COLON type_ = type	# NormalParam;
+	KW_SELF OP_COLON type_ = expr						# SelfParam
+	| identifier_ = T_IDENTIFIER OP_COLON type_ = expr	# NormalParam;
 
 class_definition:
 	(specialize_list_ = specialize_parameter_list)? KW_CLASS identifier_ = T_IDENTIFIER (
@@ -107,6 +149,70 @@ namespace_definition:
 
 expr:
 	KW_SELF # SelfExpr
+	| KW_SELF_TYPE				# SelfTypeExpr
+	| constant_ = constant		# ConstExpr
+    | primitive_ = (
+		KW_INT8
+		| KW_INT16
+		| KW_INT32
+		| KW_INT64
+		| KW_UINT8
+		| KW_UINT16
+		| KW_UINT32
+		| KW_UINT64
+		| KW_FLOAT32
+		| KW_FLOAT64
+		| KW_STRING
+		| KW_BOOL
+	) # PrimitiveTypeExpr
+	| identifier_ = identifier	# IdentifierExpr
+	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)+ (
+		instantiation_list_ = instantiation_list
+	)? # AccessChainExpr
+	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)* { isInstantiationList() }? 
+		instantiation_list_ = instantiation_list # AccessChainExprAlternative
+	| func_ = expr OP_LPAREN (
+		arguments_ += expr (OP_COMMA arguments_ += expr)*
+	)? OP_RPAREN							# CallExpr
+	| OP_BITAND KW_MUT? inner_expr_ = expr	# AddressOfExpr
+	| OP_LBRACE (
+		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
+	)? OP_RBRACE # AnonymousStructInitExpr
+	| struct_ = expr OP_LBRACE (
+		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
+	)? OP_RBRACE								# StructInitExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr
+	| OP_LBRACE (
+		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
+	)? OP_RBRACE # StructTypeExpr
+	| OP_LPAREN (
+		parameters_ += expr (OP_COMMA parameters_ += expr)*
+	)? OP_RPAREN OP_ARROW return_type_ = expr		# FunctionTypeExpr
+	| KW_MUT inner_type_ = expr						# MutableTypeExpr
+	| KW_MOVE? OP_BITAND inner_type_ = expr			# ReferenceTypeExpr
+	| OP_MUL inner_type_ = expr						# PointerTypeExpr
+	| inner_type_ = expr OP_QUESTION				# OptionalTypeExpr
+	| <assoc = right> op_ = (
+		OP_INC
+		| OP_DEC
+		| OP_SUB
+		| OP_NOT
+		| OP_BITNOT
+	) expr_ = expr				# UnaryExpr
+    | <assoc = left> left_ = expr op_ = (
+		OP_MUL
+		| OP_DIV
+		| OP_REM
+	) right_ = expr # MultiplicativeExpr
+	| <assoc = left> left_ = expr op_ = (OP_ADD | OP_SUB) right_ = expr			# AdditiveExpr
+	| <assoc = left> left_ = expr op_ = (OP_LSHIFT | OP_RSHIFT) right_ = expr	# ShiftExpr
+	| <assoc = left> left_ = expr op_ = (
+		OP_LT
+		| OP_LTE
+		| OP_GT
+		| OP_GTE
+	) right_ = expr																# RelationalExpr
+	| <assoc = left> left_ = expr op_ = (OP_EQ | OP_NEQ) right_ = expr	# EqualityExpr
 	| <assoc = right> left_ = expr op_ = (
 		OP_ASSIGN
 		| OP_ADD_ASSIGN
@@ -121,79 +227,14 @@ expr:
 		| OP_BITXOR_ASSIGN
 		| OP_LSHIFT_ASSIGN
 		| OP_RSHIFT_ASSIGN
-	) right_ = expr														# AssignExpr
-	| <assoc = left> left_ = expr op_ = (OP_EQ | OP_NEQ) right_ = expr	# EqualityExpr
-	| <assoc = left> left_ = expr op_ = (
-		OP_LT
-		| OP_LTE
-		| OP_GT
-		| OP_GTE
-	) right_ = expr																# RelationalExpr
-	| <assoc = left> left_ = expr op_ = (OP_LSHIFT | OP_RSHIFT) right_ = expr	# ShiftExpr
-	| <assoc = left> left_ = expr op_ = (OP_ADD | OP_SUB) right_ = expr			# AdditiveExpr
-	| <assoc = left> left_ = expr op_ = (
-		OP_MUL
-		| OP_DIV
-		| OP_REM
-	) right_ = expr # MultiplicativeExpr
-	| <assoc = right> op_ = (
-		OP_INC
-		| OP_DEC
-		| OP_SUB
-		| OP_NOT
-		| OP_BITNOT
-	) expr_ = expr														# UnaryExpr
-	| constant_ = constant												# ConstExpr
-	| identifier_ = identifier											# IdentifierExpr
-	| identifier_ = T_IDENTIFIER template_args_ = instantiation_list	# TemplateIdentifierExpr
-	| func_ = expr OP_LPAREN (
-		arguments_ += expr (OP_COMMA arguments_ += expr)*
-	)? OP_RPAREN																		# CallExpr
-	| OP_BITAND KW_MUT? inner_expr_ = expr												# AddressOfExpr
-	| target_ = expr (OP_DOT members_ += identifier)+									# MemberAccessExpr
-	| target_ = expr OP_DOT member_ = identifier template_args_ = instantiation_list	#
-		TemplateMemberAccessExpr
-	| (struct_ = type)? OP_LBRACE (
-		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
-	)? OP_RBRACE								# StructInitExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr;
+	) right_ = expr														# AssignExpr;
 
 identifier: name_ = T_IDENTIFIER;
 
 constant:
 	value_ = (T_INT | T_FLOAT | T_STRING | T_BOOL | KW_NULLPTR);
 
-type:
-	KW_SELF_TYPE # SelfType
-	| primitive_ = (
-		KW_INT8
-		| KW_INT16
-		| KW_INT32
-		| KW_INT64
-		| KW_UINT8
-		| KW_UINT16
-		| KW_UINT32
-		| KW_UINT64
-		| KW_FLOAT32
-		| KW_FLOAT64
-		| KW_STRING
-		| KW_BOOL
-	)																# PrimitiveType
-	| identifier_ = identifier										# IdentifierType
-	| identifier_ = identifier template_args_ = instantiation_list	# TemplateTypeInstantiation
-	| OP_LBRACE (
-		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
-	)? OP_RBRACE # StructType
-	| OP_LPAREN (
-		parameters_ += type (OP_COMMA parameters_ += type)*
-	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
-	| KW_MUT inner_type_ = type						# MutableType
-	| KW_MOVE? OP_BITAND inner_type_ = type			# ReferenceType
-	| OP_MUL inner_type_ = type						# PointerType
-	| inner_type_ = type OP_QUESTION				# OptionalType
-	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
-
-field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
+field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = expr;
 
 field_init: identifier_ = T_IDENTIFIER OP_COLON value_ = expr;
 
@@ -219,18 +260,16 @@ specialize_parameter_list:
 
 template_parameter:
 	identifier_ = T_IDENTIFIER OP_COLON KW_TYPE (
-		OP_EQ default_ = type
+		OP_EQ default_ = expr
 	)? # TypeTemplateParam
-	| identifier_ = T_IDENTIFIER OP_COLON type_ = type (
+	| identifier_ = T_IDENTIFIER OP_COLON type_ = expr (
 		OP_EQ default_ = expr
 	) # ComptimeTemplateParam;
 
 instantiation_list:
-	OP_LT arguments_ += instantiation_argument (
-		OP_COMMA arguments_ += instantiation_argument
+	OP_LT arguments_ += expr (
+		OP_COMMA arguments_ += expr
 	)* OP_GT;
-
-instantiation_argument: type_ = type | value_ = expr;
 
 KW_LET: 'let';
 KW_MUT: 'mut';

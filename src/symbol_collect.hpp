@@ -31,7 +31,7 @@ using ScopeValue = PointerVariant<
     const VariableInitialization*,               // comptime/variable declaration
     GlobalMemory::Vector<FunctionOverloadDef>*,  // function overloads
     TemplateFamily*,                             // template definition
-    const Scope*>;                               // namespace
+    Scope*>;                                     // namespace
 
 class Scope final : public GlobalMemory::MonotonicAllocated {
     friend class Sema;

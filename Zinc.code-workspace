@@ -176,6 +176,34 @@
                 }
             },
             {
+                "label": "Clang-Tidy (Debug)",
+                "type": "shell",
+                "command": "bash",
+                "args": [
+                    "-lc",
+                    "if command -v run-clang-tidy >/dev/null 2>&1; then run-clang-tidy -p build/debug -quiet; else find src tests -type f \\( -name '*.cpp' -o -name '*.hpp' \\) -print0 | xargs -0 -r clang-tidy -p build/debug; fi; true"
+                ],
+                "problemMatcher": "$gcc",
+                "presentation": {
+                    "reveal": "never",
+                    "clear": true
+                }
+            },
+            {
+                "label": "Clang-Tidy (Release)",
+                "type": "shell",
+                "command": "bash",
+                "args": [
+                    "-lc",
+                    "if command -v run-clang-tidy >/dev/null 2>&1; then run-clang-tidy -p build/release -quiet; else find src tests -type f \\( -name '*.cpp' -o -name '*.hpp' \\) -print0 | xargs -0 -r clang-tidy -p build/release; fi; true"
+                ],
+                "problemMatcher": "$gcc",
+                "presentation": {
+                    "reveal": "never",
+                    "clear": true
+                }
+            },
+            {
                 "label": "Build Main (Debug)",
                 "type": "shell",
                 "command": "cmake",
@@ -188,7 +216,11 @@
                 ],
                 "group": "build",
                 "problemMatcher": "$gcc",
-                "dependsOn": "Configure (Debug)"
+                "dependsOn": [
+                    "Configure (Debug)",
+                    "Clang-Tidy (Debug, Report Only)"
+                ],
+                "dependsOrder": "sequence"
             },
             {
                 "label": "Build Main (Release)",
@@ -203,7 +235,11 @@
                 ],
                 "group": "build",
                 "problemMatcher": "$gcc",
-                "dependsOn": "Configure (Release)"
+                "dependsOn": [
+                    "Configure (Release)",
+                    "Clang-Tidy (Release, Report Only)"
+                ],
+                "dependsOrder": "sequence"
             },
             {
                 "label": "Build UnitTests",
@@ -218,7 +254,11 @@
                 ],
                 "group": "build",
                 "problemMatcher": "$gcc",
-                "dependsOn": "Configure (Debug)"
+                "dependsOn": [
+                    "Configure (Debug)",
+                    "Clang-Tidy (Debug, Report Only)"
+                ],
+                "dependsOrder": "sequence"
             },
             {
                 "label": "Build Benchmarks",
@@ -233,7 +273,11 @@
                 ],
                 "group": "build",
                 "problemMatcher": "$gcc",
-                "dependsOn": "Configure (Release)"
+                "dependsOn": [
+                    "Configure (Release)",
+                    "Clang-Tidy (Release, Report Only)"
+                ],
+                "dependsOrder": "sequence"
             },
         ]
     },

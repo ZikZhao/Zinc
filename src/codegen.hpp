@@ -375,13 +375,6 @@ public:
         (*this)(node->right);
     }
 
-    auto operator()(const ASTMemberAccess* node) -> void {
-        (*this)(node->target);
-        for (std::string_view member : node->members) {
-            stream_ << "." << member;
-        }
-    }
-
     auto operator()(const ASTStructInitialization* node) -> void {
         stream_ << "{\n";
         for (const ASTFieldInitialization& field_init : node->field_inits) {
