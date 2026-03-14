@@ -12,13 +12,15 @@ type B<T: type> = T;
 
 type X<v: bool> = i32;
 
-let a = 5;
-let b = 10;
-let c = 15;
-let d = 20;
+const a = 5;
+const b = 10;
+const c = 15;
+const d = 20;
 
 // third
-let is_valid = a < b && c > d;
+const is_valid = a < b && c > d;
 
 // last
 type weird_inst = X<(b > c)>;
+
+const xyz = std.is_integral::<i32>;

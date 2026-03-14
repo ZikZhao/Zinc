@@ -2,6 +2,7 @@
 #include "pch.hpp"
 
 #include "ast.hpp"
+#include "meta.hpp"
 #include "object.hpp"
 
 inline constexpr std::string_view constructor_symbol = "!";
@@ -13,13 +14,14 @@ using FunctionOverloadDef = PointerVariant<
     const ASTTemplateDefinition*>;
 
 struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
-    Scope& decl_scope;
-    Scope& pattern_buildind_scope;
-    const ASTTemplateDefinition& primary;
+    Scope* decl_scope;
+    Scope* pattern_scope;  // used for template specialization pattern and skolemization
+    const ASTTemplateDefinition* primary;  // meta function if decl_scope is nullptr
     GlobalMemory::Vector<const ASTTemplateSpecialization*> specializations;
 };
 
 struct VariableInitialization : public GlobalMemory::MonotonicAllocated {
+    bool is_comptime;
     ASTExprVariant type;
     ASTExprVariant value;
 };
@@ -109,12 +111,12 @@ public:
         }
     }
 
-    void add_template(std::string_view identifier, const ASTTemplateDefinition& definition) {
+    void add_template(std::string_view identifier, const ASTTemplateDefinition* definition) {
         auto [_, inserted] = identifiers_.insert(
             {identifier,
              new TemplateFamily{
-                 .decl_scope = *this,
-                 .pattern_buildind_scope = Scope::make(*this),
+                 .decl_scope = this,
+                 .pattern_scope = &Scope::make(*this),
                  .primary = definition,
              }}
         );
@@ -124,7 +126,7 @@ public:
     }
 
     void add_template(
-        std::string_view identifier, const ASTTemplateSpecialization& specialization
+        std::string_view identifier, const ASTTemplateSpecialization* specialization
     ) {
         auto it = identifiers_.find(identifier);
         if (it == identifiers_.end()) {
@@ -134,7 +136,20 @@ public:
         if (!family) {
             throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
         }
-        family->specializations.push_back(&specialization);
+        assert(family->decl_scope != nullptr);
+        family->specializations.push_back(specialization);
+    }
+
+    void add_meta(std::string_view identifier, MetaFunction func) noexcept {
+        auto [_, inserted] = identifiers_.insert(
+            {identifier,
+             new TemplateFamily{
+                 .decl_scope = nullptr,
+                 .pattern_scope = nullptr,
+                 .primary = std::bit_cast<const ASTTemplateDefinition*>(func),
+             }}
+        );
+        assert(inserted);
     }
 
     void add_namespace(std::string_view identifier, Scope& scope) {
@@ -208,7 +223,11 @@ public:
         try {
             current_scope_.add_variable(
                 node->identifier,
-                new VariableInitialization{.type = node->declared_type, .value = node->expr}
+                new VariableInitialization{
+                    .is_comptime = node->is_constant,
+                    .type = node->declared_type,
+                    .value = node->expr
+                }
             );
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
@@ -249,7 +268,9 @@ public:
         for (auto& param : node->parameters) {
             local_scope.add_variable(
                 param.identifier,
-                new VariableInitialization{.type = param.type, .value = std::monostate{}}
+                new VariableInitialization{
+                    .is_comptime = false, .type = param.type, .value = std::monostate{}
+                }
             );
         }
         SymbolCollector local_visitor(local_scope, operators_);
@@ -266,7 +287,9 @@ public:
         for (auto& param : node->parameters) {
             local_scope.add_variable(
                 param.identifier,
-                new VariableInitialization{.type = param.type, .value = std::monostate{}}
+                new VariableInitialization{
+                    .is_comptime = false, .type = param.type, .value = std::monostate{}
+                }
             );
         }
         SymbolCollector local_visitor(local_scope, operators_);
@@ -303,10 +326,10 @@ public:
 
     // Templates
     void operator()(const ASTTemplateDefinition* node) noexcept {
-        current_scope_.add_template(node->identifier, *node);
+        current_scope_.add_template(node->identifier, node);
     }
 
     void operator()(const ASTTemplateSpecialization* node) noexcept {
-        current_scope_.add_template(node->identifier, *node);
+        current_scope_.add_template(node->identifier, node);
     }
 };

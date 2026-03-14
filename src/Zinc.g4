@@ -120,8 +120,12 @@ expr:
 	| OP_BITAND KW_MUT? inner_expr_ = expr	# AddressOfExpr
 	| (struct_ = type)? OP_LBRACE (
 		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
-	)? OP_RBRACE								# StructInitExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr
+	)? OP_RBRACE # StructInitExpr
+	| OP_LBRACKET (
+		elements_ += expr (OP_COMMA elements_ += expr)*
+	)? OP_RBRACKET											# ArrayInitExpr
+	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET	# ArrayAccessExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN				# ParenExpr
 	| <assoc = right> op_ = (
 		OP_INC
 		| OP_DEC
@@ -196,7 +200,8 @@ type:
 		AccessChainTypeAlternate
 	| OP_LBRACE (
 		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
-	)? OP_RBRACE # StructType
+	)? OP_RBRACE													# StructType
+	| element_type_ = type OP_LBRACKET (length_ = expr) OP_RBRACKET	# ArrayType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType

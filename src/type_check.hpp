@@ -2,6 +2,7 @@
 #include "pch.hpp"
 
 #include "ast.hpp"
+#include "meta.hpp"
 #include "object.hpp"
 #include "symbol_collect.hpp"
 
@@ -418,14 +419,17 @@ public:
                 }
             }) |
             GlobalMemory::collect<GlobalMemory::Vector>();
-        Sema::Guard guard(sema_, family.decl_scope);
-        if (!validate(family.primary, transformed_args)) {
+        if (auto meta_result = catch_meta_instantiation(family, transformed_args)) {
+            return *meta_result;
+        }
+        Sema::Guard guard(sema_, *family.decl_scope);
+        if (!validate(*family.primary, transformed_args)) {
             return Term::unknown();
         }
         auto [inst_scope, target] = specialization_resolution(family, transformed_args);
         Sema::Guard inner_guard(sema_, *inst_scope);
         sema_.deferred_analysis(*inst_scope, target);
-        Term result = sema_.lookup_term(family.primary.identifier);
+        Term result = sema_.lookup_term(family.primary->identifier);
         if (result.is_type()) {
             if (auto instance_type = result.get_type()->dyn_cast<InstanceType>()) {
                 instance_type->primary_template_ = &family.primary;
@@ -528,6 +532,14 @@ private:
             const ASTTemplateParameter& template_param = at(is_nttp, index);
             scope.add_template_argument(template_param.identifier, as_term(value));
         }
+    }
+
+    auto catch_meta_instantiation(TemplateFamily& family, TemplateArgs args) noexcept
+        -> std::optional<Term> {
+        if (family.decl_scope != nullptr) {
+            return std::nullopt;
+        }
+        return as_term(std::bit_cast<MetaFunction>(family.primary)(args));
     }
 };
 
@@ -814,6 +826,8 @@ private:
                 throw UnlocatedProblem::make<UndeclaredIdentifierError>(member);
             } else if (auto* next_namespace = next->get<Scope*>()) {
                 base = next_namespace;
+            } else if (auto* family = next->get<TemplateFamily*>()) {
+                base = family;
             } else {
                 base = sema_.eval_term(member, **namespace_scope, *next);
             }
@@ -1133,13 +1147,6 @@ public:
 
     void operator()(const ASTExplicitTypeExpr* node) { UNREACHABLE(); }
 
-    void operator()(const ASTParenExpr* node) { (*this)(node->inner); }
-
-    void operator()(const ASTConstant* node) {
-        /// TODO: literal types
-        out_ = {};
-    }
-
     void operator()(const ASTSelfExpr* node) {
         if (!node->is_type) {
             Diagnostic::report(SymbolCategoryMismatchError(node->location, false));
@@ -1152,6 +1159,13 @@ public:
         }
     }
 
+    void operator()(const ASTParenExpr* node) { (*this)(node->inner); }
+
+    void operator()(const ASTConstant* node) {
+        /// TODO: literal types
+        out_ = {};
+    }
+
     void operator()(const ASTIdentifier* node) {
         TypeResolution result = sema_.lookup_type(node->str);
         if (!result.is_sized()) {
@@ -1162,6 +1176,17 @@ public:
             }
         }
         out_ = result;
+    }
+
+    void operator()(const ASTAccessChain* node) {
+        Term result =
+            sema_.access_handler_->eval_access(node->base, node->members, node->instantiation_args)
+                .subject;
+        if (result.is_unknown() || !result.is_type()) {
+            out_ = TypeRegistry::get_unknown();
+        } else {
+            out_ = result.get_type();
+        }
     }
 
     template <ASTUnaryOpClass Op>
@@ -1241,6 +1266,8 @@ public:
             out_ = TypeRegistry::get_unknown();
         }
     }
+
+    void operator()(const ASTArrayType* node);
 
     void operator()(const ASTMutableType* node) {
         out_ = std::type_identity<PointerType>();
@@ -1715,16 +1742,18 @@ inline auto TemplateHandler::validate(
                 Term constraint_term =
                     ValueContextEvaluator{sema_, nullptr, false}(param.constraint).subject;
                 if (constraint_term.is_type()) {
+                    // constraint is a type, check if the argument's type is assignable to it
                     if (!constraint_term.get_type()->assignable_from(
-                            args[i]->template cast<Type>()
+                            args[i]->template cast<Value>()->get_type()
                         )) {
                         return false;
                     }
                 } else {
+                    // constraint is a concept, check if the argument satisfies it
                     if (auto satisfies = constraint_term.get_comptime()->dyn_cast<BooleanValue>()) {
                         if (!satisfies) return false;
                     } else {
-                        /// invalid constriant
+                        /// invalid constraint
                         throw;
                     }
                 }
@@ -1742,7 +1771,7 @@ inline auto TemplateHandler::specialization_resolution(
     // first, try to find a matching full specialization
     for (const auto* specialization : family.specializations) {
         if (specialization->parameters.size()) continue;
-        const auto& prototype = get_prototype(family.pattern_buildind_scope, *specialization);
+        const auto& prototype = get_prototype(*family.pattern_scope, *specialization);
         for (size_t i = 0; i < args.size(); i++) {
             static AutoBindings _;
             assert(_.empty());
@@ -1762,7 +1791,7 @@ inline auto TemplateHandler::specialization_resolution(
         const auto* specialization = family.specializations[i];
         if (specialization->parameters.size() == 0) continue;
         AutoBindings auto_bindings;
-        const auto& prototype = get_prototype(family.pattern_buildind_scope, *specialization);
+        const auto& prototype = get_prototype(*family.pattern_scope, *specialization);
         for (size_t j = 0; j < args.size(); j++) {
             if (!prototype.patterns[j]->pattern_match(args[j], auto_bindings)) {
                 viable_count--;
@@ -1791,7 +1820,7 @@ inline auto TemplateHandler::specialization_resolution(
     if (best_candidate) {
         for (const auto* specialization : std::span(family.specializations.begin(), viable_count)) {
             if (specialization == best_candidate) continue;
-            const auto& prototype = get_prototype(family.pattern_buildind_scope, *specialization);
+            const auto& prototype = get_prototype(*family.pattern_scope, *specialization);
             std::partial_ordering better_than_best =
                 compare_specialization(*best_candidate_prototype, prototype);
             if (better_than_best == std::partial_ordering::equivalent ||
@@ -1819,9 +1848,11 @@ inline auto TemplateHandler::specialization_resolution(
     Scope& inst_scope = Scope::make(*sema_.current_scope_);
     Sema::Guard guard(sema_, inst_scope);
     for (size_t i = 0; i < args.size(); i++) {
-        inst_scope.add_template_argument(family.primary.parameters[i].identifier, as_term(args[i]));
+        inst_scope.add_template_argument(
+            family.primary->parameters[i].identifier, as_term(args[i])
+        );
     }
-    return {&inst_scope, family.primary.target_node};
+    return {&inst_scope, family.primary->target_node};
 }
 
 inline auto TemplateHandler::get_prototype(
@@ -1880,6 +1911,8 @@ inline auto AccessHandler::eval_access(
             base_symbol = Term::unknown();
         } else if (auto* namespace_scope = value->get<Scope*>()) {
             base_symbol = namespace_scope;
+        } else if (auto* family = value->get<TemplateFamily*>()) {
+            base_symbol = family;
         } else {
             base_symbol = sema_.lookup_term((*identifier_node)->str);
         }
@@ -2007,9 +2040,8 @@ inline auto Sema::eval_term(
             return Term::lvalue(var_type.get());
         } else {
             assert(nonnull(var_init->value));
-            return Term::lvalue(
-                ValueContextEvaluator{*this, nullptr, false}(var_init->value).subject
-            );
+            Term init = ValueContextEvaluator{*this, nullptr, false}(var_init->value).subject;
+            return var_init->is_comptime ? Term::lvalue(init) : Term::lvalue(init.effective_type());
         }
     } else if (value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
         return Term::prvalue(
@@ -2019,4 +2051,22 @@ inline auto Sema::eval_term(
         /// TODO: throw
         assert(false);
     }
+}
+
+inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
+    out_ = std::type_identity<ArrayType>();
+    TypeResolution element_type;
+    TypeContextEvaluator{sema_, element_type}(node->element_type);
+    if (!element_type.is_sized()) {
+        TypeRegistry::add_ref_dependency(out_, element_type);
+    }
+    Term length_term = ValueContextEvaluator{sema_, nullptr, true}(node->length).subject;
+    if (length_term.is_type()) {
+        throw;
+    } else if (!length_term->dyn_cast<IntegerValue>()) {
+        throw;
+    }
+    TypeRegistry::get_at<ArrayType>(
+        out_, element_type, length_term.get_comptime()->cast<IntegerValue>()
+    );
 }

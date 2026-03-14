@@ -35,6 +35,9 @@ auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer)
         static Scope scope;
         OperatorRegistry operators;
         SymbolCollector{scope, operators}(std_root);
+        for (const auto& [identifier, meta_fn] : Meta::get_metas()) {
+            scope.add_meta(identifier, meta_fn);
+        }
         return std::pair{&scope, operators};
     }();
     return {Scope::root(*std_scope), std_operators};

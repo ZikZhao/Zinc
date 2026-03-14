@@ -49,11 +49,11 @@ struct ASTLocalBlock;
 
 struct ASTExpression;
 struct ASTExplicitTypeExpr;
-struct ASTParenExpr;
-struct ASTConstant;
 struct ASTSelfExpr;
+struct ASTConstant;
 struct ASTIdentifier;
 struct ASTAccessChain;
+struct ASTParenExpr;
 template <OperatorCode op>
 struct ASTUnaryOp;
 template <OperatorCode op>
@@ -100,18 +100,18 @@ using ASTBitwiseXorAssignOp = ASTBinaryOp<OperatorCode::BitwiseXorAssign>;
 using ASTLeftShiftAssignOp = ASTBinaryOp<OperatorCode::LeftShiftAssign>;
 using ASTRightShiftAssignOp = ASTBinaryOp<OperatorCode::RightShiftAssign>;
 
-// struct ASTMemberAccess;
 struct ASTFieldInitialization;
 struct ASTStructInitialization;
+struct ASTArrayInitialization;
+struct ASTArrayAccess;
 struct ASTFunctionCall;
 struct ASTPrimitiveType;
 struct ASTFunctionType;
 struct ASTStructType;
+struct ASTArrayType;
 struct ASTMutableType;
 struct ASTReferenceType;
 struct ASTPointerType;
-// struct ASTTemplateInstantiation;
-// struct ASTTemplateMemberAccessInstantiation;
 struct ASTExpressionStatement;
 struct ASTDeclaration;
 struct ASTFieldDeclaration;
@@ -266,9 +266,12 @@ using ASTExprVariant = std::variant<
     const ASTRightShiftAssignOp*,
     // Member access and calls
     const ASTStructInitialization*,
+    const ASTArrayInitialization*,
+    const ASTArrayAccess*,
     const ASTFunctionCall*,
     // Type expressions
     const ASTPrimitiveType*,
+    const ASTArrayType*,
     const ASTFunctionType*,
     const ASTStructType*,
     const ASTMutableType*,
@@ -309,14 +312,6 @@ struct ASTExpression : public ASTNode {};
 
 struct ASTExplicitTypeExpr : public ASTExpression {};
 
-struct ASTParenExpr final : public ASTExpression {
-    ASTExprVariant inner;
-};
-
-struct ASTConstant final : public ASTExpression {
-    const Value* value;
-};
-
 struct ASTSelfExpr final : public ASTExpression {
     bool is_type;
 };
@@ -329,6 +324,14 @@ struct ASTAccessChain final : public ASTExpression {
     ASTExprVariant base;
     std::span<std::string_view> members;
     std::span<ASTExprVariant> instantiation_args;
+};
+
+struct ASTConstant final : public ASTExpression {
+    const Value* value;
+};
+
+struct ASTParenExpr final : public ASTExpression {
+    ASTExprVariant inner;
 };
 
 template <OperatorCode op>
@@ -344,11 +347,6 @@ struct ASTBinaryOp final : public ASTExpression {
     ASTExprVariant right;
 };
 
-// struct ASTMemberAccess final : public ASTExpression {
-//     ASTExprVariant target;
-//     std::span<std::string_view> members;
-// };
-
 struct ASTFieldInitialization final : public ASTNode {
     std::string_view identifier;
     ASTExprVariant value;
@@ -357,6 +355,15 @@ struct ASTFieldInitialization final : public ASTNode {
 struct ASTStructInitialization final : public ASTExpression {
     ASTExprVariant struct_type;
     std::span<ASTFieldInitialization> field_inits;
+};
+
+struct ASTArrayInitialization final : public ASTExpression {
+    std::span<ASTExprVariant> elements;
+};
+
+struct ASTArrayAccess final : public ASTExpression {
+    ASTExprVariant base;
+    ASTExprVariant length;
 };
 
 struct ASTFunctionCall final : public ASTExpression {
@@ -380,6 +387,11 @@ struct ASTFieldDeclaration final : public ASTNode {
 
 struct ASTStructType final : public ASTExplicitTypeExpr {
     std::span<ASTFieldDeclaration> fields;
+};
+
+struct ASTArrayType final : public ASTExplicitTypeExpr {
+    ASTExprVariant element_type;
+    ASTExprVariant length;
 };
 
 struct ASTMutableType final : public ASTExplicitTypeExpr {

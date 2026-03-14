@@ -365,7 +365,7 @@ private:
         ASTExprVariant base = visit_expr(ctx->base_);
         std::span members = ctx->members_ |
                             std::views::transform([this](auto* member) { return text(member); }) |
-                            GlobalMemory::collect<std::span<std::string_view>>();
+                            GlobalMemory::collect<std::span>();
         std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
         return as_variant(new ASTAccessChain{loc(ctx), base, members, instantiation_list});
     }
@@ -375,7 +375,7 @@ private:
         ASTExprVariant base = visit_expr(ctx->base_);
         std::span members = ctx->members_ |
                             std::views::transform([this](auto* member) { return text(member); }) |
-                            GlobalMemory::collect<std::span<std::string_view>>();
+                            GlobalMemory::collect<std::span>();
         std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
         return as_variant(new ASTAccessChain{loc(ctx), base, members, instantiation_list});
     }
@@ -398,6 +398,20 @@ private:
         return as_variant(new ASTStructInitialization{
             loc(ctx), visit_expr(ctx->struct_), visit_list<ASTFieldInitialization>(ctx->inits_)
         });
+    }
+
+    auto visitArrayInitExpr(ZincParser::ArrayInitExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(
+            new ASTArrayInitialization{loc(ctx), visit_list<ASTExprVariant>(ctx->elements_)}
+        );
+    }
+
+    auto visitArrayAccessExpr(ZincParser::ArrayAccessExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(
+            new ASTArrayAccess{loc(ctx), visit_expr(ctx->base_), visit_expr(ctx->length_)}
+        );
     }
 
     auto visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
@@ -613,7 +627,10 @@ private:
         std::span members = ctx->members_ |
                             std::views::transform([this](auto* member) { return text(member); }) |
                             GlobalMemory::collect<std::span>();
-        return as_variant(new ASTAccessChain{loc(ctx), visit_expr(ctx->base_), members, {}});
+        std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
+        return as_variant(
+            new ASTAccessChain{loc(ctx), visit_expr(ctx->base_), members, instantiation_list}
+        );
     }
 
     auto visitAccessChainTypeAlternate(ZincParser::AccessChainTypeAlternateContext* ctx) noexcept
@@ -621,13 +638,20 @@ private:
         std::span members = ctx->members_ |
                             std::views::transform([this](auto* member) { return text(member); }) |
                             GlobalMemory::collect<std::span>();
-        return as_variant(new ASTAccessChain{loc(ctx), visit_expr(ctx->base_), members, {}});
+        std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
+        return as_variant(
+            new ASTAccessChain{loc(ctx), visit_expr(ctx->base_), members, instantiation_list}
+        );
     }
 
     auto visitStructType(ZincParser::StructTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
         return as_variant(
             new ASTStructType{loc(ctx), visit_list<ASTFieldDeclaration>(ctx->fields_)}
         );
+    }
+
+    auto visitArrayType(ZincParser::ArrayTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        return as_variant(new ASTArrayType{loc(ctx), visit_expr(ctx->element_type_)});
     }
 
     auto visitFunctionType(ZincParser::FunctionTypeContext* ctx) noexcept
@@ -759,5 +783,18 @@ private:
         return ctx->arguments_ |
                std::views::transform([this](auto* arg) { return visit_expr(arg); }) |
                GlobalMemory::collect<std::span>();
+    }
+
+    auto visitExplicit_instantiation_list(
+        ZincParser::Explicit_instantiation_listContext* ctx
+    ) noexcept -> Any<std::span<ASTExprVariant>> final {
+        return ctx->arguments_ |
+               std::views::transform([this](auto* arg) { return visit_expr(arg); }) |
+               GlobalMemory::collect<std::span>();
+    }
+
+    auto visitInstantiation_argument(ZincParser::Instantiation_argumentContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return ctx->type_ ? visit_expr(ctx->type_) : visit_expr(ctx->value_);
     }
 };
