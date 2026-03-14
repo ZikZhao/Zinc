@@ -4,48 +4,6 @@ options {
 	language = Cpp;
 }
 
-@parser::members {
-    bool isInstantiationList() {
-        // 如果当前面对的根本不是 '<'，直接返回 false
-        if (_input->LA(1) != ZincParser::OP_LT) {
-            return false;
-        }
-
-        int i = 1; 
-        int depth_paren = 0;   // () 深度
-        int depth_bracket = 0; // [] 深度
-        int depth_brace = 0;   // {} 深度
-        int depth_angle = 0;   // <> 深度
-
-        while (true) {
-            int type = _input->LA(i);
-            
-            // 遇到文件结束，或语句级分隔符，说明匹配失败
-            if (type == antlr4::Token::EOF || type == ZincParser::OP_SEMICOLON || type == ZincParser::OP_LBRACE) {
-                return false;
-            }
-
-            if (type == ZincParser::OP_LPAREN) depth_paren++;
-            else if (type == ZincParser::OP_RPAREN) depth_paren--;
-            else if (type == ZincParser::OP_LBRACKET) depth_bracket++;
-            else if (type == ZincParser::OP_RBRACKET) depth_bracket--;
-            
-            // 只有在普通的括号没有发生嵌套时，才处理尖括号
-            else if (depth_paren == 0 && depth_bracket == 0 && depth_brace == 0) {
-                if (type == ZincParser::OP_LT) {
-                    depth_angle++;
-                } else if (type == ZincParser::OP_GT) {
-                    depth_angle--;
-                    if (depth_angle == 0) {
-                        return true; // 找到了完美闭合的最外层 '>'
-                    }
-                }
-            }
-            i++;
-        }
-    }
-}
-
 program: statements_ += top_level_statement* EOF;
 
 top_level_statement:
@@ -81,12 +39,12 @@ expr_statement: expr_ = expr OP_SEMICOLON;
 
 declaration_statement:
 	KW_LET identifier_ = T_IDENTIFIER KW_MUT? (
-		OP_COLON type_ = expr
+		OP_COLON type_ = type
 	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON # LetDecl
 	| (specialize_list_ = specialize_parameter_list)? KW_CONST identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
 		| instantiation_list_ = instantiation_list
-	)? (OP_COLON type_ = expr)? OP_ASSIGN value_ = expr OP_SEMICOLON # ConstDecl;
+	)? (OP_COLON type_ = type)? OP_ASSIGN value_ = expr OP_SEMICOLON # ConstDecl;
 
 if_statement:
 	KW_IF OP_LPAREN condition_ = expr OP_RPAREN if_ = local_block (
@@ -109,7 +67,7 @@ return_statement: KW_RETURN expr_ = expr? OP_SEMICOLON;
 type_alias:
 	KW_TYPE identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
-	)? OP_ASSIGN type_ = expr OP_SEMICOLON;
+	)? OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
 	KW_CONST? KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER (
@@ -118,14 +76,14 @@ function_definition:
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
-	)? OP_RPAREN (OP_ARROW return_type_ = expr)? (
+	)? OP_RPAREN (OP_ARROW return_type_ = type)? (
 		OP_LBRACE body_ += statement* OP_RBRACE
 		| semi_ = OP_SEMICOLON
 	);
 
 parameter:
-	KW_SELF OP_COLON type_ = expr						# SelfParam
-	| identifier_ = T_IDENTIFIER OP_COLON type_ = expr	# NormalParam;
+	KW_SELF OP_COLON type_ = type						# SelfParam
+	| identifier_ = T_IDENTIFIER OP_COLON type_ = type	# NormalParam;
 
 class_definition:
 	(specialize_list_ = specialize_parameter_list)? KW_CLASS identifier_ = T_IDENTIFIER (
@@ -148,10 +106,75 @@ namespace_definition:
 	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += namespace_item* OP_RBRACE;
 
 expr:
-	KW_SELF # SelfExpr
-	| KW_SELF_TYPE				# SelfTypeExpr
+	KW_SELF						# SelfExpr
 	| constant_ = constant		# ConstExpr
-    | primitive_ = (
+	| identifier_ = identifier	# IdentifierExpr
+	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)+ (
+		instantiation_list_ = explicit_instantiation_list
+	)? # AccessChainExpr
+	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)* instantiation_list_ =
+		explicit_instantiation_list # AccessChainExprAlternate
+	| func_ = expr OP_LPAREN (
+		arguments_ += expr (OP_COMMA arguments_ += expr)*
+	)? OP_RPAREN							# CallExpr
+	| OP_BITAND KW_MUT? inner_expr_ = expr	# AddressOfExpr
+	| (struct_ = type)? OP_LBRACE (
+		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
+	)? OP_RBRACE								# StructInitExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr
+	| <assoc = right> op_ = (
+		OP_INC
+		| OP_DEC
+		| OP_SUB
+		| OP_NOT
+		| OP_BITNOT
+	) expr_ = expr # UnaryExpr
+	| <assoc = left> left_ = expr op_ = (
+		OP_MUL
+		| OP_DIV
+		| OP_REM
+	) right_ = expr														# MultiplicativeExpr
+	| <assoc = left> left_ = expr op_ = (OP_ADD | OP_SUB) right_ = expr	# AdditiveExpr
+	| <assoc = left> left_ = expr (
+		op_ = OP_LT OP_LT
+		| op_ = OP_GT OP_GT
+	) right_ = expr # ShiftExpr
+	| <assoc = left> left_ = expr op_ = (
+		OP_LT
+		| OP_LTE
+		| OP_GT
+		| OP_GTE
+	) right_ = expr														# RelationalExpr
+	| <assoc = left> left_ = expr op_ = (OP_EQ | OP_NEQ) right_ = expr	# EqualityExpr
+	| <assoc = left> left_ = expr op_ = OP_BITAND right_ = expr			# BitAndExpr
+	| <assoc = left> left_ = expr op_ = OP_BITXOR right_ = expr			# BitXorExpr
+	| <assoc = left> left_ = expr op_ = OP_BITOR right_ = expr			# BitOrExpr
+	| <assoc = left> left_ = expr op_ = OP_AND right_ = expr			# AndExpr
+	| <assoc = left> left_ = expr op_ = OP_OR right_ = expr				# OrExpr
+	| <assoc = right> left_ = expr (
+		op_ = OP_ASSIGN
+		| op_ = OP_ADD_ASSIGN
+		| op_ = OP_SUB_ASSIGN
+		| op_ = OP_MUL_ASSIGN
+		| op_ = OP_DIV_ASSIGN
+		| op_ = OP_REM_ASSIGN
+		| op_ = OP_AND_ASSIGN
+		| op_ = OP_OR_ASSIGN
+		| op_ = OP_BITAND_ASSIGN
+		| op_ = OP_BITOR_ASSIGN
+		| op_ = OP_BITXOR_ASSIGN
+		| op_ = OP_LT OP_LT OP_ASSIGN
+		| op_ = OP_GT OP_GT OP_ASSIGN
+	) right_ = expr # AssignExpr;
+
+identifier: name_ = T_IDENTIFIER;
+
+constant:
+	value_ = (T_INT | T_FLOAT | T_STRING | T_BOOL | KW_NULLPTR);
+
+type:
+	KW_SELF_TYPE # SelfType
+	| primitive_ = (
 		KW_INT8
 		| KW_INT16
 		| KW_INT32
@@ -164,77 +187,26 @@ expr:
 		| KW_FLOAT64
 		| KW_STRING
 		| KW_BOOL
-	) # PrimitiveTypeExpr
-	| identifier_ = identifier	# IdentifierExpr
-	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)+ (
+	)							# PrimitiveType
+	| identifier_ = identifier	# IdentifierType
+	| base_ = type (OP_DOT members_ += T_IDENTIFIER)+ (
 		instantiation_list_ = instantiation_list
-	)? # AccessChainExpr
-	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)* { isInstantiationList() }? 
-		instantiation_list_ = instantiation_list # AccessChainExprAlternative
-	| func_ = expr OP_LPAREN (
-		arguments_ += expr (OP_COMMA arguments_ += expr)*
-	)? OP_RPAREN							# CallExpr
-	| OP_BITAND KW_MUT? inner_expr_ = expr	# AddressOfExpr
-	| OP_LBRACE (
-		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
-	)? OP_RBRACE # AnonymousStructInitExpr
-	| struct_ = expr OP_LBRACE (
-		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
-	)? OP_RBRACE								# StructInitExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN	# ParenExpr
+	)?																							# AccessChainType
+	| base_ = type (OP_DOT members_ += T_IDENTIFIER)* instantiation_list_ = instantiation_list	#
+		AccessChainTypeAlternate
 	| OP_LBRACE (
 		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
-	)? OP_RBRACE # StructTypeExpr
+	)? OP_RBRACE # StructType
 	| OP_LPAREN (
-		parameters_ += expr (OP_COMMA parameters_ += expr)*
-	)? OP_RPAREN OP_ARROW return_type_ = expr		# FunctionTypeExpr
-	| KW_MUT inner_type_ = expr						# MutableTypeExpr
-	| KW_MOVE? OP_BITAND inner_type_ = expr			# ReferenceTypeExpr
-	| OP_MUL inner_type_ = expr						# PointerTypeExpr
-	| inner_type_ = expr OP_QUESTION				# OptionalTypeExpr
-	| <assoc = right> op_ = (
-		OP_INC
-		| OP_DEC
-		| OP_SUB
-		| OP_NOT
-		| OP_BITNOT
-	) expr_ = expr				# UnaryExpr
-    | <assoc = left> left_ = expr op_ = (
-		OP_MUL
-		| OP_DIV
-		| OP_REM
-	) right_ = expr # MultiplicativeExpr
-	| <assoc = left> left_ = expr op_ = (OP_ADD | OP_SUB) right_ = expr			# AdditiveExpr
-	| <assoc = left> left_ = expr op_ = (OP_LSHIFT | OP_RSHIFT) right_ = expr	# ShiftExpr
-	| <assoc = left> left_ = expr op_ = (
-		OP_LT
-		| OP_LTE
-		| OP_GT
-		| OP_GTE
-	) right_ = expr																# RelationalExpr
-	| <assoc = left> left_ = expr op_ = (OP_EQ | OP_NEQ) right_ = expr	# EqualityExpr
-	| <assoc = right> left_ = expr op_ = (
-		OP_ASSIGN
-		| OP_ADD_ASSIGN
-		| OP_SUB_ASSIGN
-		| OP_MUL_ASSIGN
-		| OP_DIV_ASSIGN
-		| OP_REM_ASSIGN
-		| OP_AND_ASSIGN
-		| OP_OR_ASSIGN
-		| OP_BITAND_ASSIGN
-		| OP_BITOR_ASSIGN
-		| OP_BITXOR_ASSIGN
-		| OP_LSHIFT_ASSIGN
-		| OP_RSHIFT_ASSIGN
-	) right_ = expr														# AssignExpr;
+		parameters_ += type (OP_COMMA parameters_ += type)*
+	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
+	| KW_MUT inner_type_ = type						# MutableType
+	| KW_MOVE? OP_BITAND inner_type_ = type			# ReferenceType
+	| OP_MUL inner_type_ = type						# PointerType
+	| inner_type_ = type OP_QUESTION				# OptionalType
+	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
 
-identifier: name_ = T_IDENTIFIER;
-
-constant:
-	value_ = (T_INT | T_FLOAT | T_STRING | T_BOOL | KW_NULLPTR);
-
-field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = expr;
+field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 
 field_init: identifier_ = T_IDENTIFIER OP_COLON value_ = expr;
 
@@ -260,16 +232,23 @@ specialize_parameter_list:
 
 template_parameter:
 	identifier_ = T_IDENTIFIER OP_COLON KW_TYPE (
-		OP_EQ default_ = expr
+		OP_EQ default_ = type
 	)? # TypeTemplateParam
-	| identifier_ = T_IDENTIFIER OP_COLON type_ = expr (
+	| identifier_ = T_IDENTIFIER OP_COLON type_ = type (
 		OP_EQ default_ = expr
-	) # ComptimeTemplateParam;
+	)? # ComptimeTemplateParam;
 
 instantiation_list:
-	OP_LT arguments_ += expr (
-		OP_COMMA arguments_ += expr
+	OP_LT arguments_ += instantiation_argument (
+		OP_COMMA arguments_ += instantiation_argument
 	)* OP_GT;
+
+explicit_instantiation_list:
+	OP_TURBO_FISH arguments_ += instantiation_argument (
+		OP_COMMA arguments_ += instantiation_argument
+	)* OP_GT;
+
+instantiation_argument: type_ = type | value_ = expr;
 
 KW_LET: 'let';
 KW_MUT: 'mut';
@@ -311,6 +290,23 @@ KW_MOVE: 'move';
 KW_FORWARD: 'forward';
 KW_SPECIALIZE: 'specialize';
 
+OP_DOT: '.';
+OP_QUESTION: '?';
+OP_COLON: ':';
+OP_SEMICOLON: ';';
+OP_COMMA: ',';
+OP_ARROW: '->';
+OP_LAMBDA: '=>';
+OP_SCOPE: '::';
+OP_TURBO_FISH: '::<';
+
+OP_LPAREN: '(';
+OP_RPAREN: ')';
+OP_LBRACKET: '[';
+OP_RBRACKET: ']';
+OP_LBRACE: '{';
+OP_RBRACE: '}';
+
 OP_ADD: '+';
 OP_SUB: '-';
 OP_MUL: '*';
@@ -334,8 +330,6 @@ OP_BITAND: '&';
 OP_BITOR: '|';
 OP_BITXOR: '^';
 OP_BITNOT: '~';
-OP_LSHIFT: '<<';
-OP_RSHIFT: '>>';
 
 OP_ASSIGN: '=';
 OP_ADD_ASSIGN: '+=';
@@ -348,23 +342,6 @@ OP_OR_ASSIGN: '||=';
 OP_BITAND_ASSIGN: '&=';
 OP_BITOR_ASSIGN: '|=';
 OP_BITXOR_ASSIGN: '^=';
-OP_LSHIFT_ASSIGN: '<<=';
-OP_RSHIFT_ASSIGN: '>>=';
-
-OP_DOT: '.';
-OP_QUESTION: '?';
-OP_COLON: ':';
-OP_SEMICOLON: ';';
-OP_COMMA: ',';
-OP_ARROW: '->';
-OP_LAMBDA: '=>';
-
-OP_LPAREN: '(';
-OP_RPAREN: ')';
-OP_LBRACKET: '[';
-OP_RBRACKET: ']';
-OP_LBRACE: '{';
-OP_RBRACE: '}';
 
 T_FLOAT: T_HEX_FLOAT | T_DEC_FLOAT;
 

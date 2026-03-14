@@ -351,6 +351,182 @@ private:
         return as_variant(new ASTSelfExpr{loc(ctx), false});
     }
 
+    auto visitConstExpr(ZincParser::ConstExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        return visit_expr(ctx->constant_);
+    }
+
+    auto visitIdentifierExpr(ZincParser::IdentifierExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return visit_expr(ctx->identifier_);
+    }
+
+    auto visitAccessChainExpr(ZincParser::AccessChainExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        ASTExprVariant base = visit_expr(ctx->base_);
+        std::span members = ctx->members_ |
+                            std::views::transform([this](auto* member) { return text(member); }) |
+                            GlobalMemory::collect<std::span<std::string_view>>();
+        std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
+        return as_variant(new ASTAccessChain{loc(ctx), base, members, instantiation_list});
+    }
+
+    auto visitAccessChainExprAlternate(ZincParser::AccessChainExprAlternateContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        ASTExprVariant base = visit_expr(ctx->base_);
+        std::span members = ctx->members_ |
+                            std::views::transform([this](auto* member) { return text(member); }) |
+                            GlobalMemory::collect<std::span<std::string_view>>();
+        std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
+        return as_variant(new ASTAccessChain{loc(ctx), base, members, instantiation_list});
+    }
+
+    auto visitCallExpr(ZincParser::CallExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        return as_variant(new ASTFunctionCall{
+            loc(ctx), visit_expr(ctx->func_), visit_list<ASTExprVariant>(ctx->arguments_)
+        });
+    }
+
+    auto visitAddressOfExpr(ZincParser::AddressOfExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(
+            new ASTReferenceType{loc(ctx), visit_expr(ctx->inner_expr_), ctx->KW_MUT() != nullptr}
+        );
+    }
+
+    auto visitStructInitExpr(ZincParser::StructInitExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(new ASTStructInitialization{
+            loc(ctx), visit_expr(ctx->struct_), visit_list<ASTFieldInitialization>(ctx->inits_)
+        });
+    }
+
+    auto visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        return as_variant(new ASTParenExpr{loc(ctx), visit_expr(ctx->inner_expr_)});
+    }
+
+    auto visitUnaryExpr(ZincParser::UnaryExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        ASTExprVariant expr = visit_expr(ctx->expr_);
+        switch (ctx->op_->getType()) {
+        case ZincParser::OP_INC:
+            return as_variant(new ASTIncrementOp{loc(ctx), expr});
+        case ZincParser::OP_DEC:
+            return as_variant(new ASTDecrementOp{loc(ctx), expr});
+        case ZincParser::OP_SUB:
+            return as_variant(new ASTNegateOp{loc(ctx), expr});
+        case ZincParser::OP_NOT:
+            return as_variant(new ASTLogicalNotOp{loc(ctx), expr});
+        case ZincParser::OP_BITNOT:
+            return as_variant(new ASTBitwiseNotOp{loc(ctx), expr});
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    auto visitMultiplicativeExpr(ZincParser::MultiplicativeExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        switch (ctx->op_->getType()) {
+        case ZincParser::OP_MUL:
+            return as_variant(new ASTMultiplyOp{loc(ctx), left, right});
+        case ZincParser::OP_DIV:
+            return as_variant(new ASTDivideOp{loc(ctx), left, right});
+        case ZincParser::OP_REM:
+            return as_variant(new ASTRemainderOp{loc(ctx), left, right});
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    auto visitAdditiveExpr(ZincParser::AdditiveExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        switch (ctx->op_->getType()) {
+        case ZincParser::OP_ADD:
+            return as_variant(new ASTAddOp{loc(ctx), left, right});
+        case ZincParser::OP_SUB:
+            return as_variant(new ASTSubtractOp{loc(ctx), left, right});
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    auto visitShiftExpr(ZincParser::ShiftExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        switch (ctx->op_->getType()) {
+        case ZincParser::OP_LT:  // OP_LSHIFT
+            return as_variant(new ASTLeftShiftOp{loc(ctx), left, right});
+        case ZincParser::OP_GT:  // OP_RSHIFT
+            return as_variant(new ASTRightShiftOp{loc(ctx), left, right});
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    auto visitRelationalExpr(ZincParser::RelationalExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        switch (ctx->op_->getType()) {
+        case ZincParser::OP_LT:
+            return as_variant(new ASTLessThanOp{loc(ctx), left, right});
+        case ZincParser::OP_LTE:
+            return as_variant(new ASTLessEqualOp{loc(ctx), left, right});
+        case ZincParser::OP_GT:
+            return as_variant(new ASTGreaterThanOp{loc(ctx), left, right});
+        case ZincParser::OP_GTE:
+            return as_variant(new ASTGreaterEqualOp{loc(ctx), left, right});
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    auto visitEqualityExpr(ZincParser::EqualityExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        switch (ctx->op_->getType()) {
+        case ZincParser::OP_EQ:
+            return as_variant(new ASTEqualOp{loc(ctx), left, right});
+        case ZincParser::OP_NEQ:
+            return as_variant(new ASTNotEqualOp{loc(ctx), left, right});
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    auto visitBitAndExpr(ZincParser::BitAndExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        return as_variant(new ASTBitwiseAndOp{loc(ctx), left, right});
+    }
+
+    auto visitBitXorExpr(ZincParser::BitXorExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        return as_variant(new ASTBitwiseXorOp{loc(ctx), left, right});
+    }
+
+    auto visitBitOrExpr(ZincParser::BitOrExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        return as_variant(new ASTBitwiseOrOp{loc(ctx), left, right});
+    }
+
+    auto visitAndExpr(ZincParser::AndExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        return as_variant(new ASTLogicalAndOp{loc(ctx), left, right});
+    }
+
+    auto visitOrExpr(ZincParser::OrExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        ASTExprVariant left = visit_expr(ctx->left_);
+        ASTExprVariant right = visit_expr(ctx->right_);
+        return as_variant(new ASTLogicalOrOp{loc(ctx), left, right});
+    }
+
     auto visitAssignExpr(ZincParser::AssignExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
@@ -377,175 +553,20 @@ private:
             return as_variant(new ASTBitwiseOrAssignOp{loc(ctx), left, right});
         case ZincParser::OP_BITXOR_ASSIGN:
             return as_variant(new ASTBitwiseXorAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_LSHIFT_ASSIGN:
+        case ZincParser::OP_LT:  // OP_LSHIFT_ASSIGN
             return as_variant(new ASTLeftShiftAssignOp{loc(ctx), left, right});
-        case ZincParser::OP_RSHIFT_ASSIGN:
+        case ZincParser::OP_GT:  // OP_RSHIFT_ASSIGN
             return as_variant(new ASTRightShiftAssignOp{loc(ctx), left, right});
         default:
             UNREACHABLE();
         }
     }
 
-    auto visitEqualityExpr(ZincParser::EqualityExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        ASTExprVariant left = visit_expr(ctx->left_);
-        ASTExprVariant right = visit_expr(ctx->right_);
-        switch (ctx->op_->getType()) {
-        case ZincParser::OP_EQ:
-            return as_variant(new ASTEqualOp{loc(ctx), left, right});
-        case ZincParser::OP_NEQ:
-            return as_variant(new ASTNotEqualOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
-        }
-    }
-
-    auto visitRelationalExpr(ZincParser::RelationalExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        ASTExprVariant left = visit_expr(ctx->left_);
-        ASTExprVariant right = visit_expr(ctx->right_);
-        switch (ctx->op_->getType()) {
-        case ZincParser::OP_LT:
-            return as_variant(new ASTLessThanOp{loc(ctx), left, right});
-        case ZincParser::OP_LTE:
-            return as_variant(new ASTLessEqualOp{loc(ctx), left, right});
-        case ZincParser::OP_GT:
-            return as_variant(new ASTGreaterThanOp{loc(ctx), left, right});
-        case ZincParser::OP_GTE:
-            return as_variant(new ASTGreaterEqualOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
-        }
-    }
-
-    auto visitShiftExpr(ZincParser::ShiftExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        ASTExprVariant left = visit_expr(ctx->left_);
-        ASTExprVariant right = visit_expr(ctx->right_);
-        switch (ctx->op_->getType()) {
-        case ZincParser::OP_LSHIFT:
-            return as_variant(new ASTLeftShiftOp{loc(ctx), left, right});
-        case ZincParser::OP_RSHIFT:
-            return as_variant(new ASTRightShiftOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
-        }
-    }
-
-    auto visitAdditiveExpr(ZincParser::AdditiveExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        ASTExprVariant left = visit_expr(ctx->left_);
-        ASTExprVariant right = visit_expr(ctx->right_);
-        switch (ctx->op_->getType()) {
-        case ZincParser::OP_ADD:
-            return as_variant(new ASTAddOp{loc(ctx), left, right});
-        case ZincParser::OP_SUB:
-            return as_variant(new ASTSubtractOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
-        }
-    }
-
-    auto visitMultiplicativeExpr(ZincParser::MultiplicativeExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        ASTExprVariant left = visit_expr(ctx->left_);
-        ASTExprVariant right = visit_expr(ctx->right_);
-        switch (ctx->op_->getType()) {
-        case ZincParser::OP_MUL:
-            return as_variant(new ASTMultiplyOp{loc(ctx), left, right});
-        case ZincParser::OP_DIV:
-            return as_variant(new ASTDivideOp{loc(ctx), left, right});
-        case ZincParser::OP_REM:
-            return as_variant(new ASTRemainderOp{loc(ctx), left, right});
-        default:
-            UNREACHABLE();
-        }
-    }
-
-    auto visitUnaryExpr(ZincParser::UnaryExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        ASTExprVariant expr = visit_expr(ctx->expr_);
-        switch (ctx->op_->getType()) {
-        case ZincParser::OP_INC:
-            return as_variant(new ASTIncrementOp{loc(ctx), expr});
-        case ZincParser::OP_DEC:
-            return as_variant(new ASTDecrementOp{loc(ctx), expr});
-        case ZincParser::OP_SUB:
-            return as_variant(new ASTNegateOp{loc(ctx), expr});
-        case ZincParser::OP_NOT:
-            return as_variant(new ASTLogicalNotOp{loc(ctx), expr});
-        case ZincParser::OP_BITNOT:
-            return as_variant(new ASTBitwiseNotOp{loc(ctx), expr});
-        default:
-            UNREACHABLE();
-        }
-    }
-
-    auto visitConstExpr(ZincParser::ConstExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        return visit_expr(ctx->constant_);
-    }
-
-    auto visitIdentifierExpr(ZincParser::IdentifierExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return visit_expr(ctx->identifier_);
-    }
-
-    auto visitAccessChainExpr(ZincParser::AccessChainExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        ASTExprVariant base = visit_expr(ctx->base_);
-        std::span members = ctx->members_ |
-                            std::views::transform([this](auto* member) { return text(member); }) |
-                            GlobalMemory::collect<std::span<std::string_view>>();
-        std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
-        return as_variant(new ASTAccessChain{loc(ctx), base, members, instantiation_list});
-    }
-
-    auto visitAccessChainExprAlternative(
-        ZincParser::AccessChainExprAlternativeContext* ctx
-    ) noexcept -> Any<ASTExprVariant> final {
-        ASTExprVariant base = visit_expr(ctx->base_);
-        std::span members = ctx->members_ |
-                            std::views::transform([this](auto* member) { return text(member); }) |
-                            GlobalMemory::collect<std::span<std::string_view>>();
-        std::span instantiation_list = visit<std::span<ASTExprVariant>>(ctx->instantiation_list_);
-        return as_variant(new ASTAccessChain{loc(ctx), base, members, instantiation_list});
-    }
-
-    auto visitCallExpr(ZincParser::CallExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        return as_variant(new ASTFunctionCall{
-            loc(ctx), visit_expr(ctx->func_), visit_list<ASTExprVariant>(ctx->arguments_)
-        });
-    }
-
-    auto visitAddressOfExpr(ZincParser::AddressOfExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return as_variant(
-            new ASTReferenceType{loc(ctx), visit_expr(ctx->inner_expr_), ctx->KW_MUT() != nullptr}
-        );
-    }
-
-    auto visitAnonymousStructInitExpr(ZincParser::AnonymousStructInitExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return as_variant(new ASTStructInitialization{
-            loc(ctx), std::monostate{}, visit_list<ASTFieldInitialization>(ctx->inits_)
-        });
-    }
-
-    auto visitStructInitExpr(ZincParser::StructInitExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return as_variant(new ASTStructInitialization{
-            loc(ctx), visit_expr(ctx->struct_), visit_list<ASTFieldInitialization>(ctx->inits_)
-        });
-    }
-
-    auto visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        return as_variant(new ASTParenExpr{loc(ctx), visit_expr(ctx->inner_expr_)});
-    }
-
-    auto visitSelfTypeExpr(ZincParser::SelfTypeExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
+    auto visitSelfType(ZincParser::SelfTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
         return as_variant(new ASTSelfExpr{loc(ctx), true});
     }
 
-    auto visitPrimitiveTypeExpr(ZincParser::PrimitiveTypeExprContext* ctx) noexcept
+    auto visitPrimitiveType(ZincParser::PrimitiveTypeContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         switch (ctx->primitive_->getType()) {
         case ZincParser::KW_INT8:
@@ -582,14 +603,34 @@ private:
         }
     }
 
-    auto visitStructTypeExpr(ZincParser::StructTypeExprContext* ctx) noexcept
+    auto visitIdentifierType(ZincParser::IdentifierTypeContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
+        return as_variant(new ASTIdentifier{loc(ctx), text(ctx->identifier_)});
+    }
+
+    auto visitAccessChainType(ZincParser::AccessChainTypeContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        std::span members = ctx->members_ |
+                            std::views::transform([this](auto* member) { return text(member); }) |
+                            GlobalMemory::collect<std::span>();
+        return as_variant(new ASTAccessChain{loc(ctx), visit_expr(ctx->base_), members, {}});
+    }
+
+    auto visitAccessChainTypeAlternate(ZincParser::AccessChainTypeAlternateContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        std::span members = ctx->members_ |
+                            std::views::transform([this](auto* member) { return text(member); }) |
+                            GlobalMemory::collect<std::span>();
+        return as_variant(new ASTAccessChain{loc(ctx), visit_expr(ctx->base_), members, {}});
+    }
+
+    auto visitStructType(ZincParser::StructTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
         return as_variant(
             new ASTStructType{loc(ctx), visit_list<ASTFieldDeclaration>(ctx->fields_)}
         );
     }
 
-    auto visitFunctionTypeExpr(ZincParser::FunctionTypeExprContext* ctx) noexcept
+    auto visitFunctionType(ZincParser::FunctionTypeContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return as_variant(new ASTFunctionType{
             loc(ctx),
@@ -598,19 +639,19 @@ private:
         });
     }
 
-    auto visitMutableTypeExpr(ZincParser::MutableTypeExprContext* ctx) noexcept
+    auto visitMutableType(ZincParser::MutableTypeContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return as_variant(new ASTMutableType{loc(ctx), visit_expr(ctx->inner_type_)});
     }
 
-    auto visitReferenceTypeExpr(ZincParser::ReferenceTypeExprContext* ctx) noexcept
+    auto visitReferenceType(ZincParser::ReferenceTypeContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return as_variant(
             new ASTReferenceType{loc(ctx), visit_expr(ctx->inner_type_), ctx->KW_MOVE() != nullptr}
         );
     }
 
-    auto visitPointerTypeExpr(ZincParser::PointerTypeExprContext* ctx) noexcept
+    auto visitPointerType(ZincParser::PointerTypeContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return as_variant(new ASTPointerType{loc(ctx), visit_expr(ctx->inner_type_)});
     }

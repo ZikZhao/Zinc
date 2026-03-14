@@ -1,40 +1,24 @@
-fn main() -> i32 {
-    let x = A<i32>{ a: 42, b: true };
-    let y = MyClass<f64>(3.14);
-    let z = y.value2;
-    return y.method1(10);
-}
+let x = A<i32>{ a: 42, b: true };
+
+// second
+type TypeTest = A<B<i32> >;
 
 type A<T: type> = {
     a: T,
     b: bool,
 };
 
-class MyClass<T: type> {
-    let value: T;
-    init(value: T) {
-        return Self{ value: value };
-    }
-    fn method1(self: &Self, x: i32) -> T {
-        return self.value;
-    }
-}
+type B<T: type> = T;
 
-specialize class MyClass<f64> {
-    let value: f64;
-    let value2: f64;
-    init(value: f64) {
-        return Self{ value: value };
-    }
-    fn method1(self: &Self, x: i32) -> f64 {
-        return self.value2;
-    }
-}
+type X<v: bool> = i32;
 
-fn max<T: type>(a: T, b: T) -> T {
-    if (a > b) {
-        return a;
-    } else {
-        return b;
-    }
-}
+let a = 5;
+let b = 10;
+let c = 15;
+let d = 20;
+
+// third
+let is_valid = a < b && c > d;
+
+// last
+type weird_inst = X<(b > c)>;
