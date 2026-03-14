@@ -1,26 +1,21 @@
-let x = A<i32>{ a: 42, b: true };
+fn main() {
+    let a = A::<i32>(5, true);
+    let b = A::<i32[]>(10, false);
+    static_assert(5 == 5, "a.a should be 5");
+}
 
-// second
-type TypeTest = A<B<i32> >;
+class A<T: type> {
+    let a: T;
+    let b: bool;
+    init(a: T, b: bool) {
+        return Self{ a: a, b: b };
+    }
+}
 
-type A<T: type> = {
-    a: T,
-    b: bool,
-};
-
-type B<T: type> = T;
-
-type X<v: bool> = i32;
-
-const a = 5;
-const b = 10;
-const c = 15;
-const d = 20;
-
-// third
-const is_valid = a < b && c > d;
-
-// last
-type weird_inst = X<(b > c)>;
-
-const xyz = std.is_integral::<i32>;
+specialize<U: type> class A<U[]> {
+    let a: U;
+    let b: bool;
+    init(a: U, b: bool) {
+        return Self{ a: a, b: b };
+    }
+}

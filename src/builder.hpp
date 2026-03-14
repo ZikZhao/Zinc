@@ -347,6 +347,15 @@ private:
         });
     }
 
+    auto visitStatic_assert_statement(ZincParser::Static_assert_statementContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTStaticAssertStatement{
+            loc(ctx),
+            visit_expr(ctx->condition_),
+            visit_expr(ctx->message_),
+        });
+    }
+
     auto visitSelfExpr(ZincParser::SelfExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         return as_variant(new ASTSelfExpr{loc(ctx), false});
     }

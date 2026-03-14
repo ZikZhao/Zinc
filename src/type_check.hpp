@@ -297,10 +297,13 @@ public:
         }
     }
 
-    [[nodiscard]] static auto apply_category(Term obj) -> const Type* {
+    [[nodiscard]] static auto apply_value_category(Term obj) -> const Type* {
         assert(!obj.is_type());
         const Type* type = obj.effective_type();
         if (obj.value_category() == ValueCategory::Left) {
+            if (auto* ref_type = type->dyn_cast<ReferenceType>()) {
+                return ref_type;
+            }
             return TypeRegistry::get<ReferenceType>(type, false);
         } else if (obj.value_category() == ValueCategory::Expiring) {
             return TypeRegistry::get<ReferenceType>(type, true);
@@ -765,6 +768,280 @@ private:
     }
 };
 
+class CallHandler final : public GlobalMemory::MonotonicAllocated {
+private:
+    enum class ConversionRank : std::uint8_t {
+        Exact = 0,                // exactly the same type
+        Qualified = 1,            // requires modifying reference qualification
+        Referenced = 1,           // requires modifying reference (lvalue to rvalue or rvalue
+                                  // to lvalue)
+        QualifiedReferenced = 2,  // requires modifying both reference qualification and reference
+        Upcast = 3,               // requires upcasting in class hierarchy, or to void pointer
+        Copy = 4,                 // requires implicit copy of the same type
+        NoMatch = 5,              // no viable conversion
+    };
+
+private:
+    static auto get_func_type(FunctionObject func) -> const FunctionType* {
+        if (auto func_value = func->dyn_cast<FunctionValue>()) {
+            return func_value->get_type();
+        } else {
+            return func->cast<FunctionType>();
+        }
+    }
+
+private:
+    Sema& sema_;
+
+public:
+    CallHandler(Sema& sema) noexcept : sema_(sema) {}
+
+    auto eval_call(Term callee, std::span<Term> args) -> Term {
+        if (callee.is_unknown()) {
+            return Term::unknown();
+        }
+        Term decayed_callee = Sema::decay(callee);
+        GlobalMemory::Vector transformed_args =
+            args | std::views::transform([](Term arg) -> const Type* {
+                if (auto value = arg.get_comptime()) {
+                    arg = Term::forward_like(arg, value->resolve_to(nullptr));
+                }
+                return Sema::apply_value_category(arg);
+            }) |
+            GlobalMemory::collect<GlobalMemory::Vector>();
+        FunctionObject overload = resolve_overload(decayed_callee, transformed_args);
+        if (!overload) {
+            /// TODO: throw no matching overload error
+            throw;
+        }
+        if (auto func_value = overload->dyn_cast<FunctionValue>()) {
+            return func_value->invoke(args);
+        } else {
+            auto func_type = overload->cast<FunctionType>();
+            return Term::prvalue(func_type->return_type_);
+        }
+    }
+
+private:
+    auto get_func_obj(Scope* scope, FunctionOverloadDef overload) -> FunctionObject;
+
+    [[nodiscard]] auto list_normal_overloads(Term func) -> GlobalMemory::Vector<FunctionObject> {
+        auto get_scope_func = [&](
+                                  Scope* scope, const ScopeValue* scope_value
+                              ) -> GlobalMemory::Vector<FunctionObject> {
+            auto* overloads = scope_value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
+            return *overloads | std::views::filter([](FunctionOverloadDef overload) {
+                return !overload.get<const ASTTemplateDefinition*>();
+            }) | std::views::transform([this, scope](FunctionOverloadDef overload) {
+                return get_func_obj(scope, overload);
+            }) | GlobalMemory::collect<GlobalMemory::Vector>();
+        };
+        if (func.is_type()) {
+            if (func->kind_ != Kind::Instance) return {};
+            Scope* scope = func->cast<InstanceType>()->scope_;
+            return get_scope_func(scope, scope->find(constructor_symbol));
+        }
+        if (auto intersection_type = func->dyn_cast<IntersectionType>()) {
+            return intersection_type->types_ |
+                   GlobalMemory::collect<GlobalMemory::Vector<FunctionObject>>();
+        } else if (auto func_type = func->dyn_cast<FunctionType>()) {
+            return {func_type};
+        } else if (auto func_value = func->dyn_cast<FunctionValue>()) {
+            return {func_value};
+        } else if (auto overload_set = func->dyn_cast<FunctionOverloadSetValue>()) {
+            return get_scope_func(
+                overload_set->scope_, opaque_cast<const ScopeValue*>(overload_set->scope_value_)
+            );
+        } else {
+            return {};
+        }
+    }
+
+    auto list_template_overloads(
+        GlobalMemory::Vector<FunctionObject>& overloads, Term func, std::span<const Type*> args
+    ) -> void {}
+
+    [[nodiscard]] auto resolve_overload(Term func, std::span<const Type*> args) -> FunctionObject {
+        GlobalMemory::Vector<FunctionObject> overloads = list_normal_overloads(func);
+        FunctionObject best_candidate = nullptr;
+        ConversionRank best_rank = ConversionRank::NoMatch;
+        auto loop = [&](std::span<FunctionObject> candidates) -> std::size_t {
+            for (std::size_t i = 0; i < candidates.size(); ++i) {
+                FunctionObject candidate = candidates[i];
+                ConversionRank rank = overload_rank(candidate, args);
+                if (rank == ConversionRank::NoMatch) {
+                    // remove non-viable candidate
+                    std::swap(candidates[i], candidates.back());
+                    candidates = candidates.subspan(0, candidates.size() - 1);
+                    --i;
+                    continue;
+                }
+                if (best_candidate == nullptr) {
+                    best_candidate = candidate;
+                    best_rank = rank;
+                } else {
+                    std::partial_ordering order =
+                        overload_partial_order(best_candidate, candidate, args);
+                    if (order == std::partial_ordering::less) {
+                        best_candidate = candidate;
+                        best_rank = rank;
+                    }
+                }
+            }
+            return candidates.size();
+        };
+        // first, find the best non-template overload
+        std::size_t normal_count = loop(overloads);
+        overloads.resize(normal_count);
+        // second, if no exact match, try template overloads
+        if (best_rank != ConversionRank::Exact) {
+            list_template_overloads(overloads, func, args);
+            loop(
+                {std::next(overloads.begin(), static_cast<std::ptrdiff_t>(normal_count)),
+                 overloads.end()}
+            );
+        }
+        // third, re-iterate through all candidates to check for ambiguity
+        GlobalMemory::Vector<FunctionObject> ambiguous_candidates;
+        bool incomparable = false;
+        if (best_candidate) {
+            for (FunctionObject candidate : overloads) {
+                if (candidate == best_candidate) continue;
+                std::partial_ordering order =
+                    overload_partial_order(best_candidate, candidate, args);
+                if (order == std::partial_ordering::equivalent) {
+                    ambiguous_candidates.push_back(candidate);
+                } else if (order == std::partial_ordering::unordered) {
+                    ambiguous_candidates.push_back(candidate);
+                    incomparable = true;
+                }
+            }
+        }
+        if (!incomparable && ambiguous_candidates.size()) {
+            // if there are only equivalent candidates, choose nontemplate one if possible
+            auto it = std::ranges::find(overloads, ambiguous_candidates[0]);
+            if (std::distance(overloads.begin(), it) < static_cast<std::ptrdiff_t>(normal_count)) {
+                ambiguous_candidates.clear();
+            }
+        }
+        if (!ambiguous_candidates.empty()) {
+            /// TODO: throw ambiguous call error, listing best_candidate and all candidates in
+            /// ambiguous_candidates
+            return nullptr;
+        }
+        return best_candidate;
+    }
+
+    static auto param_rank(const Type* param, const Type* arg) -> ConversionRank {
+        using enum ConversionRank;
+        bool is_arg_mutable = false;
+        if (auto ref_type = arg->dyn_cast<ReferenceType>()) {
+            is_arg_mutable = ref_type->referenced_type_->kind_ == Kind::Mutable;
+        }
+        auto decayed_param = Sema::decay(param);
+        auto decayed_arg = Sema::decay(arg);
+        if (decayed_param == decayed_arg) {
+            // the order of variants indicates the rank of conversion, e.g. T -> move &T is better
+            // than T -> &T, variants not listed below means no match, e.g. T -> &mut T
+            if (arg == decayed_arg) {
+                // (rvalue) T -> T / move &T / &T
+                if (arg == param) return Exact;
+                if (auto ref_type = param->dyn_cast<ReferenceType>()) {
+                    return ref_type->is_moved_ ? Referenced : QualifiedReferenced;
+                }
+                return NoMatch;
+            } else if (!arg->cast<ReferenceType>()->is_moved_) {
+                // (lvalue) &T -> &T / &mut T / T, &mut T -> &mut T / &T / T
+                if (auto ref_type = param->dyn_cast<ReferenceType>()) {
+                    if (ref_type->is_moved_) return NoMatch;
+                    return (is_arg_mutable ^ (ref_type->referenced_type_->kind_ == Kind::Mutable))
+                               ? Qualified
+                               : Exact;
+                } else {
+                    return Copy;
+                }
+            } else {
+                // (xvalue) move &T -> move &T / &mut T / &T / T
+                if (auto ref_type = param->dyn_cast<ReferenceType>()) {
+                    if (ref_type->referenced_type_->kind_ == Kind::Mutable) return Referenced;
+                    return ref_type->is_moved_ ? Exact : QualifiedReferenced;
+                } else {
+                    return Copy;
+                }
+            }
+        } else {
+            /// TODO:
+            // upcast in class hierarchy, or to void pointer
+            if (!decayed_arg->dyn_cast<PointerType>() || !decayed_param->dyn_cast<PointerType>())
+                return NoMatch;
+            auto param_class =
+                decayed_param->cast<PointerType>()->pointed_type_->dyn_cast<InstanceType>();
+            auto arg_class =
+                decayed_arg->cast<PointerType>()->pointed_type_->dyn_cast<InstanceType>();
+            if (!param_class || !arg_class) return NoMatch;
+            if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
+            const Type* current_base = arg_class;
+            while (current_base) {
+                if (current_base == param) {
+                    return Upcast;
+                }
+                if (auto current_instance = current_base->dyn_cast<InstanceType>()) {
+                    current_base = current_instance->extends_;
+                } else {
+                    break;
+                }
+            }
+            return NoMatch;
+        }
+    }
+
+    [[nodiscard]] static auto overload_rank(FunctionObject func, std::span<const Type*> arg_types)
+        -> ConversionRank {
+        const FunctionType* func_type = get_func_type(func);
+        if (func_type->parameters_.size() != arg_types.size()) {
+            return ConversionRank::NoMatch;
+        }
+        ConversionRank worst_rank = ConversionRank::Exact;
+        for (std::size_t i = 0; i < arg_types.size(); ++i) {
+            ConversionRank rank = param_rank(func_type->parameters_[i], arg_types[i]);
+            if (rank > worst_rank) {
+                worst_rank = rank;
+                if (rank == ConversionRank::NoMatch) {
+                    return ConversionRank::NoMatch;
+                }
+            }
+        }
+        return worst_rank;
+    }
+
+    [[nodiscard]] static auto overload_partial_order(
+        FunctionObject left, FunctionObject right, std::span<const Type*> arg_types
+    ) -> std::partial_ordering {
+        const FunctionType* left_type = get_func_type(left);
+        const FunctionType* right_type = get_func_type(right);
+        bool left_ever_better = false;
+        bool right_ever_better = false;
+        for (std::size_t i = 0; i < arg_types.size(); ++i) {
+            ConversionRank left_rank = param_rank(left_type->parameters_[i], arg_types[i]);
+            ConversionRank right_rank = param_rank(right_type->parameters_[i], arg_types[i]);
+            if (left_rank < right_rank) {
+                left_ever_better = true;
+            } else if (right_rank < left_rank) {
+                right_ever_better = true;
+            }
+        }
+        if (left_ever_better && !right_ever_better) {
+            return std::partial_ordering::less;
+        } else if (!left_ever_better && right_ever_better) {
+            return std::partial_ordering::greater;
+        } else if (left_ever_better && right_ever_better) {
+            return std::partial_ordering::unordered;
+        } else {
+            return std::partial_ordering::equivalent;
+        }
+    }
+};
+
 class AccessHandler final : public GlobalMemory::MonotonicAllocated {
 private:
     using Symbol = std::variant<Term, Scope*, TemplateFamily*>;
@@ -877,251 +1154,6 @@ private:
                 return Term::forward_like(object, attr_it->second);
             }
             return find_method(instance_value->type_->scope_);
-        }
-    }
-};
-
-class CallHandler final : public GlobalMemory::MonotonicAllocated {
-private:
-    enum class ConversionRank : std::uint8_t {
-        Exact = 0,                // exactly the same type
-        Qualified = 1,            // requires modifying reference qualification
-        Referenced = 1,           // requires modifying reference (lvalue to rvalue or rvalue
-                                  // to lvalue)
-        QualifiedReferenced = 2,  // requires modifying both reference qualification and reference
-        Upcast = 3,               // requires upcasting in class hierarchy, or to void pointer
-        NoMatch = 4,              // no viable conversion
-    };
-
-private:
-    static auto get_func_type(FunctionObject func) -> const FunctionType* {
-        if (auto func_value = func->dyn_cast<FunctionValue>()) {
-            return func_value->get_type();
-        } else {
-            return func->cast<FunctionType>();
-        }
-    }
-
-private:
-    Sema& sema_;
-
-public:
-    CallHandler(Sema& sema) noexcept : sema_(sema) {}
-
-    auto eval_call(Term callee, std::span<Term> args) -> Term {
-        if (callee.is_unknown()) {
-            return Term::unknown();
-        }
-        Term decayed_callee = Sema::decay(callee);
-        GlobalMemory::Vector transformed_args =
-            args | std::views::transform([](Term arg) -> Term {
-                if (auto value = arg.get_comptime()) {
-                    return Term::prvalue(value->resolve_to(nullptr));
-                }
-                return arg;
-            }) |
-            GlobalMemory::collect<GlobalMemory::Vector>();
-        FunctionObject overload = resolve_overload(decayed_callee, transformed_args);
-        if (!overload) {
-            /// TODO: throw no matching overload error
-            throw;
-        }
-        if (auto func_value = overload->dyn_cast<FunctionValue>()) {
-            return func_value->invoke(args);
-        } else {
-            auto func_type = overload->cast<FunctionType>();
-            return Term::prvalue(func_type->return_type_);
-        }
-    }
-
-private:
-    auto get_func_obj(Scope* scope, FunctionOverloadDef overload) -> FunctionObject;
-
-    [[nodiscard]] auto list_normal_overloads(Term func) -> GlobalMemory::Vector<FunctionObject> {
-        auto get_scope_func = [&](
-                                  Scope* scope, const ScopeValue* scope_value
-                              ) -> GlobalMemory::Vector<FunctionObject> {
-            auto* overloads = scope_value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
-            return *overloads | std::views::filter([](FunctionOverloadDef overload) {
-                return !overload.get<const ASTTemplateDefinition*>();
-            }) | std::views::transform([this, scope](FunctionOverloadDef overload) {
-                return get_func_obj(scope, overload);
-            }) | GlobalMemory::collect<GlobalMemory::Vector>();
-        };
-        if (func.is_type()) {
-            if (func->kind_ != Kind::Instance) return {};
-            Scope* scope = func->cast<InstanceType>()->scope_;
-            return get_scope_func(scope, scope->find(constructor_symbol));
-        }
-        if (auto intersection_type = func->dyn_cast<IntersectionType>()) {
-            return intersection_type->types_ |
-                   GlobalMemory::collect<GlobalMemory::Vector<FunctionObject>>();
-        } else if (auto func_type = func->dyn_cast<FunctionType>()) {
-            return {func_type};
-        } else if (auto func_value = func->dyn_cast<FunctionValue>()) {
-            return {func_value};
-        } else if (auto overload_set = func->dyn_cast<FunctionOverloadSetValue>()) {
-            return get_scope_func(
-                overload_set->scope_, opaque_cast<const ScopeValue*>(overload_set->scope_value_)
-            );
-        } else {
-            return {};
-        }
-    }
-
-    auto list_template_overloads(
-        GlobalMemory::Vector<FunctionObject>& overloads, Term func, std::span<Term> args
-    ) -> void {}
-
-    [[nodiscard]] auto resolve_overload(Term func, std::span<Term> args) -> FunctionObject {
-        GlobalMemory::Vector<FunctionObject> overloads = list_normal_overloads(func);
-        FunctionObject best_candidate = nullptr;
-        ConversionRank best_rank = ConversionRank::NoMatch;
-        auto loop = [&](std::span<FunctionObject> candidates) -> std::size_t {
-            for (std::size_t i = 0; i < candidates.size(); ++i) {
-                FunctionObject candidate = candidates[i];
-                ConversionRank rank = overload_rank(candidate, args);
-                if (rank == ConversionRank::NoMatch) {
-                    // remove non-viable candidate
-                    std::swap(candidates[i], candidates.back());
-                    candidates = candidates.subspan(0, candidates.size() - 1);
-                    --i;
-                    continue;
-                }
-                if (best_candidate == nullptr) {
-                    best_candidate = candidate;
-                    best_rank = rank;
-                } else {
-                    std::partial_ordering order =
-                        overload_partial_order(best_candidate, candidate, args);
-                    if (order == std::partial_ordering::less) {
-                        best_candidate = candidate;
-                        best_rank = rank;
-                    }
-                }
-            }
-            return candidates.size();
-        };
-        // first, find the best non-template overload
-        std::size_t normal_count = loop(overloads);
-        overloads.resize(normal_count);
-        // second, if no exact match, try template overloads
-        if (best_rank != ConversionRank::Exact) {
-            list_template_overloads(overloads, func, args);
-            loop(
-                {std::next(overloads.begin(), static_cast<std::ptrdiff_t>(normal_count)),
-                 overloads.end()}
-            );
-        }
-        // third, re-iterate through all candidates to check for ambiguity
-        GlobalMemory::Vector<FunctionObject> ambiguous_candidates;
-        bool incomparable = false;
-        if (best_candidate) {
-            for (FunctionObject candidate : overloads) {
-                if (candidate == best_candidate) continue;
-                std::partial_ordering order =
-                    overload_partial_order(best_candidate, candidate, args);
-                if (order == std::partial_ordering::equivalent) {
-                    ambiguous_candidates.push_back(candidate);
-                } else if (order == std::partial_ordering::unordered) {
-                    ambiguous_candidates.push_back(candidate);
-                    incomparable = true;
-                }
-            }
-        }
-        if (!incomparable && ambiguous_candidates.size()) {
-            // if there are only equivalent candidates, choose nontemplate one if possible
-            auto it = std::ranges::find(overloads, ambiguous_candidates[0]);
-            if (std::distance(overloads.begin(), it) < static_cast<std::ptrdiff_t>(normal_count)) {
-                ambiguous_candidates.clear();
-            }
-        }
-        if (!ambiguous_candidates.empty()) {
-            /// TODO: throw ambiguous call error, listing best_candidate and all candidates in
-            /// ambiguous_candidates
-            return nullptr;
-        }
-        return best_candidate;
-    }
-
-    static auto param_rank(const Type* param, Term arg) -> ConversionRank {
-        using enum ConversionRank;
-        if (Sema::decay(param) == Sema::decay(arg.effective_type())) {
-            // rank 1 conversion
-            switch (arg.value_category()) {
-            case ValueCategory::Right:
-                // rvalue T -> T / &T / move &T, T wins, move &T wins over &T
-                if (param == arg.effective_type()) return Exact;
-                if (auto ref_type = param->dyn_cast<ReferenceType>()) {
-                    return ref_type->is_moved_ ? Referenced : QualifiedReferenced;
-                }
-                break;
-            case ValueCategory::Left:
-                // lvalue T -> &T / &mut T, &T wins
-                if (auto ref_type = param->dyn_cast<ReferenceType>()) {
-                    if (ref_type->is_moved_) return NoMatch;
-                    return ref_type->referenced_type_->kind_ == Kind::Mutable ? QualifiedReferenced
-                                                                              : Referenced;
-                }
-                break;
-            case ValueCategory::Expiring:
-                // expiring T -> &T / move &T, move &T wins
-                if (auto ref_type = param->dyn_cast<ReferenceType>()) {
-                    if (ref_type->referenced_type_->kind_ == Kind::Mutable) return NoMatch;
-                    return ref_type->is_moved_ ? Exact : QualifiedReferenced;
-                }
-                break;
-            }
-        } else {
-            // rank 2 conversion: try upcast in class hierarchy, or to void pointer
-            /// TODO:
-        }
-        return NoMatch;
-    }
-
-    [[nodiscard]] static auto overload_rank(FunctionObject func, std::span<Term> arg_types)
-        -> ConversionRank {
-        const FunctionType* func_type = get_func_type(func);
-        if (func_type->parameters_.size() != arg_types.size()) {
-            return ConversionRank::NoMatch;
-        }
-        ConversionRank worst_rank = ConversionRank::Exact;
-        for (std::size_t i = 0; i < arg_types.size(); ++i) {
-            ConversionRank rank = param_rank(func_type->parameters_[i], arg_types[i]);
-            if (rank > worst_rank) {
-                worst_rank = rank;
-                if (rank == ConversionRank::NoMatch) {
-                    return ConversionRank::NoMatch;
-                }
-            }
-        }
-        return worst_rank;
-    }
-
-    [[nodiscard]] static auto overload_partial_order(
-        FunctionObject left, FunctionObject right, std::span<Term> arg_types
-    ) -> std::partial_ordering {
-        const FunctionType* left_type = get_func_type(left);
-        const FunctionType* right_type = get_func_type(right);
-        bool left_ever_better = false;
-        bool right_ever_better = false;
-        for (std::size_t i = 0; i < arg_types.size(); ++i) {
-            ConversionRank left_rank = param_rank(left_type->parameters_[i], arg_types[i]);
-            ConversionRank right_rank = param_rank(right_type->parameters_[i], arg_types[i]);
-            if (left_rank < right_rank) {
-                left_ever_better = true;
-            } else if (right_rank < left_rank) {
-                right_ever_better = true;
-            }
-        }
-        if (left_ever_better && !right_ever_better) {
-            return std::partial_ordering::less;
-        } else if (!left_ever_better && right_ever_better) {
-            return std::partial_ordering::greater;
-        } else if (left_ever_better && right_ever_better) {
-            return std::partial_ordering::unordered;
-        } else {
-            return std::partial_ordering::equivalent;
         }
     }
 };
@@ -1709,6 +1741,15 @@ public:
             (*this)(item);
         }
     }
+
+    void operator()(const ASTStaticAssertStatement* node) noexcept {
+        Term result =
+            ValueContextEvaluator{sema_, &BooleanType::instance, true}(node->condition).subject;
+        if (result.is_unknown() || !result.get_comptime()->cast<BooleanValue>()->value_) {
+            // Diagnostic::report(StaticAssertFailedError(node->location, node->message));
+            throw;
+        }
+    }
 };
 
 // ========== Implementation ==========
@@ -1870,7 +1911,7 @@ inline auto TemplateHandler::get_prototype(
     it->second.skolems = GlobalMemory::alloc_array<const Object*>(specialization.patterns.size());
     for (size_t i = 0; i < specialization.parameters.size(); i++) {
         pattern_scope.add_template_argument(
-            specialization.parameters[i].identifier, as_term(static_cast<Value*>(auto_instances[i]))
+            specialization.parameters[i].identifier, as_term(auto_instances[i])
         );
     }
     for (size_t i = 0; i < specialization.patterns.size(); i++) {
@@ -2059,6 +2100,10 @@ inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
     TypeContextEvaluator{sema_, element_type}(node->element_type);
     if (!element_type.is_sized()) {
         TypeRegistry::add_ref_dependency(out_, element_type);
+    }
+    if (std::holds_alternative<std::monostate>(node->length)) {
+        TypeRegistry::get_at<ArrayType>(out_, element_type, nullptr);
+        return;
     }
     Term length_term = ValueContextEvaluator{sema_, nullptr, true}(node->length).subject;
     if (length_term.is_type()) {

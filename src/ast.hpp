@@ -129,6 +129,7 @@ struct ASTNamespaceDefinition;
 struct ASTTemplateParameter;
 struct ASTTemplateDefinition;
 struct ASTTemplateSpecialization;
+struct ASTStaticAssertStatement;
 
 // All AST node types (base classes and final classes)
 using ASTNodeVariant = std::variant<
@@ -211,7 +212,9 @@ using ASTNodeVariant = std::variant<
     const ASTNamespaceDefinition*,
     // Templates
     const ASTTemplateDefinition*,
-    const ASTTemplateSpecialization*>;
+    const ASTTemplateSpecialization*,
+    // Static asserts
+    const ASTStaticAssertStatement*>;
 
 // All expression node types (all ASTExpression derivatives)
 using ASTExprVariant = std::variant<
@@ -514,6 +517,11 @@ struct ASTTemplateSpecialization final : public ASTNode {
     std::span<ASTTemplateParameter> parameters;
     std::span<ASTExprVariant> patterns;
     ASTNodeVariant target_node;
+};
+
+struct ASTStaticAssertStatement final : public ASTNode {
+    ASTExprVariant condition;
+    ASTExprVariant message;
 };
 
 enum class OperatorGroup : std::uint8_t {

@@ -11,7 +11,8 @@ top_level_statement:
 	| type_alias
 	| function_definition
 	| class_definition
-	| namespace_definition;
+	| namespace_definition
+	| static_assert_statement;
 
 statement:
 	local_block
@@ -24,14 +25,8 @@ statement:
 	| return_statement
 	| type_alias
 	| function_definition
-	| class_definition;
-
-namespace_item:
-	declaration_statement
-	| type_alias
-	| function_definition
 	| class_definition
-	| namespace_definition;
+	| static_assert_statement;
 
 local_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 
@@ -103,7 +98,12 @@ class_definition:
 	)* OP_RBRACE;
 
 namespace_definition:
-	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += namespace_item* OP_RBRACE;
+	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += top_level_statement* OP_RBRACE;
+
+static_assert_statement:
+	KW_STATIC_ASSERT OP_LPAREN condition_ = expr (
+		OP_COMMA message_ = expr
+	)? OP_RPAREN OP_SEMICOLON;
 
 expr:
 	KW_SELF						# SelfExpr
@@ -200,8 +200,8 @@ type:
 		AccessChainTypeAlternate
 	| OP_LBRACE (
 		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
-	)? OP_RBRACE													# StructType
-	| element_type_ = type OP_LBRACKET (length_ = expr) OP_RBRACKET	# ArrayType
+	)? OP_RBRACE														# StructType
+	| element_type_ = type OP_LBRACKET (length_ = expr)? OP_RBRACKET	# ArrayType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
@@ -232,7 +232,9 @@ template_parameter_list:
 
 specialize_parameter_list:
 	KW_SPECIALIZE (
-		OP_LT (OP_COMMA parameters_ += template_parameter)+ OP_GT
+		OP_LT parameters_ += template_parameter (
+			OP_COMMA parameters_ += template_parameter
+		)* OP_GT
 	)?;
 
 template_parameter:
@@ -294,6 +296,7 @@ KW_NAMESPACE: 'namespace';
 KW_MOVE: 'move';
 KW_FORWARD: 'forward';
 KW_SPECIALIZE: 'specialize';
+KW_STATIC_ASSERT: 'static_assert';
 
 OP_DOT: '.';
 OP_QUESTION: '?';

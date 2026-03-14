@@ -9,6 +9,7 @@ enum class Kind : std::uint8_t {
     Unknown,
     Auto,
     Any,
+    Void,
     Nullptr,
     Integer,
     Float,
@@ -43,6 +44,7 @@ class Type;
 class UnknownType;
 class AutoType;
 class AnyType;
+class VoidType;
 class NullptrType;
 class IntegerType;
 class FloatType;
@@ -473,7 +475,7 @@ public:
         if (kind_ != Kind::Auto && kind_ != target->kind_) {
             return false;
         }
-        return do_pattern_match(this, auto_bindings);
+        return do_pattern_match(target, auto_bindings);
     }
 
 private:
@@ -584,6 +586,20 @@ public:
             return true;
         }
     }
+};
+
+class VoidType final : public PrimitiveType {
+public:
+    static constexpr Kind kind = Kind::Void;
+    static VoidType instance;
+
+public:
+    VoidType() noexcept : PrimitiveType(kind) {}
+    std::string_view repr() const final { return "void"; }
+    bool do_assignable_from(const Type* source) const noexcept final {
+        return source->kind_ == Kind::Void;
+    }
+    Term default_construct() const noexcept final { UNREACHABLE(); }
 };
 
 class AnyType final : public PrimitiveType {
@@ -994,8 +1010,10 @@ protected:
         }
         if (this == other_instance) {
             return true;
-        } else if (primary_template_ && primary_template_ == other_instance->primary_template_ &&
-                   template_args_.size() == other_instance->template_args_.size()) {
+        } else if (
+            primary_template_ && primary_template_ == other_instance->primary_template_ &&
+            template_args_.size() == other_instance->template_args_.size()
+        ) {
             for (std::size_t i = 0; i < template_args_.size(); ++i) {
                 if (!template_args_[i]->pattern_match(
                         other_instance->template_args_[i], auto_bindings
@@ -2180,6 +2198,8 @@ inline UnknownType UnknownType::instance;
 inline auto UnknownType::default_construct() const noexcept -> Term {
     return Term::prvalue(&UnknownValue::instance);
 }
+
+inline VoidType VoidType::instance;
 
 inline AnyType AnyType::instance;
 
