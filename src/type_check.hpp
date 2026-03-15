@@ -7,61 +7,93 @@
 #include "symbol_collect.hpp"
 
 class CodeGenEnvironment {
+    friend class CodeGen;
+
 private:
+    struct FunctionDef {
+        const Scope* scope;
+        ASTNodeVariant node;
+        const FunctionType* func_obj;
+    };
+
+    struct FunctionCall {
+        std::string_view mangled_callee;
+        std::string_view self_arg;  // empty if no self argument
+        std::span<const Object*> args;
+    };
+
+    struct AccessChain {
+        std::string_view mangled_path;
+        std::size_t end_of_static_part;
+        std::span<const Object*> instantiation_args;
+    };
+
     using TableValue = std::variant<
-        const Type*,       // type expression
-        std::string_view,  // call (move self to first argument and put this as
-                           // function name)
-        std::pair<std::size_t, std::string_view>>;  // field access (range of and replacement of
-                                                    // fully qualified path)
+        const Type*,   // type expression
+        FunctionCall,  // function call
+        AccessChain>;  // member access
 
     using Table = GlobalMemory::FlatMap<const ASTNode*, TableValue>;
 
 public:
-    constexpr static std::string_view func_prefix = "__F_";
-    constexpr static std::string_view struct_prefix = "__S_";
-    constexpr static std::string_view closure_prefix = "__C_";
+    static auto mangle_path(
+        GlobalMemory::String& mangled, const Scope* scope, std::string_view identifier
+    ) -> void {
+        if (scope->is_extern_) {
+            [&](this auto&& self, const Scope* current) -> void {
+                if (current->parent_) self(current->parent_);
+                if (current->scope_id_) {
+                    std::format_to(std::back_inserter(mangled), "{}::", *current->scope_id_);
+                }
+            }(scope);
+            mangled += identifier;
+        } else {
+            [&](this auto&& self, const Scope* current) -> void {
+                if (current->parent_) self(current->parent_);
+                if (current->scope_id_) {
+                    std::format_to(
+                        std::back_inserter(mangled),
+                        "_{}{}",
+                        current->scope_id_->length(),
+                        *current->scope_id_
+                    );
+                }
+            }(scope);
+            std::format_to(std::back_inserter(mangled), "_{}{}", identifier.length(), identifier);
+        }
+    }
 
 private:
+    GlobalMemory::Vector<FunctionDef> functions_;
     GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
 
 public:
-    auto mangle_qualified_path(std::string_view path) -> std::string_view {
-        GlobalMemory::String mangled;
-        std::size_t start = 0;
-        while (true) {
-            std::size_t dot_pos = path.find('.', start);
-            if (dot_pos == std::string_view::npos) {
-                mangled += path.substr(start);
-                break;
-            }
-            mangled += path.substr(start, dot_pos - start);
-            mangled += "__";
-            start = dot_pos + 1;
-        }
-        return GlobalMemory::format_view("{}", mangled);
-    }
-
-    auto replace_type_expr(const Scope* scope, const ASTNode* node, const Type* type) -> void {
-        scope_map_[scope][node] = type;
-    }
-
-    auto replace_caller(const Scope* scope, const ASTNode* node, std::string_view function_name)
-        -> void {
-        scope_map_[scope][node] = function_name;
-    }
-
-    auto replace_qualified_path(
-        const Scope* scope,
-        const ASTNode* node,
-        std::size_t end_of_static_part,
-        std::string_view replacement
+    auto add_function_output(
+        const Scope* current_scope, ASTNodeVariant node, const FunctionType* func_obj
     ) -> void {
-        scope_map_[scope][node] = std::pair{end_of_static_part, replacement};
+        functions_.push_back({current_scope, node, func_obj});
     }
 
-    TableValue* find(const Scope* scope, const ASTNode* node) {
-        auto scope_it = scope_map_.find(scope);
+    auto map_type(const Scope* current_scope, const ASTNode* node, const Type* type) -> void {
+        scope_map_[current_scope][node] = type;
+    }
+
+    auto map_access_chain(
+        const Scope* current_scope,
+        const ASTNode* node,
+        std::string_view mangled_path,
+        std::size_t end_of_static_part,
+        std::span<const Object*> instantiation_args
+    ) -> void {
+        scope_map_[current_scope][node] = AccessChain{
+            .mangled_path = mangled_path,
+            .end_of_static_part = end_of_static_part,
+            .instantiation_args = instantiation_args
+        };
+    }
+
+    TableValue* find(const Scope* current_scope, const ASTNode* node) {
+        auto scope_it = scope_map_.find(current_scope);
         if (scope_it == scope_map_.end()) {
             return nullptr;
         }
@@ -298,20 +330,29 @@ public:
     private:
         Sema& sema_;
         Scope* prev_scope_;
+        std::size_t postfix_length_;
 
     public:
         Guard(Sema& sema, Scope& scope) noexcept
             : sema_(sema), prev_scope_(std::exchange(sema.current_scope_, &scope)) {}
-        Guard(Sema& sema, const ASTNode* child) noexcept
+        Guard(Sema& sema, const ASTNode* child, std::string_view postfix = "") noexcept
             : sema_(sema),
               prev_scope_(
                   std::exchange(sema.current_scope_, sema.current_scope_->children_.at(child))
-              ) {}
+              ),
+              postfix_length_(postfix.length()) {
+            if (!postfix.empty()) {
+                sema.qualified_path_ += postfix;
+            }
+        }
         Guard(const Guard&) = delete;
         Guard(Guard&&) = delete;
         auto operator=(const Guard&) = delete;
         auto operator=(Guard&&) = delete;
-        ~Guard() noexcept { sema_.current_scope_ = prev_scope_; }
+        ~Guard() noexcept {
+            sema_.current_scope_ = prev_scope_;
+            sema_.qualified_path_.resize(sema_.qualified_path_.size() - postfix_length_);
+        }
     };
 
 public:
@@ -384,6 +425,7 @@ private:
 
 public:
     Scope* current_scope_;
+    GlobalMemory::String qualified_path_;
     CodeGenEnvironment& codegen_env_;
     std::unique_ptr<TemplateHandler> template_handler_;
     std::unique_ptr<OperationHandler> operation_handler_;
@@ -478,34 +520,22 @@ public:
 
     [[nodiscard]] auto is_template_about_type(const TemplateFamily& family) const noexcept -> bool;
 
-    inline auto instantiate(TemplateFamily& family, std::span<Term> args) -> Term {
-        GlobalMemory::Vector transformed_args =
-            args | std::views::transform([](Term arg) -> const Object* {
-                if (auto* type = arg.get_type()) {
-                    return type;
-                } else if (auto* value = arg.get_comptime()) {
-                    return value->resolve_to(nullptr);
-                } else {
-                    throw;
-                }
-            }) |
-            GlobalMemory::collect<GlobalMemory::Vector>();
-        if (auto meta_result = catch_meta_instantiation(family, transformed_args)) {
+    inline auto instantiate(TemplateFamily& family, TemplateArgs args) -> Term {
+        if (auto meta_result = catch_meta_instantiation(family, args)) {
             return *meta_result;
         }
         Sema::Guard guard(sema_, *family.decl_scope);
-        if (!validate(*family.primary, transformed_args)) {
+        if (!validate(*family.primary, args)) {
             return Term::unknown();
         }
-        auto [inst_scope, target] = specialization_resolution(family, transformed_args);
+        auto [inst_scope, target] = specialization_resolution(family, args);
         Sema::Guard inner_guard(sema_, *inst_scope);
         sema_.deferred_analysis(*inst_scope, target);
         Term result = sema_.lookup_term(family.primary->identifier);
         if (result.is_type()) {
             if (auto instance_type = result.get_type()->dyn_cast<InstanceType>()) {
                 instance_type->primary_template_ = &family.primary;
-                instance_type->template_args_ =
-                    transformed_args | GlobalMemory::collect<std::span>();
+                instance_type->template_args_ = args;
             }
         }
         return result;
@@ -849,7 +879,7 @@ private:
         NoMatch = 5,              // no viable conversion
     };
 
-private:
+public:
     static auto get_func_type(FunctionObject func) -> const FunctionType* {
         if (auto func_value = func->dyn_cast<FunctionValue>()) {
             return func_value->get_type();
@@ -863,6 +893,8 @@ private:
 
 public:
     CallHandler(Sema& sema) noexcept : sema_(sema) {}
+
+    auto get_func_obj(Scope* scope, FunctionOverloadDef overload) noexcept -> FunctionObject;
 
     auto eval_call(Term callee, std::span<Term> args) -> Term {
         if (callee.is_unknown()) {
@@ -891,8 +923,6 @@ public:
     }
 
 private:
-    auto get_func_obj(Scope* scope, FunctionOverloadDef overload) -> FunctionObject;
-
     [[nodiscard]] auto list_normal_overloads(Term func) -> GlobalMemory::Vector<FunctionObject> {
         auto get_scope_func = [&](
                                   Scope* scope, const ScopeValue* scope_value
@@ -1120,13 +1150,31 @@ private:
 public:
     AccessHandler(Sema& sema) noexcept : sema_(sema) {}
 
-    auto eval_access(
-        ASTExprVariant base,
-        std::span<std::string_view> members,
-        std::span<ASTExprVariant> instantiation_args
-    ) noexcept -> TermWithSelf;
+    auto eval_access(const ASTAccessChain& node) noexcept -> TermWithSelf;
 
 private:
+    auto eval_next_static_access(
+        Symbol& base, std::string_view member, const Scope*& base_scope
+    ) noexcept -> bool {
+        if (auto* namespace_scope = std::get_if<Scope*>(&base)) {
+            auto next = (*namespace_scope)->find(member);
+            if (!next) {
+                throw UnlocatedProblem::make<UndeclaredIdentifierError>(member);
+            } else if (auto* next_namespace = next->get<Scope*>()) {
+                base = next_namespace;
+                base_scope = next_namespace;
+            } else if (auto* family = next->get<TemplateFamily*>()) {
+                base = family;
+                base_scope = next_namespace;
+            } else {
+                base = sema_.eval_term(member, **namespace_scope, *next);
+            }
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     auto eval_next_access(Symbol& base, Term& self, std::string_view member) noexcept -> bool {
         if (auto* term = std::get_if<Term>(&base)) {
             if (auto* type = term->get_type()) {
@@ -1162,19 +1210,6 @@ private:
                 }
                 self = *term;
                 base = sema_.is_mutable(*term) ? sema_.apply_mutable(result) : result;
-            }
-            return true;
-        } else if (auto* namespace_scope = std::get_if<Scope*>(&base)) {
-            // namespace access
-            auto next = (*namespace_scope)->find(member);
-            if (!next) {
-                throw UnlocatedProblem::make<UndeclaredIdentifierError>(member);
-            } else if (auto* next_namespace = next->get<Scope*>()) {
-                base = next_namespace;
-            } else if (auto* family = next->get<TemplateFamily*>()) {
-                base = family;
-            } else {
-                base = sema_.eval_term(member, **namespace_scope, *next);
             }
             return true;
         } else {
@@ -1279,9 +1314,7 @@ public:
     }
 
     void operator()(const ASTAccessChain* node) {
-        Term result =
-            sema_.access_handler_->eval_access(node->base, node->members, node->instantiation_args)
-                .result;
+        Term result = sema_.access_handler_->eval_access(*node).result;
         if (result.is_unknown() || !result.is_type()) {
             out_ = TypeRegistry::get_unknown();
         } else {
@@ -1589,9 +1622,7 @@ public:
     }
 
     auto operator()(const ASTAccessChain* node) -> TermWithSelf {
-        return sema_.access_handler_->eval_access(
-            node->base, node->members, node->instantiation_args
-        );
+        return sema_.access_handler_->eval_access(*node);
     }
 
     template <ASTUnaryOpClass Op>
@@ -1729,11 +1760,10 @@ public:
         if (nonnull(node->declared_type)) {
             TypeResolution declared_type;
             TypeContextEvaluator{sema_, declared_type}(node->declared_type);
-            sema_.codegen_env_.replace_type_expr(
-                sema_.current_scope_, NodePtrVisitor()(node->declared_type), declared_type
-            );
+            sema_.codegen_env_.map_type(sema_.current_scope_, node, declared_type);
         } else if (!std::holds_alternative<std::monostate>(node->expr)) {
-            ValueContextEvaluator{sema_, nullptr, false}(node->expr);
+            Term init = ValueContextEvaluator{sema_, nullptr, false}(node->expr).result;
+            sema_.codegen_env_.map_type(sema_.current_scope_, node, init.effective_type());
         }
     }
 
@@ -1772,7 +1802,11 @@ public:
 
     // Functions and classes
     void operator()(const ASTFunctionDefinition* node) noexcept {
+        FunctionObject func_obj = sema_.call_handler_->get_func_obj(sema_.current_scope_, node);
         Sema::Guard guard(sema_, node);
+        sema_.codegen_env_.add_function_output(
+            sema_.current_scope_, node, CallHandler::get_func_type(func_obj)
+        );
         for (auto& stmt : node->body) {
             (*this)(stmt);
         }
@@ -1780,7 +1814,13 @@ public:
 
     void operator()(const ASTConstructorDestructorDefinition* node) noexcept {
         Sema::Guard guard(sema_, node);
-        sema_.current_scope_->in_constructor_ = true;
+        if (node->is_constructor) {
+            FunctionObject func_obj = sema_.call_handler_->get_func_obj(sema_.current_scope_, node);
+            sema_.codegen_env_.add_function_output(
+                sema_.current_scope_, node, CallHandler::get_func_type(func_obj)
+            );
+            sema_.current_scope_->in_constructor_ = true;
+        }
         for (auto& stmt : node->body) {
             (*this)(stmt);
         }
@@ -2009,21 +2049,21 @@ inline auto TemplateHandler::get_prototype(
     return it->second;
 }
 
-inline auto AccessHandler::eval_access(
-    ASTExprVariant base,
-    std::span<std::string_view> members,
-    std::span<ASTExprVariant> instantiation_args
-) noexcept -> TermWithSelf {
+inline auto AccessHandler::eval_access(const ASTAccessChain& node) noexcept -> TermWithSelf {
+    const Scope* base_scope;
     Symbol base_symbol;
     Term self;
-    if (auto* identifier_node = std::get_if<const ASTIdentifier*>(&base)) {
+    // first eval base
+    if (auto* identifier_node = std::get_if<const ASTIdentifier*>(&node.base)) {
         auto [scope, value] = sema_.lookup((*identifier_node)->str);
         if (!scope) {
             Diagnostic::report(
                 UndeclaredIdentifierError((*identifier_node)->location, (*identifier_node)->str)
             );
             base_symbol = Term::unknown();
-        } else if (auto* namespace_scope = value->get<Scope*>()) {
+        }
+        base_scope = scope;
+        if (auto* namespace_scope = value->get<Scope*>()) {
             base_symbol = namespace_scope;
         } else if (auto* family = value->get<TemplateFamily*>()) {
             base_symbol = family;
@@ -2031,9 +2071,18 @@ inline auto AccessHandler::eval_access(
             base_symbol = sema_.lookup_term((*identifier_node)->str);
         }
     } else {
-        base_symbol = ValueContextEvaluator{sema_, nullptr, false}(base).result;
+        base_symbol = ValueContextEvaluator{sema_, nullptr, false}(node.base).result;
     }
-    for (std::string_view member : members) {
+    // second process static accesses
+    std::span<std::string_view> remaining = node.members;
+    while (!remaining.empty()) {
+        if (!eval_next_static_access(base_symbol, remaining.front(), base_scope)) {
+            break;
+        }
+        remaining = remaining.subspan(1);
+    }
+    // third process non-static accesses
+    for (std::string_view member : remaining) {
         if (!eval_next_access(base_symbol, self, member)) {
             return {.result = Term::unknown(), .self = {}};
         }
@@ -2041,30 +2090,44 @@ inline auto AccessHandler::eval_access(
     if (std::holds_alternative<Scope*>(base_symbol)) {
         throw;
     }
-    if (!instantiation_args.empty()) {
+    std::span<const Object*> arg_terms;
+    if (!node.instantiation_args.empty()) {
         if (!std::holds_alternative<TemplateFamily*>(base_symbol)) {
             throw;
         }
-        GlobalMemory::Vector arg_terms =
-            instantiation_args | std::views::transform([&](ASTExprVariant arg) {
-                return ValueContextEvaluator{sema_, nullptr, false}(arg).result;
-            }) |
-            GlobalMemory::collect<GlobalMemory::Vector>();
+        arg_terms = node.instantiation_args |
+                    std::views::transform([&](ASTExprVariant arg) -> const Object* {
+                        Term result = ValueContextEvaluator{sema_, nullptr, true}(arg).result;
+                        if (auto* type = result.get_type()) {
+                            return type;
+                        } else {
+                            return result->cast<Value>();
+                        }
+                    }) |
+                    GlobalMemory::collect<std::span>();
         return {
             .result = sema_.template_handler_->instantiate(
                 *std::get<TemplateFamily*>(base_symbol), arg_terms
             ),
             .self = {}
         };
-    } else {
-        if (std::holds_alternative<TemplateFamily*>(base_symbol)) {
-            throw;
-        }
-        return {.result = std::get<Term>(base_symbol), .self = self};
     }
+    if (!std::holds_alternative<Term>(base_symbol)) {
+        throw;
+    }
+    GlobalMemory::String mangled_path;
+    CodeGenEnvironment::mangle_path(mangled_path, base_scope, remaining.front());
+    sema_.codegen_env_.map_access_chain(
+        sema_.current_scope_,
+        &node,
+        GlobalMemory::persist(mangled_path),
+        node.members.size() - remaining.size(),
+        arg_terms
+    );
+    return {.result = std::get<Term>(base_symbol), .self = self};
 }
 
-inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload)
+inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload) noexcept
     -> FunctionObject {
     Sema::Guard guard{sema_, *scope};
     bool any_error = false;
@@ -2078,7 +2141,11 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
                      return param_type;
                  }) |
                  GlobalMemory::collect<std::span<const Type*>>();
-        TypeContextEvaluator{sema_, return_type}(func_def->return_type);
+        if (nonnull(func_def->return_type)) {
+            TypeContextEvaluator{sema_, return_type}(func_def->return_type);
+        } else {
+            return_type = &VoidType::instance;
+        }
     } else if (auto ctor_def = overload.get<const ASTConstructorDestructorDefinition*>()) {
         params = ctor_def->parameters |
                  std::views::transform([&](const ASTFunctionParameter& param) -> const Type* {

@@ -40,28 +40,37 @@ class Scope final : public GlobalMemory::MonotonicAllocated {
 
 public:
     static auto root(Scope& std_scope) -> Scope& {
-        auto* scope = new Scope(nullptr);
+        auto* scope = new Scope(nullptr, nullptr);
         scope->add_namespace("std", std_scope);
         return *scope;
     }
 
-    static auto make(Scope& parent, const ASTNode* origin = nullptr) -> Scope& {
-        auto* scope = new Scope(&parent);
+    static auto make(
+        Scope& parent, const ASTNode* origin = nullptr, const std::string_view* scope_id = nullptr
+    ) -> Scope& {
+        auto* scope = new Scope(&parent, scope_id);
         parent.children_.insert({origin, scope});
         return *scope;
     }
 
 private:
-    Scope* const parent_ = nullptr;
     GlobalMemory::FlatMap<const void*, Scope*> children_;
     GlobalMemory::FlatMap<std::string_view, ScopeValue> identifiers_;
 
 public:
-    const Type* self_type_;
-    bool in_constructor_;
+    Scope* const parent_ = nullptr;
+    const std::string_view* scope_id_ = nullptr;
+    const Type* self_type_ = nullptr;
+    bool in_constructor_ = false;
+    bool is_extern_ = false;
 
 private:
-    Scope(Scope* parent) noexcept : parent_(parent) {}
+    Scope(Scope* parent, const std::string_view* scope_id) noexcept
+        : parent_(parent), scope_id_(scope_id) {
+        if (parent) {
+            is_extern_ = parent->is_extern_;
+        }
+    }
 
 public:
     Scope() noexcept = default;
@@ -301,7 +310,7 @@ public:
     // Classes
     void operator()(const ASTClassDefinition* node) noexcept {
         current_scope_.add_class(node->identifier, node);
-        Scope& class_scope = Scope::make(current_scope_, node);
+        Scope& class_scope = Scope::make(current_scope_, node, &node->identifier);
         SymbolCollector class_visitor(class_scope, operators_);
         for (auto& ctor : node->constructors) {
             class_visitor(ctor);

@@ -483,7 +483,6 @@ struct ASTFunctionDefinition final : public ASTNode {
     bool is_const;
     bool is_static;
     bool is_decl_only;
-    bool is_main = false;  // Updated by SymbolCollector
 };
 
 struct ASTConstructorDestructorDefinition final : public ASTNode {

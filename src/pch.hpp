@@ -299,6 +299,12 @@ public:
         return span;
     }
 
+    static constexpr auto persist(const GlobalMemory::String& str) -> std::string_view {
+        std::span<char> ptr = alloc_array<char>(str.size() + 1);
+        std::ranges::copy(str, ptr.begin());
+        return {ptr.data(), str.size()};
+    }
+
 private:
     template <typename Container>
         requires requires { typename Container::value_type; }

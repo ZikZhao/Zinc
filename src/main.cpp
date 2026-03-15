@@ -32,7 +32,10 @@ auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer)
     static auto [std_scope, std_operators] = [&]() {
         ASTBuilder builder(*sources.load_std(), importer);
         const ASTRoot* std_root = builder();
+        static std::string_view scope_id = "std";
         static Scope scope;
+        scope.scope_id_ = &scope_id;
+        scope.is_extern_ = true;
         OperatorRegistry operators;
         SymbolCollector{scope, operators}(std_root);
         for (const auto& [identifier, meta_fn] : Meta::get_metas()) {
@@ -71,5 +74,5 @@ auto main(int argc, char* argv[]) -> int {
     bool has_error = Diagnostic::print(sources);
     if (has_error) return EXIT_FAILURE;
 
-    return codegen(sources, codegen_env);
+    return codegen(sources, sema, codegen_env);
 }

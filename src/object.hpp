@@ -242,6 +242,7 @@ public:
         if constexpr (std::is_same_v<T, InstanceType>) {
             // classes with same definition are distinct types
             out.reconstruct<T>(std::forward<decltype(args)>(args)...);
+            instance->instance_types_.push_back(static_cast<const T*>(out.get()));
         } else if constexpr (TypeInTupleV<T, Composites>) {
             instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
         } else {
@@ -294,7 +295,7 @@ private:
         TypeSet<IntersectionType>,
         TypeSet<UnionType>>
         types_;
-    GlobalMemory::Vector<InstanceType*> instance_types_;
+    GlobalMemory::Vector<const InstanceType*> instance_types_;
     GlobalMemory::Vector<AutoType*> auto_types_;
     // GlobalMemory::Vector<const Object*> auto_instances_;
     GlobalMemory::FlatMap<std::type_index, Type*> builtin_types_;

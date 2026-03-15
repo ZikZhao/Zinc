@@ -1,13 +1,13 @@
 fn main() {
-    let a = A::<i32>(5, true);
+    let a = A::<i32>(5, 1);
     let b = A::<i32[]>(10, false);
     static_assert(5 == 5, "a.a should be 5");
 }
 
 class A<T: type> {
     let a: T;
-    let b: bool;
-    init(a: T, b: bool) {
+    let b: T;
+    init(a: T, b: T) {
         return Self{ a: a, b: b };
     }
 }

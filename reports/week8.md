@@ -203,3 +203,4 @@ The development is structured into granular phases to ensure stability before in
 15. Class Template Argument Deduction (CTAD): by in-class deduction guide
 16. String Literals As Types
 17. ==TS-style Format String==
+18. ==Static Reflection==
