@@ -32,9 +32,8 @@ auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer)
     static auto [std_scope, std_operators] = [&]() {
         ASTBuilder builder(*sources.load_std(), importer);
         const ASTRoot* std_root = builder();
-        static std::string_view scope_id = "std";
         static Scope scope;
-        scope.scope_id_ = &scope_id;
+        scope.scope_id_ = "std";
         scope.is_extern_ = true;
         OperatorRegistry operators;
         SymbolCollector{scope, operators}(std_root);

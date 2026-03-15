@@ -37,17 +37,17 @@ using ScopeValue = PointerVariant<
 
 class Scope final : public GlobalMemory::MonotonicAllocated {
     friend class Sema;
+    friend class CodeGen;
 
 public:
     static auto root(Scope& std_scope) -> Scope& {
-        auto* scope = new Scope(nullptr, nullptr);
+        auto* scope = new Scope(nullptr, {});
         scope->add_namespace("std", std_scope);
         return *scope;
     }
 
-    static auto make(
-        Scope& parent, const ASTNode* origin = nullptr, const std::string_view* scope_id = nullptr
-    ) -> Scope& {
+    static auto make(Scope& parent, const ASTNode* origin = nullptr, std::string_view scope_id = {})
+        -> Scope& {
         auto* scope = new Scope(&parent, scope_id);
         parent.children_.insert({origin, scope});
         return *scope;
@@ -59,13 +59,13 @@ private:
 
 public:
     Scope* const parent_ = nullptr;
-    const std::string_view* scope_id_ = nullptr;
+    std::string_view scope_id_;
     const Type* self_type_ = nullptr;
     bool in_constructor_ = false;
     bool is_extern_ = false;
 
 private:
-    Scope(Scope* parent, const std::string_view* scope_id) noexcept
+    Scope(Scope* parent, std::string_view scope_id) noexcept
         : parent_(parent), scope_id_(scope_id) {
         if (parent) {
             is_extern_ = parent->is_extern_;
@@ -310,7 +310,7 @@ public:
     // Classes
     void operator()(const ASTClassDefinition* node) noexcept {
         current_scope_.add_class(node->identifier, node);
-        Scope& class_scope = Scope::make(current_scope_, node, &node->identifier);
+        Scope& class_scope = Scope::make(current_scope_, node, node->identifier);
         SymbolCollector class_visitor(class_scope, operators_);
         for (auto& ctor : node->constructors) {
             class_visitor(ctor);

@@ -7,9 +7,7 @@
 #include "symbol_collect.hpp"
 
 class CodeGenEnvironment {
-    friend class CodeGen;
-
-private:
+public:
     struct FunctionDef {
         const Scope* scope;
         ASTNodeVariant node;
@@ -42,29 +40,35 @@ public:
         if (scope->is_extern_) {
             [&](this auto&& self, const Scope* current) -> void {
                 if (current->parent_) self(current->parent_);
-                if (current->scope_id_) {
-                    std::format_to(std::back_inserter(mangled), "{}::", *current->scope_id_);
+                if (!current->scope_id_.empty()) {
+                    std::format_to(std::back_inserter(mangled), "{}::", current->scope_id_);
                 }
             }(scope);
             mangled += identifier;
         } else {
             [&](this auto&& self, const Scope* current) -> void {
                 if (current->parent_) self(current->parent_);
-                if (current->scope_id_) {
-                    std::format_to(
-                        std::back_inserter(mangled),
-                        "_{}{}",
-                        current->scope_id_->length(),
-                        *current->scope_id_
-                    );
+                if (!current->scope_id_.empty()) {
+                    if (current->scope_id_[0] == '0') {
+                        mangled += "_";
+                        mangled += current->scope_id_;
+                    } else {
+                        std::format_to(
+                            std::back_inserter(mangled),
+                            "_{}{}",
+                            current->scope_id_.length(),
+                            current->scope_id_
+                        );
+                    }
                 }
             }(scope);
             std::format_to(std::back_inserter(mangled), "_{}{}", identifier.length(), identifier);
         }
     }
 
-private:
+public:
     GlobalMemory::Vector<FunctionDef> functions_;
+    GlobalMemory::Vector<std::pair<Scope*, std::span<const Object*>>> instantiations_;
     GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
 
 public:
@@ -90,6 +94,10 @@ public:
             .end_of_static_part = end_of_static_part,
             .instantiation_args = instantiation_args
         };
+    }
+
+    auto map_instantiation(const Scope* inst_scope, std::span<const Object*> args) -> void {
+        instantiations_.push_back({const_cast<Scope*>(inst_scope), args});
     }
 
     TableValue* find(const Scope* current_scope, const ASTNode* node) {
@@ -530,6 +538,7 @@ public:
         }
         auto [inst_scope, target] = specialization_resolution(family, args);
         Sema::Guard inner_guard(sema_, *inst_scope);
+        sema_.codegen_env_.map_instantiation(inst_scope, args);
         sema_.deferred_analysis(*inst_scope, target);
         Term result = sema_.lookup_term(family.primary->identifier);
         if (result.is_type()) {
