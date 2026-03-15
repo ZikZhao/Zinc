@@ -285,6 +285,16 @@ constexpr auto nonnull(auto&& variant) -> bool {
     return !std::holds_alternative<std::monostate>(std::forward<decltype(variant)>(variant));
 }
 
+struct NodePtrVisitor {
+    auto operator()(ASTNodeVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
+    auto operator()(ASTExprVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
+    template <typename T>
+    auto operator()(const T* node) -> const ASTNode* {
+        return node;
+    }
+    auto operator()(std::monostate) -> const ASTNode* { return nullptr; }
+};
+
 template <typename T>
 concept ASTUnaryOpClass = requires(T node) {
     { T::opcode } -> std::convertible_to<OperatorCode>;

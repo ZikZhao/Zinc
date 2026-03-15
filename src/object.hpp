@@ -390,9 +390,9 @@ public:
     }
 };
 
-struct TermWithReceiver {
-    Term subject;
-    Term receiver;
+struct TermWithSelf {
+    Term result;
+    Term self;
 };
 
 class Object : public GlobalMemory::MonotonicAllocated {

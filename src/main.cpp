@@ -64,11 +64,12 @@ auto main(int argc, char* argv[]) -> int {
     auto [scope, operators] = get_root(sources, importer);
     SymbolCollector{scope, operators}(root);
 
-    Sema sema{scope, std::move(operators)};
+    CodeGenEnvironment codegen_env;
+    Sema sema{scope, codegen_env, std::move(operators)};
     TypeCheckVisitor{sema}(root);
 
     bool has_error = Diagnostic::print(sources);
     if (has_error) return EXIT_FAILURE;
 
-    return codegen(sources);
+    return codegen(sources, codegen_env);
 }

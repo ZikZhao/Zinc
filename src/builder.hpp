@@ -794,14 +794,6 @@ private:
                GlobalMemory::collect<std::span>();
     }
 
-    auto visitExplicit_instantiation_list(
-        ZincParser::Explicit_instantiation_listContext* ctx
-    ) noexcept -> Any<std::span<ASTExprVariant>> final {
-        return ctx->arguments_ |
-               std::views::transform([this](auto* arg) { return visit_expr(arg); }) |
-               GlobalMemory::collect<std::span>();
-    }
-
     auto visitInstantiation_argument(ZincParser::Instantiation_argumentContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return ctx->type_ ? visit_expr(ctx->type_) : visit_expr(ctx->value_);

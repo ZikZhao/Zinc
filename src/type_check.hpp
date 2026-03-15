@@ -6,8 +6,75 @@
 #include "object.hpp"
 #include "symbol_collect.hpp"
 
-namespace PrimitiveOperations {
+class CodeGenEnvironment {
+private:
+    using TableValue = std::variant<
+        const Type*,       // type expression
+        std::string_view,  // call (move self to first argument and put this as
+                           // function name)
+        std::pair<std::size_t, std::string_view>>;  // field access (range of and replacement of
+                                                    // fully qualified path)
 
+    using Table = GlobalMemory::FlatMap<const ASTNode*, TableValue>;
+
+public:
+    constexpr static std::string_view func_prefix = "__F_";
+    constexpr static std::string_view struct_prefix = "__S_";
+    constexpr static std::string_view closure_prefix = "__C_";
+
+private:
+    GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
+
+public:
+    auto mangle_qualified_path(std::string_view path) -> std::string_view {
+        GlobalMemory::String mangled;
+        std::size_t start = 0;
+        while (true) {
+            std::size_t dot_pos = path.find('.', start);
+            if (dot_pos == std::string_view::npos) {
+                mangled += path.substr(start);
+                break;
+            }
+            mangled += path.substr(start, dot_pos - start);
+            mangled += "__";
+            start = dot_pos + 1;
+        }
+        return GlobalMemory::format_view("{}", mangled);
+    }
+
+    auto replace_type_expr(const Scope* scope, const ASTNode* node, const Type* type) -> void {
+        scope_map_[scope][node] = type;
+    }
+
+    auto replace_caller(const Scope* scope, const ASTNode* node, std::string_view function_name)
+        -> void {
+        scope_map_[scope][node] = function_name;
+    }
+
+    auto replace_qualified_path(
+        const Scope* scope,
+        const ASTNode* node,
+        std::size_t end_of_static_part,
+        std::string_view replacement
+    ) -> void {
+        scope_map_[scope][node] = std::pair{end_of_static_part, replacement};
+    }
+
+    TableValue* find(const Scope* scope, const ASTNode* node) {
+        auto scope_it = scope_map_.find(scope);
+        if (scope_it == scope_map_.end()) {
+            return nullptr;
+        }
+        auto& table = scope_it->second;
+        auto node_it = table.find(node);
+        if (node_it == table.end()) {
+            return nullptr;
+        }
+        return &node_it->second;
+    }
+};
+
+namespace PrimitiveOperations {
 template <OperatorGroup G>
 auto apply_op(OperatorCode opcode, const auto& left, const auto& right) {
     if constexpr (G == OperatorGroup::Arithmetic) {
@@ -317,13 +384,14 @@ private:
 
 public:
     Scope* current_scope_;
+    CodeGenEnvironment& codegen_env_;
     std::unique_ptr<TemplateHandler> template_handler_;
     std::unique_ptr<OperationHandler> operation_handler_;
     std::unique_ptr<AccessHandler> access_handler_;
     std::unique_ptr<CallHandler> call_handler_;
 
 public:
-    Sema(Scope& root, OperatorRegistry&& operators_) noexcept;
+    Sema(Scope& root, CodeGenEnvironment& codegen_env, OperatorRegistry&& operators_) noexcept;
 
     auto deferred_analysis(Scope& scope, auto variant) noexcept -> void;
 
@@ -1056,10 +1124,10 @@ public:
         ASTExprVariant base,
         std::span<std::string_view> members,
         std::span<ASTExprVariant> instantiation_args
-    ) noexcept -> TermWithReceiver;
+    ) noexcept -> TermWithSelf;
 
 private:
-    auto eval_next_access(Symbol& base, Term& receiver, std::string_view member) noexcept -> bool {
+    auto eval_next_access(Symbol& base, Term& self, std::string_view member) noexcept -> bool {
         if (auto* term = std::get_if<Term>(&base)) {
             if (auto* type = term->get_type()) {
                 // class static scope access
@@ -1092,7 +1160,7 @@ private:
                     /// TODO: throw member not found error
                     throw;
                 }
-                receiver = *term;
+                self = *term;
                 base = sema_.is_mutable(*term) ? sema_.apply_mutable(result) : result;
             }
             return true;
@@ -1213,7 +1281,7 @@ public:
     void operator()(const ASTAccessChain* node) {
         Term result =
             sema_.access_handler_->eval_access(node->base, node->members, node->instantiation_args)
-                .subject;
+                .result;
         if (result.is_unknown() || !result.is_type()) {
             out_ = TypeRegistry::get_unknown();
         } else {
@@ -1462,7 +1530,7 @@ public:
           require_comptime_(require_comptime),
           template_pattern_mode_(template_pattern_mode) {}
 
-    auto operator()(const ASTExprVariant& variant) -> TermWithReceiver {
+    auto operator()(const ASTExprVariant& variant) -> TermWithSelf {
         if (std::visit(
                 [](auto node) -> bool {
                     return std::is_convertible_v<decltype(node), const ASTExplicitTypeExpr*>;
@@ -1471,88 +1539,87 @@ public:
             )) {
             TypeResolution out;
             TypeContextEvaluator{sema_, out}(variant);
-            return {.subject = Term::type(out), .receiver = {}};
+            return {.result = Term::type(out), .self = {}};
         }
         return std::visit(*this, variant);
     }
 
-    auto operator()(std::monostate) -> TermWithReceiver { UNREACHABLE(); }
+    auto operator()(std::monostate) -> TermWithSelf { UNREACHABLE(); }
 
-    auto operator()(const ASTExpression* node) -> TermWithReceiver { UNREACHABLE(); }
+    auto operator()(const ASTExpression* node) -> TermWithSelf { UNREACHABLE(); }
 
-    auto operator()(const ASTExplicitTypeExpr* node) -> TermWithReceiver { UNREACHABLE(); }
+    auto operator()(const ASTExplicitTypeExpr* node) -> TermWithSelf { UNREACHABLE(); }
 
-    auto operator()(const ASTParenExpr* node) -> TermWithReceiver { return (*this)(node->inner); }
+    auto operator()(const ASTParenExpr* node) -> TermWithSelf { return (*this)(node->inner); }
 
-    auto operator()(const ASTConstant* node) -> TermWithReceiver {
+    auto operator()(const ASTConstant* node) -> TermWithSelf {
         if (expected_) {
             try {
                 Value* typed_value = node->value->resolve_to(expected_);
-                return {.subject = Term::prvalue(typed_value), .receiver = {}};
+                return {.result = Term::prvalue(typed_value), .self = {}};
             } catch (UnlocatedProblem& e) {
                 e.report_at(node->location);
-                return {.subject = Term::unknown(), .receiver = {}};
+                return {.result = Term::unknown(), .self = {}};
             }
         } else {
-            return {.subject = Term::prvalue(node->value->resolve_to(nullptr)), .receiver = {}};
+            return {.result = Term::prvalue(node->value->resolve_to(nullptr)), .self = {}};
         }
     }
 
-    auto operator()(const ASTSelfExpr* node) -> TermWithReceiver {
+    auto operator()(const ASTSelfExpr* node) -> TermWithSelf {
         if (node->is_type) {
-            return {.subject = Term::type(sema_.get_self_type()), .receiver = {}};
+            return {.result = Term::type(sema_.get_self_type()), .self = {}};
         } else {
-            return {.subject = sema_.lookup_term("self"), .receiver = {}};
+            return {.result = sema_.lookup_term("self"), .self = {}};
         }
     }
 
-    auto operator()(const ASTIdentifier* node) -> TermWithReceiver {
+    auto operator()(const ASTIdentifier* node) -> TermWithSelf {
         try {
             Term term = sema_.lookup_term(node->str);
             if (require_comptime_ && !term.is_comptime()) {
                 Diagnostic::report(NotConstantExpressionError(node->location));
-                return {.subject = Term::unknown(), .receiver = {}};
+                return {.result = Term::unknown(), .self = {}};
             }
-            return {.subject = term, .receiver = {}};
+            return {.result = term, .self = {}};
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
-            return {.subject = Term::unknown(), .receiver = {}};
+            return {.result = Term::unknown(), .self = {}};
         }
     }
 
-    auto operator()(const ASTAccessChain* node) -> TermWithReceiver {
+    auto operator()(const ASTAccessChain* node) -> TermWithSelf {
         return sema_.access_handler_->eval_access(
             node->base, node->members, node->instantiation_args
         );
     }
 
     template <ASTUnaryOpClass Op>
-    auto operator()(const Op* node) -> TermWithReceiver {
-        Term expr_term = ValueContextEvaluator{*this, nullptr}(node->expr).subject;
+    auto operator()(const Op* node) -> TermWithSelf {
+        Term expr_term = ValueContextEvaluator{*this, nullptr}(node->expr).result;
         return {
-            .subject = sema_.operation_handler_->eval_value_op(Op::opcode, expr_term),
-            .receiver = {}
+            .result = sema_.operation_handler_->eval_value_op(Op::opcode, expr_term), .self = {}
         };
     }
 
     template <ASTBinaryOpClass Op>
-    auto operator()(const Op* node) -> TermWithReceiver {
-        Term left_term = ValueContextEvaluator{*this, nullptr}(node->left).subject;
-        Term right_term = ValueContextEvaluator{*this, nullptr}(node->right).subject;
+    auto operator()(const Op* node) -> TermWithSelf {
+        Term left_term = ValueContextEvaluator{*this, nullptr}(node->left).result;
+        Term right_term = ValueContextEvaluator{*this, nullptr}(node->right).result;
         try {
             return {
-                .subject =
+                .result =
                     sema_.operation_handler_->eval_value_op(Op::opcode, left_term, right_term),
-                .receiver = {}
+                .self = {}
             };
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
-            return {.subject = Term::unknown(), .receiver = {}};
+            return {.result = Term::unknown(), .self = {}};
         }
     }
 
     auto operator()(const ASTFieldInitialization* node) -> Term {
-        Term value_term = ValueContextEvaluator{*this, nullptr}(node->value).subject;
+        Term value_term = ValueContextEvaluator{*this, nullptr}(node->value).result;
         if (require_comptime_ && !value_term.is_comptime()) {
             Diagnostic::report(NotConstantExpressionError(node->location));
             return Term::unknown();
@@ -1560,13 +1627,13 @@ public:
         return value_term;
     }
 
-    auto operator()(const ASTStructInitialization* node) -> TermWithReceiver {
+    auto operator()(const ASTStructInitialization* node) -> TermWithSelf {
         GlobalMemory::FlatMap inits =
             node->field_inits |
             std::views::transform(
                 [&](const ASTFieldInitialization& init) -> std::pair<std::string_view, Term> {
                     return {
-                        init.identifier, ValueContextEvaluator{*this, nullptr}(init.value).subject
+                        init.identifier, ValueContextEvaluator{*this, nullptr}(init.value).result
                     };
                 }
             ) |
@@ -1589,38 +1656,38 @@ public:
                 /// TODO: throw not in constructor error
                 throw;
             }
-            return {.subject = StructType::construct(type, inits), .receiver = {}};
+            return {.result = StructType::construct(type, inits), .self = {}};
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
-            return {.subject = Term::unknown(), .receiver = {}};
+            return {.result = Term::unknown(), .self = {}};
         }
     }
 
-    auto operator()(const ASTFunctionCall* node) -> TermWithReceiver {
+    auto operator()(const ASTFunctionCall* node) -> TermWithSelf {
         bool any_error = false;
         GlobalMemory::Vector<Term> args_terms =
             node->arguments | std::views::transform([&](ASTExprVariant arg) {
-                Term arg_term = ValueContextEvaluator{*this, nullptr}(arg).subject;
+                Term arg_term = ValueContextEvaluator{*this, nullptr}(arg).result;
                 any_error |= arg_term.is_unknown();
                 return arg_term;
             }) |
             GlobalMemory::collect<GlobalMemory::Vector<Term>>();
-        auto [func, receiver] = ValueContextEvaluator{*this, nullptr}(node->function);
-        if (receiver) {
-            args_terms.insert(args_terms.begin(), receiver);
+        auto [func, self] = ValueContextEvaluator{*this, nullptr}(node->function);
+        if (self) {
+            args_terms.insert(args_terms.begin(), self);
         }
         if (any_error) {
-            return {.subject = Term::unknown(), .receiver = {}};
+            return {.result = Term::unknown(), .self = {}};
         }
         try {
-            return {.subject = sema_.call_handler_->eval_call(func, args_terms), .receiver = {}};
+            return {.result = sema_.call_handler_->eval_call(func, args_terms), .self = {}};
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
-            return {.subject = Term::unknown(), .receiver = {}};
+            return {.result = Term::unknown(), .self = {}};
         }
     }
 
-    auto operator()(const auto* node) -> TermWithReceiver { UNREACHABLE(); }
+    auto operator()(const auto* node) -> TermWithSelf { UNREACHABLE(); }
 };
 
 class TypeCheckVisitor {
@@ -1662,6 +1729,9 @@ public:
         if (nonnull(node->declared_type)) {
             TypeResolution declared_type;
             TypeContextEvaluator{sema_, declared_type}(node->declared_type);
+            sema_.codegen_env_.replace_type_expr(
+                sema_.current_scope_, NodePtrVisitor()(node->declared_type), declared_type
+            );
         } else if (!std::holds_alternative<std::monostate>(node->expr)) {
             ValueContextEvaluator{sema_, nullptr, false}(node->expr);
         }
@@ -1744,7 +1814,7 @@ public:
 
     void operator()(const ASTStaticAssertStatement* node) noexcept {
         Term result =
-            ValueContextEvaluator{sema_, &BooleanType::instance, true}(node->condition).subject;
+            ValueContextEvaluator{sema_, &BooleanType::instance, true}(node->condition).result;
         if (result.is_unknown() || !result.get_comptime()->cast<BooleanValue>()->value_) {
             // Diagnostic::report(StaticAssertFailedError(node->location, node->message));
             throw;
@@ -1754,8 +1824,11 @@ public:
 
 // ========== Implementation ==========
 
-inline Sema::Sema(Scope& root, OperatorRegistry&& operators) noexcept
+inline Sema::Sema(
+    Scope& root, CodeGenEnvironment& codegen_env, OperatorRegistry&& operators
+) noexcept
     : current_scope_(&root),
+      codegen_env_(codegen_env),
       template_handler_(std::make_unique<TemplateHandler>(*this)),
       operation_handler_(std::make_unique<OperationHandler>(*this, std::move(operators))),
       access_handler_(std::make_unique<AccessHandler>(*this)),
@@ -1781,7 +1854,7 @@ inline auto TemplateHandler::validate(
         if (param.is_nttp) {
             if (!std::holds_alternative<std::monostate>(param.constraint)) {
                 Term constraint_term =
-                    ValueContextEvaluator{sema_, nullptr, false}(param.constraint).subject;
+                    ValueContextEvaluator{sema_, nullptr, false}(param.constraint).result;
                 if (constraint_term.is_type()) {
                     // constraint is a type, check if the argument's type is assignable to it
                     if (!constraint_term.get_type()->assignable_from(
@@ -1916,7 +1989,7 @@ inline auto TemplateHandler::get_prototype(
     }
     for (size_t i = 0; i < specialization.patterns.size(); i++) {
         ValueContextEvaluator evaluator{sema_, nullptr, false, true};
-        it->second.patterns[i] = evaluator(specialization.patterns[i]).subject.get();
+        it->second.patterns[i] = evaluator(specialization.patterns[i]).result.get();
     }
     pattern_scope.clear();
     for (const auto& param : specialization.parameters) {
@@ -1930,7 +2003,7 @@ inline auto TemplateHandler::get_prototype(
     }
     for (size_t i = 0; i < specialization.patterns.size(); i++) {
         ValueContextEvaluator evaluator{sema_, nullptr, false, true};
-        it->second.skolems[i] = evaluator(specialization.patterns[i]).subject.get();
+        it->second.skolems[i] = evaluator(specialization.patterns[i]).result.get();
     }
     pattern_scope.clear();
     return it->second;
@@ -1940,9 +2013,9 @@ inline auto AccessHandler::eval_access(
     ASTExprVariant base,
     std::span<std::string_view> members,
     std::span<ASTExprVariant> instantiation_args
-) noexcept -> TermWithReceiver {
+) noexcept -> TermWithSelf {
     Symbol base_symbol;
-    Term receiver;
+    Term self;
     if (auto* identifier_node = std::get_if<const ASTIdentifier*>(&base)) {
         auto [scope, value] = sema_.lookup((*identifier_node)->str);
         if (!scope) {
@@ -1958,11 +2031,11 @@ inline auto AccessHandler::eval_access(
             base_symbol = sema_.lookup_term((*identifier_node)->str);
         }
     } else {
-        base_symbol = ValueContextEvaluator{sema_, nullptr, false}(base).subject;
+        base_symbol = ValueContextEvaluator{sema_, nullptr, false}(base).result;
     }
     for (std::string_view member : members) {
-        if (!eval_next_access(base_symbol, receiver, member)) {
-            return {.subject = Term::unknown(), .receiver = {}};
+        if (!eval_next_access(base_symbol, self, member)) {
+            return {.result = Term::unknown(), .self = {}};
         }
     }
     if (std::holds_alternative<Scope*>(base_symbol)) {
@@ -1974,20 +2047,20 @@ inline auto AccessHandler::eval_access(
         }
         GlobalMemory::Vector arg_terms =
             instantiation_args | std::views::transform([&](ASTExprVariant arg) {
-                return ValueContextEvaluator{sema_, nullptr, false}(arg).subject;
+                return ValueContextEvaluator{sema_, nullptr, false}(arg).result;
             }) |
             GlobalMemory::collect<GlobalMemory::Vector>();
         return {
-            .subject = sema_.template_handler_->instantiate(
+            .result = sema_.template_handler_->instantiate(
                 *std::get<TemplateFamily*>(base_symbol), arg_terms
             ),
-            .receiver = {}
+            .self = {}
         };
     } else {
         if (std::holds_alternative<TemplateFamily*>(base_symbol)) {
             throw;
         }
-        return {.subject = std::get<Term>(base_symbol), .receiver = receiver};
+        return {.result = std::get<Term>(base_symbol), .self = self};
     }
 }
 
@@ -2073,7 +2146,7 @@ inline auto Sema::eval_term(
             TypeResolution var_type;
             TypeContextEvaluator{*this, var_type}(var_init->type);
             if (nonnull(var_init->value)) {
-                Term init = ValueContextEvaluator{*this, var_type, false}(var_init->value).subject;
+                Term init = ValueContextEvaluator{*this, var_type, false}(var_init->value).result;
                 if (!var_type->assignable_from(init.effective_type())) {
                     throw;
                 }
@@ -2081,7 +2154,7 @@ inline auto Sema::eval_term(
             return Term::lvalue(var_type.get());
         } else {
             assert(nonnull(var_init->value));
-            Term init = ValueContextEvaluator{*this, nullptr, false}(var_init->value).subject;
+            Term init = ValueContextEvaluator{*this, nullptr, false}(var_init->value).result;
             return var_init->is_comptime ? Term::lvalue(init) : Term::lvalue(init.effective_type());
         }
     } else if (value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
@@ -2105,7 +2178,7 @@ inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
         TypeRegistry::get_at<ArrayType>(out_, element_type, nullptr);
         return;
     }
-    Term length_term = ValueContextEvaluator{sema_, nullptr, true}(node->length).subject;
+    Term length_term = ValueContextEvaluator{sema_, nullptr, true}(node->length).result;
     if (length_term.is_type()) {
         throw;
     } else if (!length_term->dyn_cast<IntegerValue>()) {

@@ -4,30 +4,6 @@
 #include "object.hpp"
 #include "type_check.hpp"
 
-static auto type_hash(const void* ptr) -> std::string_view {
-    thread_local std::array<char, sizeof(void*) * 2> buffer;
-    std::format_to_n(
-        buffer.begin(),
-        buffer.size(),
-        "t{:0{}X}",
-        std::bit_cast<std::uintptr_t>(ptr),
-        sizeof(void*) * 2
-    );
-    return {buffer.data(), buffer.size()};
-}
-
-static auto func_hash(const void* ptr) -> std::string_view {
-    thread_local std::array<char, sizeof(void*) * 2> buffer;
-    std::format_to_n(
-        buffer.begin(),
-        buffer.size(),
-        "f{:0{}X}",
-        std::bit_cast<std::uintptr_t>(ptr),
-        sizeof(void*) * 2
-    );
-    return {buffer.data(), buffer.size()};
-}
-
 struct VariantGetter {
     auto operator()(std::monostate) const noexcept -> const void* { UNREACHABLE(); }
     auto operator()(const void* ptr) const noexcept -> const void* { return ptr; }
@@ -109,13 +85,117 @@ public:
 };
 
 class TypeCodeGen final {
+public:
+    static void generate(
+        GlobalMemory::Vector<const Type*> generated_types, const Type* type, auto out_it
+    ) {
+        switch (type->kind_) {
+        case Kind::Unknown:
+            UNREACHABLE();
+        case Kind::Any:
+            std::format_to(out_it, "{}", "std::any");
+            break;
+        case Kind::Nullptr:
+            std::format_to(out_it, "{}", "std::nullptr_t");
+            break;
+        case Kind::Integer:
+            generate(generated_types, type->cast<IntegerType>(), out_it);
+            break;
+        case Kind::Float:
+            generate(generated_types, type->cast<FloatType>(), out_it);
+            break;
+        case Kind::Boolean:
+            std::format_to(out_it, "{}", "bool");
+            break;
+        case Kind::Function:
+            generate(generated_types, type->cast<FunctionType>(), out_it);
+            break;
+        case Kind::Array:
+            /// TODO:
+            break;
+        case Kind::Struct:
+        case Kind::Instance:
+            std::format_to(out_it, "t{}", index(generated_types, type));
+            break;
+        case Kind::Interface:
+            /// TODO:
+            break;
+        case Kind::Mutable:
+            /// TODO:
+            generate(generated_types, type->cast<MutableType>()->target_type_, out_it);
+            break;
+        case Kind::Reference:
+            generate(generated_types, type->cast<ReferenceType>()->referenced_type_, out_it);
+            std::format_to(out_it, "{}", "&");
+            break;
+        case Kind::Pointer:
+            generate(generated_types, type->cast<PointerType>()->pointed_type_, out_it);
+            std::format_to(out_it, "{}", "*");
+            break;
+        default:
+            /// TODO:
+            assert(false);
+        }
+    }
+
+    static void generate(
+        GlobalMemory::Vector<const Type*>& generated_types, const IntegerType* type, auto out_it
+    ) {
+        std::format_to(out_it, "std::{}int", type->is_signed_ ? "" : "u");
+        switch (type->bits_) {
+        case 8:
+            std::format_to(out_it, "{}", "8_t");
+            break;
+        case 16:
+            std::format_to(out_it, "{}", "16_t");
+            break;
+        case 32:
+            std::format_to(out_it, "{}", "32_t");
+            break;
+        case 64:
+            std::format_to(out_it, "{}", "64_t");
+            break;
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    static void generate(
+        GlobalMemory::Vector<const Type*>& generated_types, const FloatType* type, auto out_it
+    ) {
+        if (type->bits_ == 32) {
+            std::format_to(out_it, "{}", "float");
+        } else if (type->bits_ == 64) {
+            std::format_to(out_it, "{}", "double");
+        } else {
+            UNREACHABLE();
+        }
+    }
+
+    static void generate(
+        GlobalMemory::Vector<const Type*>& generated_types, const FunctionType* type, auto out_it
+    ) {
+        std::format_to(out_it, "{}", "std::function<");
+        generate(generated_types, type->return_type_, out_it);
+        std::format_to(out_it, "{}", "(");
+        const char* sep = "";
+        for (const Type* param_type : type->parameters_) {
+            std::format_to(out_it, "{}", sep);
+            generate(generated_types, param_type, out_it);
+            sep = ", ";
+        }
+        std::format_to(out_it, "{}", ")>");
+    }
+
 private:
     std::ofstream& stream_;
+    GlobalMemory::Vector<const Type*>& generated_types_;
     GlobalMemory::String forward_declarations_;
     GlobalMemory::String definitions_;
 
 public:
-    TypeCodeGen(std::ofstream& stream) : stream_(stream) {}
+    TypeCodeGen(std::ofstream& stream, GlobalMemory::Vector<const Type*>& generated_types)
+        : stream_(stream), generated_types_(generated_types) {}
 
     void operator()() {
         TypeSorter sorter;
@@ -126,13 +206,19 @@ public:
         for (const InstanceType* type : TypeRegistry::instance->instance_types_) {
             sorter.add(type);
         }
-        for (const Type* type : std::move(sorter).iterate()) {
+        generated_types_.reserve(
+            std::get<TypeRegistry::TypeSet<StructType>>(TypeRegistry::instance->types_).size() +
+            TypeRegistry::instance->instance_types_.size()
+        );
+        std::ranges::copy(std::move(sorter).iterate(), std::back_inserter(generated_types_));
+        std::ranges::sort(generated_types_);
+        for (const Type* type : generated_types_) {
             switch (type->kind_) {
             case Kind::Struct:
-                generate(type->cast<StructType>());
+                generate_struct(type->cast<StructType>());
                 break;
             case Kind::Instance:
-                generate(type->cast<InstanceType>());
+                generate_class(type->cast<InstanceType>());
                 break;
             default:
                 UNREACHABLE();
@@ -141,105 +227,13 @@ public:
         stream_ << forward_declarations_ << "\n" << definitions_;
     }
 
-    void generate(const Type* type) {
-        switch (type->kind_) {
-        case Kind::Unknown:
-            UNREACHABLE();
-        case Kind::Any:
-            definitions_ += "std::any";
-            break;
-        case Kind::Nullptr:
-            definitions_ += "std::nullptr_t";
-            break;
-        case Kind::Integer:
-            generate(type->cast<IntegerType>());
-            break;
-        case Kind::Float:
-            generate(type->cast<FloatType>());
-            break;
-        case Kind::Boolean:
-            definitions_ += "bool";
-            break;
-        case Kind::Function:
-            generate(type->cast<FunctionType>());
-            break;
-        case Kind::Array:
-            /// TODO:
-            break;
-        case Kind::Struct:
-        case Kind::Instance:
-            definitions_ += type_hash(type);
-            break;
-        case Kind::Interface:
-            /// TODO:
-            break;
-        case Kind::Mutable:
-            /// TODO:
-            generate(type->cast<MutableType>()->target_type_);
-            break;
-        case Kind::Reference:
-            generate(type->cast<ReferenceType>()->referenced_type_);
-            definitions_ += "&";
-            break;
-        case Kind::Pointer:
-            generate(type->cast<PointerType>()->pointed_type_);
-            definitions_ += "*";
-            break;
-        default:
-            /// TODO:
-            assert(false);
-        }
-    }
-
-    void generate(const IntegerType* type) {
-        definitions_ += type->is_signed_ ? "std::int" : "std::uint";
-        switch (type->bits_) {
-        case 8:
-            definitions_ += "8_t";
-            break;
-        case 16:
-            definitions_ += "16_t";
-            break;
-        case 32:
-            definitions_ += "32_t";
-            break;
-        case 64:
-            definitions_ += "64_t";
-            break;
-        default:
-            UNREACHABLE();
-        }
-    }
-
-    void generate(const FloatType* type) {
-        if (type->bits_ == 32) {
-            definitions_ += "float";
-        } else if (type->bits_ == 64) {
-            definitions_ += "double";
-        } else {
-            UNREACHABLE();
-        }
-    }
-
-    void generate(const FunctionType* type) {
-        definitions_ += "std::function<";
-        generate(type->return_type_);
-        definitions_ += "(";
-        const char* sep = "";
-        for (const Type* param_type : type->parameters_) {
-            definitions_ += sep;
-            generate(param_type);
-            sep = ", ";
-        }
-        definitions_ += ")>";
-    }
-
-    void generate(const StructType* type) {
-        std::format_to(std::back_inserter(forward_declarations_), "struct {};\n", type_hash(type));
-        std::format_to(std::back_inserter(definitions_), "struct {} {{\n", type_hash(type));
+    void generate_struct(const StructType* type) {
+        std::size_t type_index = index(generated_types_, type);
+        std::format_to(std::back_inserter(forward_declarations_), "struct t{};\n", type_index);
+        std::format_to(std::back_inserter(definitions_), "struct t{} {{\n", type_index);
         for (const auto& [field_name, field_type] : type->fields_) {
             definitions_ += "    ";
-            generate(field_type);
+            generate(generated_types_, field_type, std::back_inserter(definitions_));
             definitions_ += " ";
             definitions_ += field_name;
             definitions_ += ";\n";
@@ -247,12 +241,13 @@ public:
         definitions_ += "};\n";
     }
 
-    void generate(const InstanceType* type) {
-        std::format_to(std::back_inserter(forward_declarations_), "struct {};\n", type_hash(type));
-        std::format_to(std::back_inserter(definitions_), "struct {} {{\n", type_hash(type));
+    void generate_class(const InstanceType* type) {
+        std::size_t type_index = index(generated_types_, type);
+        std::format_to(std::back_inserter(forward_declarations_), "struct t{};\n", type_index);
+        std::format_to(std::back_inserter(definitions_), "struct t{} {{\n", type_index);
         for (const auto& [attr_name, attr_type] : type->attrs_) {
             definitions_ += "    ";
-            generate(attr_type);
+            generate(generated_types_, attr_type, std::back_inserter(definitions_));
             definitions_ += " ";
             definitions_ += attr_name;
             definitions_ += ";\n";
@@ -264,43 +259,28 @@ public:
 
 class CodeGen final {
 private:
-    using Environment = GlobalMemory::FlatMap<const ASTExpression*, std::string_view>;
-
-    class Guard {
-    private:
-        CodeGen& codegen_;
-        const Scope* prev_scope;
-        const Environment* prev_env;
-
-    public:
-        Guard(CodeGen& codegen, const Scope* scope) noexcept
-            : codegen_(codegen),
-              prev_scope(std::exchange(codegen.current_scope_, scope)),
-              prev_env(std::exchange(codegen.current_env_, &codegen.scope_envs_.at(scope))) {}
-        Guard(const Guard&) = delete;
-        Guard(Guard&&) = delete;
-        auto operator=(const Guard&) = delete;
-        auto operator=(Guard&&) = delete;
-        ~Guard() noexcept {
-            codegen_.current_scope_ = prev_scope;
-            codegen_.current_env_ = prev_env;
-        }
-    };
-
-private:
     std::ofstream& stream_;
-    const GlobalMemory::FlatMap<const Scope*, Environment>& scope_envs_;
+    CodeGenEnvironment env_;
     const Scope* current_scope_;
-    const Environment* current_env_;
+    GlobalMemory::Vector<const Type*> generated_types_;
 
 public:
     CodeGen(
-        std::ofstream& stream, decltype(scope_envs_) scope_envs, const Scope* current_scope
+        std::ofstream& stream,
+        CodeGenEnvironment& env,
+        const Scope* current_scope,
+        GlobalMemory::Vector<const Type*> generated_types
     ) noexcept
         : stream_(stream),
-          scope_envs_(scope_envs),
+          env_(env),
           current_scope_(current_scope),
-          current_env_(&scope_envs_.at(current_scope_)) {}
+          generated_types_(std::move(generated_types)) {}
+
+    CodeGen(const CodeGen& other, const Scope* current_scope) noexcept
+        : stream_(other.stream_),
+          env_(other.env_),
+          current_scope_(current_scope),
+          generated_types_(other.generated_types_) {}
 
     auto operator()(ASTNodeVariant variant) -> void { return std::visit(*this, variant); }
 
@@ -308,8 +288,12 @@ public:
         std::visit(
             [&]<typename T>(T node) -> void {
                 if constexpr (std::is_convertible_v<T, const ASTExpression*>) {
-                    if (auto it = current_env_->find(node); it != current_env_->end()) {
-                        stream_ << it->second;
+                    if (auto* value = env_.find(current_scope_, node)) {
+                        TypeCodeGen::generate(
+                            generated_types_,
+                            std::get<const Type*>(*value),
+                            std::ostreambuf_iterator<char>(stream_)
+                        );
                         return;
                     }
                 }
@@ -327,11 +311,13 @@ public:
         stream_ << "auto " << node->identifier << "(";
         const char* sep = "";
         for (const auto& param : node->parameters) {
-            stream_ << sep << param.identifier
-                    << type_hash(std::visit(VariantGetter{}, param.type));
+            stream_ << sep << param.identifier;
+            (*this)(param.type);
             sep = ", ";
         }
-        stream_ << ") -> " << type_hash(std::visit(VariantGetter{}, node->return_type)) << " {\n";
+        stream_ << ") -> ";
+        (*this)(node->return_type);
+        stream_ << " {\n";
         for (const ASTNodeVariant& child : node->body) {
             (*this)(child);
         }
@@ -403,8 +389,8 @@ public:
     }
 
     auto operator()(const ASTDeclaration* node) -> void {
-        stream_ << type_hash(std::visit(VariantGetter{}, node->declared_type)) << " "
-                << node->identifier << ";\n";
+        (*this)(node->declared_type);
+        stream_ << " " << node->identifier << ";\n";
     }
 
     auto operator()(const ASTIfStatement* node) -> void {
@@ -440,7 +426,7 @@ public:
     }
 };
 
-auto codegen(SourceManager& sources) -> int {
+auto codegen(SourceManager& sources, CodeGenEnvironment& codegen_env) -> int {
     GlobalMemory::String out_path = sources.files[0].path + ".cpp";
     std::ofstream out(out_path.c_str());
     if (!out) {
@@ -448,6 +434,8 @@ auto codegen(SourceManager& sources) -> int {
         return EXIT_FAILURE;
     }
     out << "#include <any>\n#include <cstdint>\n#include <functional>\n\n";
-    TypeCodeGen{out}();
+
+    GlobalMemory::Vector<const Type*> generated_types;
+    TypeCodeGen{out, generated_types}();
     return EXIT_SUCCESS;
 }

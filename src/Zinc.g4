@@ -110,10 +110,10 @@ expr:
 	| constant_ = constant		# ConstExpr
 	| identifier_ = identifier	# IdentifierExpr
 	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)+ (
-		instantiation_list_ = explicit_instantiation_list
-	)? # AccessChainExpr
-	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)* instantiation_list_ =
-		explicit_instantiation_list # AccessChainExprAlternate
+		instantiation_list_ = instantiation_list
+	)?																							# AccessChainExpr
+	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)* instantiation_list_ = instantiation_list	#
+		AccessChainExprAlternate
 	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN							# CallExpr
@@ -246,12 +246,7 @@ template_parameter:
 	)? # ComptimeTemplateParam;
 
 instantiation_list:
-	OP_LT arguments_ += instantiation_argument (
-		OP_COMMA arguments_ += instantiation_argument
-	)* OP_GT;
-
-explicit_instantiation_list:
-	OP_TURBO_FISH arguments_ += instantiation_argument (
+	(OP_LT | OP_TURBO_FISH) arguments_ += instantiation_argument (
 		OP_COMMA arguments_ += instantiation_argument
 	)* OP_GT;
 
