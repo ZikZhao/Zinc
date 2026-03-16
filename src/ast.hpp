@@ -480,9 +480,9 @@ struct ASTFunctionDefinition final : public ASTNode {
     std::span<ASTFunctionParameter> parameters;
     ASTExprVariant return_type;
     std::span<ASTNodeVariant> body;
-    bool is_const;
-    bool is_static;
-    bool is_decl_only;
+    bool declared_const;
+    bool declared_static;
+    bool declared_extern;
 };
 
 struct ASTConstructorDestructorDefinition final : public ASTNode {

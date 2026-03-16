@@ -11,17 +11,18 @@ public:
     struct FunctionDef {
         const Scope* scope;
         ASTNodeVariant node;
-        const FunctionType* func_obj;
+        const FunctionType* func_type;
     };
 
     struct FunctionCall {
-        std::string_view mangled_callee;
-        std::string_view self_arg;  // empty if no self argument
-        std::span<const Object*> args;
+        const FunctionType* func_type;
+        const Type* self_type;
+        bool is_constructor;
+        bool is_operator_overload;
     };
 
     struct AccessChain {
-        std::string_view mangled_path;
+        const Scope* scope;
         std::size_t end_of_static_part;
         std::span<const Object*> instantiation_args;
     };
@@ -85,14 +86,30 @@ public:
     auto map_access_chain(
         const Scope* current_scope,
         const ASTNode* node,
-        std::string_view mangled_path,
+        const Scope* scope,
         std::size_t end_of_static_part,
         std::span<const Object*> instantiation_args
     ) -> void {
         scope_map_[current_scope][node] = AccessChain{
-            .mangled_path = mangled_path,
+            .scope = scope,
             .end_of_static_part = end_of_static_part,
             .instantiation_args = instantiation_args
+        };
+    }
+
+    auto map_function_call(
+        const Scope* current_scope,
+        const ASTNode* node,
+        const FunctionType* func_type,
+        const Type* self_type,
+        bool is_constructor,
+        bool is_operator_overload
+    ) -> void {
+        scope_map_[current_scope][node] = FunctionCall{
+            .func_type = func_type,
+            .self_type = self_type,
+            .is_constructor = is_constructor,
+            .is_operator_overload = is_operator_overload
         };
     }
 
@@ -905,24 +922,40 @@ public:
 
     auto get_func_obj(Scope* scope, FunctionOverloadDef overload) noexcept -> FunctionObject;
 
-    auto eval_call(Term callee, std::span<Term> args) -> Term {
+    auto eval_call(const ASTFunctionCall& node, Term callee, Term self, std::span<Term> args)
+        -> Term {
         if (callee.is_unknown()) {
             return Term::unknown();
         }
         Term decayed_callee = Sema::decay(callee);
+        auto transform = [](Term arg) -> const Type* {
+            if (auto value = arg.get_comptime()) {
+                arg = Term::forward_like(arg, value->resolve_to(nullptr));
+            }
+            return Sema::apply_value_category(arg);
+        };
         GlobalMemory::Vector transformed_args =
-            args | std::views::transform([](Term arg) -> const Type* {
-                if (auto value = arg.get_comptime()) {
-                    arg = Term::forward_like(arg, value->resolve_to(nullptr));
-                }
-                return Sema::apply_value_category(arg);
-            }) |
-            GlobalMemory::collect<GlobalMemory::Vector>();
+            args | std::views::transform(transform) | GlobalMemory::collect<GlobalMemory::Vector>();
+        if (self) {
+            transformed_args.insert(transformed_args.begin(), transform(self));
+        }
         FunctionObject overload = resolve_overload(decayed_callee, transformed_args);
         if (!overload) {
             /// TODO: throw no matching overload error
             throw;
         }
+        // a.b.c(d) -> a.b.c(d)   // static, suffix + argument list
+        // a.b.c(d) -> decltype(a.b)::c(a.b, d)     // member function, suffix + argument list
+        // a.b.c(d) -> a.b.c.operator()(a.b.c, d)    // operator overload, replace operator () +
+        // argument list
+        sema_.codegen_env_.map_function_call(
+            sema_.current_scope_,
+            &node,
+            get_func_type(overload),
+            self ? self.effective_type() : nullptr,
+            decayed_callee.is_type(),
+            decayed_callee->kind_ == Kind::Instance
+        );
         if (auto func_value = overload->dyn_cast<FunctionValue>()) {
             return func_value->invoke(args);
         } else {
@@ -969,7 +1002,6 @@ private:
     ) -> void {}
 
     [[nodiscard]] auto resolve_overload(Term func, std::span<const Type*> args) -> FunctionObject {
-        GlobalMemory::Vector<FunctionObject> overloads = list_normal_overloads(func);
         FunctionObject best_candidate = nullptr;
         ConversionRank best_rank = ConversionRank::NoMatch;
         auto loop = [&](std::span<FunctionObject> candidates) -> std::size_t {
@@ -998,6 +1030,7 @@ private:
             return candidates.size();
         };
         // first, find the best non-template overload
+        GlobalMemory::Vector<FunctionObject> overloads = list_normal_overloads(func);
         std::size_t normal_count = loop(overloads);
         overloads.resize(normal_count);
         // second, if no exact match, try template overloads
@@ -1517,7 +1550,7 @@ private:
         -> GlobalMemory::FlatMap<std::string_view, FunctionOverloadSetValue*> {
         GlobalMemory::Vector non_static_functions =
             node->functions | std::views::filter([](const ASTFunctionDefinition* func_def) -> bool {
-                return !func_def->is_static;
+                return !func_def->declared_static;
             }) |
             GlobalMemory::collect<GlobalMemory::Vector>();
         std::ranges::sort(
@@ -1713,14 +1746,13 @@ public:
             }) |
             GlobalMemory::collect<GlobalMemory::Vector<Term>>();
         auto [func, self] = ValueContextEvaluator{*this, nullptr}(node->function);
-        if (self) {
-            args_terms.insert(args_terms.begin(), self);
-        }
         if (any_error) {
             return {.result = Term::unknown(), .self = {}};
         }
         try {
-            return {.result = sema_.call_handler_->eval_call(func, args_terms), .self = {}};
+            return {
+                .result = sema_.call_handler_->eval_call(*node, func, self, args_terms), .self = {}
+            };
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
             return {.result = Term::unknown(), .self = {}};
@@ -2124,14 +2156,8 @@ inline auto AccessHandler::eval_access(const ASTAccessChain& node) noexcept -> T
     if (!std::holds_alternative<Term>(base_symbol)) {
         throw;
     }
-    GlobalMemory::String mangled_path;
-    CodeGenEnvironment::mangle_path(mangled_path, base_scope, remaining.front());
     sema_.codegen_env_.map_access_chain(
-        sema_.current_scope_,
-        &node,
-        GlobalMemory::persist(mangled_path),
-        node.members.size() - remaining.size(),
-        arg_terms
+        sema_.current_scope_, &node, base_scope, node.members.size() - remaining.size(), arg_terms
     );
     return {.result = std::get<Term>(base_symbol), .self = self};
 }

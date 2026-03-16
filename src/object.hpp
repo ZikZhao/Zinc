@@ -464,7 +464,7 @@ public:
         return static_cast<ResultType>(&self);
     }
 
-    virtual std::string_view repr() const = 0;
+    virtual GlobalMemory::String repr() const = 0;
 
     auto pattern_match(
         const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
@@ -554,7 +554,7 @@ private:
     UnknownType() noexcept : PrimitiveType(kind) {}
 
 public:
-    std::string_view repr() const final { return "unknown"; }
+    GlobalMemory::String repr() const final { return "unknown"; }
     bool do_assignable_from(const Type* source) const noexcept final { return true; }
     Term default_construct() const noexcept final;
 };
@@ -568,7 +568,7 @@ public:
 
 public:
     AutoType(std::size_t index) noexcept : Type(kind), index_(index) {}
-    std::string_view repr() const final { UNREACHABLE(); }
+    GlobalMemory::String repr() const final { UNREACHABLE(); }
     bool can_intern(TypeDependencyGraph& graph) noexcept final { return true; }
     std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
@@ -596,7 +596,7 @@ public:
 
 public:
     VoidType() noexcept : PrimitiveType(kind) {}
-    std::string_view repr() const final { return "void"; }
+    GlobalMemory::String repr() const final { return "void"; }
     bool do_assignable_from(const Type* source) const noexcept final {
         return source->kind_ == Kind::Void;
     }
@@ -610,7 +610,7 @@ public:
 
 public:
     AnyType() noexcept : PrimitiveType(kind) {}
-    std::string_view repr() const final { return "any"; }
+    GlobalMemory::String repr() const final { return "any"; }
     bool do_assignable_from(const Type* source) const noexcept final { return true; }
     Term default_construct() const noexcept final;
 };
@@ -622,7 +622,7 @@ public:
 
 public:
     NullptrType() noexcept : PrimitiveType(kind) {}
-    std::string_view repr() const final { return "nullptr"; }
+    GlobalMemory::String repr() const final { return "nullptr"; }
     bool do_assignable_from(const Type* source) const noexcept final {
         /// No variable can have null type except null literal
         UNREACHABLE();
@@ -652,8 +652,8 @@ public:
         : PrimitiveType(kind), is_signed_(is_signed), bits_(bits) {
         assert(bits == 0 || bits == 8 || bits == 16 || bits == 32 || bits == 64);
     }
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("{}{}", is_signed_ ? "i" : "u", bits_);
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("{}{}", is_signed_ ? "i" : "u", bits_);
     }
     bool do_assignable_from(const Type* source) const noexcept final {
         const IntegerType* other_int = source->dyn_cast<IntegerType>();
@@ -677,7 +677,7 @@ public:
     FloatType(std::uint8_t bits) noexcept : PrimitiveType(kind), bits_(bits) {
         assert(bits == 0 || bits == 32 || bits == 64);
     }
-    std::string_view repr() const final { return GlobalMemory::format_view("f{}", bits_); }
+    GlobalMemory::String repr() const final { return GlobalMemory::format("f{}", bits_); }
     bool do_assignable_from(const Type* source) const noexcept final {
         const FloatType* other_float = source->dyn_cast<FloatType>();
         return other_float && (other_float->bits_ == 0 || this->bits_ >= other_float->bits_);
@@ -692,7 +692,7 @@ public:
 
 public:
     BooleanType() noexcept : PrimitiveType(kind) {}
-    std::string_view repr() const final { return "bool"; }
+    GlobalMemory::String repr() const final { return "bool"; }
     bool do_assignable_from(const Type* source) const noexcept final {
         return source->dyn_cast<BooleanType>() != nullptr;
     }
@@ -711,11 +711,11 @@ public:
     FunctionType(std::span<const Type*> parameters, const Type* return_type) noexcept
         : Type(kind), parameters_(parameters), return_type_(return_type) {}
 
-    std::string_view repr() const final {
+    GlobalMemory::String repr() const final {
         GlobalMemory::String params_repr =
             parameters_ | std::views::transform([](const Type* type) { return type->repr(); }) |
             std::views::join_with(", "sv) | GlobalMemory::collect<GlobalMemory::String>();
-        return GlobalMemory::format_view("({}) -> {}", params_repr, return_type_->repr());
+        return GlobalMemory::format("({}) -> {}", params_repr, return_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -781,8 +781,8 @@ public:
     ArrayType(const Type* element_type, const IntegerValue* size) noexcept
         : Type(kind), element_type_(element_type) {}
 
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("{}[]", element_type_->repr());
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("{}[]", element_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -823,7 +823,7 @@ public:
     StructType(GlobalMemory::FlatMap<std::string_view, const Type*> fields) noexcept
         : Type(kind), fields_(std::move(fields)) {}
 
-    std::string_view repr() const final {
+    GlobalMemory::String repr() const final {
         // TODO
         return {};
     }
@@ -906,7 +906,7 @@ private:
 public:
     InterfaceType() noexcept : Type(kind) {}
 
-    std::string_view repr() const override {
+    GlobalMemory::String repr() const override {
         /// TODO:
         return {};
     }
@@ -974,7 +974,7 @@ public:
           primary_template_(primary_template),
           template_args_(template_args) {}
 
-    std::string_view repr() const override { return GlobalMemory::format_view("{}", identifier_); }
+    GlobalMemory::String repr() const override { return GlobalMemory::format("{}", identifier_); }
 
     auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
 
@@ -1039,8 +1039,8 @@ public:
 public:
     MutableType(const Type* target_type) noexcept : Type(kind), target_type_(target_type) {}
 
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("mut {}", target_type_->repr());
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("mut {}", target_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -1081,10 +1081,8 @@ public:
 public:
     ReferenceType(const Type* referenced_type, bool is_moved) noexcept
         : Type(kind), referenced_type_(referenced_type), is_moved_(is_moved) {}
-    std::string_view repr() const final {
-        return GlobalMemory::format_view(
-            "{}&{}", is_moved_ ? "move " : "", referenced_type_->repr()
-        );
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("{}&{}", is_moved_ ? "move " : "", referenced_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -1130,8 +1128,8 @@ public:
 
 public:
     PointerType(const Type* pointed_type) noexcept : Type(kind), pointed_type_(pointed_type) {}
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("*{}", pointed_type_->repr());
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("*{}", pointed_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -1202,7 +1200,7 @@ public:
     IntersectionType(auto&&... unflattened_types) noexcept
         : Type(kind), types_{flatten(unflattened_types...)} {}
 
-    std::string_view repr() const final {
+    GlobalMemory::String repr() const final {
         /// TODO:
         return {};
     }
@@ -1305,7 +1303,7 @@ public:
     UnionType(auto&&... unflattened_types) noexcept
         : Type(kind), types_(flatten(unflattened_types...)) {}
 
-    std::string_view repr() const final {
+    GlobalMemory::String repr() const final {
         // TODO
         return {};
     }
@@ -1437,7 +1435,7 @@ public:
 
 private:
     UnknownValue() noexcept : Value(kind) {}
-    std::string_view repr() const final { return "unknown"; }
+    GlobalMemory::String repr() const final { return "unknown"; }
     UnknownType* get_type() const noexcept final { return &UnknownType::instance; }
     UnknownValue* clone() const noexcept final { return new UnknownValue(*this); }
     UnknownValue* resolve_to(const Type* target) const noexcept final { return new UnknownValue(); }
@@ -1459,7 +1457,7 @@ public:
 
 public:
     AutoValue(std::size_t index) noexcept : Value(kind), index_(index) {}
-    std::string_view repr() const final { UNREACHABLE(); }
+    GlobalMemory::String repr() const final { UNREACHABLE(); }
     AutoType* get_type() const noexcept final { UNREACHABLE(); }
     AutoValue* clone() const noexcept final { UNREACHABLE(); }
     AutoValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
@@ -1486,7 +1484,7 @@ public:
 
 public:
     NullptrValue() noexcept : Value(kind) {}
-    std::string_view repr() const final { return "null"; }
+    GlobalMemory::String repr() const final { return "null"; }
     const NullptrType* get_type() const noexcept final { return &NullptrType::instance; }
     NullptrValue* clone() const noexcept final { return new NullptrValue(*this); }
     NullptrValue* resolve_to(const Type* target) const final {
@@ -1521,8 +1519,8 @@ public:
         : Value(kind), type_(type), value_(std::move(value)) {
         assert(type && type != &IntegerType::untyped_instance);
     }
-    auto repr() const -> std::string_view final {
-        return GlobalMemory::format_view("{}", value_.to_string());
+    auto repr() const -> GlobalMemory::String final {
+        return GlobalMemory::format("{}", value_.to_string());
     }
     auto get_type() const noexcept -> const IntegerType* final { return type_; }
     auto clone() const noexcept -> IntegerValue* final { return new IntegerValue(*this); }
@@ -1629,7 +1627,7 @@ public:
         : Value(kind), type_(type), value_(value) {
         assert(type && type != &FloatType::untyped_instance);
     }
-    std::string_view repr() const final { return GlobalMemory::format_view("{}", value_); }
+    GlobalMemory::String repr() const final { return GlobalMemory::format("{}", value_); }
     const FloatType* get_type() const noexcept final { return type_; }
     FloatValue* clone() const noexcept final { return new FloatValue(*this); }
     auto resolve_to(const Type* target) const -> FloatValue* final {
@@ -1677,7 +1675,7 @@ public:
 
 public:
     BooleanValue(bool value) noexcept : Value(kind), value_(value) {}
-    std::string_view repr() const noexcept final { return this->value_ ? "true" : "false"; }
+    GlobalMemory::String repr() const noexcept final { return this->value_ ? "true" : "false"; }
     const BooleanType* get_type() const noexcept final { return &BooleanType::instance; }
     BooleanValue* clone() const noexcept final { return new BooleanValue(*this); }
     BooleanValue* resolve_to(const Type* target) const final {
@@ -1711,8 +1709,8 @@ public:
     FunctionValue(const FunctionType* type, decltype(callback_) invoke) noexcept
         : Value(kind), type_(type), callback_(std::move(invoke)) {}
 
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("<function at {:p}>", static_cast<const void*>(this));
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("<function at {:p}>", static_cast<const void*>(this));
     }
     const FunctionType* get_type() const noexcept final { return type_; }
     FunctionValue* clone() const noexcept final { UNREACHABLE(); }
@@ -1756,8 +1754,8 @@ public:
             std::destroy_at(&elements_);
         }
     };
-    std::string_view repr() const noexcept final {
-        return GlobalMemory::format_view("[{}]", type_->element_type_->repr());
+    GlobalMemory::String repr() const noexcept final {
+        return GlobalMemory::format("[{}]", type_->element_type_->repr());
     }
     const ArrayType* get_type() const noexcept final { return type_; }
     ArrayValue* clone() const noexcept final {
@@ -1799,8 +1797,8 @@ public:
 public:
     StructValue(const StructType* type, decltype(fields_) fields) noexcept
         : Value(kind), type_(type), fields_(std::move(fields)) {}
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("<struct {}>", type_->repr());
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("<struct {}>", type_->repr());
     }
     const StructType* get_type() const noexcept final { return type_; }
     StructValue* clone() const noexcept final {
@@ -1855,8 +1853,8 @@ public:
 public:
     InstanceValue(const InstanceType* type, decltype(attrs_) attributes) noexcept
         : Value(kind), type_(type), attrs_(std::move(attributes)) {}
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("<instance of {}>", type_->repr());
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("<instance of {}>", type_->repr());
     }
     const InstanceType* get_type() const noexcept final { return type_; }
     InstanceValue* clone() const noexcept final {
@@ -1913,8 +1911,8 @@ public:
 public:
     MutableValue(const MutableType* type, Value* value) noexcept
         : Value(kind), type_(type), value_(value) {}
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("mut {}", value_->repr());
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("mut {}", value_->repr());
     }
     const MutableType* get_type() const noexcept final { return type_; }
     MutableValue* clone() const noexcept final { return new MutableValue(*this); }
@@ -1950,8 +1948,8 @@ public:
 public:
     ReferenceValue(const ReferenceType* type, Value* referenced_value) noexcept
         : Value(kind), type_(type), referenced_value_(referenced_value) {}
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("&{}", referenced_value_->repr());
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("&{}", referenced_value_->repr());
     }
     const ReferenceType* get_type() const noexcept final { return type_; }
     ReferenceValue* clone() const noexcept final { return new ReferenceValue(*this); }
@@ -1989,8 +1987,8 @@ public:
     PointerValue(const PointerType* type, Value* pointed_value) noexcept
         : Value(kind), type_(type), pointed_value_(pointed_value) {}
 
-    std::string_view repr() const final {
-        return GlobalMemory::format_view("*{}", pointed_value_->repr());
+    GlobalMemory::String repr() const final {
+        return GlobalMemory::format("*{}", pointed_value_->repr());
     }
 
     const PointerType* get_type() const noexcept final { return type_; }
@@ -2032,7 +2030,7 @@ public:
 public:
     FunctionOverloadSetValue(Scope* scope, const OpaqueScopeValue* scope_value) noexcept
         : Value(kind), scope_(scope), scope_value_(scope_value) {}
-    std::string_view repr() const final { return "<function overload set>"; }
+    GlobalMemory::String repr() const final { return "<function overload set>"; }
     const Type* get_type() const noexcept final {
         /// TODO:
         return nullptr;

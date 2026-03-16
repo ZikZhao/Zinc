@@ -102,6 +102,14 @@ auto index(const auto& container, auto&& value) {
     return static_cast<std::size_t>(std::distance(container.begin(), it));
 }
 
+auto out_it(auto& container) {
+    if constexpr (requires { container.push_back; }) {
+        return std::back_inserter(container);
+    } else if (requires { container << ""; }) {
+        return std::ostreambuf_iterator(container);
+    }
+}
+
 template <typename... Ts>
     requires(std::is_pointer_v<Ts> && ...)
 class PointerVariant {

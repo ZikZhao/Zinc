@@ -50,7 +50,6 @@ public:
         }
     }
 
-    /// Only returns nominal types
     auto iterate() && noexcept -> std::generator<const Type*> {
         GlobalMemory::FlatMap<const Type*, std::size_t> in_degree;
         GlobalMemory::FlatSet<const Type*> candidates = std::move(types_);
@@ -83,52 +82,52 @@ public:
 
 class TypeCodeGen final {
 public:
-    static void output(const Type* type, TypeSeq types, GlobalMemory::String& out) {
+    static void output(GlobalMemory::String& out, const Type* type, TypeSeq types) {
         switch (type->kind_) {
         case Kind::Unknown:
             UNREACHABLE();
         case Kind::Void:
-            out += "void";
+            out += "void"sv;
             break;
         case Kind::Any:
-            out += "std::any";
+            out += "std::any"sv;
             break;
         case Kind::Nullptr:
-            out += "std::nullptr_t";
+            out += "std::nullptr_t"sv;
             break;
         case Kind::Integer:
-            output(type->cast<IntegerType>(), types, out);
+            output(out, type->cast<IntegerType>(), types);
             break;
         case Kind::Float:
-            output(type->cast<FloatType>(), types, out);
+            output(out, type->cast<FloatType>(), types);
             break;
         case Kind::Boolean:
-            out += "bool";
+            out += "bool"sv;
             break;
         case Kind::Function:
-            output(type->cast<FunctionType>(), types, out);
+            output(out, type->cast<FunctionType>(), types);
             break;
         case Kind::Array:
             /// TODO:
             break;
         case Kind::Struct:
         case Kind::Instance:
-            std::format_to(std::back_inserter(out), "t{}", index(types, type));
+            std::format_to(std::back_inserter(out), "t{}"sv, index(types, type));
             break;
         case Kind::Interface:
             /// TODO:
             break;
         case Kind::Mutable:
             /// TODO:
-            output(type->cast<MutableType>()->target_type_, types, out);
+            output(out, type->cast<MutableType>()->target_type_, types);
             break;
         case Kind::Reference:
-            output(type->cast<ReferenceType>()->referenced_type_, types, out);
-            out += "&";
+            output(out, type->cast<ReferenceType>()->referenced_type_, types);
+            out += "&"sv;
             break;
         case Kind::Pointer:
-            output(type->cast<PointerType>()->pointed_type_, types, out);
-            out += "*";
+            output(out, type->cast<PointerType>()->pointed_type_, types);
+            out += "*"sv;
             break;
         default:
             /// TODO:
@@ -136,47 +135,47 @@ public:
         }
     }
 
-    static void output(const IntegerType* type, TypeSeq types, GlobalMemory::String& out) {
-        std::format_to(std::back_inserter(out), "std::{}int", type->is_signed_ ? "" : "u");
+    static void output(GlobalMemory::String& out, const IntegerType* type, TypeSeq types) {
+        std::format_to(std::back_inserter(out), "std::{}int"sv, type->is_signed_ ? "" : "u");
         switch (type->bits_) {
         case 8:
-            out += "8_t";
+            out += "8_t"sv;
             break;
         case 16:
-            out += "16_t";
+            out += "16_t"sv;
             break;
         case 32:
-            out += "32_t";
+            out += "32_t"sv;
             break;
         case 64:
-            out += "64_t";
+            out += "64_t"sv;
             break;
         default:
             UNREACHABLE();
         }
     }
 
-    static void output(const FloatType* type, TypeSeq types, GlobalMemory::String& out) {
+    static void output(GlobalMemory::String& out, const FloatType* type, TypeSeq types) {
         if (type->bits_ == 32) {
-            out += "float";
+            out += "float"sv;
         } else if (type->bits_ == 64) {
-            out += "double";
+            out += "double"sv;
         } else {
             UNREACHABLE();
         }
     }
 
-    static void output(const FunctionType* type, TypeSeq types, GlobalMemory::String& out) {
-        out += "std::function<";
-        output(type->return_type_, types, out);
-        out += "(";
-        const char* sep = "";
+    static void output(GlobalMemory::String& out, const FunctionType* type, TypeSeq types) {
+        out += "std::function<"sv;
+        output(out, type->return_type_, types);
+        out += "("sv;
+        std::string_view sep = ""sv;
         for (const Type* param_type : type->parameters_) {
             out += sep;
-            output(param_type, types, out);
-            sep = ", ";
+            output(out, param_type, types);
+            sep = ", "sv;
         }
-        out += ")>";
+        out += ")>"sv;
     }
 
 private:
@@ -202,7 +201,8 @@ public:
             std::get<TypeRegistry::TypeSet<StructType>>(TypeRegistry::instance->types_).size() +
             TypeRegistry::instance->instance_types_.size()
         );
-        std::ranges::copy(std::move(sorter).iterate(), std::back_inserter(generated_types_));
+        auto it = std::back_inserter(generated_types_);
+        std::ranges::copy(std::move(sorter).iterate(), it);
         std::ranges::sort(generated_types_);
         for (const Type* type : generated_types_) {
             switch (type->kind_) {
@@ -216,63 +216,66 @@ public:
                 UNREACHABLE();
             }
         }
-        stream_ << forward_declarations_ << "\n" << definitions_;
+        stream_.write(
+            forward_declarations_.data(), static_cast<std::streamsize>(forward_declarations_.size())
+        );
+        stream_ << "\n"sv;
+        stream_.write(definitions_.data(), static_cast<std::streamsize>(definitions_.size()));
     }
 
     void generate_struct(const StructType* type) {
         std::size_t type_index = index(generated_types_, type);
-        std::format_to(std::back_inserter(forward_declarations_), "struct t{};\n", type_index);
-        std::format_to(std::back_inserter(definitions_), "struct t{} {{\n", type_index);
+        auto it_fwd = std::back_inserter(forward_declarations_);
+        auto it_def = std::back_inserter(definitions_);
+        std::format_to(it_fwd, "struct t{};\n"sv, type_index);
+        std::format_to(it_def, "struct t{} {{\n"sv, type_index);
         for (const auto& [field_name, field_type] : type->fields_) {
-            definitions_ += "    ";
-            output(field_type, generated_types_, definitions_);
-            definitions_ += " ";
+            definitions_ += "    "sv;
+            output(definitions_, field_type, generated_types_);
+            definitions_ += " "sv;
             definitions_ += field_name;
-            definitions_ += ";\n";
+            definitions_ += ";\n"sv;
         }
-        definitions_ += "};\n";
+        definitions_ += "};\n"sv;
     }
 
     void generate_class(const InstanceType* type) {
         std::size_t type_index = index(generated_types_, type);
-        std::format_to(std::back_inserter(forward_declarations_), "struct t{};\n", type_index);
-        std::format_to(std::back_inserter(definitions_), "struct t{} {{\n", type_index);
+        auto it_fwd = std::back_inserter(forward_declarations_);
+        auto it_def = std::back_inserter(definitions_);
+        std::format_to(it_fwd, "struct t{};\n"sv, type_index);
+        std::format_to(it_def, "struct t{} {{\n"sv, type_index);
         for (const auto& [attr_name, attr_type] : type->attrs_) {
-            definitions_ += "    ";
-            output(attr_type, generated_types_, definitions_);
-            definitions_ += " ";
+            definitions_ += "    "sv;
+            output(definitions_, attr_type, generated_types_);
+            definitions_ += " "sv;
             definitions_ += attr_name;
-            definitions_ += ";\n";
+            definitions_ += ";\n"sv;
         }
         /// TODO: methods with instantiations
-        definitions_ += "};\n";
+        definitions_ += "};\n"sv;
     }
 };
 
 class ValueCodeGen final {
 public:
-    void operator()(const Value* value, TypeSeq types, GlobalMemory::String& out) {
+    void operator()(GlobalMemory::String& out, const Value* value, TypeSeq types) {
         switch (value->kind_) {
         case Kind::Any:
-            std::format_to(std::back_inserter(out), "{}", "std::any{}");
+            out += "std::any{}"sv;
             break;
         case Kind::Nullptr:
-            std::format_to(std::back_inserter(out), "{}", "nullptr");
+            out += "nullptr"sv;
             break;
         case Kind::Integer: {
-            GlobalMemory::String int_repr = value->cast<IntegerValue>()->value_.to_string();
-            std::format_to(std::back_inserter(out), "{}", int_repr);
+            out += value->cast<IntegerValue>()->value_.to_string();
             break;
         }
         case Kind::Float:
-            std::format_to(std::back_inserter(out), "{:a}", value->cast<FloatValue>()->value_);
+            std::format_to(std::back_inserter(out), "{:a}"sv, value->cast<FloatValue>()->value_);
             break;
         case Kind::Boolean:
-            std::format_to(
-                std::back_inserter(out),
-                "{}",
-                value->cast<BooleanValue>()->value_ ? "true" : "false"
-            );
+            out += value->cast<BooleanValue>()->value_ ? "true"sv : "false"sv;
             break;
         case Kind::Array:
             throw;
@@ -282,28 +285,28 @@ public:
             break;
         case Kind::Struct: {
             std::format_to(
-                std::back_inserter(out), "{}{{", index(types, value->cast<StructValue>()->type_)
+                std::back_inserter(out), "{}{{"sv, index(types, value->cast<StructValue>()->type_)
             );
-            const char* sep = "";
+            std::string_view sep = ""sv;
             for (const auto& [field_name, field_value] : value->cast<StructValue>()->fields_) {
-                std::format_to(std::back_inserter(out), "{}.{} = ", sep, field_name);
-                (*this)(field_value, types, out);
-                sep = ", ";
+                std::format_to(std::back_inserter(out), "{}.{} = "sv, sep, field_name);
+                (*this)(out, field_value, types);
+                sep = ", "sv;
             }
-            out += "}";
+            out += "}"sv;
             break;
         }
         case Kind::Instance: {
             std::format_to(
-                std::back_inserter(out), "{}{{", index(types, value->cast<InstanceValue>()->type_)
+                std::back_inserter(out), "{}{{"sv, index(types, value->cast<InstanceValue>()->type_)
             );
-            const char* sep = "";
+            std::string_view sep = ""sv;
             for (const auto& [field_name, field_value] : value->cast<InstanceValue>()->attrs_) {
-                std::format_to(std::back_inserter(out), "{}.{} = ", sep, field_name);
-                (*this)(field_value, types, out);
-                sep = ", ";
+                std::format_to(std::back_inserter(out), "{}.{} = "sv, sep, field_name);
+                (*this)(out, field_value, types);
+                sep = ", "sv;
             }
-            out += "}";
+            out += "}"sv;
             break;
         }
         default:
@@ -325,16 +328,16 @@ public:
             for (const Object* arg : args) {
                 std::size_t prev_size = mangled_part.size();
                 if (auto* type = arg->dyn_type()) {
-                    (*this)(type, mangled_part);
+                    (*this)(mangled_part, type);
                 } else {
-                    (*this)(arg->cast<Value>(), mangled_part);
+                    (*this)(mangled_part, arg->cast<Value>());
                 }
                 std::format_to(
                     std::inserter(
                         mangled_part,
                         std::next(mangled_part.begin(), static_cast<std::ptrdiff_t>(prev_size))
                     ),
-                    "{}",
+                    "{}"sv,
                     mangled_part.size() - prev_size
                 );
             }
@@ -342,12 +345,12 @@ public:
         }
     }
 
-    auto operator()(const Scope* scope, GlobalMemory::String& mangled) const -> void {
+    auto operator()(GlobalMemory::String& out, const Scope* scope) const -> void {
         if (scope->is_extern_) {
             [&](this auto&& self, const Scope* current) -> void {
                 if (current->parent_) self(current->parent_);
                 if (!current->scope_id_.empty()) {
-                    std::format_to(std::back_inserter(mangled), "{}::", current->scope_id_);
+                    std::format_to(std::back_inserter(out), "{}::"sv, current->scope_id_);
                 }
             }(scope);
         } else {
@@ -355,8 +358,8 @@ public:
                 if (current->parent_) self(current->parent_);
                 if (!current->scope_id_.empty()) {
                     std::format_to(
-                        std::back_inserter(mangled),
-                        "_{}{}",
+                        std::back_inserter(out),
+                        "_{}{}"sv,
                         current->scope_id_.length(),
                         current->scope_id_
                     );
@@ -365,40 +368,40 @@ public:
         }
     }
 
-    auto operator()(const Type* type, GlobalMemory::String& mangled) const -> void {
+    auto operator()(GlobalMemory::String& out, const Type* type) const -> void {
         switch (type->kind_) {
         case Kind::Unknown:
             UNREACHABLE();
         case Kind::Void:
-            mangled += "v";
+            out += "v"sv;
             break;
         case Kind::Any:
-            mangled += "a";
+            out += "a"sv;
             break;
         case Kind::Nullptr:
-            mangled += "n";
+            out += "n"sv;
             break;
         case Kind::Integer: {
             const IntegerType* int_type = type->cast<IntegerType>();
             std::format_to(
-                std::back_inserter(mangled),
-                "{}{}",
-                int_type->is_signed_ ? "i" : "u",
+                std::back_inserter(out),
+                "{}{}"sv,
+                int_type->is_signed_ ? "i"sv : "u"sv,
                 int_type->bits_
             );
             break;
         }
         case Kind::Float: {
             const FloatType* float_type = type->cast<FloatType>();
-            std::format_to(std::back_inserter(mangled), "f{}", float_type->bits_);
+            std::format_to(std::back_inserter(out), "f{}"sv, float_type->bits_);
             break;
         }
         case Kind::Boolean:
-            mangled += "b";
+            out += "b"sv;
             break;
         case Kind::Array:
-            mangled += "A";
-            (*this)(type->cast<ArrayType>()->element_type_, mangled);
+            out += "A"sv;
+            (*this)(out, type->cast<ArrayType>()->element_type_);
             break;
         case Kind::Function:
         case Kind::Interface:
@@ -410,7 +413,7 @@ public:
             break;
         case Kind::Struct:
         case Kind::Instance: {
-            std::format_to(std::back_inserter(mangled), "t{}", index(types_, type));
+            std::format_to(std::back_inserter(out), "t{}"sv, index(types_, type));
             break;
         }
         default:
@@ -418,9 +421,7 @@ public:
         }
     }
 
-    auto operator()(const Value* value, GlobalMemory::String& mangled) const -> void {
-        assert(false);
-    }
+    auto operator()(auto out, const Value* value) const -> void { assert(false); }
 };
 
 class CodeGen final {
@@ -446,10 +447,11 @@ private:
 
 private:
     std::ofstream& stream_;
+    GlobalMemory::String forward_declarations_;
+    GlobalMemory::String definitions_;
     CodeGenEnvironment env_;
     NameMangler mangler_;
     std::span<const Type*> types_;
-    GlobalMemory::String buffer_;
     const Scope* current_scope_;
     std::size_t indent_level_;
 
@@ -460,9 +462,7 @@ public:
         NameMangler& mangler,
         std::span<const Type*> types
     ) noexcept
-        : stream_(stream), env_(env), mangler_(mangler), types_(types) {
-        buffer_.reserve(8192);
-    }
+        : stream_(stream), env_(env), mangler_(mangler), types_(types) {}
 
     auto operator()() -> void {
         GlobalMemory::String mangled_path;
@@ -478,34 +478,23 @@ public:
             } else if (
                 auto* ctor_def = std::get_if<const ASTConstructorDestructorDefinition*>(&node)
             ) {
-                CodeGenEnvironment::mangle_path(mangled_path, scope, "init");
-                (*this)(*ctor_def, mangled_path, func_obj);
+                (*this)(*ctor_def, func_obj);
             } else {
                 UNREACHABLE();
             }
             mangled_path.clear();
             newline();
-            stream_ << buffer_;
-            buffer_.clear();
         }
+        stream_.write(
+            forward_declarations_.data(), static_cast<std::streamsize>(forward_declarations_.size())
+        );
+        stream_ << "\n"sv;
+        stream_.write(definitions_.data(), static_cast<std::streamsize>(definitions_.size()));
     }
 
     auto operator()(ASTNodeVariant variant) -> void { return std::visit(*this, variant); }
 
-    auto operator()(ASTExprVariant variant) -> void {
-        std::visit(
-            [&]<typename T>(T node) -> void {
-                if constexpr (std::is_convertible_v<T, const ASTExpression*>) {
-                    if (auto* value = env_.find(current_scope_, node)) {
-                        TypeCodeGen::output(std::get<const Type*>(*value), types_, buffer_);
-                        return;
-                    }
-                }
-                return std::visit(*this, variant);
-            },
-            variant
-        );
-    }
+    auto operator()(ASTExprVariant variant) -> void { return std::visit(*this, variant); }
 
     auto operator()(std::monostate) -> void { UNREACHABLE(); }
 
@@ -516,56 +505,72 @@ public:
         std::string_view mangled_path,
         const FunctionType* func_obj
     ) -> void {
-        buffer_.append("auto ").append(mangled_path).append("(");
-        const char* sep = "";
-        for (std::size_t i = 0; i < node->parameters.size(); i++) {
-            buffer_ += sep;
-            const ASTFunctionParameter& param = node->parameters[i];
-            TypeCodeGen::output(func_obj->parameters_[i], types_, buffer_);
-            buffer_.append(" ").append(param.identifier);
-            sep = ", ";
-        }
-        buffer_ += ") -> ";
-        if (mangled_path == "main") {
-            buffer_ += "int";
-        } else {
-            TypeCodeGen::output(func_obj->return_type_, types_, buffer_);
-        }
-        buffer_ += " {";
+        auto gen = [&](GlobalMemory::String& out) {
+            std::format_to(std::back_inserter(out), "auto {}("sv, mangled_path);
+            std::string_view sep = ""sv;
+            for (std::size_t i = 0; i < node->parameters.size(); i++) {
+                out += sep;
+                const ASTFunctionParameter& param = node->parameters[i];
+                TypeCodeGen::output(out, func_obj->parameters_[i], types_);
+                out += " "sv;
+                out += param.identifier;
+                sep = ", "sv;
+            }
+            out += ") -> "sv;
+            if (mangled_path == "main"sv) {
+                out += "int"sv;
+            } else {
+                TypeCodeGen::output(out, func_obj->return_type_, types_);
+            }
+        };
+        gen(forward_declarations_);
+        forward_declarations_ += ";\n"sv;
+        gen(definitions_);
+        definitions_ += " {"sv;
         indent_level_++;
         for (const ASTNodeVariant& child : node->body) {
             newline();
             (*this)(child);
         }
         indent_level_--;
-        buffer_ += "}";
+        definitions_ += "}"sv;
         newline();
     }
 
-    auto operator()(
-        const ASTConstructorDestructorDefinition* node,
-        std::string_view mangled_path,
-        const FunctionType* func_obj
-    ) -> void {
-        buffer_.append("auto ").append(mangled_path).append("(");
-        const char* sep = "";
-        for (std::size_t i = 0; i < node->parameters.size(); i++) {
-            buffer_ += sep;
-            const ASTFunctionParameter& param = node->parameters[i];
-            output_type(func_obj->parameters_[i]);
-            buffer_.append(" ").append(param.identifier);
-            sep = ", ";
-        }
-        buffer_ += ") -> ";
-        output_type(func_obj->return_type_);
-        buffer_ += " {";
+    auto operator()(const ASTConstructorDestructorDefinition* node, const FunctionType* func_type)
+        -> void {
+        auto gen = [&](GlobalMemory::String& out) {
+            std::format_to(
+                std::back_inserter(out),
+                "auto _init_t{}_0"sv,
+                index(types_, func_type->return_type_)
+            );
+            for (const Type* param_type : func_type->parameters_) {
+                mangler_(out, param_type);
+            }
+            std::string_view sep = "("sv;
+            for (std::size_t i = 0; i < node->parameters.size(); i++) {
+                out += sep;
+                const ASTFunctionParameter& param = node->parameters[i];
+                TypeCodeGen::output(out, func_type->parameters_[i], types_);
+                out += " "sv;
+                out += param.identifier;
+                sep = ", "sv;
+            }
+            out += ") -> "sv;
+            TypeCodeGen::output(out, func_type->return_type_, types_);
+        };
+        gen(forward_declarations_);
+        forward_declarations_ += ";\n"sv;
+        gen(definitions_);
+        definitions_ += " {"sv;
         indent_level_++;
         for (const ASTNodeVariant& child : node->body) {
             newline();
             (*this)(child);
         }
         indent_level_--;
-        buffer_ += "}";
+        definitions_ += "}"sv;
         newline();
     }
 
@@ -577,114 +582,126 @@ public:
     }
 
     auto operator()(const ASTParenExpr* node) -> void {
-        buffer_ += "(";
+        definitions_ += "("sv;
         (*this)(node->inner);
-        buffer_ += ")";
+        definitions_ += ")"sv;
     }
 
-    auto operator()(const ASTConstant* node) -> void {
-        /// TODO:
-        // buffer_ << node->value;
-    }
+    auto operator()(const ASTConstant* node) -> void { definitions_ += node->value->repr(); }
 
     auto operator()(const ASTSelfExpr* node) -> void {
-        buffer_ += (node->is_type ? "decltype(*this)" : "(*this)");
+        definitions_ += (node->is_type ? "decltype(*this)" : "(*this)");
     }
 
-    auto operator()(const ASTIdentifier* node) -> void { buffer_ += node->str; }
+    auto operator()(const ASTIdentifier* node) -> void { definitions_ += node->str; }
 
     template <ASTUnaryOpClass Op>
     auto operator()(const Op* node) -> void {
         /// TODO: postfix unary ops
-        buffer_ += GetOperatorString(Op::opcode);
+        definitions_ += GetOperatorString(Op::opcode);
         (*this)(node->expr);
     }
 
     template <ASTBinaryOpClass Op>
     auto operator()(const Op* node) -> void {
         (*this)(node->left);
-        buffer_.append(" ").append(GetOperatorString(Op::opcode)).append(" ");
+        definitions_ += " "sv;
+        definitions_ += GetOperatorString(Op::opcode);
+        definitions_ += " "sv;
         (*this)(node->right);
     }
 
     auto operator()(const ASTStructInitialization* node) -> void {
-        buffer_ += "{\n";
+        definitions_ += "{"sv;
+        newline();
         for (const ASTFieldInitialization& field_init : node->field_inits) {
-            buffer_.append(".").append(field_init.identifier).append(" = ");
+            std::format_to(std::back_inserter(definitions_), ".{} = "sv, field_init.identifier);
             (*this)(field_init.value);
-            buffer_ += ",";
+            definitions_ += ","sv;
             newline();
         }
-        buffer_ += "}";
+        definitions_ += "}"sv;
     }
 
     auto operator()(const ASTFunctionCall* node) -> void {
-        (*this)(node->function);
-        buffer_ += "(";
+        const auto& [func_type, self_type, is_constructor, is_operator_overload] =
+            std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
+        if (is_constructor) {
+            definitions_ += "_init_"sv;
+            mangler_(definitions_, func_type->return_type_);
+        } else {
+            (*this)(node->function);
+        }
+        definitions_ += "_0"sv;
+        if (self_type) {
+            mangler_(definitions_, self_type);
+        }
+        for (auto* param_type : func_type->parameters_) {
+            mangler_(definitions_, param_type);
+        }
+        definitions_ += "("sv;
         const char* sep = "";
-        for (const ASTExprVariant& arg : node->arguments) {
-            buffer_ += sep;
+        for (ASTExprVariant arg : node->arguments) {
+            definitions_ += sep;
             (*this)(arg);
             sep = ", ";
         }
-        buffer_ += ")";
+        definitions_ += ")"sv;
     }
 
     auto operator()(const ASTExpressionStatement* node) -> void {
         (*this)(node->expr);
-        buffer_ += ";";
+        definitions_ += ";"sv;
     }
 
     auto operator()(const ASTDeclaration* node) -> void {
-        output_type(std::get<const Type*>(*env_.find(current_scope_, node)));
-        buffer_.append(" ").append(node->identifier);
+        const Type* type = std::get<const Type*>(*env_.find(current_scope_, node));
+        TypeCodeGen::output(definitions_, type, types_);
+        std::format_to(std::back_inserter(definitions_), " {}", node->identifier);
         if (nonnull(node->expr)) {
-            buffer_ += " = ";
+            definitions_ += " = "sv;
             (*this)(node->expr);
         }
-        buffer_ += ";";
+        definitions_ += ";"sv;
     }
 
     auto operator()(const ASTIfStatement* node) -> void {
-        buffer_ += "if (";
+        definitions_ += "if ("sv;
         (*this)(node->condition);
-        buffer_ += ") ";
+        definitions_ += ") "sv;
         (*this)(node->if_block);
         if (node->else_block) {
-            buffer_ += " else ";
+            definitions_ += " else "sv;
             (*this)(node->else_block);
-            ;
         }
     }
 
     auto operator()(const ASTForStatement* node) -> void {
-        buffer_ += "for (";
+        definitions_ += "for ("sv;
         if (node->initializer_decl) {
             (*this)(node->initializer_decl);
         } else if (nonnull(node->initializer_expr)) {
             (*this)(node->initializer_expr);
         }
-        buffer_ += "; ";
+        definitions_ += "; "sv;
         if (nonnull(node->condition)) {
             (*this)(node->condition);
         }
-        buffer_ += "; ";
+        definitions_ += "; "sv;
         if (nonnull(node->increment)) {
             (*this)(node->increment);
         }
-        buffer_ += ") ";
+        definitions_ += ") "sv;
         (*this)(node->body);
     }
 
 private:
     auto newline() -> void {
-        buffer_ += "\n";
+        definitions_ += "\n"sv;
         for (std::size_t i = 0; i < indent_level_; i++) {
-            buffer_ += "    ";
+            definitions_ += "    "sv;
         }
     }
-
-    auto output_type(const Type* type) -> void { TypeCodeGen::output(type, types_, buffer_); }
 };
 
 auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env) -> int {
