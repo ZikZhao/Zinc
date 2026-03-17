@@ -258,13 +258,15 @@ private:
     auto visitOperator_overload_definition(
         ZincParser::Operator_overload_definitionContext* ctx
     ) noexcept -> Any<ASTNodeVariant> final {
+        /// TODO: throw error if operator is invalid or if number of parameters doesn't match
+        /// operator
         OperatorCode opcode;
-        switch (ctx->opcode_->getType()) {
+        switch (ctx->operator_->getType()) {
         case ZincParser::OP_ADD:
             opcode = OperatorCode::Add;
             break;
         case ZincParser::OP_SUB:
-            opcode = OperatorCode::Subtract;
+            opcode = ctx->parameters_.size() == 1 ? OperatorCode::Negate : OperatorCode::Subtract;
             break;
         case ZincParser::OP_MUL:
             opcode = OperatorCode::Multiply;
@@ -274,9 +276,6 @@ private:
             break;
         case ZincParser::OP_REM:
             opcode = OperatorCode::Remainder;
-            break;
-        case ZincParser::OP_NEG:
-            opcode = OperatorCode::Negate;
             break;
         case ZincParser::OP_INC:
             opcode = OperatorCode::Increment;
@@ -291,13 +290,17 @@ private:
             opcode = OperatorCode::NotEqual;
             break;
         case ZincParser::OP_LT:
-            opcode = OperatorCode::LessThan;
+            opcode = ctx->op2_
+                         ? (ctx->op3_ ? OperatorCode::LeftShiftAssign : OperatorCode::LeftShift)
+                         : OperatorCode::LessThan;
             break;
         case ZincParser::OP_LTE:
             opcode = OperatorCode::LessEqual;
             break;
         case ZincParser::OP_GT:
-            opcode = OperatorCode::GreaterThan;
+            opcode = ctx->op2_
+                         ? (ctx->op3_ ? OperatorCode::RightShiftAssign : OperatorCode::RightShift)
+                         : OperatorCode::GreaterThan;
             break;
         case ZincParser::OP_GTE:
             opcode = OperatorCode::GreaterEqual;
@@ -323,14 +326,14 @@ private:
         case ZincParser::OP_BITNOT:
             opcode = OperatorCode::BitwiseNot;
             break;
-        case ZincParser::OP_LT:
-            opcode = OperatorCode::LeftShift;
-            break;
         }
         auto* op_def = new ASTOperatorOverloadDefinition{
             loc(ctx),
-            ctx->opcode_,
-            visit_list<ASTFunctionParameter>(ctx->parameters_),
+            opcode,
+            visit<ASTFunctionParameter>(ctx->parameters_[0]),
+            ctx->parameters_.size() > 1
+                ? new ASTFunctionParameter(visit<ASTFunctionParameter>(ctx->parameters_[1]))
+                : nullptr,
             visit_expr(ctx->return_type_),
             visit_list(ctx->body_),
             ctx->KW_CONST() != nullptr
@@ -539,15 +542,15 @@ private:
         ASTExprVariant expr = visit_expr(ctx->expr_);
         switch (ctx->op_->getType()) {
         case ZincParser::OP_INC:
-            return as_variant(new ASTIncrementOp{loc(ctx), expr});
+            return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::Increment, expr});
         case ZincParser::OP_DEC:
-            return as_variant(new ASTDecrementOp{loc(ctx), expr});
+            return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::Decrement, expr});
         case ZincParser::OP_SUB:
-            return as_variant(new ASTNegateOp{loc(ctx), expr});
+            return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::Negate, expr});
         case ZincParser::OP_NOT:
-            return as_variant(new ASTLogicalNotOp{loc(ctx), expr});
+            return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::LogicalNot, expr});
         case ZincParser::OP_BITNOT:
-            return as_variant(new ASTBitwiseNotOp{loc(ctx), expr});
+            return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::BitwiseNot, expr});
         default:
             UNREACHABLE();
         }
@@ -559,11 +562,11 @@ private:
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
         case ZincParser::OP_MUL:
-            return as_variant(new ASTMultiplyOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::Multiply, left, right});
         case ZincParser::OP_DIV:
-            return as_variant(new ASTDivideOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::Divide, left, right});
         case ZincParser::OP_REM:
-            return as_variant(new ASTRemainderOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::Remainder, left, right});
         default:
             UNREACHABLE();
         }
@@ -575,9 +578,9 @@ private:
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
         case ZincParser::OP_ADD:
-            return as_variant(new ASTAddOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::Add, left, right});
         case ZincParser::OP_SUB:
-            return as_variant(new ASTSubtractOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::Subtract, left, right});
         default:
             UNREACHABLE();
         }
@@ -588,9 +591,9 @@ private:
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
         case ZincParser::OP_LT:  // OP_LSHIFT
-            return as_variant(new ASTLeftShiftOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::LeftShift, left, right});
         case ZincParser::OP_GT:  // OP_RSHIFT
-            return as_variant(new ASTRightShiftOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::RightShift, left, right});
         default:
             UNREACHABLE();
         }
@@ -602,13 +605,13 @@ private:
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
         case ZincParser::OP_LT:
-            return as_variant(new ASTLessThanOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::LessThan, left, right});
         case ZincParser::OP_LTE:
-            return as_variant(new ASTLessEqualOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::LessEqual, left, right});
         case ZincParser::OP_GT:
-            return as_variant(new ASTGreaterThanOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::GreaterThan, left, right});
         case ZincParser::OP_GTE:
-            return as_variant(new ASTGreaterEqualOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::GreaterEqual, left, right});
         default:
             UNREACHABLE();
         }
@@ -620,9 +623,9 @@ private:
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
         case ZincParser::OP_EQ:
-            return as_variant(new ASTEqualOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::Equal, left, right});
         case ZincParser::OP_NEQ:
-            return as_variant(new ASTNotEqualOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::NotEqual, left, right});
         default:
             UNREACHABLE();
         }
@@ -631,31 +634,31 @@ private:
     auto visitBitAndExpr(ZincParser::BitAndExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
-        return as_variant(new ASTBitwiseAndOp{loc(ctx), left, right});
+        return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::BitwiseAnd, left, right});
     }
 
     auto visitBitXorExpr(ZincParser::BitXorExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
-        return as_variant(new ASTBitwiseXorOp{loc(ctx), left, right});
+        return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::BitwiseXor, left, right});
     }
 
     auto visitBitOrExpr(ZincParser::BitOrExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
-        return as_variant(new ASTBitwiseOrOp{loc(ctx), left, right});
+        return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::BitwiseOr, left, right});
     }
 
     auto visitAndExpr(ZincParser::AndExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
-        return as_variant(new ASTLogicalAndOp{loc(ctx), left, right});
+        return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::LogicalAnd, left, right});
     }
 
     auto visitOrExpr(ZincParser::OrExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
-        return as_variant(new ASTLogicalOrOp{loc(ctx), left, right});
+        return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::LogicalOr, left, right});
     }
 
     auto visitAssignExpr(ZincParser::AssignExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
@@ -663,31 +666,47 @@ private:
         ASTExprVariant right = visit_expr(ctx->right_);
         switch (ctx->op_->getType()) {
         case ZincParser::OP_ASSIGN:
-            return as_variant(new ASTAssignOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::Assign, left, right});
         case ZincParser::OP_ADD_ASSIGN:
-            return as_variant(new ASTAddAssignOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::AddAssign, left, right});
         case ZincParser::OP_SUB_ASSIGN:
-            return as_variant(new ASTSubtractAssignOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::SubtractAssign, left, right});
         case ZincParser::OP_MUL_ASSIGN:
-            return as_variant(new ASTMultiplyAssignOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::MultiplyAssign, left, right});
         case ZincParser::OP_DIV_ASSIGN:
-            return as_variant(new ASTDivideAssignOp{loc(ctx), left, right});
+            return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::DivideAssign, left, right});
         case ZincParser::OP_REM_ASSIGN:
-            return as_variant(new ASTRemainderAssignOp{loc(ctx), left, right});
+            return as_variant(
+                new ASTBinaryOp{loc(ctx), OperatorCode::RemainderAssign, left, right}
+            );
         case ZincParser::OP_AND_ASSIGN:
-            return as_variant(new ASTLogicalAndAssignOp{loc(ctx), left, right});
+            return as_variant(
+                new ASTBinaryOp{loc(ctx), OperatorCode::LogicalAndAssign, left, right}
+            );
         case ZincParser::OP_OR_ASSIGN:
-            return as_variant(new ASTLogicalOrAssignOp{loc(ctx), left, right});
+            return as_variant(
+                new ASTBinaryOp{loc(ctx), OperatorCode::LogicalOrAssign, left, right}
+            );
         case ZincParser::OP_BITAND_ASSIGN:
-            return as_variant(new ASTBitwiseAndAssignOp{loc(ctx), left, right});
+            return as_variant(
+                new ASTBinaryOp{loc(ctx), OperatorCode::BitwiseAndAssign, left, right}
+            );
         case ZincParser::OP_BITOR_ASSIGN:
-            return as_variant(new ASTBitwiseOrAssignOp{loc(ctx), left, right});
+            return as_variant(
+                new ASTBinaryOp{loc(ctx), OperatorCode::BitwiseOrAssign, left, right}
+            );
         case ZincParser::OP_BITXOR_ASSIGN:
-            return as_variant(new ASTBitwiseXorAssignOp{loc(ctx), left, right});
+            return as_variant(
+                new ASTBinaryOp{loc(ctx), OperatorCode::BitwiseXorAssign, left, right}
+            );
         case ZincParser::OP_LT:  // OP_LSHIFT_ASSIGN
-            return as_variant(new ASTLeftShiftAssignOp{loc(ctx), left, right});
+            return as_variant(
+                new ASTBinaryOp{loc(ctx), OperatorCode::LeftShiftAssign, left, right}
+            );
         case ZincParser::OP_GT:  // OP_RSHIFT_ASSIGN
-            return as_variant(new ASTRightShiftAssignOp{loc(ctx), left, right});
+            return as_variant(
+                new ASTBinaryOp{loc(ctx), OperatorCode::RightShiftAssign, left, right}
+            );
         default:
             UNREACHABLE();
         }
@@ -707,6 +726,7 @@ private:
         case ZincParser::KW_INT32:
             return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i32_instance});
         case ZincParser::KW_INT64:
+        case ZincParser::KW_ISIZE:
             return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i64_instance});
         case ZincParser::KW_UINT8:
             return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u8_instance});
@@ -715,6 +735,7 @@ private:
         case ZincParser::KW_UINT32:
             return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u32_instance});
         case ZincParser::KW_UINT64:
+        case ZincParser::KW_USIZE:
             return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::u64_instance});
         case ZincParser::KW_FLOAT32:
             return as_variant(new ASTPrimitiveType{loc(ctx), &FloatType::f32_instance});

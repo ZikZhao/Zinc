@@ -1360,26 +1360,25 @@ public:
         }
     }
 
-    template <ASTUnaryOpClass Op>
-    void operator()(const Op* node) {
+    void operator()(const ASTUnaryOp* node) {
         TypeResolution expr_result;
         TypeContextEvaluator{sema_, expr_result, false}(node->expr);
         try {
-            out_ = TypeResolution(sema_.operation_handler_->eval_type_op(Op::opcode, expr_result));
+            out_ =
+                TypeResolution(sema_.operation_handler_->eval_type_op(node->opcode, expr_result));
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
             out_ = TypeRegistry::get_unknown();
         }
     }
 
-    template <ASTBinaryOpClass Op>
-    void operator()(const Op* node) {
+    void operator()(const ASTBinaryOp* node) {
         TypeResolution left_result;
         TypeContextEvaluator{sema_, left_result}(node->left);
         TypeResolution right_result;
         TypeContextEvaluator{sema_, right_result}(node->right);
         try {
-            out_ = sema_.operation_handler_->eval_type_op(Op::opcode, left_result, right_result);
+            out_ = sema_.operation_handler_->eval_type_op(node->opcode, left_result, right_result);
         } catch (UnlocatedProblem& e) {
             e.report_at(node->location);
             out_ = TypeRegistry::get_unknown();
@@ -1663,22 +1662,20 @@ public:
         return sema_.access_handler_->eval_access(*node);
     }
 
-    template <ASTUnaryOpClass Op>
-    auto operator()(const Op* node) -> TermWithSelf {
+    auto operator()(const ASTUnaryOp* node) -> TermWithSelf {
         Term expr_term = ValueContextEvaluator{*this, nullptr}(node->expr).result;
         return {
-            .result = sema_.operation_handler_->eval_value_op(Op::opcode, expr_term), .self = {}
+            .result = sema_.operation_handler_->eval_value_op(node->opcode, expr_term), .self = {}
         };
     }
 
-    template <ASTBinaryOpClass Op>
-    auto operator()(const Op* node) -> TermWithSelf {
+    auto operator()(const ASTBinaryOp* node) -> TermWithSelf {
         Term left_term = ValueContextEvaluator{*this, nullptr}(node->left).result;
         Term right_term = ValueContextEvaluator{*this, nullptr}(node->right).result;
         try {
             return {
                 .result =
-                    sema_.operation_handler_->eval_value_op(Op::opcode, left_term, right_term),
+                    sema_.operation_handler_->eval_value_op(node->opcode, left_term, right_term),
                 .self = {}
             };
         } catch (UnlocatedProblem& e) {

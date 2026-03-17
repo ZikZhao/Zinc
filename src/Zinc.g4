@@ -77,20 +77,42 @@ function_definition:
 	);
 
 operator_overload_definition:
-	KW_OPERATOR operator_ = (
-		OP_ADD
-		| OP_SUB
-		| OP_MUL
-		| OP_DIV
-		| OP_REM
-		| OP_INC
-		| OP_DEC
-		| OP_EQ
-		| OP_NEQ
-		| OP_LT
-		| OP_LTE
-		| OP_GT
-		| OP_GTE
+	KW_CONST? KW_OPERATOR (
+		operator_ = OP_ADD
+		| operator_ = OP_SUB
+		| operator_ = OP_MUL
+		| operator_ = OP_DIV
+		| operator_ = OP_REM
+		| operator_ = OP_INC
+		| operator_ = OP_DEC
+		| operator_ = OP_EQ
+		| operator_ = OP_NEQ
+		| operator_ = OP_LT
+		| operator_ = OP_LTE
+		| operator_ = OP_GT
+		| operator_ = OP_GTE
+		| operator_ = OP_AND
+		| operator_ = OP_OR
+		| operator_ = OP_NOT
+		| operator_ = OP_BITAND
+		| operator_ = OP_BITOR
+		| operator_ = OP_BITXOR
+		| operator_ = OP_BITNOT
+		| operator_ = OP_ASSIGN
+		| operator_ = OP_ADD_ASSIGN
+		| operator_ = OP_SUB_ASSIGN
+		| operator_ = OP_MUL_ASSIGN
+		| operator_ = OP_DIV_ASSIGN
+		| operator_ = OP_REM_ASSIGN
+		| operator_ = OP_AND_ASSIGN
+		| operator_ = OP_OR_ASSIGN
+		| operator_ = OP_BITAND_ASSIGN
+		| operator_ = OP_BITOR_ASSIGN
+		| operator_ = OP_BITXOR_ASSIGN
+		| operator_ = OP_LT op2_ = OP_LT
+		| operator_ = OP_GT op2_ = OP_GT
+		| operator_ = OP_LT op2_ = OP_LT op3_ = OP_ASSIGN
+		| operator_ = OP_GT op2_ = OP_GT op3_ = OP_ASSIGN
 	) OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
@@ -274,10 +296,10 @@ specialize_parameter_list:
 	)?;
 
 template_parameter:
-	identifier_ = T_IDENTIFIER OP_COLON KW_TYPE (
+	identifier_ = T_IDENTIFIER OP_ELLIPSIS? OP_COLON KW_TYPE (
 		OP_EQ default_ = type
 	)? # TypeTemplateParam
-	| identifier_ = T_IDENTIFIER OP_COLON type_ = type (
+	| identifier_ = T_IDENTIFIER OP_ELLIPSIS? OP_COLON type_ = type (
 		OP_EQ default_ = expr
 	)? # ComptimeTemplateParam;
 

@@ -179,7 +179,8 @@ public:
     void clear() noexcept { identifiers_.clear(); }
 };
 
-using OperatorRegistry = GlobalMemory::UnorderedMultiMap<OperatorCode, FunctionOverloadDef>;
+using OperatorRegistry =
+    GlobalMemory::UnorderedMultiMap<OperatorCode, const ASTOperatorOverloadDefinition*>;
 
 class SymbolCollector {
 private:
@@ -298,6 +299,34 @@ public:
                 param.identifier,
                 new VariableInitialization{
                     .is_comptime = false, .type = param.type, .value = std::monostate{}
+                }
+            );
+        }
+        SymbolCollector local_visitor(local_scope, operators_);
+        for (auto& stmt : node->body) {
+            local_visitor(stmt);
+        }
+    }
+
+    void operator()(const ASTOperatorOverloadDefinition* node) noexcept {
+        OperatorCode opcode = node->opcode;
+        operators_.insert({opcode, node});
+        Scope& local_scope = Scope::make(current_scope_, node);
+        local_scope.add_variable(
+            node->left.identifier,
+            new VariableInitialization{
+                .is_comptime = node->declared_const,
+                .type = node->left.type,
+                .value = std::monostate{}
+            }
+        );
+        if (node->right) {
+            local_scope.add_variable(
+                node->right->identifier,
+                new VariableInitialization{
+                    .is_comptime = node->declared_const,
+                    .type = node->right->type,
+                    .value = std::monostate{}
                 }
             );
         }

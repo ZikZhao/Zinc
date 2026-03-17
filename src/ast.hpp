@@ -54,51 +54,8 @@ struct ASTConstant;
 struct ASTIdentifier;
 struct ASTAccessChain;
 struct ASTParenExpr;
-template <OperatorCode op>
 struct ASTUnaryOp;
-template <OperatorCode op>
 struct ASTBinaryOp;
-
-using ASTAddOp = ASTBinaryOp<OperatorCode::Add>;
-using ASTSubtractOp = ASTBinaryOp<OperatorCode::Subtract>;
-using ASTNegateOp = ASTUnaryOp<OperatorCode::Negate>;
-using ASTMultiplyOp = ASTBinaryOp<OperatorCode::Multiply>;
-using ASTDivideOp = ASTBinaryOp<OperatorCode::Divide>;
-using ASTRemainderOp = ASTBinaryOp<OperatorCode::Remainder>;
-using ASTIncrementOp = ASTUnaryOp<OperatorCode::Increment>;
-using ASTDecrementOp = ASTUnaryOp<OperatorCode::Decrement>;
-
-using ASTEqualOp = ASTBinaryOp<OperatorCode::Equal>;
-using ASTNotEqualOp = ASTBinaryOp<OperatorCode::NotEqual>;
-using ASTLessThanOp = ASTBinaryOp<OperatorCode::LessThan>;
-using ASTLessEqualOp = ASTBinaryOp<OperatorCode::LessEqual>;
-using ASTGreaterThanOp = ASTBinaryOp<OperatorCode::GreaterThan>;
-using ASTGreaterEqualOp = ASTBinaryOp<OperatorCode::GreaterEqual>;
-
-using ASTLogicalAndOp = ASTBinaryOp<OperatorCode::LogicalAnd>;
-using ASTLogicalOrOp = ASTBinaryOp<OperatorCode::LogicalOr>;
-using ASTLogicalNotOp = ASTUnaryOp<OperatorCode::LogicalNot>;
-
-using ASTBitwiseAndOp = ASTBinaryOp<OperatorCode::BitwiseAnd>;
-using ASTBitwiseOrOp = ASTBinaryOp<OperatorCode::BitwiseOr>;
-using ASTBitwiseXorOp = ASTBinaryOp<OperatorCode::BitwiseXor>;
-using ASTBitwiseNotOp = ASTUnaryOp<OperatorCode::BitwiseNot>;
-using ASTLeftShiftOp = ASTBinaryOp<OperatorCode::LeftShift>;
-using ASTRightShiftOp = ASTBinaryOp<OperatorCode::RightShift>;
-
-using ASTAssignOp = ASTBinaryOp<OperatorCode::Assign>;
-using ASTAddAssignOp = ASTBinaryOp<OperatorCode::AddAssign>;
-using ASTSubtractAssignOp = ASTBinaryOp<OperatorCode::SubtractAssign>;
-using ASTMultiplyAssignOp = ASTBinaryOp<OperatorCode::MultiplyAssign>;
-using ASTDivideAssignOp = ASTBinaryOp<OperatorCode::DivideAssign>;
-using ASTRemainderAssignOp = ASTBinaryOp<OperatorCode::RemainderAssign>;
-using ASTLogicalAndAssignOp = ASTBinaryOp<OperatorCode::LogicalAndAssign>;
-using ASTLogicalOrAssignOp = ASTBinaryOp<OperatorCode::LogicalOrAssign>;
-using ASTBitwiseAndAssignOp = ASTBinaryOp<OperatorCode::BitwiseAndAssign>;
-using ASTBitwiseOrAssignOp = ASTBinaryOp<OperatorCode::BitwiseOrAssign>;
-using ASTBitwiseXorAssignOp = ASTBinaryOp<OperatorCode::BitwiseXorAssign>;
-using ASTLeftShiftAssignOp = ASTBinaryOp<OperatorCode::LeftShiftAssign>;
-using ASTRightShiftAssignOp = ASTBinaryOp<OperatorCode::RightShiftAssign>;
 
 struct ASTFieldInitialization;
 struct ASTStructInitialization;
@@ -144,48 +101,8 @@ using ASTNodeVariant = std::variant<
     const ASTSelfExpr*,
     const ASTIdentifier*,
     const ASTAccessChain*,
-    // Unary operators
-    const ASTNegateOp*,
-    const ASTIncrementOp*,
-    const ASTDecrementOp*,
-    const ASTLogicalNotOp*,
-    const ASTBitwiseNotOp*,
-    // Binary operators - arithmetic
-    const ASTAddOp*,
-    const ASTSubtractOp*,
-    const ASTMultiplyOp*,
-    const ASTDivideOp*,
-    const ASTRemainderOp*,
-    // Binary operators - comparison
-    const ASTEqualOp*,
-    const ASTNotEqualOp*,
-    const ASTLessThanOp*,
-    const ASTLessEqualOp*,
-    const ASTGreaterThanOp*,
-    const ASTGreaterEqualOp*,
-    // Binary operators - logical
-    const ASTLogicalAndOp*,
-    const ASTLogicalOrOp*,
-    // Binary operators - bitwise
-    const ASTBitwiseAndOp*,
-    const ASTBitwiseOrOp*,
-    const ASTBitwiseXorOp*,
-    const ASTLeftShiftOp*,
-    const ASTRightShiftOp*,
-    // Binary operators - assignment
-    const ASTAssignOp*,
-    const ASTAddAssignOp*,
-    const ASTSubtractAssignOp*,
-    const ASTMultiplyAssignOp*,
-    const ASTDivideAssignOp*,
-    const ASTRemainderAssignOp*,
-    const ASTLogicalAndAssignOp*,
-    const ASTLogicalOrAssignOp*,
-    const ASTBitwiseAndAssignOp*,
-    const ASTBitwiseOrAssignOp*,
-    const ASTBitwiseXorAssignOp*,
-    const ASTLeftShiftAssignOp*,
-    const ASTRightShiftAssignOp*,
+    const ASTUnaryOp*,
+    const ASTBinaryOp*,
     // Member access and calls
     const ASTStructInitialization*,
     const ASTFunctionCall*,
@@ -227,48 +144,8 @@ using ASTExprVariant = std::variant<
     const ASTSelfExpr*,
     const ASTIdentifier*,
     const ASTAccessChain*,
-    // Unary operators
-    const ASTNegateOp*,
-    const ASTIncrementOp*,
-    const ASTDecrementOp*,
-    const ASTLogicalNotOp*,
-    const ASTBitwiseNotOp*,
-    // Binary operators - arithmetic
-    const ASTAddOp*,
-    const ASTSubtractOp*,
-    const ASTMultiplyOp*,
-    const ASTDivideOp*,
-    const ASTRemainderOp*,
-    // Binary operators - comparison
-    const ASTEqualOp*,
-    const ASTNotEqualOp*,
-    const ASTLessThanOp*,
-    const ASTLessEqualOp*,
-    const ASTGreaterThanOp*,
-    const ASTGreaterEqualOp*,
-    // Binary operators - logical
-    const ASTLogicalAndOp*,
-    const ASTLogicalOrOp*,
-    // Binary operators - bitwise
-    const ASTBitwiseAndOp*,
-    const ASTBitwiseOrOp*,
-    const ASTBitwiseXorOp*,
-    const ASTLeftShiftOp*,
-    const ASTRightShiftOp*,
-    // Binary operators - assignment
-    const ASTAssignOp*,
-    const ASTAddAssignOp*,
-    const ASTSubtractAssignOp*,
-    const ASTMultiplyAssignOp*,
-    const ASTDivideAssignOp*,
-    const ASTRemainderAssignOp*,
-    const ASTLogicalAndAssignOp*,
-    const ASTLogicalOrAssignOp*,
-    const ASTBitwiseAndAssignOp*,
-    const ASTBitwiseOrAssignOp*,
-    const ASTBitwiseXorAssignOp*,
-    const ASTLeftShiftAssignOp*,
-    const ASTRightShiftAssignOp*,
+    const ASTUnaryOp*,
+    const ASTBinaryOp*,
     // Member access and calls
     const ASTStructInitialization*,
     const ASTArrayInitialization*,
@@ -295,19 +172,6 @@ struct NodePtrVisitor {
         return node;
     }
     auto operator()(std::monostate) -> const ASTNode* { return nullptr; }
-};
-
-template <typename T>
-concept ASTUnaryOpClass = requires(T node) {
-    { T::opcode } -> std::convertible_to<OperatorCode>;
-    { node.expr } -> std::convertible_to<ASTExprVariant>;
-};
-
-template <typename T>
-concept ASTBinaryOpClass = requires(T node) {
-    { T::opcode } -> std::convertible_to<OperatorCode>;
-    { node.left } -> std::convertible_to<ASTExprVariant>;
-    { node.right } -> std::convertible_to<ASTExprVariant>;
 };
 
 struct ASTNode : public GlobalMemory::MonotonicAllocated {
@@ -349,15 +213,13 @@ struct ASTParenExpr final : public ASTExpression {
     ASTExprVariant inner;
 };
 
-template <OperatorCode op>
 struct ASTUnaryOp final : public ASTExpression {
-    static constexpr OperatorCode opcode = op;
+    OperatorCode opcode;
     ASTExprVariant expr;
 };
 
-template <OperatorCode op>
 struct ASTBinaryOp final : public ASTExpression {
-    static constexpr OperatorCode opcode = op;
+    OperatorCode opcode;
     ASTExprVariant left;
     ASTExprVariant right;
 };
@@ -498,7 +360,8 @@ struct ASTConstructorDestructorDefinition final : public ASTNode {
 
 struct ASTOperatorOverloadDefinition final : public ASTNode {
     OperatorCode opcode;
-    std::span<ASTFunctionParameter> parameters;
+    ASTFunctionParameter left;
+    ASTFunctionParameter* right;
     ASTExprVariant return_type;
     std::span<ASTNodeVariant> body;
     bool declared_const;

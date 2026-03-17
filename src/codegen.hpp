@@ -597,18 +597,16 @@ public:
 
     auto operator()(const ASTIdentifier* node) -> void { definitions_ += node->str; }
 
-    template <ASTUnaryOpClass Op>
-    auto operator()(const Op* node) -> void {
+    auto operator()(const ASTUnaryOp* node) -> void {
         /// TODO: postfix unary ops
-        definitions_ += GetOperatorString(Op::opcode);
+        definitions_ += GetOperatorString(node->opcode);
         (*this)(node->expr);
     }
 
-    template <ASTBinaryOpClass Op>
-    auto operator()(const Op* node) -> void {
+    auto operator()(const ASTBinaryOp* node) -> void {
         (*this)(node->left);
         definitions_ += " "sv;
-        definitions_ += GetOperatorString(Op::opcode);
+        definitions_ += GetOperatorString(node->opcode);
         definitions_ += " "sv;
         (*this)(node->right);
     }

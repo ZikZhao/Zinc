@@ -1,4 +1,4 @@
-fn print<Fmt: type, Args: type...>(fmt: Fmt, args: Args...);
+fn print<Fmt: type, Args...: type>(fmt: Fmt, args: Args...);
 
 class array<T: type, N: usize> {
     let data: [T; N];
