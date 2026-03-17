@@ -233,32 +233,109 @@ private:
         }
         return as_variant(type_alias);
     }
-
     auto visitFunction_definition(ZincParser::Function_definitionContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
-        std::span parameters = visit_list<ASTFunctionParameter>(ctx->parameters_);
-        std::string_view identifier = text(ctx->identifier_);
-        ASTExprVariant return_type = visit_expr(ctx->return_type_);
-        std::span body = visit_list(ctx->body_);
-        auto function_def = new ASTFunctionDefinition{
+        auto* func_def = new ASTFunctionDefinition{
             loc(ctx),
-            identifier,
-            parameters,
-            return_type,
-            body,
+            text(ctx->identifier_),
+            visit_list<ASTFunctionParameter>(ctx->parameters_),
+            visit_expr(ctx->return_type_),
+            visit_list(ctx->body_),
             ctx->KW_CONST() != nullptr,
-            ctx->KW_STATIC() != nullptr,
-            ctx->semi_ != nullptr
+            ctx->KW_STATIC() != nullptr
         };
         if (ctx->template_list_) {
             return as_variant(new ASTTemplateDefinition{
                 loc(ctx),
-                identifier,
+                func_def->identifier,
                 visit<std::span<ASTTemplateParameter>>(ctx->template_list_),
-                function_def
+                func_def
             });
         }
-        return as_variant(function_def);
+        return as_variant(func_def);
+    }
+
+    auto visitOperator_overload_definition(
+        ZincParser::Operator_overload_definitionContext* ctx
+    ) noexcept -> Any<ASTNodeVariant> final {
+        OperatorCode opcode;
+        switch (ctx->opcode_->getType()) {
+        case ZincParser::OP_ADD:
+            opcode = OperatorCode::Add;
+            break;
+        case ZincParser::OP_SUB:
+            opcode = OperatorCode::Subtract;
+            break;
+        case ZincParser::OP_MUL:
+            opcode = OperatorCode::Multiply;
+            break;
+        case ZincParser::OP_DIV:
+            opcode = OperatorCode::Divide;
+            break;
+        case ZincParser::OP_REM:
+            opcode = OperatorCode::Remainder;
+            break;
+        case ZincParser::OP_NEG:
+            opcode = OperatorCode::Negate;
+            break;
+        case ZincParser::OP_INC:
+            opcode = OperatorCode::Increment;
+            break;
+        case ZincParser::OP_DEC:
+            opcode = OperatorCode::Decrement;
+            break;
+        case ZincParser::OP_EQ:
+            opcode = OperatorCode::Equal;
+            break;
+        case ZincParser::OP_NEQ:
+            opcode = OperatorCode::NotEqual;
+            break;
+        case ZincParser::OP_LT:
+            opcode = OperatorCode::LessThan;
+            break;
+        case ZincParser::OP_LTE:
+            opcode = OperatorCode::LessEqual;
+            break;
+        case ZincParser::OP_GT:
+            opcode = OperatorCode::GreaterThan;
+            break;
+        case ZincParser::OP_GTE:
+            opcode = OperatorCode::GreaterEqual;
+            break;
+        case ZincParser::OP_AND:
+            opcode = OperatorCode::LogicalAnd;
+            break;
+        case ZincParser::OP_OR:
+            opcode = OperatorCode::LogicalOr;
+            break;
+        case ZincParser::OP_NOT:
+            opcode = OperatorCode::LogicalNot;
+            break;
+        case ZincParser::OP_BITAND:
+            opcode = OperatorCode::BitwiseAnd;
+            break;
+        case ZincParser::OP_BITOR:
+            opcode = OperatorCode::BitwiseOr;
+            break;
+        case ZincParser::OP_BITXOR:
+            opcode = OperatorCode::BitwiseXor;
+            break;
+        case ZincParser::OP_BITNOT:
+            opcode = OperatorCode::BitwiseNot;
+            break;
+        case ZincParser::OP_LT:
+            opcode = OperatorCode::LeftShift;
+            break;
+        }
+        auto* op_def = new ASTOperatorOverloadDefinition{
+            loc(ctx),
+            ctx->opcode_,
+            visit_list<ASTFunctionParameter>(ctx->parameters_),
+            visit_expr(ctx->return_type_),
+            visit_list(ctx->body_),
+            ctx->KW_CONST() != nullptr
+        };
+        return as_variant(op_def);
     }
 
     auto visitSelfParam(ZincParser::SelfParamContext* ctx) noexcept
@@ -268,7 +345,38 @@ private:
 
     auto visitNormalParam(ZincParser::NormalParamContext* ctx) noexcept
         -> Any<ASTFunctionParameter> final {
-        return ASTFunctionParameter{loc(ctx), text(ctx->identifier_), visit_expr(ctx->type_)};
+        return ASTFunctionParameter{
+            loc(ctx),
+            text(ctx->identifier_),
+            visit_expr(ctx->type_),
+            std::monostate{},
+            ctx->KW_MUT() != nullptr,
+            false
+        };
+    }
+
+    auto visitDefaultParam(ZincParser::DefaultParamContext* ctx) noexcept
+        -> Any<ASTFunctionParameter> final {
+        return ASTFunctionParameter{
+            loc(ctx),
+            text(ctx->identifier_),
+            visit_expr(ctx->type_),
+            visit_expr(ctx->default_),
+            ctx->KW_MUT() != nullptr,
+            false
+        };
+    }
+
+    auto visitVariadicParam(ZincParser::VariadicParamContext* ctx) noexcept
+        -> Any<ASTFunctionParameter> final {
+        return ASTFunctionParameter{
+            loc(ctx),
+            text(ctx->identifier_),
+            visit_expr(ctx->type_),
+            ASTExprVariant(new ASTSelfExpr{loc(ctx), true}),
+            ctx->KW_MUT() != nullptr,
+            true
+        };
     }
 
     auto visitClass_definition(ZincParser::Class_definitionContext* ctx) noexcept
@@ -612,15 +720,11 @@ private:
             return as_variant(new ASTPrimitiveType{loc(ctx), &FloatType::f32_instance});
         case ZincParser::KW_FLOAT64:
             return as_variant(new ASTPrimitiveType{loc(ctx), &FloatType::f64_instance});
-        case ZincParser::KW_STRING:
-            /// TODO: write a new class to do
-            /// TODO: current implementation leads to memory violation
-            /// (TypeRegistry::get needs to be called on main thread)
-            // last_visited_ = new ASTPrimitiveType(loc(ctx),
-            // TypeRegistry::get<StringType>());
-            return nullptr;
         case ZincParser::KW_BOOL:
             return as_variant(new ASTPrimitiveType{loc(ctx), &BooleanType::instance});
+        case ZincParser::KW_STRVIEW:
+            // return as_variant(new ASTPrimitiveType{loc(ctx), &StringViewType::instance});
+            throw;
         default:
             UNREACHABLE();
         }
@@ -736,21 +840,25 @@ private:
 
     auto visitConstructor(ZincParser::ConstructorContext* ctx) noexcept
         -> Any<const ASTConstructorDestructorDefinition*> final {
-        return const_cast<const ASTConstructorDestructorDefinition*>(
-            new ASTConstructorDestructorDefinition{
-                loc(ctx),
-                true,
-                visit_list<ASTFunctionParameter>(ctx->parameters_),
-                visit_list(ctx->body_)
-            }
-        );
+        auto* constructor_def = new ASTConstructorDestructorDefinition{
+            loc(ctx),
+            visit_list<ASTFunctionParameter>(ctx->parameters_),
+            visit_list<ASTNodeVariant>(ctx->body_),
+            true,
+            ctx->KW_CONST() != nullptr
+        };
+        return const_cast<const ASTConstructorDestructorDefinition*>(constructor_def);
     }
 
     auto visitDestructor(ZincParser::DestructorContext* ctx) noexcept
         -> Any<const ASTConstructorDestructorDefinition*> final {
         return const_cast<const ASTConstructorDestructorDefinition*>(
             new ASTConstructorDestructorDefinition{
-                loc(ctx), false, std::span<ASTFunctionParameter>{}, visit_list(ctx->body_)
+                loc(ctx),
+                std::span<ASTFunctionParameter>{},
+                visit_list(ctx->body_),
+                false,
+                ctx->KW_CONST() != nullptr
             }
         );
     }

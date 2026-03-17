@@ -216,10 +216,11 @@ public:
                 UNREACHABLE();
             }
         }
+        stream_ << "// ----- Type Forward Declarations -----\n"sv;
         stream_.write(
             forward_declarations_.data(), static_cast<std::streamsize>(forward_declarations_.size())
         );
-        stream_ << "\n"sv;
+        stream_ << "\n// ----- Type Definitions -----\n"sv;
         stream_.write(definitions_.data(), static_cast<std::streamsize>(definitions_.size()));
     }
 
@@ -485,10 +486,11 @@ public:
             mangled_path.clear();
             newline();
         }
+        stream_ << "\n// ----- Function Forward Declarations -----\n"sv;
         stream_.write(
             forward_declarations_.data(), static_cast<std::streamsize>(forward_declarations_.size())
         );
-        stream_ << "\n"sv;
+        stream_ << "\n// ----- Function Definitions -----\n"sv;
         stream_.write(definitions_.data(), static_cast<std::streamsize>(definitions_.size()));
     }
 

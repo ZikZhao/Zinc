@@ -65,7 +65,7 @@ type_alias:
 	)? OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
-	KW_CONST? KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER (
+	KW_STATIC? KW_CONST? KW_FUNC identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
 	)? OP_LPAREN (
 		parameters_ += parameter (
@@ -76,9 +76,36 @@ function_definition:
 		| semi_ = OP_SEMICOLON
 	);
 
+operator_overload_definition:
+	KW_OPERATOR operator_ = (
+		OP_ADD
+		| OP_SUB
+		| OP_MUL
+		| OP_DIV
+		| OP_REM
+		| OP_INC
+		| OP_DEC
+		| OP_EQ
+		| OP_NEQ
+		| OP_LT
+		| OP_LTE
+		| OP_GT
+		| OP_GTE
+	) OP_LPAREN (
+		parameters_ += parameter (
+			OP_COMMA parameters_ += parameter
+		)*
+	)? OP_RPAREN (OP_ARROW return_type_ = type)? (
+		OP_LBRACE body_ += statement* OP_RBRACE
+		| semi_ = OP_SEMICOLON
+	);
+
 parameter:
-	KW_SELF OP_COLON type_ = type						# SelfParam
-	| identifier_ = T_IDENTIFIER OP_COLON type_ = type	# NormalParam;
+	KW_SELF OP_COLON type_ = type															# SelfParam
+	| KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type								# NormalParam
+	| KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_ASSIGN default_ = expr	#
+		DefaultParam
+	| KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_ELLIPSIS # VariadicParam;
 
 class_definition:
 	(specialize_list_ = specialize_parameter_list)? KW_CLASS identifier_ = T_IDENTIFIER (
@@ -89,12 +116,13 @@ class_definition:
 			OP_COMMA implements_ += identifier
 		)*
 	)? OP_LBRACE (
-		constructor_ += constructor
-		| destructor_ += destructor
-		| fields_ += declaration_statement
-		| types_ += type_alias
-		| functions_ += function_definition
+		types_ += type_alias
 		| classes_ += class_definition
+		| fields_ += declaration_statement
+		| constructor_ += constructor
+		| destructor_ += destructor
+		| functions_ += function_definition
+		| operator_overloads_ += operator_overload_definition
 	)* OP_RBRACE;
 
 namespace_definition:
@@ -123,9 +151,13 @@ expr:
 	)? OP_RBRACE # StructInitExpr
 	| OP_LBRACKET (
 		elements_ += expr (OP_COMMA elements_ += expr)*
-	)? OP_RBRACKET											# ArrayInitExpr
-	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET	# ArrayAccessExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN				# ParenExpr
+	)? OP_RBRACKET																# ArrayInitExpr
+	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET						# ArrayAccessExpr
+	| base_ = expr OP_LBRACKET start_ = expr OP_COLON end_ = expr OP_RBRACKET	# SliceExpr
+	| KW_MUT inner_expr_ = expr													# MutExpr
+	| KW_MOVE inner_expr_ = expr												# MoveExpr
+	| KW_FORWARD inner_expr_ = expr												# ForwardExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN									# ParenExpr
 	| <assoc = right> op_ = (
 		OP_INC
 		| OP_DEC
@@ -183,14 +215,16 @@ type:
 		| KW_INT16
 		| KW_INT32
 		| KW_INT64
+		| KW_ISIZE
 		| KW_UINT8
 		| KW_UINT16
 		| KW_UINT32
 		| KW_UINT64
+		| KW_USIZE
 		| KW_FLOAT32
 		| KW_FLOAT64
-		| KW_STRING
 		| KW_BOOL
+		| KW_STRVIEW
 	)							# PrimitiveType
 	| identifier_ = identifier	# IdentifierType
 	| base_ = type (OP_DOT members_ += T_IDENTIFIER)+ (
@@ -200,8 +234,10 @@ type:
 		AccessChainTypeAlternate
 	| OP_LBRACE (
 		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
-	)? OP_RBRACE														# StructType
-	| element_type_ = type OP_LBRACKET (length_ = expr)? OP_RBRACKET	# ArrayType
+	)? OP_RBRACE # StructType
+	| OP_LBRACKET element_type_ = type (
+		OP_SEMICOLON length_ = expr
+	)? OP_RBRACKET # ArrayType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
@@ -216,14 +252,14 @@ field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 field_init: identifier_ = T_IDENTIFIER OP_COLON value_ = expr;
 
 constructor:
-	KW_INIT OP_LPAREN (
+	KW_CONST? KW_INIT OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
 	)? OP_RPAREN OP_LBRACE body_ += statement* OP_RBRACE;
 
 destructor:
-	KW_DROP OP_LPAREN OP_RPAREN OP_LBRACE body_ += statement* OP_RBRACE;
+	KW_CONST? KW_DROP OP_LPAREN OP_RPAREN OP_LBRACE body_ += statement* OP_RBRACE;
 
 template_parameter_list:
 	OP_LT parameters_ += template_parameter (
@@ -259,15 +295,17 @@ KW_INT8: 'i8';
 KW_INT16: 'i16';
 KW_INT32: 'i32';
 KW_INT64: 'i64';
+KW_ISIZE: 'isize';
 KW_UINT8: 'u8';
 KW_UINT16: 'u16';
 KW_UINT32: 'u32';
 KW_UINT64: 'u64';
+KW_USIZE: 'usize';
 KW_FLOAT32: 'f32';
 KW_FLOAT64: 'f64';
-KW_STRING: 'string';
 KW_BOOL: 'bool';
 KW_NULLPTR: 'nullptr';
+KW_STRVIEW: 'strview';
 KW_IF: 'if';
 KW_ELSE: 'else';
 KW_SWITCH: 'switch';
@@ -292,6 +330,7 @@ KW_MOVE: 'move';
 KW_FORWARD: 'forward';
 KW_SPECIALIZE: 'specialize';
 KW_STATIC_ASSERT: 'static_assert';
+KW_OPERATOR: 'operator';
 
 OP_DOT: '.';
 OP_QUESTION: '?';
@@ -302,6 +341,7 @@ OP_ARROW: '->';
 OP_LAMBDA: '=>';
 OP_SCOPE: '::';
 OP_TURBO_FISH: '::<';
+OP_ELLIPSIS: '...';
 
 OP_LPAREN: '(';
 OP_RPAREN: ')';

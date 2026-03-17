@@ -944,10 +944,6 @@ public:
             /// TODO: throw no matching overload error
             throw;
         }
-        // a.b.c(d) -> a.b.c(d)   // static, suffix + argument list
-        // a.b.c(d) -> decltype(a.b)::c(a.b, d)     // member function, suffix + argument list
-        // a.b.c(d) -> a.b.c.operator()(a.b.c, d)    // operator overload, replace operator () +
-        // argument list
         sema_.codegen_env_.map_function_call(
             sema_.current_scope_,
             &node,

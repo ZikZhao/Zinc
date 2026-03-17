@@ -66,6 +66,13 @@ flowchart LR
 
   I implemented a Unified AST Node design where all expressions inherit from `ASTExpression`. Crucially, the AST structure remains immutable after construction. Semantic distinction is achieved purely through the `eval()` method, which returns a polymorphic `Object*` (resolving to either a `Type*` or `Value*`). This allows the transpiler to handle types as first-class citizens dynamically during semantic analysis without mutating the underlying syntax tree.
 
+- ==**The Notorious Angle Bracket Ambiguity in Template Syntax**==
+
+  1. **The Parsing Dilemma:** In modern language design, template and generic instantiation syntax varies widely (e.g., `<>` in C++/Rust, `[]` in Python). I opted for the traditional angle brackets (`<>`) for Zinc, but immediately encountered classic parsing ambiguities. For instance, in an expression like `MyStruct<T>{ ... }`, ANTLR's greedy parsing evaluates the closing `>` as a "greater-than" comparison operator. It mistakenly treats `T` as the left operand and the anonymous struct initialization `{ ... }` as the right operand, failing to close the template parameter list because the instantiation rule inherently accepts expressions.
+  2. **The Brittle Predicate Hack:** My initial attempt to resolve this involved hacking ANTLR by injecting C++ semantic predicates to track the nesting depth of parentheses, brackets, and braces. This predicate was designed to force the parser to reject the "greater-than" branch for the closing `>` at the correct nesting level, guiding it naturally into the instantiation branch. However, this approach proved fundamentally flawed. ANTLR's ALL(*) algorithm relies heavily on speculative lookahead; during this speculative phase, the custom C++ predicate state does not update correctly, making state management highly fragile. Furthermore, it aggressively consumed `>` symbols out of context, erroneously parsing logical expressions like `a < b && c > d` as a broken template instantiation of `a` rather than a logical AND of two comparisons.
+  3. **Adopting the "Turbofish" Syntax:** To solve this definitively without parser hacks, I adopted Rust's "Turbofish" syntax (`::<>`). C++ handles this ambiguity poorly in dependent scopes; because chained comparisons like `1 < 2 > 3` are syntactically valid in C++ (evaluating to `false > 3`, then `0 > 3`), the compiler forces developers to use a clumsy disambiguator, requiring syntax like `obj.template method<...>()`. Rust's approach (`obj.method::<...>()`) is far more elegant. By introducing a definitive token (`::`) immediately before the instantiation list, the parser is unambiguously locked into the template instantiation branch. It easily consumes the closing `>` without falling back to the comparison operator, preserving both syntax clarity and parser stability. In explicit type contexts, the standard angle bracket (`<`) can be used directly instead of the turbofish operator to initiate an instantiation list. Since comparison operations are syntactically invalid within type contexts, no ambiguity exists; even when operators such as `decltype`, `typeof`, or `requires` are involved, these specific prefix tokens guarantee a clear and unambiguous syntactic boundary, safely managing the transition from a type context back to a value or statement context.
+  4. **Lexical Right-Shift Collisions:** A related lexical issue occurred with nested templates like `A<B<C>>`, where the lexer eagerly combined the final two brackets into a right-shift operator token (`>>`), resulting in a syntax error. I resolved this by completely removing the left-shift (`<<`) and right-shift (`>>`) operator tokens from the lexer. Instead, the parser explicitly matches two consecutive `<` or `>` symbols for shift operations. While a minor side effect is that `a > > b` (with a space) technically parses as a right-shift, this invalid syntax is strictly caught and rejected during the AST construction phase.
+
 - **Lazy Type Resolution**
 
   I implemented Lazy Type Resolution by strictly decoupling the Symbol Collection phase from Type Checking. During symbol collection, type definitions are captured as raw AST expressions. These expressions are evaluated into concrete Type objects lazily and on-demand during the Type Checking phase. This strategy, augmented with memorization, efficiently handles forward references and complex dependency graphs (including potential circular types) while maintaining a clean separation of concerns between scoping and typing logic.
@@ -125,12 +132,49 @@ flowchart LR
 
   C++ value categories (lvalue, prvalue, xvalue, etc.) and the overloaded semantics of `&&` (rvalue references versus universal references) are notorious sources of confusion. While Rust handles moves implicitly, discarding C++'s granular value semantics is not viable, as they are crucial for paradigms like rvalue-qualified methods in builder patterns. Zinc resolves this friction by elevating `move` and `forward` to first-class language keywords. Obtaining an rvalue is done via `move x`, which evaluates to the type `move &T`. Because moving inherently requires mutability, `move &T` is strictly equivalent to `move &mut T`, allowing intuitive overloads such as `fn func(self: &mut Self)` for lvalues and `fn func(self: move &Self)` for rvalues. Perfect forwarding is similarly streamlined: declaring a universal reference becomes `fn func(x: forward &T)`. This acts as a chameleon—yielding `&T` when passed an lvalue, and `move &T` when passed an rvalue. To pass it downstream, the programmer simply writes `forward x`, entirely eliminating the need to explicitly specify types or grapple with convoluted double-reference (`&&`) syntax, thus drastically flattening the learning curve while preserving C++'s expressive power.
 
-- ==**The Notorious Angle Bracket Ambiguity in Template Syntax**==
+- ==**Function Overload Resolution**==
 
-  1. **The Parsing Dilemma:** In modern language design, template and generic instantiation syntax varies widely (e.g., `<>` in C++/Rust, `[]` in Python). I opted for the traditional angle brackets (`<>`) for Zinc, but immediately encountered classic parsing ambiguities. For instance, in an expression like `MyStruct<T>{ ... }`, ANTLR's greedy parsing evaluates the closing `>` as a "greater-than" comparison operator. It mistakenly treats `T` as the left operand and the anonymous struct initialization `{ ... }` as the right operand, failing to close the template parameter list because the instantiation rule inherently accepts expressions.
-  2. **The Brittle Predicate Hack:** My initial attempt to resolve this involved hacking ANTLR by injecting C++ semantic predicates to track the nesting depth of parentheses, brackets, and braces. This predicate was designed to force the parser to reject the "greater-than" branch for the closing `>` at the correct nesting level, guiding it naturally into the instantiation branch. However, this approach proved fundamentally flawed. ANTLR's ALL(*) algorithm relies heavily on speculative lookahead; during this speculative phase, the custom C++ predicate state does not update correctly, making state management highly fragile. Furthermore, it aggressively consumed `>` symbols out of context, erroneously parsing logical expressions like `a < b && c > d` as a broken template instantiation of `a` rather than a logical AND of two comparisons.
-  3. **Adopting the "Turbofish" Syntax:** To solve this definitively without parser hacks, I adopted Rust's "Turbofish" syntax (`::<>`). C++ handles this ambiguity poorly in dependent scopes; because chained comparisons like `1 < 2 > 3` are syntactically valid in C++ (evaluating to `false > 3`, then `0 > 3`), the compiler forces developers to use a clumsy disambiguator, requiring syntax like `obj.template method<...>()`. Rust's approach (`obj.method::<...>()`) is far more elegant. By introducing a definitive token (`::`) immediately before the instantiation list, the parser is unambiguously locked into the template instantiation branch. It easily consumes the closing `>` without falling back to the comparison operator, preserving both syntax clarity and parser stability. In explicit type contexts, the standard angle bracket (`<`) can be used directly instead of the turbofish operator to initiate an instantiation list. Since comparison operations are syntactically invalid within type contexts, no ambiguity exists; even when operators such as `decltype`, `typeof`, or `requires` are involved, these specific prefix tokens guarantee a clear and unambiguous syntactic boundary, safely managing the transition from a type context back to a value or statement context.
-  4. **Lexical Right-Shift Collisions:** A related lexical issue occurred with nested templates like `A<B<C>>`, where the lexer eagerly combined the final two brackets into a right-shift operator token (`>>`), resulting in a syntax error. I resolved this by completely removing the left-shift (`<<`) and right-shift (`>>`) operator tokens from the lexer. Instead, the parser explicitly matches two consecutive `<` or `>` symbols for shift operations. While a minor side effect is that `a > > b` (with a space) technically parses as a right-shift, this invalid syntax is strictly caught and rejected during the AST construction phase.
+  Zinc’s function overload resolution system is heavily inspired by C++ but deliberately rejects the ability to fully specialize function templates. In Zinc, an overload set bound to a fully qualified path consists exclusively of non-template functions and primary (unspecialized) template functions. This restriction significantly simplifies the resolution matrix and reduces inherent ambiguities. Furthermore, Zinc strictly forbids implicit conversions between unrelated types—completely eliminating the unpredictable behavior caused by C++'s non-explicit constructors and conversion operators.
+
+  Argument-to-parameter conversion distances are quantified using a strict **Rank system**:
+
+  - **Rank 0 (Exact Match):** No modification required (e.g., an lvalue `i32` argument matching an `&i32` parameter).
+  - **Rank 1 (Single Adjustment):** Stripping the `mut` qualifier *or* modifying the reference category (e.g., `mut &i32` to `&i32`).
+  - **Rank 2 (Dual Adjustment):** Stripping the `mut` qualifier *and* modifying the reference category simultaneously (e.g., `move &i32` to `&i32`, as `move` inherently implies a mutable reference).
+  - **Rank 3 (Pointer Upcasting):** Upcasting to a base class or interface, prioritizing the nearest ancestor in the inheritance tree, up to `*void`.
+  - **Rank 4 (Implicit Construction):** Applied only when the argument and parameter share the same decayed type and the parameter expects a prvalue (pure rvalue).
+
+  Crucially, individual parameter conversions form a **strict partial order**. For example, if a class implements two distinct interfaces, a pointer upcast to either interface is mathematically incomparable, as neither is functionally "closer" than the other.
+
+  Candidate functions are evaluated against each other using this same strict partial ordering. A function is deemed the "best viable candidate" if its parameter conversions are better than or equal to all other candidates, and strictly better in at least one parameter. If Candidate A is better for the first parameter but Candidate B is better for the second, they are incomparable.
+
+  The compiler implements this using a highly efficient **two-pass algorithm**:
+
+  1. **Pass 1 (Election):** The compiler iterates through the overload set, electing a *potential* best candidate. The current best is only replaced if the newly evaluated candidate is strictly superior.
+  2. **Pass 2 (Validation):** The elected best candidate is cross-verified against all other candidates. If any comparison yields an equality or an incomparability, the compiler proceeds to ambiguity validation phase.
+
+  To mirror C++'s preference for concrete functions over generic ones, non-template functions are strictly prioritized. The first pass initially iterates *only* over non-template functions. If the resulting best candidate is not a Rank 0 (exact) match, the compiler then appends template functions to the candidate list, deduces their instantiation arguments, and continues the iteration.
+
+  To handle tie-breaking between templates and non-templates, the implementation utilizes a **boundary index**. During the ambiguity validation phase, the compiler maintains a temporary array of all candidates tied with the best candidate, alongside a boolean flag tracking if any incomparability occurred. If the flag is false (no incomparability) and all tied candidates possess indices strictly greater than the boundary index (meaning every tied competitor is a template), the tie is gracefully broken in favor of the non-template best candidate.
+
+- ==**Template Specialization Resolution**==
+
+  Template specialization resolution is largely analogous to function overload resolution: while the latter determines which candidate can suitably fit runtime values into parameter types, the former determines which candidate can suitably fit types into a pattern, subsequently deducing the types or values for the corresponding structural slots.
+
+  Initially, template instantiation checks the primary template. Specializations are merely attributes of the primary template, providing alternative definitions when a given pattern is matched, but they do not affect whether an instantiation satisfies the primary base template. The primary template ensures that the kind of each instantiation argument (Type or Non-Type Template Parameter [NTTP]; Template Template Parameters [TTP] will not be implemented in Zinc) is consistent, and then verifies whether each instantiated argument satisfies its associated concept (an unary boolean predicate). Subsequently, during the specialization resolution phase, the resolver first compares the instantiation against all full specializations. A full specialization matches a unique set of instantiation arguments, making such matches inherently unambiguous.
+
+  If no full specialization matches, partial specialization matching is performed. Zinc implements this using internal semantic objects (types or values) equipped with **binding slots**, rather than relying on AST-based structural matching. These slots, designated as `Auto`, are also utilized for type capturing in implicit templates declared with the `auto` keyword. Because the evaluation of types and values is computationally expensive, and the generated matching patterns have no practical utility beyond matching itself, Zinc precomputes these patterns and strictly disables template expansion during their evaluation. During the matching process, the `Object::pattern_match` method is invoked alongside a binding table. Types and values at each layer are checked against the target; any structural mismatch immediately short-circuits and terminates the pattern matching. When an `Auto` slot is matched, the captured type or value is recorded in the binding table. If the slot already exists in the table and the newly captured entity is not identical to the previously recorded one, the match evaluates to `false`.
+
+  If the patterns at all positions of a partial specialization match successfully, it is deemed a viable candidate. Both patterns and partial specializations adhere to a strict partial ordering. Similar to function overloads, a two-pass traversal is employed. The first pass elects a potential best candidate. When comparing a pair of candidates, the patterns at each position are evaluated, and the strictly more specific pattern wins. This is implemented using an algorithm based on **Skolem constants**: slots are filled with unique, synthetic types that do not match any actual types in the system. If candidate A's Skolemized instance successfully passes through candidate B's pattern, then B's pattern is more general than A's. We then cross-check by passing B's Skolemized instance through A's pattern. If both are more general, they are functionally equivalent; if neither is more general, they are incomparable (meaning the two patterns represent disjoint subsets in the type space). To be the definitive best candidate, a specialization must be at least as specific as all other candidates at every position, and strictly more specific in at least one position. Crucially, this partial ordering comparison does not rely on concrete instantiation arguments; the specificity of a template is determined entirely at definition time and is an intrinsic property of the template itself. The second pass then verifies against all other candidates to detect ambiguities. Finally, the compiler instantiates the "instantiation scope" using the best candidate's binding table, injects the partial specialization parameters, and evaluates the target symbol. The result of this evaluation is then permanently cached.
+
+  *Note: A classic example of incomparable template partial specializations leading to ambiguity:*
+
+  ```
+  class A<X: type, Y: type>;
+  specialize<X: type> class A<X, f64>;
+  specialize<Y: type> class A<i64, Y>;
+  type B = A<i64, f64>;
+  ```
 
 - **Error Recovery & Error Cascading Prevention**
 
@@ -142,19 +186,26 @@ flowchart LR
 
   By demoting C++ to a pure compile-time Intermediate Representation (IR), the current CodeGen pipeline now performs explicit instantiation and **Type Hoisting** for all generics prior to emission. This decision yields significant architectural advantages: globally unified type lifting entirely eliminates scope shadowing issues, making precise topological sorting and the strict separation of forward declarations from definitions trivial. The generation phase now simply emits the lowered, monomorphized AST—stripped of all non-runtime constructs and replaced with mangled identifiers—directly into the output stream. Concurrently, by eliminating complex template instantiations and overload resolution branches, the parsing speed of the downstream C++ compiler is theoretically improved. The accepted trade-off is the complete loss of human readability in the generated source, increased source code volume, and restricting interoperability to a one-way FFI (Zinc can call C++, but C++ cannot easily invoke highly mangled Zinc code). Ultimately, this compromise completely removes the limitations that the target language's abstraction boundaries previously placed on Zinc's core semantic expression.
 
+- ==**Closed-World Polymorphism & Type-Index Dispatch**==
+
+  C++’s reliance on `vptr`-based polymorphism occupies a compromised design space, prioritizing separate compilation and open-world extensibility at the cost of the Fragile Base Class (FBC) problem. In systems programming, assuming synchronized ABIs across dynamic libraries is often unrealistic—prompting industry standards to frequently restrict cross-boundary C++ polymorphism in favor of flat C ABIs to avoid severe memory corruption or segmentation faults. Recognizing this, Zinc strictly enforces a **Closed-World Assumption (CWA)** and discards vtables in favor of **Type-Index-Based Polymorphism** (conceptually aligning with tagged unions).
+
+  For any polymorphic class, Zinc injects a compiler-generated type index at memory offset zero. Crucially, these indices are assigned using a contiguous topological inheritance order (e.g., all descendants of branch B are strictly less than descendants of branch C). This architecture yields profound benefits: it completely eliminates the notoriously complex pointer-adjustment overhead inherent to C++ object slicing and casting, and it reduces dynamic type checks (downcasting) to ultra-fast integer range comparisons—an optimization C++ developers often manually emulate via enum tags. Furthermore, during Code Generation, Zinc lowers all member functions (except destructors, to preserve C++ RAII) into static free functions. Virtual dispatch is implemented not via indirect pointers, but through a centralized wrapper function containing a `switch` statement over the object's type index to call the underlying worker function. Because practical class hierarchies rarely exceed a manageable number of variants, this jump-table approach provides the downstream C++ compiler with massive opportunities for aggressive inlining and **devirtualization**, effectively bypassing the branch-prediction penalties and instruction cache misses typically associated with indirect virtual calls.
+
 #### 5. Development Checkpoints (Milestones)
 
 The development is structured into granular phases to ensure stability before introducing advanced static analysis features.
 
-| **Phase** | **Checkpoint**           | **Status**  | **Description**                                              |
-| --------- | ------------------------ | ----------- | ------------------------------------------------------------ |
-| **P1**    | **Core Infrastructure**  | Done        | PMR Memory model, Async File/Module Loading, ANTLR4 Integration. |
-| **P2**    | **Basic Semantics**      | Done        | Primitive Types, Symbol Collection, Type Checker, Diagnostic System. |
-| **P3**    | **Control Flow & Ops**   | Done        | Control flow (if/for), Operator Overloading via `OperationHandler`. |
-| **P4**    | **CodeGen**              | In Progress | Emitting C++20 code based on semantic analysis results.      |
-| **P5**    | **Classes & Namespaces** | Done        | Struct/Class layouts, Member resolution, Namespace scoping.  |
-| **P6**    | **Static Safety**        | In Progress | Borrow Checker                                               |
-| **P7**    | **Metaprogramming**      | In Progress | Template inference and expansion (LSP support if time permits). |
+| **Phase** | **Checkpoint**            | **Status**  | **Description**                                              |
+| --------- | ------------------------- | ----------- | ------------------------------------------------------------ |
+| **P1**    | **Core Infrastructure**   | Done        | PMR Memory model, Async File/Module Loading, ANTLR4 Integration. |
+| **P2**    | **Basic Semantics**       | Done        | Primitive Types, Symbol Collection, Type Checker, Diagnostic System. |
+| **P3**    | **Control Flow & Ops**    | Done        | Control flow (if/for), Operator Overloading via `OperationHandler`. |
+| **P4**    | **CodeGen**               | In Progress | Emitting C++20 code based on semantic analysis results.      |
+| **P5**    | **Classes & Namespaces**  | Done        | Struct/Class layouts, Member resolution, Namespace scoping.  |
+| **P6**    | ==~~**Static Safety**~~== | Dropped     | ~~Borrow Checker~~                                           |
+| **P7**    | **Metaprogramming**       | In Progress | Template inference and expansion (LSP support if time permits). |
+| **P8**    | ==**Evaluation**==        | Planned     | Rewriting My CG Coursework with Zinc                         |
 
 #### 6. Concrete Implementation
 
@@ -184,23 +235,27 @@ The development is structured into granular phases to ensure stability before in
 
   Crucially, rather than relying on the classic OOP double-dispatch pattern—which demands tedious `accept`/`visit` boilerplate and rigid return types (often forcing the use of type-erased wrappers like `std::any`, as seen in ANTLR's generated visitors)—this transpiler leverages modern C++'s `std::variant` and `std::visit`. This approach replaces runtime virtual polymorphism with compile-time static dispatch. It elegantly satisfies the DRY (Don't Repeat Yourself) principle: because `std::visit` resolves the best matching overload at compile time, a single visitor implementation can naturally fall back to base-class or generic overloads to simulate default behaviors. This achieves highly efficient, pattern-matching-like AST traversal while maintaining strict type safety and zero vtable overhead.
 
+- ==**CodeGen Pipeline & Deterministic Name Mangling**==
+
+  The CodeGen pipeline is strictly bifurcated into two phases: Type Generation followed by Code Generation. Post-semantic analysis, all reachable types are consolidated within the interning pool. Because the compiler operates macroscopically as a pure function, the insertion order of types into this pool is absolute and deterministic. Combined with a stable topological sort, this determinism allows the transpiler to utilize the interned type's chronological pool index as its stable nominal symbol in the generated C++. Crucially, only structs and classes are emitted as index-named declarations; all other composite or primitive types are expanded inline at their point of use.
+
+  During the subsequent Code Generation phase, every function is assigned a globally mangled identifier. This includes member functions, which are lowered and hoisted to the global scope as free functions. To map Zinc's module paths to flat C++ identifiers securely, fully qualified paths are concatenated using underscores. To eliminate any ambiguity caused by user-defined identifiers that inherently contain underscores, each path segment is strictly prefixed by its character length (e.g., the path `global.class.static_symbol` is mangled as `_6global_5class_13static_symbol`). Furthermore, to support function overloads and template instantiations, a serialized representation of the parameter type list is injected into the mangled name, prefixed with a `0` to differentiate it from standard path segments. For example, `global.f(i32, bool)` becomes `_6global_1f_03i321b` (where `3i32` encodes `i32` and `1b` encodes `bool`). This length-prefixed mangling scheme—conceptually similar to the Itanium C++ ABI—is straightforward, perfectly reversible (demangleable), and guarantees a strictly collision-free namespace.
+
 #### 7. Remaining Goals
 
 1. ~~Template Syntax~~
 2. ~~Deferred Static Analysis on Template Instantiation~~
 3. Monomorphization
 4. Built-in Types (by declaration file)
-5. Borrow Checker: Lexical and Statement-level Lifetimes
-6. Borrow Checker: Return Type Lifetime Annotations
-7. Array Type, Vector Type, Intersection and Union of Dynamic Struct Type
-8. Completing Built-in Types
-9. Method Reference
-10. ~~Metaprogramming: Built-in Predicates~~
-11. Metaprogramming: Concepts (Traits)
-12. Template: Variadic Parameters
-13. Abbreviated Function Templates by `auto` keyword
-14. Module System
-15. Class Template Argument Deduction (CTAD): by in-class deduction guide
-16. String Literals As Types
-17. ==TS-style Format String==
-18. ==Static Reflection==
+5. Array Type, Vector Type, Intersection and Union of Dynamic Struct Type
+6. Completing Built-in Types
+7. Method Reference
+8. ~~Metaprogramming: Built-in Predicates~~
+9. Metaprogramming: Concepts (Traits)
+10. Template: Variadic Parameters
+11. Abbreviated Function Templates by `auto` keyword
+12. Module System
+13. Class Template Argument Deduction (CTAD): by in-class deduction guide
+14. String Literals As Types
+15. ==TS-style Format String==
+16. ==Static Reflection==

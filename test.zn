@@ -1,25 +1,32 @@
 fn main() {
-    let a = A::<i32>(5, 1);
-    let b = A::<i32[]>(10, false);
-    static_assert(5 == 5, "a.a should be 5");
+    let v1 = Vec3{ x: 1, y: 2, z: 3 };
+    let v2 = Vec3{ x: 4, y: 5, z: 6 };
+    let v3 = v1 + v2;
+    std.print("v3: ({}, {}, {})", v3.x, v3.y, v3.z);
 }
 
-class A<T: type> {
-    let a: T;
-    let b: T;
-    init(a: T, b: T) {
-        return Self{ a: a, b: b };
+class Vec3<T: type> {
+    let x: T;
+    let y: T;
+    let z: T;
+
+    init(x: T, y: T, z: T) {
+        return Self{ x: x, y: y, z: z };
     }
-}
 
-specialize<U: type> class A<U[]> {
-    let a: U;
-    let b: bool;
-    init(a: U, b: bool) {
-        return Self{ a: a, b: b };
+    operator+(self: &Self, other: &Self) -> Self {
+        return Self{
+            x: self.x + other.x,
+            y: self.y + other.y,
+            z: self.z + other.z,
+        };
     }
-}
 
-fn add(a: i32, b: i32) -> i32 {
-    return a + b;
+    operator*(self: &Self, scalar: T) -> Self {
+        return Self{
+            x: self.x * scalar,
+            y: self.y * scalar,
+            z: self.z * scalar,
+        };
+    }
 }

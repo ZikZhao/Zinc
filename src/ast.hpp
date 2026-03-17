@@ -124,6 +124,7 @@ struct ASTReturnStatement;
 struct ASTFunctionParameter;
 struct ASTFunctionDefinition;
 struct ASTConstructorDestructorDefinition;
+struct ASTOperatorOverloadDefinition;
 struct ASTClassDefinition;
 struct ASTNamespaceDefinition;
 struct ASTTemplateParameter;
@@ -208,6 +209,7 @@ using ASTNodeVariant = std::variant<
     // Functions and classes
     const ASTFunctionDefinition*,
     const ASTConstructorDestructorDefinition*,
+    const ASTOperatorOverloadDefinition*,
     const ASTClassDefinition*,
     const ASTNamespaceDefinition*,
     // Templates
@@ -473,6 +475,9 @@ struct ASTReturnStatement final : public ASTNode {
 struct ASTFunctionParameter final : public ASTNode {
     std::string_view identifier;
     ASTExprVariant type;
+    ASTExprVariant default_value;
+    bool is_mutable;
+    bool is_variadic;
 };
 
 struct ASTFunctionDefinition final : public ASTNode {
@@ -482,13 +487,21 @@ struct ASTFunctionDefinition final : public ASTNode {
     std::span<ASTNodeVariant> body;
     bool declared_const;
     bool declared_static;
-    bool declared_extern;
 };
 
 struct ASTConstructorDestructorDefinition final : public ASTNode {
-    bool is_constructor;
     std::span<ASTFunctionParameter> parameters;
     std::span<ASTNodeVariant> body;
+    bool is_constructor;
+    bool declared_const;
+};
+
+struct ASTOperatorOverloadDefinition final : public ASTNode {
+    OperatorCode opcode;
+    std::span<ASTFunctionParameter> parameters;
+    ASTExprVariant return_type;
+    std::span<ASTNodeVariant> body;
+    bool declared_const;
 };
 
 struct ASTClassDefinition final : public ASTNode {
