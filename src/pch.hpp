@@ -85,6 +85,16 @@ concept RandomAccessRange = std::ranges::random_access_range<R> && std::ranges::
                             std::convertible_to<std::ranges::range_reference_t<R>, T>;
 
 template <typename T>
+constexpr auto nonnull(T&& variant) -> bool {
+    return !std::holds_alternative<std::monostate>(std::forward<T>(variant));
+}
+
+template <typename T>
+constexpr auto holds_monostate(T&& variant) -> bool {
+    return std::holds_alternative<std::monostate>(std::forward<T>(variant));
+}
+
+template <typename T>
 constexpr auto opaque_cast(auto* ptr) {
     /// NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     return reinterpret_cast<T>(ptr);
@@ -100,14 +110,6 @@ auto index(const auto& container, auto&& value) {
     auto it = std::ranges::find(container, value);
     assert(it != container.end());
     return static_cast<std::size_t>(std::distance(container.begin(), it));
-}
-
-auto out_it(auto& container) {
-    if constexpr (requires { container.push_back; }) {
-        return std::back_inserter(container);
-    } else if (requires { container << ""; }) {
-        return std::ostreambuf_iterator(container);
-    }
 }
 
 template <typename... Ts>

@@ -160,10 +160,6 @@ using ASTExprVariant = std::variant<
     const ASTReferenceType*,
     const ASTPointerType*>;
 
-constexpr auto nonnull(auto&& variant) -> bool {
-    return !std::holds_alternative<std::monostate>(std::forward<decltype(variant)>(variant));
-}
-
 struct NodePtrVisitor {
     auto operator()(ASTNodeVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
     auto operator()(ASTExprVariant variant) -> const ASTNode* { return std::visit(*this, variant); }

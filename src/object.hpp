@@ -330,7 +330,6 @@ public:
     enum class Category : std::uint8_t {
         Runtime,   // a runtime value -> const Type*
         Comptime,  // a compile-time value -> Value*
-        Type,      // a type -> const Type*
     };
 
 public:
@@ -338,14 +337,12 @@ public:
     static auto prvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Right); }
     static auto lvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Left); }
     static auto lvalue(Term term) noexcept -> Term {
-        assert(!term.is_type());
-        return {term.ptr_, term.category_, ValueCategory::Left};
+        return Term(term.get(), ValueCategory::Left, term.is_comptime_);
     }
     static auto xvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Expiring); }
     static auto forward_like(const Term& source, auto* ptr) noexcept -> Term {
-        return Term(ptr, source.category_, source.value_category_);
+        return Term(ptr, source.value_category(), source.is_comptime_);
     }
-    static auto type(const Type* type) noexcept -> Term { return Term(type); }
 
 private:
     union {
@@ -353,18 +350,16 @@ private:
         const Type* type_;
         Value* value_;
     };
-    Category category_;
     ValueCategory value_category_;
+    bool is_comptime_;
 
 private:
-    explicit Term(const Type* type) noexcept
-        : type_(type), category_(Category::Type), value_category_(ValueCategory::Right) {}
     Term(const Type* type, ValueCategory value_category) noexcept
-        : type_(type), category_(Category::Runtime), value_category_(value_category) {}
+        : type_(type), value_category_(value_category), is_comptime_(false) {}
     Term(Value* value, ValueCategory value_category) noexcept
-        : value_(value), category_(Category::Comptime), value_category_(value_category) {}
-    Term(const Object* obj, Category category, ValueCategory value_category) noexcept
-        : ptr_(obj), category_(category), value_category_(value_category) {}
+        : value_(value), value_category_(value_category), is_comptime_(true) {}
+    Term(const Object* ptr, ValueCategory value_category, bool is_comptime) noexcept
+        : ptr_(ptr), value_category_(value_category), is_comptime_(is_comptime) {}
 
 public:
     Term() noexcept = default;
@@ -376,16 +371,7 @@ public:
     [[nodiscard]] auto value_category() const noexcept -> ValueCategory { return value_category_; }
 
     [[nodiscard]] auto is_unknown() const noexcept -> bool;
-    [[nodiscard]] auto is_type() const noexcept -> bool { return category_ == Category::Type; }
-    [[nodiscard]] auto is_comptime() const noexcept -> bool {
-        return category_ == Category::Comptime;
-    }
-    [[nodiscard]] auto is_runtime() const noexcept -> bool {
-        return category_ == Category::Runtime;
-    }
-    [[nodiscard]] auto get_type() const noexcept -> const Type* {
-        return is_type() ? type_ : nullptr;
-    }
+    [[nodiscard]] auto is_comptime() const noexcept -> bool { return is_comptime_; }
     [[nodiscard]] auto get_comptime() const noexcept -> Value* {
         return is_comptime() ? value_ : nullptr;
     }
@@ -2168,13 +2154,12 @@ inline const Type* TypeRegistry::simplify_recursive_type(
     return interned_type;
 }
 
-inline auto Term::unknown() noexcept -> Term { return Term(&UnknownType::instance); }
+inline auto Term::unknown() noexcept -> Term { return Term::prvalue(&UnknownType::instance); }
 
 inline auto Term::is_unknown() const noexcept -> bool { return ptr_->kind_ == Kind::Unknown; }
 
 inline auto Term::effective_type() const noexcept -> const Type* {
-    assert(!is_type());
-    return category_ == Category::Comptime ? value_->get_type() : type_;
+    return is_comptime_ ? value_->get_type() : type_;
 }
 
 inline auto Type::assignable_from(const Type* source) const noexcept -> bool {
@@ -2348,9 +2333,6 @@ inline auto StructType::construct(
     GlobalMemory::FlatMap<std::string_view, const Type*> init_types;
     bool is_comptime = true;
     for (const auto& [id, term] : inits) {
-        if (term.is_type()) {
-            throw UnlocatedProblem::make<SymbolCategoryMismatchError>(false);
-        }
         if (!term.is_comptime()) {
             is_comptime = false;
         }

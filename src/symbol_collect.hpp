@@ -27,7 +27,7 @@ struct VariableInitialization : public GlobalMemory::MonotonicAllocated {
 };
 
 using ScopeValue = PointerVariant<
-    Term*,                                       // type/comptime (from template)
+    const Object*,                               // type/comptime (from template)
     const ASTExprVariant*,                       // type alias
     const ASTClassDefinition*,                   // class definition
     const VariableInitialization*,               // comptime/variable declaration
@@ -80,9 +80,9 @@ public:
     auto operator=(Scope&&) -> Scope& = delete;
     ~Scope() noexcept = default;
 
-    void add_template_argument(std::string_view identifier, Term term) noexcept {
+    void add_template_argument(std::string_view identifier, const Object* term) noexcept {
         assert(!identifiers_.contains(identifier));
-        identifiers_.insert({identifier, new Term(term)});
+        identifiers_.insert({identifier, term});
     }
 
     void add_alias(std::string_view identifier, const ASTExprVariant* expr) {
