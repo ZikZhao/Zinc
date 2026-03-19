@@ -15,7 +15,6 @@ enum class Kind : std::uint8_t {
     Float,
     Boolean,
     Function,
-    Array,
     Struct,
     Interface,
     Instance,
@@ -47,7 +46,6 @@ class IntegerType;
 class FloatType;
 class BooleanType;
 class FunctionType;
-class ArrayType;
 class StructType;
 class InterfaceType;
 class InstanceType;
@@ -227,7 +225,6 @@ public:
     static void get_at(TypeResolution& out, auto&&... args) noexcept {
         using Composites = std::tuple<
             FunctionType,
-            ArrayType,
             StructType,
             InstanceType,
             MutableType,
@@ -283,7 +280,6 @@ private:
     TypeDependencyGraph graph_;
     std::tuple<
         TypeSet<FunctionType>,
-        TypeSet<ArrayType>,
         TypeSet<StructType>,
         TypeSet<MutableType>,
         TypeSet<ReferenceType>,
@@ -746,40 +742,6 @@ protected:
         }
         return return_type_->pattern_match(other_func->return_type_, auto_bindings);
     }
-};
-
-class ArrayType final : public Type {
-public:
-    static constexpr Kind kind = Kind::Array;
-
-public:
-    const Type* element_type_;
-    const IntegerValue* size_;
-
-public:
-    ArrayType(const Type* element_type, const IntegerValue* size) noexcept
-        : Type(kind), element_type_(element_type) {}
-
-    GlobalMemory::String repr() const final {
-        return GlobalMemory::format("{}[]", element_type_->repr());
-    }
-
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
-        return graph.check_dependency(this, element_type_);
-    }
-
-    Term default_construct() const noexcept final;
-
-protected:
-    auto do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
-    ) const noexcept -> std::strong_ordering final;
-
-    auto do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept
-        -> bool final;
-
-    auto do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept
-        -> bool final;
 };
 
 class StructType : public Type {
@@ -1282,6 +1244,7 @@ public:
 
 protected:
     Value(Kind kind) noexcept : Object(kind, false) {}
+    virtual auto do_less_compare(const Value* other) const noexcept -> bool = 0;
 
 public:
     Type* dyn_type() = delete;
@@ -1291,6 +1254,15 @@ public:
     virtual auto resolve_to(const Type* target) const -> Value* = 0;
     virtual void assign_from(Value* source) = 0;
     virtual auto hash_code() const noexcept -> std::size_t = 0;
+    bool less_compare(const Value* other) const noexcept {
+        if (this == other) {
+            return false;
+        }
+        if (kind_ != other->kind_) {
+            return kind_ < other->kind_;
+        }
+        return do_less_compare(other);
+    }
 };
 
 class UnknownValue final : public Value {
@@ -1311,6 +1283,7 @@ private:
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         UNREACHABLE();
     }
+    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
     std::size_t hash_code() const noexcept final { return std::bit_cast<std::size_t>(this); }
 };
 
@@ -1336,6 +1309,7 @@ public:
             return true;
         }
     }
+    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
     std::size_t hash_code() const noexcept final {
         return hash_combine(std::bit_cast<std::size_t>(this), index_);
     }
@@ -1363,6 +1337,7 @@ public:
         const NullptrValue* other_nullptr = target->dyn_cast<NullptrValue>();
         return other_nullptr != nullptr;
     }
+    bool do_less_compare(const Value* other) const noexcept final { return false; }
     std::size_t hash_code() const noexcept final { return std::bit_cast<std::size_t>(this); }
 };
 
@@ -1468,6 +1443,10 @@ public:
         const IntegerValue* other_int = target->dyn_cast<IntegerValue>();
         return other_int && value_ == other_int->value_;
     }
+    bool do_less_compare(const Value* other) const noexcept final {
+        const IntegerValue* other_int = other->cast<IntegerValue>();
+        return value_ < other_int->value_;
+    }
     std::size_t hash_code() const noexcept final { return std::hash<BigInt>{}(value_); }
 };
 
@@ -1520,6 +1499,9 @@ public:
         /// float-point number is not allowed as NTTP
         return false;
     }
+    bool do_less_compare(const Value* other) const noexcept final {
+        return value_ < other->cast<FloatValue>()->value_;
+    }
     std::size_t hash_code() const noexcept final { return std::hash<double>{}(value_); }
 };
 
@@ -1549,6 +1531,9 @@ public:
         const BooleanValue* other_bool = target->dyn_cast<BooleanValue>();
         return other_bool && value_ == other_bool->value_;
     }
+    bool do_less_compare(const Value* other) const noexcept final {
+        return !value_ && other->cast<BooleanValue>()->value_;
+    }
     std::size_t hash_code() const noexcept final { return std::hash<bool>{}(value_); }
 };
 
@@ -1574,67 +1559,10 @@ public:
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         throw;
     }
-
+    bool do_less_compare(const Value* other) const noexcept final { throw; }
     auto hash_code() const noexcept -> std::size_t final { throw; }
 
     auto invoke(std::span<Term> args) const -> Term { return callback_(args); }
-};
-
-class ArrayValue final : public Value {
-public:
-    static constexpr Kind kind = Kind::Array;
-
-public:
-    const ArrayType* type_;
-    union {
-        GlobalMemory::Vector<Value*> elements_;
-        std::string_view string_;
-    };
-
-public:
-    ArrayValue(GlobalMemory::Vector<Value*> elements) noexcept
-        : Value(kind), type_(nullptr), elements_(std::move(elements)) {}
-    ArrayValue(const ArrayType* type, GlobalMemory::Vector<Value*> elements) noexcept
-        : Value(kind), type_(type), elements_(std::move(elements)) {}
-    ArrayValue(std::string_view string) noexcept
-        : Value(kind),
-          type_(TypeRegistry::get<ArrayType>(&IntegerType::u8_instance, nullptr)),
-          string_(string) {}
-    ~ArrayValue() noexcept {
-        if (type_->element_type_ == &IntegerType::u8_instance) {
-            // string literal, no need to delete elements
-        } else {
-            std::destroy_at(&elements_);
-        }
-    };
-    GlobalMemory::String repr() const noexcept final {
-        return GlobalMemory::format("[{}]", type_->element_type_->repr());
-    }
-    const ArrayType* get_type() const noexcept final { return type_; }
-    ArrayValue* clone() const noexcept final {
-        if (type_) {
-            GlobalMemory::Vector<Value*> cloned_elements;
-            for (Value* element : elements_) {
-                cloned_elements.push_back(element->clone());
-            }
-            return new ArrayValue(type_, std::move(cloned_elements));
-        } else {
-            return new ArrayValue(string_);
-        }
-    }
-    ArrayValue* resolve_to(const Type* target) const noexcept final {
-        /// TODO: implement
-        return nullptr;
-    }
-    void assign_from(Value* source) final {
-        /// TODO: implement
-        UNREACHABLE();
-    }
-    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
-        throw;
-    }
-
-    auto hash_code() const noexcept -> std::size_t final { throw; }
 };
 
 class StructValue final : public Value {
@@ -1688,6 +1616,18 @@ public:
             hash = hash_combine(hash, value->hash_code());
         }
         return hash;
+    }
+    bool do_less_compare(const Value* other) const noexcept final {
+        const StructValue* other_struct = other->cast<StructValue>();
+        for (const auto& [name, value] : fields_) {
+            const Value* other_value = other_struct->fields_.at(name);
+            if (value->less_compare(other_value)) {
+                return true;
+            } else if (other_value->less_compare(value)) {
+                return false;
+            }
+        }
+        return false;
     }
 };
 
@@ -1744,7 +1684,18 @@ public:
         }
         return hash;
     }
-
+    auto do_less_compare(const Value* other) const noexcept -> bool final {
+        const InstanceValue* other_instance = other->cast<InstanceValue>();
+        for (const auto& [name, value] : attrs_) {
+            const Value* other_value = other_instance->attrs_.at(name);
+            if (value->less_compare(other_value)) {
+                return true;
+            } else if (other_value->less_compare(value)) {
+                return false;
+            }
+        }
+        return false;
+    }
     auto get_attr(std::string_view attr) noexcept -> Value* { return attrs_.at(attr); }
 };
 
@@ -1777,7 +1728,9 @@ public:
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         UNREACHABLE();
     }
-
+    bool do_less_compare(const Value* other) const noexcept final {
+        return value_->less_compare(other->cast<MutableValue>()->value_);
+    }
     [[nodiscard]] auto hash_code() const noexcept -> std::size_t final {
         return hash_combine(std::bit_cast<std::size_t>(type_), value_->hash_code());
     }
@@ -1813,7 +1766,10 @@ public:
         const ReferenceValue* other_ref = target->dyn_cast<ReferenceValue>();
         return other_ref && referenced_value_ == other_ref->referenced_value_;
     }
-
+    bool do_less_compare(const Value* other) const noexcept final {
+        const ReferenceValue* other_ref = other->cast<ReferenceValue>();
+        return referenced_value_->less_compare(other_ref->referenced_value_);
+    }
     [[nodiscard]] auto hash_code() const noexcept -> std::size_t final {
         return hash_combine(std::bit_cast<std::size_t>(type_), referenced_value_->hash_code());
     }
@@ -1854,6 +1810,10 @@ public:
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const PointerValue* other_ptr = target->dyn_cast<PointerValue>();
         return other_ptr && pointed_value_ == other_ptr->pointed_value_;
+    }
+
+    bool do_less_compare(const Value* other) const noexcept final {
+        return pointed_value_->less_compare(other->cast<PointerValue>()->pointed_value_);
     }
 
     [[nodiscard]] auto hash_code() const noexcept -> std::size_t final {
@@ -2066,72 +2026,6 @@ inline auto FunctionType::do_assignable_from(
 inline auto FunctionType::default_construct() const noexcept -> Term {
     /// TODO:
     assert(false);
-}
-
-inline auto ArrayType::do_compare(
-    const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
-) const noexcept -> std::strong_ordering {
-    const ArrayType* other_array = other->cast<ArrayType>();
-    auto cmp = element_type_->compare(other_array->element_type_, assumed_equal);
-    if (cmp != std::strong_ordering::equal) {
-        return cmp;
-    }
-    if (size_ == nullptr && other_array->size_ == nullptr) {
-        return std::strong_ordering::equal;
-    } else if (size_ == nullptr) {
-        return std::strong_ordering::less;
-    } else if (other_array->size_ == nullptr) {
-        return std::strong_ordering::greater;
-    }
-    return size_->value_ <=> other_array->size_->value_;
-}
-
-inline auto ArrayType::do_assignable_from(
-    const Type* source, AutoBindings& auto_bindings
-) const noexcept -> bool {
-    if (const ArrayType* array_other = source->dyn_cast<ArrayType>()) {
-        if (!element_type_->assignable_from(array_other->element_type_, auto_bindings)) {
-            return false;
-        }
-        if (size_ && array_other->size_) {
-            return size_->value_ == array_other->size_->value_;
-        } else {
-            return (!size_ && !array_other->size_);
-        }
-    }
-    return false;
-}
-
-inline auto ArrayType::do_pattern_match(
-    const Object* target, AutoBindings& auto_bindings
-) const noexcept -> bool {
-    const ArrayType* other_array = target->dyn_cast<ArrayType>();
-    return other_array && element_type_->pattern_match(other_array->element_type_, auto_bindings) &&
-           (size_ ? size_->pattern_match(other_array->size_, auto_bindings) : true);
-}
-
-inline auto ArrayType::default_construct() const noexcept -> Term {
-    GlobalMemory::Vector<Term> elements;
-    bool is_comptime = true;
-    for (std::size_t i = 0; i < size_->value_; ++i) {
-        Term default_value = element_type_->default_construct();
-        if (!default_value) {
-            return {};
-        }
-        if (!default_value.is_comptime()) {
-            is_comptime = false;
-        }
-        elements.push_back(default_value);
-    }
-    if (is_comptime) {
-        return Term::prvalue(
-            new ArrayValue(this, elements | std::views::transform([](Term& term) {
-                                     return term.get_comptime();
-                                 }) | GlobalMemory::collect<GlobalMemory::Vector>())
-        );
-    } else {
-        return Term::prvalue(this);
-    }
 }
 
 inline auto StructType::construct(

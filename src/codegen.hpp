@@ -107,9 +107,6 @@ public:
         case Kind::Function:
             output(out, type->cast<FunctionType>(), types);
             break;
-        case Kind::Array:
-            /// TODO:
-            break;
         case Kind::Struct:
         case Kind::Instance:
             std::format_to(std::back_inserter(out), "t{}"sv, index(types, type));
@@ -278,9 +275,6 @@ public:
         case Kind::Boolean:
             out += value->cast<BooleanValue>()->value_ ? "true"sv : "false"sv;
             break;
-        case Kind::Array:
-            throw;
-            break;
         case Kind::Function:
             throw;
             break;
@@ -400,10 +394,6 @@ public:
         case Kind::Boolean:
             out += "b"sv;
             break;
-        case Kind::Array:
-            out += "A"sv;
-            (*this)(out, type->cast<ArrayType>()->element_type_);
-            break;
         case Kind::Function:
         case Kind::Interface:
         case Kind::Mutable:
@@ -476,9 +466,7 @@ public:
                     CodeGenEnvironment::mangle_path(mangled_path, scope, (*func_def)->identifier);
                     (*this)(*func_def, mangled_path, func_obj);
                 }
-            } else if (
-                auto* ctor_def = std::get_if<const ASTConstructorDestructorDefinition*>(&node)
-            ) {
+            } else if (auto* ctor_def = std::get_if<const ASTCtorDtorDefinition*>(&node)) {
                 (*this)(*ctor_def, func_obj);
             } else {
                 UNREACHABLE();
@@ -539,8 +527,7 @@ public:
         newline();
     }
 
-    auto operator()(const ASTConstructorDestructorDefinition* node, const FunctionType* func_type)
-        -> void {
+    auto operator()(const ASTCtorDtorDefinition* node, const FunctionType* func_type) -> void {
         auto gen = [&](GlobalMemory::String& out) {
             std::format_to(
                 std::back_inserter(out),

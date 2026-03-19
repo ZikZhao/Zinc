@@ -83,8 +83,8 @@ struct ASTBreakStatement;
 struct ASTReturnStatement;
 struct ASTFunctionParameter;
 struct ASTFunctionDefinition;
-struct ASTConstructorDestructorDefinition;
-struct ASTOperatorOverloadDefinition;
+struct ASTCtorDtorDefinition;
+struct ASTOperatorDefinition;
 struct ASTClassDefinition;
 struct ASTNamespaceDefinition;
 struct ASTTemplateParameter;
@@ -129,8 +129,8 @@ using ASTNodeVariant = std::variant<
     const ASTReturnStatement*,
     // Functions and classes
     const ASTFunctionDefinition*,
-    const ASTConstructorDestructorDefinition*,
-    const ASTOperatorOverloadDefinition*,
+    const ASTCtorDtorDefinition*,
+    const ASTOperatorDefinition*,
     const ASTClassDefinition*,
     const ASTNamespaceDefinition*,
     // Templates
@@ -356,14 +356,14 @@ struct ASTFunctionDefinition final : public ASTNode {
     bool declared_static;
 };
 
-struct ASTConstructorDestructorDefinition final : public ASTNode {
+struct ASTCtorDtorDefinition final : public ASTNode {
     std::span<ASTFunctionParameter> parameters;
     std::span<ASTNodeVariant> body;
     bool is_constructor;
     bool declared_const;
 };
 
-struct ASTOperatorOverloadDefinition final : public ASTNode {
+struct ASTOperatorDefinition final : public ASTNode {
     OperatorCode opcode;
     ASTFunctionParameter left;
     ASTFunctionParameter* right;
@@ -379,10 +379,10 @@ struct ASTClassDefinition final : public ASTNode {
     std::span<const ASTTypeAlias*> aliases;
     std::span<const ASTClassDefinition*> classes;
     std::span<const ASTDeclaration*> fields;
-    std::span<const ASTConstructorDestructorDefinition*> constructors;
-    const ASTConstructorDestructorDefinition* destructor;
+    std::span<const ASTCtorDtorDefinition*> constructors;
+    const ASTCtorDtorDefinition* destructor;
     std::span<const ASTFunctionDefinition*> functions;
-    std::span<const ASTOperatorOverloadDefinition*> operators;
+    std::span<const ASTOperatorDefinition*> operators;
 };
 
 struct ASTNamespaceDefinition final : public ASTNode {

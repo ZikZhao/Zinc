@@ -558,18 +558,59 @@ public:
         }
         return eval_symbol(identifier, *scope, *value);
     }
+
+    auto get_std_symbol(std::string_view identifier) -> Symbol {
+        auto [scope, value] = lookup("std");
+        auto std_scope = value->get<Scope*>();
+        return eval_symbol(identifier, *std_scope, *std_scope->find(identifier));
+    }
 };
 
 class TemplateHandler final : public GlobalMemory::MonotonicAllocated {
 private:
-    struct TemplateArgumentComparator {
-        auto operator()(const Object* left, const Object* right) noexcept {
-            if (auto* left_type = left->dyn_type()) {
-                return left_type == right->cast<Type>();
-            } else {
-                /// TODO: value equality
+    using TemplateArgs = std::span<const Object*>;
+
+    using TemplateCacheKey = std::pair<const ASTTemplateDefinition*, TemplateArgs>;
+
+    struct TemplateKeyHasher {
+        auto operator()(const TemplateCacheKey& key) const noexcept -> std::size_t {
+            std::size_t result = std::bit_cast<std::size_t>(key.first);
+            for (const Object* arg : key.second) {
+                if (auto* type = arg->dyn_type()) {
+                    result = hash_combine(result, std::bit_cast<std::size_t>(type));
+                } else {
+                    result = hash_combine(
+                        result, std::bit_cast<std::size_t>(arg->cast<Value>()->hash_code())
+                    );
+                }
+            }
+            return result;
+        }
+    };
+
+    struct TemplateKeyComparator {
+        auto operator()(const TemplateCacheKey& left, const TemplateCacheKey& right) const noexcept
+            -> bool {
+            if (left.first != right.first) {
                 return false;
             }
+            if (left.second.size() != right.second.size()) {
+                return false;
+            }
+            for (size_t i = 0; i < left.second.size(); i++) {
+                const Object* left_arg = left.second[i];
+                const Object* right_arg = right.second[i];
+                if (auto* left_type = left_arg->dyn_type()) {
+                    if (left_type != right_arg) {
+                        return false;
+                    }
+                } else {
+                    if (left_arg->cast<Value>()->less_compare(right_arg->cast<Value>())) {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
     };
 
@@ -578,13 +619,11 @@ private:
         std::span<const Object*> skolems;
     };
 
-    using TemplateArgs = std::span<const Object*>;
-
 private:
     Sema& sema_;
-    // GlobalMemory::UnorderedMap<std::pair<const ASTTemplateDefinition*, TemplateArgs>, const
-    // Object*>
-    //     instantiations_;
+    GlobalMemory::
+        UnorderedMap<TemplateCacheKey, const Object*, TemplateKeyHasher, TemplateKeyComparator>
+            cache_;
     GlobalMemory::UnorderedMap<const ASTTemplateSpecialization*, SpecializationPrototype>
         pattern_cache_;
 
@@ -601,6 +640,9 @@ public:
         if (!validate(*family.primary, args)) {
             return {};
         }
+        if (auto cache_it = cache_.find({family.primary, args}); cache_it != cache_.end()) {
+            return as_symbol(cache_it->second);
+        }
         auto [inst_scope, target] = specialization_resolution(family, args);
         Sema::Guard inner_guard(sema_, *inst_scope);
         sema_.codegen_env_.map_instantiation(inst_scope, args);
@@ -612,6 +654,10 @@ public:
                 instance_type->template_args_ = args;
             }
         }
+        cache_[{family.primary, args}] =
+            Sema::get_if<SymbolKind::Type>(result)
+                ? static_cast<const Object*>(Sema::get<SymbolKind::Type>(result))
+                : Sema::get<SymbolKind::Term>(result).get_comptime();
         return result;
     }
 
@@ -1677,14 +1723,8 @@ public:
     }
 
     auto operator()(const ASTStringConstant* node) -> Symbol {
-        auto [scope, value] = sema_.lookup("std");
-        Scope* std_scope = value->get<Scope*>();
-        const ScopeValue* string_view_scope_value = std_scope->find("string_view");
-        assert(
-            string_view_scope_value && string_view_scope_value->get<const ASTClassDefinition*>()
-        );
-        TypeResolution strview_type_res =
-            sema_.eval_type("string_view", *std_scope, *string_view_scope_value);
+        Symbol string_view_symbol = sema_.get_std_symbol("string_view");
+        TypeResolution strview_type_res = Sema::get<SymbolKind::Type>(string_view_symbol);
         return Term::prvalue(strview_type_res.get());
     }
 
@@ -1907,7 +1947,7 @@ public:
         }
     }
 
-    void operator()(const ASTConstructorDestructorDefinition* node) noexcept {
+    void operator()(const ASTCtorDtorDefinition* node) noexcept {
         Sema::Guard guard(sema_, node);
         if (node->is_constructor) {
             FunctionObject func_obj = sema_.call_handler_->get_func_obj(sema_.current_scope_, node);
@@ -1976,6 +2016,7 @@ inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void
 inline auto TemplateHandler::inference(
     Scope* scope, const ASTTemplateDefinition* primary, std::span<const Type*> args
 ) noexcept -> FunctionObject {
+    // prepare auto instances
     GlobalMemory::Vector<const Object*> auto_instances = TypeRegistry::get_auto_instances(
         primary->parameters | std::views::transform(&ASTTemplateParameter::is_nttp)
     );
@@ -1984,6 +2025,8 @@ inline auto TemplateHandler::inference(
         const ASTTemplateParameter& param = primary->parameters[i];
         pattern_scope.add_template_argument(param.identifier, args[i]);
     }
+    // make patterns
+    Sema::Guard guard(sema_, pattern_scope);
     GlobalMemory::Vector<const Type*> patterns;
     if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&primary->target_node)) {
         for (const auto& pattern : (*func_def)->parameters) {
@@ -1991,30 +2034,26 @@ inline auto TemplateHandler::inference(
                 ValueContextEvaluator{sema_, nullptr, false, true}(pattern.type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
         }
-    } else if (
-        auto* ctor_def =
-            std::get_if<const ASTConstructorDestructorDefinition*>(&primary->target_node)
-    ) {
+    } else if (auto* ctor_def = std::get_if<const ASTCtorDtorDefinition*>(&primary->target_node)) {
         for (const auto& pattern : (*ctor_def)->parameters) {
             Symbol pattern_symbol =
                 ValueContextEvaluator{sema_, nullptr, false, true}(pattern.type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
         }
-    } else if (
-        auto* operator_fn = std::get_if<const ASTOperatorOverloadDefinition*>(&primary->target_node)
-    ) {
+    } else if (auto* op_def = std::get_if<const ASTOperatorDefinition*>(&primary->target_node)) {
         Symbol left_pattern_symbol =
-            ValueContextEvaluator{sema_, nullptr, false, true}((*operator_fn)->left.type);
+            ValueContextEvaluator{sema_, nullptr, false, true}((*op_def)->left.type);
         patterns.push_back(Sema::get<SymbolKind::Type>(left_pattern_symbol));
-        if ((*operator_fn)->right) {
+        if ((*op_def)->right) {
             Symbol right_pattern_symbol =
-                ValueContextEvaluator{sema_, nullptr, false, true}((*operator_fn)->right->type);
+                ValueContextEvaluator{sema_, nullptr, false, true}((*op_def)->right->type);
             patterns.push_back(Sema::get<SymbolKind::Type>(right_pattern_symbol));
         }
     } else {
         // template cannot appears on another template
         UNREACHABLE();
     }
+    // pattern match and auto binding
     AutoBindings auto_bindings;
     for (std::size_t i = 0; i < patterns.size(); i++) {
         if (!patterns[i]->assignable_from(args[i], auto_bindings)) {
@@ -2028,6 +2067,7 @@ inline auto TemplateHandler::inference(
     for (auto& auto_inst : auto_instances) {
         instantiation_args.push_back(auto_bindings[auto_inst]);
     }
+    // instantiate the template with auto bindings
     Symbol func_symbol = instantiate(scope, primary, instantiation_args);
     if (!holds_monostate(func_symbol)) {
         return Sema::get<SymbolKind::Term>(func_symbol).get();
@@ -2314,7 +2354,7 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
         } else {
             return_type = &VoidType::instance;
         }
-    } else if (auto ctor_def = overload.get<const ASTConstructorDestructorDefinition*>()) {
+    } else if (auto ctor_def = overload.get<const ASTCtorDtorDefinition*>()) {
         params = ctor_def->parameters |
                  std::views::transform([&](const ASTFunctionParameter& param) -> const Type* {
                      TypeResolution param_type;
@@ -2323,7 +2363,7 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
                  }) |
                  GlobalMemory::collect<std::span<const Type*>>();
         return_type = sema_.get_self_type();
-    } else if (auto* operator_def = overload.get<const ASTOperatorOverloadDefinition*>()) {
+    } else if (auto* operator_def = overload.get<const ASTOperatorDefinition*>()) {
         TypeResolution left_type;
         TypeResolution right_type;
         TypeContextEvaluator{sema_, left_type}(operator_def->left.type);
@@ -2415,14 +2455,22 @@ inline auto Sema::eval_symbol(
 }
 
 inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
-    out_ = std::type_identity<ArrayType>();
     TypeResolution element_type;
     TypeContextEvaluator{sema_, element_type}(node->element_type);
     if (!element_type.is_sized()) {
         TypeRegistry::add_ref_dependency(out_, element_type);
     }
     if (std::holds_alternative<std::monostate>(node->length)) {
-        TypeRegistry::get_at<ArrayType>(out_, element_type, nullptr);
+        out_ = &UnknownType::instance;
+        return;
+    }
+
+    if (holds_monostate(node->length)) {
+        Symbol span = sema_.get_std_symbol("span");
+        std::array<const Object*, 1> array_args = {element_type.get()};
+        Symbol result =
+            sema_.template_handler_->instantiate(*std::get<TemplateFamily*>(span), array_args);
+        out_ = Sema::get<SymbolKind::Type>(result);
         return;
     }
 
@@ -2432,9 +2480,12 @@ inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
         if (!length_term.is_comptime() || !length_term.get_comptime()->dyn_cast<IntegerValue>()) {
             throw;
         }
-        TypeRegistry::get_at<ArrayType>(
-            out_, element_type, length_term.get_comptime()->cast<IntegerValue>()
-        );
+        Symbol array = sema_.get_std_symbol("array");
+        std::array<const Object*, 2> array_args = {element_type.get(), length_term.get_comptime()};
+        Symbol result =
+            sema_.template_handler_->instantiate(*std::get<TemplateFamily*>(array), array_args);
+        out_ = Sema::get<SymbolKind::Type>(result);
+        return;
     }
     out_ = TypeRegistry::get_unknown();
 }

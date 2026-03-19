@@ -2,6 +2,9 @@ class string_view {
 }
 
 class array<T: type, N: usize> {
+    fn at(self: &Self, index: usize) -> &T;
+    fn at(self: &mut Self, index: usize) -> &mut T;
+    fn size(self: &Self) -> usize;
 }
 
 fn print<Args...: type>(fmt: string_view, args: Args...);

@@ -69,8 +69,6 @@ auto is_integral(const Type* type) -> bool { return type->kind_ == Kind::Integer
 
 auto is_floating_point(const Type* type) -> bool { return type->kind_ == Kind::Float; }
 
-auto is_array(const Type* type) -> bool { return type->kind_ == Kind::Array; }
-
 auto is_pointer(const Type* type) -> bool { return type->kind_ == Kind::Pointer; }
 
 auto is_lvalue_reference(const Type* type) -> bool {
@@ -110,8 +108,7 @@ auto is_scalar(const Type* type) -> bool {
 }
 
 auto is_object(const Type* type) -> bool {
-    return is_scalar(type) || type->kind_ == Kind::Array || type->kind_ == Kind::Union ||
-           type->kind_ == Kind::Instance;
+    return is_scalar(type) || type->kind_ == Kind::Union || type->kind_ == Kind::Instance;
 }
 
 auto is_compound(const Type* type) -> bool { return !is_scalar(type); }
@@ -131,7 +128,6 @@ auto get_metas() -> std::generator<std::pair<std::string_view, MetaFunction>> {
     // scope.add_meta("is_void", MetaWrapper<is_void>{});
     co_yield {"is_integral", MetaWrapper<is_integral>::invoke};
     co_yield {"is_floating_point", MetaWrapper<is_floating_point>::invoke};
-    co_yield {"is_array", MetaWrapper<is_array>::invoke};
     co_yield {"is_pointer", MetaWrapper<is_pointer>::invoke};
     co_yield {"is_lvalue_reference", MetaWrapper<is_lvalue_reference>::invoke};
     co_yield {"is_rvalue_reference", MetaWrapper<is_rvalue_reference>::invoke};

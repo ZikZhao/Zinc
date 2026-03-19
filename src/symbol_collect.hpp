@@ -10,8 +10,8 @@ inline constexpr std::string_view destructor_symbol = "~";
 
 using FunctionOverloadDef = PointerVariant<
     const ASTFunctionDefinition*,
-    const ASTConstructorDestructorDefinition*,
-    const ASTOperatorOverloadDefinition*,
+    const ASTCtorDtorDefinition*,
+    const ASTOperatorDefinition*,
     const ASTTemplateDefinition*>;
 
 struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
@@ -122,20 +122,11 @@ public:
     }
 
     void add_template(std::string_view identifier, const ASTTemplateDefinition* definition) {
-        if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&definition->target_node)) {
-            add_function(identifier, *func_def);
-            return;
-        } else if (
-            auto* ctor_def =
-                std::get_if<const ASTConstructorDestructorDefinition*>(&definition->target_node)
-        ) {
-            add_function(identifier, *ctor_def);
-            return;
-        } else if (
-            auto* operator_fn =
-                std::get_if<const ASTOperatorOverloadDefinition*>(&definition->target_node)
-        ) {
-            add_function(identifier, *operator_fn);
+        ASTNodeVariant target = definition->target_node;
+        if (std::holds_alternative<const ASTFunctionDefinition*>(target) ||
+            std::holds_alternative<const ASTCtorDtorDefinition*>(target) ||
+            std::holds_alternative<const ASTOperatorDefinition*>(target)) {
+            add_function(identifier, definition);
             return;
         }
         auto [_, inserted] = identifiers_.insert(
@@ -301,7 +292,7 @@ public:
         }
     }
 
-    void operator()(const ASTConstructorDestructorDefinition* node) noexcept {
+    void operator()(const ASTCtorDtorDefinition* node) noexcept {
         current_scope_.add_function(
             node->is_constructor ? constructor_symbol : destructor_symbol, node
         );
@@ -320,7 +311,7 @@ public:
         }
     }
 
-    void operator()(const ASTOperatorOverloadDefinition* node) noexcept {
+    void operator()(const ASTOperatorDefinition* node) noexcept {
         current_scope_.add_function(GetOperatorString(node->opcode), node);
         Scope& local_scope = Scope::make(current_scope_, node);
         local_scope.add_variable(

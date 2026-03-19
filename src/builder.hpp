@@ -257,7 +257,7 @@ private:
 
     auto visitOperator_overload_definition(
         ZincParser::Operator_overload_definitionContext* ctx
-    ) noexcept -> Any<const ASTOperatorOverloadDefinition*> final {
+    ) noexcept -> Any<const ASTOperatorDefinition*> final {
         /// TODO: throw error if operator is invalid or if number of parameters doesn't match
         /// operator
         OperatorCode opcode;
@@ -327,7 +327,7 @@ private:
             opcode = OperatorCode::BitwiseNot;
             break;
         }
-        return const_cast<const ASTOperatorOverloadDefinition*>(new ASTOperatorOverloadDefinition{
+        return const_cast<const ASTOperatorDefinition*>(new ASTOperatorDefinition{
             loc(ctx),
             opcode,
             visit<ASTFunctionParameter>(ctx->parameters_[0]),
@@ -402,17 +402,15 @@ private:
                                return std::get<const ASTDeclaration*>(node);
                            }) |
                            GlobalMemory::collect<std::span>();
-        std::span constructors =
-            visit_list<const ASTConstructorDestructorDefinition*>(ctx->constructor_);
-        std::span destructors =
-            visit_list<const ASTConstructorDestructorDefinition*>(ctx->destructor_);
+        std::span constructors = visit_list<const ASTCtorDtorDefinition*>(ctx->constructor_);
+        std::span destructors = visit_list<const ASTCtorDtorDefinition*>(ctx->destructor_);
         std::span functions =
             visit_list(ctx->functions_) |
             std::views::transform([](ASTNodeVariant node) -> const ASTFunctionDefinition* {
                 return std::get<const ASTFunctionDefinition*>(node);
             }) |
             GlobalMemory::collect<std::span>();
-        std::span operators = visit_list<const ASTOperatorOverloadDefinition*>(ctx->operators_);
+        std::span operators = visit_list<const ASTOperatorDefinition*>(ctx->operators_);
         if (destructors.size() > 1) {
             /// TODO: thread safety
             Diagnostic::report(DuplicateDestructorError(destructors[1]->location));
@@ -859,28 +857,26 @@ private:
     }
 
     auto visitConstructor(ZincParser::ConstructorContext* ctx) noexcept
-        -> Any<const ASTConstructorDestructorDefinition*> final {
-        auto* constructor_def = new ASTConstructorDestructorDefinition{
+        -> Any<const ASTCtorDtorDefinition*> final {
+        auto* constructor_def = new ASTCtorDtorDefinition{
             loc(ctx),
             visit_list<ASTFunctionParameter>(ctx->parameters_),
             visit_list<ASTNodeVariant>(ctx->body_),
             true,
             ctx->KW_CONST() != nullptr
         };
-        return const_cast<const ASTConstructorDestructorDefinition*>(constructor_def);
+        return const_cast<const ASTCtorDtorDefinition*>(constructor_def);
     }
 
     auto visitDestructor(ZincParser::DestructorContext* ctx) noexcept
-        -> Any<const ASTConstructorDestructorDefinition*> final {
-        return const_cast<const ASTConstructorDestructorDefinition*>(
-            new ASTConstructorDestructorDefinition{
-                loc(ctx),
-                std::span<ASTFunctionParameter>{},
-                visit_list(ctx->body_),
-                false,
-                ctx->KW_CONST() != nullptr
-            }
-        );
+        -> Any<const ASTCtorDtorDefinition*> final {
+        return const_cast<const ASTCtorDtorDefinition*>(new ASTCtorDtorDefinition{
+            loc(ctx),
+            std::span<ASTFunctionParameter>{},
+            visit_list(ctx->body_),
+            false,
+            ctx->KW_CONST() != nullptr
+        });
     }
 
     auto visitTemplate_parameter_list(ZincParser::Template_parameter_listContext* ctx) noexcept
