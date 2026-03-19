@@ -11,6 +11,7 @@ inline constexpr std::string_view destructor_symbol = "~";
 using FunctionOverloadDef = PointerVariant<
     const ASTFunctionDefinition*,
     const ASTConstructorDestructorDefinition*,
+    const ASTOperatorOverloadDefinition*,
     const ASTTemplateDefinition*>;
 
 struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
@@ -179,17 +180,12 @@ public:
     void clear() noexcept { identifiers_.clear(); }
 };
 
-using OperatorRegistry =
-    GlobalMemory::UnorderedMultiMap<OperatorCode, const ASTOperatorOverloadDefinition*>;
-
 class SymbolCollector {
 private:
     Scope& current_scope_;
-    OperatorRegistry& operators_;
 
 public:
-    SymbolCollector(Scope& scope, OperatorRegistry& operators) noexcept
-        : current_scope_(scope), operators_(operators) {}
+    SymbolCollector(Scope& scope) noexcept : current_scope_(scope) {}
 
     void operator()(const ASTNodeVariant& variant) noexcept { std::visit(*this, variant); }
 
@@ -208,7 +204,7 @@ public:
 
     void operator()(const ASTLocalBlock* node) noexcept {
         Scope& local_scope = Scope::make(current_scope_, node);
-        SymbolCollector local_visitor(local_scope, operators_);
+        SymbolCollector local_visitor(local_scope);
         for (auto& stmt : node->statements) {
             local_visitor(stmt);
         }
@@ -251,7 +247,7 @@ public:
     // Statements
     void operator()(const ASTIfStatement* node) noexcept {
         Scope& condition_scope = Scope::make(current_scope_, node);
-        SymbolCollector condition_visitor(condition_scope, operators_);
+        SymbolCollector condition_visitor(condition_scope);
         condition_visitor(node->condition);
         condition_visitor(&node->if_block);
         if (node->else_block) {
@@ -261,7 +257,7 @@ public:
 
     void operator()(const ASTForStatement* node) noexcept {
         Scope& local_scope = Scope::make(current_scope_, node);
-        SymbolCollector local_visitor(local_scope, operators_);
+        SymbolCollector local_visitor(local_scope);
         if (node->initializer_decl) {
             local_visitor(node->initializer_decl);
         } else if (!std::holds_alternative<std::monostate>(node->initializer_expr)) {
@@ -283,7 +279,7 @@ public:
                 }
             );
         }
-        SymbolCollector local_visitor(local_scope, operators_);
+        SymbolCollector local_visitor(local_scope);
         for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
@@ -302,15 +298,14 @@ public:
                 }
             );
         }
-        SymbolCollector local_visitor(local_scope, operators_);
+        SymbolCollector local_visitor(local_scope);
         for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
     }
 
     void operator()(const ASTOperatorOverloadDefinition* node) noexcept {
-        OperatorCode opcode = node->opcode;
-        operators_.insert({opcode, node});
+        current_scope_.add_function(GetOperatorString(node->opcode), node);
         Scope& local_scope = Scope::make(current_scope_, node);
         local_scope.add_variable(
             node->left.identifier,
@@ -330,7 +325,7 @@ public:
                 }
             );
         }
-        SymbolCollector local_visitor(local_scope, operators_);
+        SymbolCollector local_visitor(local_scope);
         for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
@@ -340,7 +335,7 @@ public:
     void operator()(const ASTClassDefinition* node) noexcept {
         current_scope_.add_class(node->identifier, node);
         Scope& class_scope = Scope::make(current_scope_, node, node->identifier);
-        SymbolCollector class_visitor(class_scope, operators_);
+        SymbolCollector class_visitor(class_scope);
         for (auto& ctor : node->constructors) {
             class_visitor(ctor);
         }
@@ -350,12 +345,15 @@ public:
         for (auto& func : node->functions) {
             class_visitor(func);
         }
+        for (auto& operator_fn : node->operators) {
+            class_visitor(operator_fn);
+        }
     }
 
     // Namespaces
     void operator()(const ASTNamespaceDefinition* node) noexcept {
         Scope& namespace_scope = Scope::make(current_scope_, node);
-        SymbolCollector namespace_visitor(namespace_scope, operators_);
+        SymbolCollector namespace_visitor(namespace_scope);
         for (auto& item : node->items) {
             namespace_visitor(item);
         }

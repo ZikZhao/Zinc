@@ -1,8 +1,7 @@
-fn print<Fmt: type, Args...: type>(fmt: Fmt, args: Args...);
+class string_view {
+}
 
 class array<T: type, N: usize> {
-    let data: [T; N];
-    init(data: [T; N]) {
-        return Self{ data: data };
-    }
 }
+
+fn print<Args...: type>(fmt: string_view, args: Args...);

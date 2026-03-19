@@ -27,22 +27,20 @@ public:
     }
 };
 
-auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer)
-    -> std::pair<Scope&, OperatorRegistry> {
-    static auto [std_scope, std_operators] = [&]() {
+auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer) -> Scope& {
+    static Scope& std_scope = [&]() -> Scope& {
         ASTBuilder builder(*sources.load_std(), importer);
         const ASTRoot* std_root = builder();
         static Scope scope;
         scope.scope_id_ = "std";
         scope.is_extern_ = true;
-        OperatorRegistry operators;
-        SymbolCollector{scope, operators}(std_root);
+        SymbolCollector{scope}(std_root);
         for (const auto& [identifier, meta_fn] : Meta::get_metas()) {
             scope.add_meta(identifier, meta_fn);
         }
-        return std::pair{&scope, operators};
+        return scope;
     }();
-    return {Scope::root(*std_scope), std_operators};
+    return Scope::root(std_scope);
 }
 
 auto main(int argc, char* argv[]) -> int {
@@ -63,11 +61,11 @@ auto main(int argc, char* argv[]) -> int {
         return EXIT_FAILURE;
     }
 
-    auto [scope, operators] = get_root(sources, importer);
-    SymbolCollector{scope, operators}(root);
+    Scope& scope = get_root(sources, importer);
+    SymbolCollector{scope}(root);
 
     CodeGenEnvironment codegen_env;
-    Sema sema{scope, codegen_env, std::move(operators)};
+    Sema sema{scope, codegen_env};
     TypeCheckVisitor{sema}(root);
 
     bool has_error = Diagnostic::print(sources);

@@ -11,7 +11,9 @@ enum class OperatorCode : std::uint8_t {
     Divide,
     Remainder,
     Increment,
+    PostIncrement,
     Decrement,
+    PostDecrement,
     Equal,
     NotEqual,
     LessThan,
@@ -51,6 +53,7 @@ struct ASTExpression;
 struct ASTExplicitTypeExpr;
 struct ASTSelfExpr;
 struct ASTConstant;
+struct ASTStringConstant;
 struct ASTIdentifier;
 struct ASTAccessChain;
 struct ASTParenExpr;
@@ -98,6 +101,7 @@ using ASTNodeVariant = std::variant<
     // Expressions
     const ASTParenExpr*,
     const ASTConstant*,
+    const ASTStringConstant*,
     const ASTSelfExpr*,
     const ASTIdentifier*,
     const ASTAccessChain*,
@@ -141,6 +145,7 @@ using ASTExprVariant = std::variant<
     // Basic expressions
     const ASTParenExpr*,
     const ASTConstant*,
+    const ASTStringConstant*,
     const ASTSelfExpr*,
     const ASTIdentifier*,
     const ASTAccessChain*,
@@ -203,6 +208,10 @@ struct ASTAccessChain final : public ASTExpression {
 
 struct ASTConstant final : public ASTExpression {
     const Value* value;
+};
+
+struct ASTStringConstant final : public ASTExpression {
+    std::string_view value;
 };
 
 struct ASTParenExpr final : public ASTExpression {
@@ -367,12 +376,13 @@ struct ASTClassDefinition final : public ASTNode {
     std::string_view identifier;
     std::string_view extends;
     std::span<std::string_view> implements;
+    std::span<const ASTTypeAlias*> aliases;
+    std::span<const ASTClassDefinition*> classes;
+    std::span<const ASTDeclaration*> fields;
     std::span<const ASTConstructorDestructorDefinition*> constructors;
     const ASTConstructorDestructorDefinition* destructor;
-    std::span<const ASTDeclaration*> fields;
-    std::span<const ASTTypeAlias*> aliases;
     std::span<const ASTFunctionDefinition*> functions;
-    std::span<const ASTClassDefinition*> classes;
+    std::span<const ASTOperatorOverloadDefinition*> operators;
 };
 
 struct ASTNamespaceDefinition final : public ASTNode {
@@ -426,7 +436,9 @@ constexpr auto GetOperatorGroup(OperatorCode opcode) -> OperatorGroup {
         return OperatorGroup::Arithmetic;
     case OperatorCode::Negate:
     case OperatorCode::Increment:
+    case OperatorCode::PostIncrement:
     case OperatorCode::Decrement:
+    case OperatorCode::PostDecrement:
         return OperatorGroup::UnaryArithmetic;
     case OperatorCode::Equal:
     case OperatorCode::NotEqual:

@@ -377,11 +377,6 @@ public:
     }
 };
 
-struct TermWithSelf {
-    Term result;
-    Term self;
-};
-
 class Object : public GlobalMemory::MonotonicAllocated {
 public:
     Kind kind_;
@@ -1493,6 +1488,7 @@ public:
 class IntegerValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Integer;
+    static IntegerValue zero;
 
 public:
     const IntegerType* const type_;  // nullptr for integer literals without a specific type
@@ -1502,9 +1498,7 @@ public:
     explicit IntegerValue(std::string_view value) noexcept
         : Value(kind), type_(&IntegerType::untyped_instance), value_(value) {}
     IntegerValue(const IntegerType* type, BigInt value) noexcept
-        : Value(kind), type_(type), value_(std::move(value)) {
-        assert(type && type != &IntegerType::untyped_instance);
-    }
+        : Value(kind), type_(type), value_(std::move(value)) {}
     auto repr() const -> GlobalMemory::String final {
         return GlobalMemory::format("{}", value_.to_string());
     }
@@ -2432,3 +2426,5 @@ inline auto UnionType::default_construct() const noexcept -> Term {
 inline UnknownValue UnknownValue::instance;
 
 inline NullptrValue NullptrValue::instance;
+
+inline IntegerValue IntegerValue::zero = IntegerValue(&IntegerType::untyped_instance, BigInt{});

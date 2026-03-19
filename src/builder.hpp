@@ -257,7 +257,7 @@ private:
 
     auto visitOperator_overload_definition(
         ZincParser::Operator_overload_definitionContext* ctx
-    ) noexcept -> Any<ASTNodeVariant> final {
+    ) noexcept -> Any<const ASTOperatorOverloadDefinition*> final {
         /// TODO: throw error if operator is invalid or if number of parameters doesn't match
         /// operator
         OperatorCode opcode;
@@ -327,7 +327,7 @@ private:
             opcode = OperatorCode::BitwiseNot;
             break;
         }
-        auto* op_def = new ASTOperatorOverloadDefinition{
+        return const_cast<const ASTOperatorOverloadDefinition*>(new ASTOperatorOverloadDefinition{
             loc(ctx),
             opcode,
             visit<ASTFunctionParameter>(ctx->parameters_[0]),
@@ -337,8 +337,7 @@ private:
             visit_expr(ctx->return_type_),
             visit_list(ctx->body_),
             ctx->KW_CONST() != nullptr
-        };
-        return as_variant(op_def);
+        });
     }
 
     auto visitSelfParam(ZincParser::SelfParamContext* ctx) noexcept
@@ -387,32 +386,33 @@ private:
         std::span implements = ctx->implements_ |
                                std::views::transform([this](auto child) { return text(child); }) |
                                GlobalMemory::collect<std::span<std::string_view>>();
-        std::span constructors =
-            visit_list<const ASTConstructorDestructorDefinition*>(ctx->constructor_);
-        std::span destructors =
-            visit_list<const ASTConstructorDestructorDefinition*>(ctx->destructor_);
-        std::span fields = visit_list(ctx->fields_) |
-                           std::views::transform([](ASTNodeVariant node) -> const ASTDeclaration* {
-                               return std::get<const ASTDeclaration*>(node);
-                           }) |
-                           GlobalMemory::collect<std::span>();
         std::span types = visit_list(ctx->types_) |
                           std::views::transform([](ASTNodeVariant node) -> const ASTTypeAlias* {
                               return std::get<const ASTTypeAlias*>(node);
                           }) |
                           GlobalMemory::collect<std::span>();
-        std::span functions =
-            visit_list(ctx->functions_) |
-            std::views::transform([](ASTNodeVariant node) -> const ASTFunctionDefinition* {
-                return std::get<const ASTFunctionDefinition*>(node);
-            }) |
-            GlobalMemory::collect<std::span>();
         std::span classes =
             visit_list(ctx->classes_) |
             std::views::transform([](ASTNodeVariant node) -> const ASTClassDefinition* {
                 return std::get<const ASTClassDefinition*>(node);
             }) |
             GlobalMemory::collect<std::span>();
+        std::span fields = visit_list(ctx->fields_) |
+                           std::views::transform([](ASTNodeVariant node) -> const ASTDeclaration* {
+                               return std::get<const ASTDeclaration*>(node);
+                           }) |
+                           GlobalMemory::collect<std::span>();
+        std::span constructors =
+            visit_list<const ASTConstructorDestructorDefinition*>(ctx->constructor_);
+        std::span destructors =
+            visit_list<const ASTConstructorDestructorDefinition*>(ctx->destructor_);
+        std::span functions =
+            visit_list(ctx->functions_) |
+            std::views::transform([](ASTNodeVariant node) -> const ASTFunctionDefinition* {
+                return std::get<const ASTFunctionDefinition*>(node);
+            }) |
+            GlobalMemory::collect<std::span>();
+        std::span operators = visit_list<const ASTOperatorOverloadDefinition*>(ctx->operators_);
         if (destructors.size() > 1) {
             /// TODO: thread safety
             Diagnostic::report(DuplicateDestructorError(destructors[1]->location));
@@ -422,12 +422,13 @@ private:
             text(ctx->identifier_),
             ctx->extends_ ? text(ctx->extends_) : "",
             implements,
+            types,
+            classes,
+            fields,
             constructors,
             destructors.empty() ? nullptr : destructors[0],
-            fields,
-            types,
             functions,
-            classes
+            operators,
         };
         if (ctx->template_list_) {
             if (ctx->specialize_list_) throw;
@@ -829,9 +830,7 @@ private:
                 new ASTConstant{loc(ctx), Value::from_literal<FloatValue>(text(ctx->value_))}
             );
         case ZincParser::T_STRING:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<ArrayValue>(text(ctx->value_))}
-            );
+            return as_variant(new ASTStringConstant{loc(ctx), text(ctx->value_)});
         case ZincParser::T_BOOL:
             return as_variant(
                 new ASTConstant{loc(ctx), Value::from_literal<BooleanValue>(text(ctx->value_))}

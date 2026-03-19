@@ -144,7 +144,7 @@ class_definition:
 		| constructor_ += constructor
 		| destructor_ += destructor
 		| functions_ += function_definition
-		| operator_overloads_ += operator_overload_definition
+		| operators_ += operator_overload_definition
 	)* OP_RBRACE;
 
 namespace_definition:

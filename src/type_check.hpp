@@ -14,7 +14,8 @@ using Symbol = std::variant<
     std::pair<Term, std::pair<Scope*, const ScopeValue*>>,
     TemplateFamily*,
     std::span<const Object*>,
-    Scope*>;
+    Scope*,
+    std::tuple<OperatorCode, const Type*, const Type*>>;
 
 enum class SymbolKind : std::uint8_t {
     Type = 1,
@@ -23,7 +24,8 @@ enum class SymbolKind : std::uint8_t {
     Method = 4,
     Template = 5,
     ParameterPack = 6,
-    Namespace = 7
+    Namespace = 7,
+    Operator = 8,
 };
 
 class CodeGenEnvironment {
@@ -510,7 +512,7 @@ public:
     std::unique_ptr<CallHandler> call_handler_;
 
 public:
-    Sema(Scope& root, CodeGenEnvironment& codegen_env, OperatorRegistry&& operators_) noexcept;
+    Sema(Scope& root, CodeGenEnvironment& codegen_env) noexcept;
 
     auto deferred_analysis(Scope& scope, auto variant) noexcept -> void;
 
@@ -723,30 +725,21 @@ private:
 };
 
 class OperationHandler final : public GlobalMemory::MonotonicAllocated {
-private:
-    using Operation = std::tuple<OperatorCode, const Type*, const Type*>;
-
-    struct OperationHasher {
-        auto operator()(const Operation& op) const noexcept -> std::size_t {
-            auto [opcode, left_type, right_type] = op;
-            return hash_combine(
-                std::hash<OperatorCode>{}(opcode),
-                std::bit_cast<std::size_t>(left_type),
-                std::bit_cast<std::size_t>(right_type)
-            );
+public:
+    static auto is_primitive(Term operand) noexcept -> bool {
+        if (operand) {
+            Term decayed = Sema::decay(operand);
+            return decayed->kind_ == Kind::Integer || decayed->kind_ == Kind::Float ||
+                   decayed->kind_ == Kind::Boolean;
         }
-    };
+        return true;
+    }
 
 private:
     Sema& sema_;
-    GlobalMemory::UnorderedMap<Operation, FunctionObject, OperationHasher> map_;
 
 public:
-    OperatorRegistry operators_;
-
-public:
-    OperationHandler(Sema& sema, OperatorRegistry&& operators) noexcept
-        : sema_(sema), operators_(std::move(operators)) {}
+    OperationHandler(Sema& sema) noexcept : sema_(sema) {}
 
     auto eval_type_op(OperatorCode opcode, const Type* left, const Type* right = nullptr) const
         -> const Type* {
@@ -754,75 +747,19 @@ public:
         return nullptr;
     }
 
-    auto eval_value_op(OperatorCode opcode, Term left, Term right = {}) -> Term {
-        bool left_is_mutable = false;
-        Term decayed_left = sema_.decay(left);
-        Term decayed_right = sema_.decay(right);
-        if (decayed_left->kind_ == Kind::Unknown ||
-            (decayed_right && decayed_right->kind_ == Kind::Unknown)) {
-            return Term::unknown();
-        } else if (
-            (decayed_left->kind_ == Kind::Integer || decayed_left->kind_ == Kind::Float ||
-             decayed_left->kind_ == Kind::Boolean) &&
-            (right ? (decayed_right->kind_ == Kind::Integer ||
-                      decayed_right->kind_ == Kind::Float || decayed_right->kind_ == Kind::Boolean)
-                   : true)
-        ) {
-            return eval_primitive_op(opcode, decayed_left, decayed_right, left_is_mutable);
-        }
-        /// TODO: check mutability for assignment operations
-        bool comptime = left.is_comptime() && (right && right.is_comptime());
-        const Type* left_type = left.effective_type();
-        const Type* right_type = right ? right.effective_type() : nullptr;
-        auto it = map_.find({opcode, left_type, right_type});
-        if (it != map_.end()) {
-            if (auto func_value = it->second->dyn_cast<FunctionValue>(); func_value && comptime) {
-                return func_value->invoke(GlobalMemory::pack_array(left, right));
-            } else {
-                auto func_type = it->second->cast<FunctionType>();
-                return Term::prvalue(func_type->return_type_);
-            }
-        } else {
-            if (FunctionObject instantiated = try_instantiate(opcode, left_type, right_type)) {
-                map_.insert({{opcode, left_type, right_type}, instantiated});
-                if (auto func_value = instantiated->dyn_cast<FunctionValue>()) {
-                    if (comptime) {
-                        return func_value->invoke(GlobalMemory::pack_array(left, right));
-                    } else {
-                        return Term::prvalue(func_value->get_type()->return_type_);
-                    }
-                } else {
-                    auto func_type = instantiated->cast<FunctionType>();
-                    return Term::prvalue(func_type->return_type_);
-                }
-            }
-            throw UnlocatedProblem::make<OperationNotDefinedError>(
-                GetOperatorString(opcode), left->repr(), right ? right->repr() : ""
-            );
-        }
-    }
-
-private:
-    auto try_instantiate(OperatorCode opcode, const Type* left, const Type* right) const
-        -> FunctionObject {
-        // User-defined operator templates
-        auto range = operators_.equal_range(opcode);
-        for (auto it = range.first; it != range.second; ++it) {
-            /// TODO:
-        }
-        return nullptr;
-    }
-
     [[nodiscard]] auto eval_primitive_op(
-        OperatorCode opcode, Term left, Term right, bool left_is_mutable
-    ) const -> Term {
-        const Type* left_type = left.effective_type();
-        Kind left_kind = left->kind_;
-        Kind right_kind = right ? right->kind_ : Kind::Unknown;
+        OperatorCode opcode, Term left, Term right = {}
+    ) const noexcept -> Term {
         bool comptime = left.is_comptime() && (right ? right.is_comptime() : true);
+        bool left_is_mutable = Sema::is_mutable(left);
+        Term decayed_left = Sema::decay(left);
+        Term decayed_right = Sema::decay(right);
+        const Type* left_type = decayed_left.effective_type();
+        Kind left_kind = decayed_left->kind_;
+        Kind right_kind = decayed_right ? decayed_right->kind_ : Kind::Unknown;
         if (comptime) {
-            Value* left_value = left.get_comptime();
-            Value* right_value = right ? right.get_comptime() : nullptr;
+            Value* left_value = decayed_left.get_comptime();
+            Value* right_value = decayed_right ? decayed_right.get_comptime() : nullptr;
             switch (GetOperatorGroup(opcode)) {
             case OperatorGroup::Arithmetic:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
@@ -942,6 +879,10 @@ private:
         /// TODO: throw error
         return Term::unknown();
     }
+
+    auto eval_overloaded_op(
+        const ASTNode* node, OperatorCode opcode, Term left, Term right = {}
+    ) const noexcept -> Term;
 };
 
 class CallHandler final : public GlobalMemory::MonotonicAllocated {
@@ -974,7 +915,7 @@ public:
 
     auto get_func_obj(Scope* scope, FunctionOverloadDef overload) noexcept -> FunctionObject;
 
-    auto eval_call(const ASTFunctionCall& node, Symbol callee, std::span<Term> args) -> Term {
+    auto eval_call(const ASTNode* node, Symbol callee, std::span<Term> args) -> Term {
         if (holds_monostate(callee)) return {};
         auto transform = [](Term arg) -> const Type* {
             if (auto value = arg.get_comptime()) {
@@ -995,7 +936,7 @@ public:
         }
         sema_.codegen_env_.map_function_call(
             sema_.current_scope_,
-            &node,
+            node,
             get_func_type(overload),
             Sema::get_if<SymbolKind::Method>(callee)
                 ? Sema::get<SymbolKind::Method>(callee).first.effective_type()
@@ -1045,6 +986,28 @@ private:
             return reification(function->first, function->second);
         } else if (auto* method = Sema::get_if<SymbolKind::Method>(func)) {
             return reification(method->second.first, method->second.second);
+        } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(func)) {
+            GlobalMemory::Vector<FunctionObject> result;
+            const Type* left_type = std::get<1>(*operator_fn);
+            if (left_type->kind_ == Kind::Instance) {
+                Scope* scope = left_type->cast<InstanceType>()->scope_;
+                auto overloads = scope->find(GetOperatorString(std::get<0>(*operator_fn)));
+                if (overloads) {
+                    result = reification(scope, overloads);
+                }
+            }
+            if (const Type* right_type = std::get<2>(*operator_fn);
+                right_type->kind_ == Kind::Instance && left_type != right_type) {
+                Scope* scope = right_type->cast<InstanceType>()->scope_;
+                auto overloads = scope->find(GetOperatorString(std::get<0>(*operator_fn)));
+                if (overloads) {
+                    auto operator_overloads = reification(scope, overloads);
+                    result.insert(
+                        result.end(), operator_overloads.begin(), operator_overloads.end()
+                    );
+                }
+            }
+            return result;
         }
         return {};
     }
@@ -1653,6 +1616,18 @@ public:
         }
     }
 
+    auto operator()(const ASTStringConstant* node) -> Symbol {
+        auto [scope, value] = sema_.lookup("std");
+        Scope* std_scope = value->get<Scope*>();
+        const ScopeValue* string_view_scope_value = std_scope->find("string_view");
+        assert(
+            string_view_scope_value && string_view_scope_value->get<const ASTClassDefinition*>()
+        );
+        TypeResolution strview_type_res =
+            sema_.eval_type("string_view", *std_scope, *string_view_scope_value);
+        return Term::prvalue(strview_type_res.get());
+    }
+
     auto operator()(const ASTSelfExpr* node) -> Symbol {
         if (node->is_type) {
             return sema_.get_self_type();
@@ -1688,9 +1663,14 @@ public:
         if (!Sema::expect(expr_symbol, SymbolKind::Term)) {
             return {};
         }
-        return sema_.operation_handler_->eval_value_op(
-            node->opcode, Sema::get<SymbolKind::Term>(expr_symbol)
-        );
+        Term expr_term = Sema::get<SymbolKind::Term>(expr_symbol);
+        if (OperationHandler::is_primitive(expr_term)) {
+            return sema_.operation_handler_->eval_primitive_op(
+                node->opcode, Sema::get<SymbolKind::Term>(expr_symbol)
+            );
+        } else {
+            return sema_.operation_handler_->eval_overloaded_op(node, node->opcode, expr_term);
+        }
     }
 
     auto operator()(const ASTBinaryOp* node) -> Symbol {
@@ -1702,11 +1682,19 @@ public:
         if (any_error) {
             return {};
         }
-        return sema_.operation_handler_->eval_value_op(
-            node->opcode,
-            Sema::get<SymbolKind::Term>(left_symbol),
-            Sema::get<SymbolKind::Term>(right_symbol)
-        );
+        Term left_term = Sema::get<SymbolKind::Term>(left_symbol);
+        Term right_term = Sema::get<SymbolKind::Term>(right_symbol);
+        if (OperationHandler::is_primitive(left_term) &&
+            OperationHandler::is_primitive(right_term)) {
+            return sema_.operation_handler_->eval_primitive_op(node->opcode, left_term, right_term);
+        } else {
+            return sema_.operation_handler_->eval_overloaded_op(
+                node,
+                node->opcode,
+                Sema::get<SymbolKind::Term>(left_symbol),
+                Sema::get<SymbolKind::Term>(right_symbol)
+            );
+        }
     }
 
     auto operator()(const ASTFieldInitialization* node) -> Symbol {
@@ -1757,7 +1745,7 @@ public:
             args_terms.push_back(Sema::get<SymbolKind::Term>(arg_symbol));
         }
         Symbol func_symbol = ValueContextEvaluator{*this, nullptr}(node->function);
-        return sema_.call_handler_->eval_call(*node, func_symbol, args_terms);
+        return sema_.call_handler_->eval_call(node, func_symbol, args_terms);
     }
 
     auto operator()(const auto* node) -> Symbol { UNREACHABLE(); }
@@ -1911,18 +1899,16 @@ public:
 
 // ========== Implementation ==========
 
-inline Sema::Sema(
-    Scope& root, CodeGenEnvironment& codegen_env, OperatorRegistry&& operators
-) noexcept
+inline Sema::Sema(Scope& root, CodeGenEnvironment& codegen_env) noexcept
     : current_scope_(&root),
       codegen_env_(codegen_env),
       template_handler_(std::make_unique<TemplateHandler>(*this)),
-      operation_handler_(std::make_unique<OperationHandler>(*this, std::move(operators))),
+      operation_handler_(std::make_unique<OperationHandler>(*this)),
       access_handler_(std::make_unique<AccessHandler>(*this)),
       call_handler_(std::make_unique<CallHandler>(*this)) {}
 
 inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void {
-    SymbolCollector{scope, operation_handler_->operators_}(variant);
+    SymbolCollector{scope}(variant);
     Guard guard(*this, scope);
     TypeCheckVisitor{*this}(variant);
 }
@@ -2101,6 +2087,25 @@ inline auto TemplateHandler::get_prototype(
     return it->second;
 }
 
+inline auto OperationHandler::eval_overloaded_op(
+    const ASTNode* node, OperatorCode opcode, Term left, Term right
+) const noexcept -> Term {
+    const Type* left_type = Sema::decay(left.effective_type());
+    const Type* right_type = right ? Sema::decay(right.effective_type()) : nullptr;
+    if (left_type->kind_ != Kind::Instance && right_type && right_type->kind_ != Kind::Instance) {
+        throw;
+    }
+    std::array<Term, 2> args = {left, right};
+    if (opcode == OperatorCode::PostIncrement || opcode == OperatorCode::PostDecrement) {
+        args[1] = Term::prvalue(&IntegerValue::zero);
+    }
+    return sema_.call_handler_->eval_call(
+        node,
+        std::tuple{opcode, left_type, right_type},
+        args[1] ? args : std::span(args).subspan(0, 1)
+    );
+}
+
 inline auto AccessHandler::eval_access(const ASTAccessChain& node) noexcept -> Symbol {
     const Scope* base_scope;
     Symbol base_symbol;
@@ -2147,21 +2152,21 @@ inline auto AccessHandler::eval_access(const ASTAccessChain& node) noexcept -> S
         if (!std::holds_alternative<TemplateFamily*>(base_symbol)) {
             throw;
         }
-        arg_terms = node.instantiation_args |
-                    std::views::transform([&](ASTExprVariant arg) -> const Object* {
-                        Symbol result = ValueContextEvaluator{sema_, nullptr, true}(arg);
-                        if (Sema::expect(result, SymbolKind::Type, SymbolKind::Term)) {
-                            return std::get<Term>(result).get();
-                        }
-                        return nullptr;
-                    }) |
-                    GlobalMemory::collect<std::span>();
+        arg_terms =
+            node.instantiation_args |
+            std::views::transform([&](ASTExprVariant arg) -> const Object* {
+                Symbol result = ValueContextEvaluator{sema_, nullptr, true}(arg);
+                if (Sema::expect(result, SymbolKind::Type, SymbolKind::Term)) {
+                    return Sema::get_if<SymbolKind::Type>(result)
+                               ? static_cast<const Object*>(Sema::get<SymbolKind::Type>(result))
+                               : Sema::get<SymbolKind::Term>(result).get_comptime();
+                }
+                return nullptr;
+            }) |
+            GlobalMemory::collect<std::span>();
         return sema_.template_handler_->instantiate(
             *std::get<TemplateFamily*>(base_symbol), arg_terms
         );
-    }
-    if (!std::holds_alternative<Term>(base_symbol)) {
-        throw;
     }
     sema_.codegen_env_.map_access_chain(
         sema_.current_scope_, &node, base_scope, node.members.size() - remaining.size(), arg_terms
@@ -2197,6 +2202,17 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
                  }) |
                  GlobalMemory::collect<std::span<const Type*>>();
         return_type = sema_.get_self_type();
+    } else if (auto* operator_def = overload.get<const ASTOperatorOverloadDefinition*>()) {
+        TypeResolution left_type;
+        TypeResolution right_type;
+        TypeContextEvaluator{sema_, left_type}(operator_def->left.type);
+        TypeContextEvaluator{sema_, return_type}(operator_def->return_type);
+        if (operator_def->right) {
+            TypeContextEvaluator{sema_, right_type}(operator_def->right->type);
+            params = GlobalMemory::pack_array(left_type.get(), right_type.get());
+        } else {
+            params = GlobalMemory::pack_array(left_type.get());
+        }
     } else {
         UNREACHABLE();
     }
