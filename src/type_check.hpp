@@ -6,12 +6,18 @@
 #include "object.hpp"
 #include "symbol_collect.hpp"
 
+struct BoundMethod {
+    Term object;
+    Scope* scope;
+    const ScopeValue* value;
+};
+
 using Symbol = std::variant<
     std::monostate,
     const Type*,
     Term,
     std::pair<Scope*, const ScopeValue*>,
-    std::pair<Term, std::pair<Scope*, const ScopeValue*>>,
+    BoundMethod,
     TemplateFamily*,
     std::span<const Object*>,
     Scope*,
@@ -377,29 +383,20 @@ public:
     private:
         Sema& sema_;
         Scope* prev_scope_;
-        std::size_t postfix_length_;
 
     public:
         Guard(Sema& sema, Scope& scope) noexcept
             : sema_(sema), prev_scope_(std::exchange(sema.current_scope_, &scope)) {}
-        Guard(Sema& sema, const ASTNode* child, std::string_view postfix = "") noexcept
+        Guard(Sema& sema, const ASTNode* child) noexcept
             : sema_(sema),
               prev_scope_(
                   std::exchange(sema.current_scope_, sema.current_scope_->children_.at(child))
-              ),
-              postfix_length_(postfix.length()) {
-            if (!postfix.empty()) {
-                sema.qualified_path_ += postfix;
-            }
-        }
+              ) {}
         Guard(const Guard&) = delete;
         Guard(Guard&&) = delete;
         auto operator=(const Guard&) = delete;
         auto operator=(Guard&&) = delete;
-        ~Guard() noexcept {
-            sema_.current_scope_ = prev_scope_;
-            sema_.qualified_path_.resize(sema_.qualified_path_.size() - postfix_length_);
-        }
+        ~Guard() noexcept { sema_.current_scope_ = prev_scope_; }
     };
 
 public:
@@ -504,7 +501,6 @@ private:
 
 public:
     Scope* current_scope_;
-    GlobalMemory::String qualified_path_;
     CodeGenEnvironment& codegen_env_;
     std::unique_ptr<TemplateHandler> template_handler_;
     std::unique_ptr<OperationHandler> operation_handler_;
@@ -584,8 +580,6 @@ private:
 
     using TemplateArgs = std::span<const Object*>;
 
-    using AutoBindings = GlobalMemory::FlatMap<const Object*, const Object*>;
-
 private:
     Sema& sema_;
     // GlobalMemory::UnorderedMap<std::pair<const ASTTemplateDefinition*, TemplateArgs>, const
@@ -621,7 +615,29 @@ public:
         return result;
     }
 
-    auto template_inference(TemplateFamily& family, std::span<Term> args) -> std::span<Term>;
+    inline auto instantiate(Scope* scope, const ASTTemplateDefinition* primary, TemplateArgs args)
+        -> Symbol {
+        Sema::Guard guard(sema_, *scope);
+        if (!validate(*primary, args)) {
+            return {};
+        }
+        Scope& inst_scope = Scope::make(*sema_.current_scope_);
+        Sema::Guard inner_guard(sema_, inst_scope);
+        sema_.codegen_env_.map_instantiation(&inst_scope, args);
+        sema_.deferred_analysis(inst_scope, primary->target_node);
+        Symbol result = sema_.lookup_symbol(primary->identifier);
+        if (const Type* type = std::get<static_cast<size_t>(SymbolKind::Type)>(result)) {
+            if (auto instance_type = type->dyn_cast<InstanceType>()) {
+                instance_type->primary_template_ = &primary;
+                instance_type->template_args_ = args;
+            }
+        }
+        return result;
+    }
+
+    auto inference(
+        Scope* scope, const ASTTemplateDefinition* primary, std::span<const Type*> args
+    ) noexcept -> FunctionObject;
 
 private:
     static auto as_symbol(const Object* obj) -> Symbol {
@@ -926,7 +942,7 @@ public:
         GlobalMemory::Vector transformed_args =
             args | std::views::transform(transform) | GlobalMemory::collect<GlobalMemory::Vector>();
         if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
-            transformed_args.insert(transformed_args.begin(), transform(method->first));
+            transformed_args.insert(transformed_args.begin(), transform(method->object));
         }
 
         FunctionObject overload = resolve_overload(callee, transformed_args);
@@ -939,7 +955,7 @@ public:
             node,
             get_func_type(overload),
             Sema::get_if<SymbolKind::Method>(callee)
-                ? Sema::get<SymbolKind::Method>(callee).first.effective_type()
+                ? Sema::get<SymbolKind::Method>(callee).object.effective_type()
                 : nullptr,
             Sema::get_if<SymbolKind::Type>(callee),
             Sema::get_if<SymbolKind::Term>(callee)
@@ -974,10 +990,7 @@ private:
             return reification(scope, scope->find(constructor_symbol));
         } else if (auto* callable_value = Sema::get_if<SymbolKind::Term>(func)) {
             Term decayed = Sema::decay(*callable_value);
-            if (auto* intersection_type = decayed->dyn_cast<IntersectionType>()) {
-                return intersection_type->types_ |
-                       GlobalMemory::collect<GlobalMemory::Vector<FunctionObject>>();
-            } else if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
+            if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
                 return {func_type};
             } else if (auto func_value = decayed->dyn_cast<FunctionValue>()) {
                 return {func_value};
@@ -985,7 +998,7 @@ private:
         } else if (auto* function = Sema::get_if<SymbolKind::Function>(func)) {
             return reification(function->first, function->second);
         } else if (auto* method = Sema::get_if<SymbolKind::Method>(func)) {
-            return reification(method->second.first, method->second.second);
+            return reification(method->scope, method->value);
         } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(func)) {
             GlobalMemory::Vector<FunctionObject> result;
             const Type* left_type = std::get<1>(*operator_fn);
@@ -1013,8 +1026,57 @@ private:
     }
 
     auto list_template_overloads(
-        GlobalMemory::Vector<FunctionObject>& overloads, Symbol func, std::span<const Type*> args
-    ) -> void {}
+        GlobalMemory::Vector<FunctionObject>& out, Symbol func, std::span<const Type*> args
+    ) -> void {
+        auto reification = [&](Scope* scope, const ScopeValue* scope_value) -> void {
+            auto* overloads = scope_value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
+            for (FunctionOverloadDef overload : *overloads) {
+                if (!overload.get<const ASTTemplateDefinition*>()) continue;
+                if (auto func_obj = sema_.template_handler_->inference(
+                        scope, overload.get<const ASTTemplateDefinition*>(), args
+                    )) {
+                    out.push_back(func_obj);
+                }
+            }
+        };
+        if (auto* callable_type = Sema::get_if<SymbolKind::Type>(func)) {
+            if ((*callable_type)->kind_ != Kind::Instance) {
+                throw;
+                return;
+            }
+            Scope* scope = (*callable_type)->cast<InstanceType>()->scope_;
+            reification(scope, scope->find(constructor_symbol));
+        } else if (auto* callable_value = Sema::get_if<SymbolKind::Term>(func)) {
+            Term decayed = Sema::decay(*callable_value);
+            if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
+                out.push_back(func_type);
+            } else if (auto func_value = decayed->dyn_cast<FunctionValue>()) {
+                out.push_back(func_value);
+            }
+        } else if (auto* function = Sema::get_if<SymbolKind::Function>(func)) {
+            return reification(function->first, function->second);
+        } else if (auto* method = Sema::get_if<SymbolKind::Method>(func)) {
+            return reification(method->scope, method->value);
+        } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(func)) {
+            GlobalMemory::Vector<FunctionObject> result;
+            const Type* left_type = std::get<1>(*operator_fn);
+            if (left_type->kind_ == Kind::Instance) {
+                Scope* scope = left_type->cast<InstanceType>()->scope_;
+                auto overloads = scope->find(GetOperatorString(std::get<0>(*operator_fn)));
+                if (overloads) {
+                    reification(scope, overloads);
+                }
+            }
+            if (const Type* right_type = std::get<2>(*operator_fn);
+                right_type->kind_ == Kind::Instance && left_type != right_type) {
+                Scope* scope = right_type->cast<InstanceType>()->scope_;
+                auto overloads = scope->find(GetOperatorString(std::get<0>(*operator_fn)));
+                if (overloads) {
+                    reification(scope, overloads);
+                }
+            }
+        }
+    }
 
     [[nodiscard]] auto resolve_overload(Symbol func, std::span<const Type*> args)
         -> FunctionObject {
@@ -1248,7 +1310,7 @@ private:
         } else if (auto* term = Sema::get_if<SymbolKind::Term>(base)) {
             // value access
             Term decayed = Sema::decay(*term);
-            Term result;
+            Symbol result;
             if (decayed->kind_ == Kind::Struct) {
                 result = struct_access(decayed, member);
             } else if (decayed->kind_ == Kind::Instance) {
@@ -1258,12 +1320,12 @@ private:
                     ".", decayed->repr(), member
                 );
             }
-            if (!result) {
+            if (holds_monostate(result)) {
                 /// TODO: throw member not found error
                 throw;
             }
             self = *term;
-            base = sema_.is_mutable(*term) ? sema_.apply_mutable(result) : result;
+            base = result;
 
             return true;
         } else {
@@ -1288,13 +1350,11 @@ private:
         return {};
     }
 
-    auto instance_access(Term object, std::string_view member) -> Term {
-        auto find_method = [&](Scope* scope) -> Term {
+    auto instance_access(Term object, std::string_view member) -> Symbol {
+        auto find_method = [&](Scope* scope) -> Symbol {
             const ScopeValue* value = scope->find(member);
             if (value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
-                return Term::prvalue(
-                    new FunctionOverloadSetValue(scope, opaque_cast<const OpaqueScopeValue*>(value))
-                );
+                return BoundMethod{object, scope, value};
             }
             return {};
         };
@@ -1913,6 +1973,67 @@ inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void
     TypeCheckVisitor{*this}(variant);
 }
 
+inline auto TemplateHandler::inference(
+    Scope* scope, const ASTTemplateDefinition* primary, std::span<const Type*> args
+) noexcept -> FunctionObject {
+    GlobalMemory::Vector<const Object*> auto_instances = TypeRegistry::get_auto_instances(
+        primary->parameters | std::views::transform(&ASTTemplateParameter::is_nttp)
+    );
+    Scope& pattern_scope = Scope::make(*scope);
+    for (std::size_t i = 0; i < primary->parameters.size(); i++) {
+        const ASTTemplateParameter& param = primary->parameters[i];
+        pattern_scope.add_template_argument(param.identifier, args[i]);
+    }
+    GlobalMemory::Vector<const Type*> patterns;
+    if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&primary->target_node)) {
+        for (const auto& pattern : (*func_def)->parameters) {
+            Symbol pattern_symbol =
+                ValueContextEvaluator{sema_, nullptr, false, true}(pattern.type);
+            patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
+        }
+    } else if (
+        auto* ctor_def =
+            std::get_if<const ASTConstructorDestructorDefinition*>(&primary->target_node)
+    ) {
+        for (const auto& pattern : (*ctor_def)->parameters) {
+            Symbol pattern_symbol =
+                ValueContextEvaluator{sema_, nullptr, false, true}(pattern.type);
+            patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
+        }
+    } else if (
+        auto* operator_fn = std::get_if<const ASTOperatorOverloadDefinition*>(&primary->target_node)
+    ) {
+        Symbol left_pattern_symbol =
+            ValueContextEvaluator{sema_, nullptr, false, true}((*operator_fn)->left.type);
+        patterns.push_back(Sema::get<SymbolKind::Type>(left_pattern_symbol));
+        if ((*operator_fn)->right) {
+            Symbol right_pattern_symbol =
+                ValueContextEvaluator{sema_, nullptr, false, true}((*operator_fn)->right->type);
+            patterns.push_back(Sema::get<SymbolKind::Type>(right_pattern_symbol));
+        }
+    } else {
+        // template cannot appears on another template
+        UNREACHABLE();
+    }
+    AutoBindings auto_bindings;
+    for (std::size_t i = 0; i < patterns.size(); i++) {
+        if (!patterns[i]->assignable_from(args[i], auto_bindings)) {
+            // Diagnostic::report(TemplateArgumentTypeMismatchError(
+            //     primary->parameters[i].identifier, args[i]->repr(), patterns[i]->repr()
+            // ));
+            throw;
+        }
+    }
+    GlobalMemory::Vector<const Object*> instantiation_args;
+    for (auto& auto_inst : auto_instances) {
+        instantiation_args.push_back(auto_bindings[auto_inst]);
+    }
+    Symbol func_symbol = instantiate(scope, primary, instantiation_args);
+    if (!holds_monostate(func_symbol)) {
+        return Sema::get<SymbolKind::Term>(func_symbol).get();
+    }
+}
+
 inline auto TemplateHandler::validate(
     const ASTTemplateDefinition& primary, TemplateArgs args
 ) noexcept -> bool {
@@ -2048,7 +2169,7 @@ inline auto TemplateHandler::specialization_resolution(
 inline auto TemplateHandler::get_prototype(
     Scope& pattern_scope, const ASTTemplateSpecialization& specialization
 ) noexcept -> const SpecializationPrototype& {
-    GlobalMemory::Vector<Object*> auto_instances = TypeRegistry::get_auto_instances(
+    GlobalMemory::Vector<const Object*> auto_instances = TypeRegistry::get_auto_instances(
         specialization.parameters | std::views::transform(&ASTTemplateParameter::is_nttp)
     );
     Sema::Guard guard(sema_, pattern_scope);
@@ -2278,7 +2399,8 @@ inline auto Sema::eval_symbol(
         if (holds_monostate(var_init->type)) return init;
         TypeResolution type;
         TypeContextEvaluator{*this, type}(var_init->type);
-        if (init && !type->assignable_from(init.effective_type())) return {};
+        AutoBindings auto_bindings;
+        if (init && !type->assignable_from(init.effective_type(), auto_bindings)) return {};
         return Term::lvalue(type.get());
     } else if (value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
         return std::pair{&scope, &value};

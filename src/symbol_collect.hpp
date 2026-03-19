@@ -122,6 +122,22 @@ public:
     }
 
     void add_template(std::string_view identifier, const ASTTemplateDefinition* definition) {
+        if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&definition->target_node)) {
+            add_function(identifier, *func_def);
+            return;
+        } else if (
+            auto* ctor_def =
+                std::get_if<const ASTConstructorDestructorDefinition*>(&definition->target_node)
+        ) {
+            add_function(identifier, *ctor_def);
+            return;
+        } else if (
+            auto* operator_fn =
+                std::get_if<const ASTOperatorOverloadDefinition*>(&definition->target_node)
+        ) {
+            add_function(identifier, *operator_fn);
+            return;
+        }
         auto [_, inserted] = identifiers_.insert(
             {identifier,
              new TemplateFamily{

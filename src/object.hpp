@@ -22,7 +22,6 @@ enum class Kind : std::uint8_t {
     Mutable,
     Reference,
     Pointer,
-    Intersection,
     Union,
     Overload,
     Template,
@@ -35,8 +34,6 @@ enum class ValueCategory : std::uint8_t {
 };
 
 class Scope;
-/// for reinterpret_cast to ScopeValue
-struct OpaqueScopeValue;
 
 class Object;
 
@@ -57,7 +54,6 @@ class InstanceType;
 class MutableType;
 class ReferenceType;
 class PointerType;
-class IntersectionType;
 class UnionType;
 
 class Value;
@@ -74,7 +70,6 @@ class InstanceValue;
 class MutableValue;
 class ReferenceValue;
 class PointerValue;
-class FunctionOverloadSetValue;
 
 template <typename T>
 concept TypeClass = std::derived_from<T, Type> && !std::is_abstract_v<T>;
@@ -82,7 +77,8 @@ template <typename V>
 concept ValueClass = std::derived_from<V, Value> && !std::is_abstract_v<V>;
 
 using FunctionObject = const Object*;  // either FunctionType or FunctionValue
-using FunctionOverloadVector = GlobalMemory::Vector<FunctionObject>;
+
+using AutoBindings = GlobalMemory::FlatMap<const Object*, const Object*>;
 
 class TypeDependencyGraph {
 public:
@@ -237,7 +233,6 @@ public:
             MutableType,
             ReferenceType,
             PointerType,
-            IntersectionType,
             UnionType>;
         if constexpr (std::is_same_v<T, InstanceType>) {
             // classes with same definition are distinct types
@@ -280,7 +275,8 @@ public:
     }
 
     template <std::ranges::input_range R>
-    static auto get_auto_instances(R&& is_nttp_array) noexcept -> GlobalMemory::Vector<Object*>
+    static auto get_auto_instances(R&& is_nttp_array) noexcept
+        -> GlobalMemory::Vector<const Object*>
         requires std::same_as<std::ranges::range_value_t<R>, bool>;
 
 private:
@@ -292,7 +288,6 @@ private:
         TypeSet<MutableType>,
         TypeSet<ReferenceType>,
         TypeSet<PointerType>,
-        TypeSet<IntersectionType>,
         TypeSet<UnionType>>
         types_;
     GlobalMemory::Vector<const InstanceType*> instance_types_;
@@ -447,9 +442,7 @@ public:
 
     virtual GlobalMemory::String repr() const = 0;
 
-    auto pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept -> bool {
+    auto pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept -> bool {
         assert(is_type_ == target->is_type_);
         if (this == target) {
             return true;
@@ -461,9 +454,8 @@ public:
     }
 
 private:
-    virtual auto do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept -> bool = 0;
+    virtual auto do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept
+        -> bool = 0;
 };
 
 class Type : public Object {
@@ -492,7 +484,7 @@ public:
         return do_compare(other, assumed_equal);
     }
 
-    auto assignable_from(const Type* source) const noexcept -> bool;
+    auto assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept -> bool;
 
     virtual auto default_construct() const noexcept -> Term = 0;
 
@@ -501,7 +493,8 @@ protected:
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept -> std::strong_ordering = 0;
 
-    virtual auto do_assignable_from(const Type* source) const noexcept -> bool = 0;
+    virtual auto do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept
+        -> bool = 0;
 };
 
 class PrimitiveType : public Type {
@@ -516,9 +509,7 @@ protected:
         return this <=> other;
     }
 
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         return this == target;
     }
 };
@@ -536,7 +527,9 @@ private:
 
 public:
     GlobalMemory::String repr() const final { return "unknown"; }
-    bool do_assignable_from(const Type* source) const noexcept final { return true; }
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
+        return true;
+    }
     Term default_construct() const noexcept final;
 };
 
@@ -556,11 +549,16 @@ public:
     ) const noexcept final {
         return this <=> other;
     }
-    bool do_assignable_from(const Type* source) const noexcept final { UNREACHABLE(); }
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
+        if (auto_bindings.contains(this)) {
+            return auto_bindings[this] == source;
+        } else {
+            auto_bindings[this] = source;
+            return true;
+        }
+    }
     Term default_construct() const noexcept final { UNREACHABLE(); }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         if (auto_bindings.contains(this)) {
             return auto_bindings[this] == target;
         } else {
@@ -578,7 +576,7 @@ public:
 public:
     VoidType() noexcept : PrimitiveType(kind) {}
     GlobalMemory::String repr() const final { return "void"; }
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         return source->kind_ == Kind::Void;
     }
     Term default_construct() const noexcept final { UNREACHABLE(); }
@@ -592,7 +590,9 @@ public:
 public:
     AnyType() noexcept : PrimitiveType(kind) {}
     GlobalMemory::String repr() const final { return "any"; }
-    bool do_assignable_from(const Type* source) const noexcept final { return true; }
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
+        return true;
+    }
     Term default_construct() const noexcept final;
 };
 
@@ -604,7 +604,7 @@ public:
 public:
     NullptrType() noexcept : PrimitiveType(kind) {}
     GlobalMemory::String repr() const final { return "nullptr"; }
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         /// No variable can have null type except null literal
         UNREACHABLE();
     }
@@ -636,7 +636,7 @@ public:
     GlobalMemory::String repr() const final {
         return GlobalMemory::format("{}{}", is_signed_ ? "i" : "u", bits_);
     }
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         const IntegerType* other_int = source->dyn_cast<IntegerType>();
         return other_int && (other_int->bits_ == 0 || (this->is_signed_ == other_int->is_signed_ &&
                                                        this->bits_ >= other_int->bits_));
@@ -659,7 +659,7 @@ public:
         assert(bits == 0 || bits == 32 || bits == 64);
     }
     GlobalMemory::String repr() const final { return GlobalMemory::format("f{}", bits_); }
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         const FloatType* other_float = source->dyn_cast<FloatType>();
         return other_float && (other_float->bits_ == 0 || this->bits_ >= other_float->bits_);
     }
@@ -674,7 +674,7 @@ public:
 public:
     BooleanType() noexcept : PrimitiveType(kind) {}
     GlobalMemory::String repr() const final { return "bool"; }
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         return source->dyn_cast<BooleanType>() != nullptr;
     }
     Term default_construct() const noexcept final;
@@ -732,11 +732,9 @@ protected:
         return return_type_->compare(other_func->return_type_, assumed_equal);
     }
 
-    bool do_assignable_from(const Type* source) const noexcept final;
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final;
 
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const FunctionType* other_func = target->dyn_cast<FunctionType>();
         if (!other_func || parameters_.size() != other_func->parameters_.size()) {
             return false;
@@ -777,11 +775,11 @@ protected:
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept -> std::strong_ordering final;
 
-    auto do_assignable_from(const Type* source) const noexcept -> bool final;
+    auto do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept
+        -> bool final;
 
-    auto do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept -> bool final;
+    auto do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept
+        -> bool final;
 };
 
 class StructType : public Type {
@@ -843,7 +841,7 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         // (a,b,c) is assignable to (a,b)
         // i.e., source must have at least all fields of this
         const StructType* other_struct = source->dyn_cast<StructType>();
@@ -852,16 +850,15 @@ protected:
         }
         for (const auto& [name, type] : fields_) {
             auto it = other_struct->fields_.find(name);
-            if (it == other_struct->fields_.end() || !(*it).second->assignable_from(type)) {
+            if (it == other_struct->fields_.end() ||
+                !(*it).second->assignable_from(type, auto_bindings)) {
                 return false;
             }
         }
         return true;
     }
 
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const StructType* other_struct = target->dyn_cast<StructType>();
         if (!other_struct) {
             return false;
@@ -882,7 +879,7 @@ public:
     static constexpr Kind kind = Kind::Interface;
 
 private:
-    GlobalMemory::FlatMap<std::string_view, FunctionOverloadVector> methods_;
+    GlobalMemory::FlatMap<std::string_view, std::span<const FunctionType*>> methods_;
 
 public:
     InterfaceType() noexcept : Type(kind) {}
@@ -907,7 +904,7 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         /// TODO:
         return false;
     }
@@ -981,11 +978,11 @@ protected:
         return this <=> other;
     }
 
-    bool do_assignable_from(const Type* other) const noexcept final { return this == other; }
+    bool do_assignable_from(const Type* other, AutoBindings& auto_bindings) const noexcept final {
+        return this == other;
+    }
 
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const InstanceType* other_instance = target->dyn_cast<InstanceType>();
         if (!other_instance) {
             return false;
@@ -1038,14 +1035,12 @@ protected:
         return target_type_->compare(other_mut->target_type_, assumed_equal);
     }
 
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         const MutableType* other_mut = source->dyn_cast<MutableType>();
-        return other_mut && target_type_->assignable_from(other_mut->target_type_);
+        return other_mut && target_type_->assignable_from(other_mut->target_type_, auto_bindings);
     }
 
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const MutableType* other_mut = target->dyn_cast<MutableType>();
         return other_mut && target_type_->pattern_match(other_mut->target_type_, auto_bindings);
     }
@@ -1085,15 +1080,13 @@ protected:
         return referenced_type_->compare(other_ref->referenced_type_, assumed_equal);
     }
 
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         const ReferenceType* other_ref = source->dyn_cast<ReferenceType>();
         return other_ref && (is_moved_ == other_ref->is_moved_) &&
-               referenced_type_->assignable_from(other_ref->referenced_type_);
+               referenced_type_->assignable_from(other_ref->referenced_type_, auto_bindings);
     }
 
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const ReferenceType* other_ref = target->dyn_cast<ReferenceType>();
         return other_ref && (is_moved_ == other_ref->is_moved_) &&
                referenced_type_->pattern_match(other_ref->referenced_type_, auto_bindings);
@@ -1127,120 +1120,16 @@ protected:
         return pointed_type_->compare(other_ptr->pointed_type_, assumed_equal);
     }
 
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         const PointerType* other_ptr = source->dyn_cast<PointerType>();
-        return (other_ptr && pointed_type_->assignable_from(other_ptr->pointed_type_)) ||
+        return (other_ptr &&
+                pointed_type_->assignable_from(other_ptr->pointed_type_, auto_bindings)) ||
                source->kind_ == Kind::Nullptr;
     }
 
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const PointerType* other_ptr = target->dyn_cast<PointerType>();
         return other_ptr && pointed_type_->pattern_match(other_ptr->pointed_type_, auto_bindings);
-    }
-};
-
-/// TODO: order types by address
-class IntersectionType final : public Type {
-public:
-    static constexpr Kind kind = Kind::Intersection;
-
-private:
-    static std::span<const Type*> flatten(std::span<const Type*> unflattened_types) {
-        std::size_t size = 0;
-        for (const Type* type : unflattened_types) {
-            if (const IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
-                size += intersection_type->types_.size();
-            } else {
-                size++;
-            }
-        }
-        std::span<const Type*> buffer = GlobalMemory::alloc_array<const Type*>(size);
-        std::size_t index = 0;
-        for (const Type* type : unflattened_types) {
-            if (const IntersectionType* intersection_type = type->dyn_cast<IntersectionType>()) {
-                for (const Type* inner_type : intersection_type->types_) {
-                    buffer[index++] = inner_type;
-                }
-            } else {
-                buffer[index++] = type;
-            }
-        }
-        return buffer;
-    }
-    static auto flatten(const Type* left, const Type* right) -> std::span<const Type*> {
-        std::array types = {left, right};
-        return flatten(std::span<const Type*>(types));
-    }
-
-public:
-    std::span<const Type*> types_;
-
-public:
-    IntersectionType(auto&&... unflattened_types) noexcept
-        : Type(kind), types_{flatten(unflattened_types...)} {}
-
-    GlobalMemory::String repr() const final {
-        /// TODO:
-        return {};
-    }
-
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
-        for (const Type*& type : types_) {
-            if (!graph.check_dependency(this, type)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    auto default_construct() const noexcept -> Term final;
-
-protected:
-    std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
-    ) const noexcept final {
-        const IntersectionType* other_intersection = other->cast<IntersectionType>();
-        if (types_.size() != other_intersection->types_.size()) {
-            return types_.size() <=> other_intersection->types_.size();
-        }
-        for (std::size_t i = 0; i < types_.size(); ++i) {
-            assumed_equal.insert({types_[i], other_intersection->types_[i]});
-            auto cmp = types_[i]->compare(other_intersection->types_[i], assumed_equal);
-            if (cmp != std::strong_ordering::equal) {
-                return cmp;
-            }
-        }
-        return std::strong_ordering::equal;
-    }
-
-    bool do_assignable_from(const Type* source) const noexcept final {
-        // (a & b & c) is assignable to (a & b)
-        // i.e., source supports at least all the function overloads of this
-        if (const IntersectionType* other_intersection = source->dyn_cast<IntersectionType>()) {
-            for (const auto& type : types_) {
-                bool found = false;
-                for (const auto& other_type : other_intersection->types_) {
-                    if (type->assignable_from(other_type)) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    return false;
-                }
-            }
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
-        throw;
     }
 };
 
@@ -1318,14 +1207,14 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool do_assignable_from(const Type* source) const noexcept final {
+    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
         // (a | b) is assignable to (a | b | c)
         // i.e., source must be assignable to at least one of the types in this
         if (const UnionType* other_union = source->dyn_cast<UnionType>()) {
             for (const auto& type : other_union->types_) {
                 bool found = false;
                 for (const auto& other_type : types_) {
-                    if (other_type->assignable_from(type)) {
+                    if (other_type->assignable_from(type, auto_bindings)) {
                         found = true;
                         break;
                     }
@@ -1339,9 +1228,7 @@ protected:
         return false;
     }
 
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         throw;
     }
 };
@@ -1421,9 +1308,7 @@ private:
     UnknownValue* clone() const noexcept final { return new UnknownValue(*this); }
     UnknownValue* resolve_to(const Type* target) const noexcept final { return new UnknownValue(); }
     void assign_from(Value* source) final { UNREACHABLE(); }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         UNREACHABLE();
     }
     std::size_t hash_code() const noexcept final { return std::bit_cast<std::size_t>(this); }
@@ -1443,9 +1328,7 @@ public:
     AutoValue* clone() const noexcept final { UNREACHABLE(); }
     AutoValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
     void assign_from(Value* source) final { UNREACHABLE(); }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         if (auto_bindings.contains(this)) {
             return target == auto_bindings[this];
         } else {
@@ -1476,9 +1359,7 @@ public:
         return new NullptrValue();
     }
     void assign_from(Value* source) final { UNREACHABLE(); }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const NullptrValue* other_nullptr = target->dyn_cast<NullptrValue>();
         return other_nullptr != nullptr;
     }
@@ -1583,9 +1464,7 @@ public:
         IntegerValue* int_source = source->cast<IntegerValue>();
         this->value_ = int_source->value_;
     }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const IntegerValue* other_int = target->dyn_cast<IntegerValue>();
         return other_int && value_ == other_int->value_;
     }
@@ -1637,9 +1516,7 @@ public:
         FloatValue* float_source = source->cast<FloatValue>();
         this->value_ = float_source->value_;
     }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         /// float-point number is not allowed as NTTP
         return false;
     }
@@ -1668,9 +1545,7 @@ public:
         BooleanValue* bool_source = source->cast<BooleanValue>();
         this->value_ = bool_source->value_;
     }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const BooleanValue* other_bool = target->dyn_cast<BooleanValue>();
         return other_bool && value_ == other_bool->value_;
     }
@@ -1696,9 +1571,7 @@ public:
     FunctionValue* clone() const noexcept final { UNREACHABLE(); }
     FunctionValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
     void assign_from(Value* source) final { UNREACHABLE(); }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         throw;
     }
 
@@ -1757,9 +1630,7 @@ public:
         /// TODO: implement
         UNREACHABLE();
     }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         throw;
     }
 
@@ -1798,9 +1669,7 @@ public:
         StructValue* struct_source = source->cast<StructValue>();
         this->fields_ = struct_source->fields_;
     }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const StructValue* other_struct = target->dyn_cast<StructValue>();
         if (!other_struct || type_ != other_struct->type_) {
             return false;
@@ -1854,9 +1723,8 @@ public:
         InstanceValue* instance_source = source->cast<InstanceValue>();
         this->attrs_ = instance_source->attrs_;
     }
-    auto do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept -> bool final {
+    auto do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept
+        -> bool final {
         const InstanceValue* other_instance = target->dyn_cast<InstanceValue>();
         if (!other_instance || type_ != other_instance->type_) {
             return false;
@@ -1906,9 +1774,7 @@ public:
         MutableValue* mut_source = source->cast<MutableValue>();
         this->value_ = mut_source->value_;
     }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         UNREACHABLE();
     }
 
@@ -1943,9 +1809,7 @@ public:
         ReferenceValue* ref_source = source->cast<ReferenceValue>();
         referenced_value_ = ref_source->referenced_value_;
     }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const ReferenceValue* other_ref = target->dyn_cast<ReferenceValue>();
         return other_ref && referenced_value_ == other_ref->referenced_value_;
     }
@@ -1987,9 +1851,7 @@ public:
         this->pointed_value_ = ptr_source->pointed_value_;
     }
 
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const PointerValue* other_ptr = target->dyn_cast<PointerValue>();
         return other_ptr && pointed_value_ == other_ptr->pointed_value_;
     }
@@ -1997,39 +1859,6 @@ public:
     [[nodiscard]] auto hash_code() const noexcept -> std::size_t final {
         return hash_combine(std::bit_cast<std::size_t>(type_), pointed_value_->hash_code());
     }
-};
-
-class FunctionOverloadSetValue final : public Value {
-public:
-    static constexpr Kind kind = Kind::Overload;
-
-public:
-    Scope* scope_;                         // scope defining the overload set
-    const OpaqueScopeValue* scope_value_;  // points to scope record defining the overload set
-
-public:
-    FunctionOverloadSetValue(Scope* scope, const OpaqueScopeValue* scope_value) noexcept
-        : Value(kind), scope_(scope), scope_value_(scope_value) {}
-    GlobalMemory::String repr() const final { return "<function overload set>"; }
-    const Type* get_type() const noexcept final {
-        /// TODO:
-        return nullptr;
-    }
-    FunctionOverloadSetValue* clone() const noexcept final {
-        return new FunctionOverloadSetValue(scope_, scope_value_);
-    }
-    FunctionOverloadSetValue* resolve_to(const Type* target) const final {
-        /// TODO:
-        return nullptr;
-    }
-    void assign_from(Value* source) final { UNREACHABLE(); }
-    bool do_pattern_match(
-        const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
-    ) const noexcept final {
-        UNREACHABLE();
-    }
-
-    auto hash_code() const noexcept -> std::size_t final { UNREACHABLE(); }
 };
 
 inline bool TypeRegistry::TypeComparator::operator()(
@@ -2045,10 +1874,10 @@ inline const Type* TypeRegistry::get_unknown() noexcept { return &UnknownType::i
 
 template <std::ranges::input_range R>
 inline auto TypeRegistry::get_auto_instances(R&& is_nttp_array) noexcept
-    -> GlobalMemory::Vector<Object*>
+    -> GlobalMemory::Vector<const Object*>
     requires std::same_as<std::ranges::range_value_t<R>, bool>
 {
-    GlobalMemory::Vector<Object*> result;
+    GlobalMemory::Vector<const Object*> result;
     result.reserve(is_nttp_array.size());
     std::size_t type_index = 0;
     for (bool is_nttp : std::forward<R>(is_nttp_array)) {
@@ -2095,11 +1924,6 @@ inline std::pair<const Type*, bool> TypeRegistry::dispatch_pool(const Type* type
     case Kind::Pointer: {
         auto [it, inserted] =
             std::get<TypeSet<PointerType>>(types_).insert(type->cast<PointerType>());
-        return {*it, inserted};
-    }
-    case Kind::Intersection: {
-        auto [it, inserted] =
-            std::get<TypeSet<IntersectionType>>(types_).insert(type->cast<IntersectionType>());
         return {*it, inserted};
     }
     case Kind::Union: {
@@ -2156,19 +1980,20 @@ inline auto Term::effective_type() const noexcept -> const Type* {
     return is_comptime_ ? value_->get_type() : type_;
 }
 
-inline auto Type::assignable_from(const Type* source) const noexcept -> bool {
-    assert(!(this == source) || do_assignable_from(source));
+inline auto Type::assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept
+    -> bool {
+    assert(!(this == source) || do_assignable_from(source, auto_bindings));
     if (this == source) {
         return true;
     }
     if (kind_ != source->kind_) {
         if (auto mut = source->dyn_cast<MutableType>()) {
-            return do_assignable_from(mut->target_type_);
+            return do_assignable_from(mut->target_type_, auto_bindings);
         } else if (auto ref = source->dyn_cast<ReferenceType>()) {
-            return do_assignable_from(ref->referenced_type_);
+            return do_assignable_from(ref->referenced_type_, auto_bindings);
         }
     }
-    return do_assignable_from(source);
+    return do_assignable_from(source, auto_bindings);
 }
 
 inline UnknownType UnknownType::instance;
@@ -2219,7 +2044,9 @@ inline auto BooleanType::default_construct() const noexcept -> Term {
     return Term::prvalue(new BooleanValue(false));
 }
 
-inline auto FunctionType::do_assignable_from(const Type* source) const noexcept -> bool {
+inline auto FunctionType::do_assignable_from(
+    const Type* source, AutoBindings& auto_bindings
+) const noexcept -> bool {
     // (Base) => Derived is assignable to (Derived) => Base
     // i.e., parameters are contravariant, return type is covariant
     if (const FunctionType* func_other = source->dyn_cast<FunctionType>()) {
@@ -2227,21 +2054,13 @@ inline auto FunctionType::do_assignable_from(const Type* source) const noexcept 
             return false;
         }
         for (std::size_t i = 0; i < parameters_.size(); ++i) {
-            if (!func_other->parameters_[i]->assignable_from(parameters_[i])) {
+            if (!func_other->parameters_[i]->assignable_from(parameters_[i], auto_bindings)) {
                 return false;
             }
         }
-        return return_type_->assignable_from(func_other->return_type_);
-    } else if (const IntersectionType* intersection_other = source->dyn_cast<IntersectionType>()) {
-        for (const Type* member_type : intersection_other->types_) {
-            if (this->assignable_from(member_type)) {
-                return true;
-            }
-        }
-        return false;
-    } else {
-        return false;
+        return return_type_->assignable_from(func_other->return_type_, auto_bindings);
     }
+    return false;
 }
 
 inline auto FunctionType::default_construct() const noexcept -> Term {
@@ -2267,9 +2086,11 @@ inline auto ArrayType::do_compare(
     return size_->value_ <=> other_array->size_->value_;
 }
 
-inline auto ArrayType::do_assignable_from(const Type* source) const noexcept -> bool {
+inline auto ArrayType::do_assignable_from(
+    const Type* source, AutoBindings& auto_bindings
+) const noexcept -> bool {
     if (const ArrayType* array_other = source->dyn_cast<ArrayType>()) {
-        if (!element_type_->assignable_from(array_other->element_type_)) {
+        if (!element_type_->assignable_from(array_other->element_type_, auto_bindings)) {
             return false;
         }
         if (size_ && array_other->size_) {
@@ -2282,7 +2103,7 @@ inline auto ArrayType::do_assignable_from(const Type* source) const noexcept -> 
 }
 
 inline auto ArrayType::do_pattern_match(
-    const Object* target, GlobalMemory::FlatMap<const Object*, const Object*>& auto_bindings
+    const Object* target, AutoBindings& auto_bindings
 ) const noexcept -> bool {
     const ArrayType* other_array = target->dyn_cast<ArrayType>();
     return other_array && element_type_->pattern_match(other_array->element_type_, auto_bindings) &&
@@ -2334,6 +2155,7 @@ inline auto StructType::construct(
     }
     for (const auto& [field_name, field_type] : *field_types) {
         auto it = init_types.find(field_name);
+        AutoBindings auto_bindings;
         if (it == init_types.end()) {
             if (auto default_value = field_type->default_construct()) {
                 inits.insert({field_name, default_value});
@@ -2341,7 +2163,7 @@ inline auto StructType::construct(
                 throw UnlocatedProblem::make<UninitializedAttributeError>(field_name);
                 return Term::unknown();
             }
-        } else if (!field_type->assignable_from(it->second)) {
+        } else if (!field_type->assignable_from(it->second, auto_bindings)) {
             throw UnlocatedProblem::make<TypeMismatchError>(
                 GlobalMemory::format_view("field '{}'", field_name), it->second->repr()
             );
@@ -2409,12 +2231,6 @@ inline auto MutableType::default_construct() const noexcept -> Term {
 
 inline auto PointerType::default_construct() const noexcept -> Term {
     return Term::prvalue(new PointerValue(this, nullptr));
-}
-
-inline auto IntersectionType::default_construct() const noexcept -> Term {
-    /// TODO:
-    assert(false);
-    return Term{};
 }
 
 inline auto UnionType::default_construct() const noexcept -> Term {
