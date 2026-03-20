@@ -414,7 +414,7 @@ public:
         }
     }
 
-    auto operator()(auto out, const Value* value) const -> void { assert(false); }
+    auto operator()(GlobalMemory::String& out, const Value* value) const -> void { assert(false); }
 
     auto operator()(GlobalMemory::String& out, OperatorCode opcode) const noexcept -> void {
         switch (opcode) {
@@ -739,23 +739,58 @@ public:
     auto operator()(const ASTConstant* node) -> void { definitions_ += node->value->repr(); }
 
     auto operator()(const ASTSelfExpr* node) -> void {
-        definitions_ += (node->is_type ? "decltype(*this)" : "(*this)");
+        assert(!node->is_type);
+        definitions_ += "self"sv;
     }
 
     auto operator()(const ASTIdentifier* node) -> void { definitions_ += node->str; }
 
+    auto operator()(const ASTMemberAccess* node) -> void {
+        if (auto* replacement = env_.find(current_scope_, node)) {
+            mangler_(definitions_, std::get<const Scope*>(*replacement));
+        } else {
+            (*this)(node->base);
+            definitions_ += "."sv;
+            definitions_ += node->member;
+        }
+    }
+
     auto operator()(const ASTUnaryOp* node) -> void {
-        /// TODO: postfix unary ops·
-        definitions_ += GetOperatorString(node->opcode);
-        (*this)(node->expr);
+        if (node->opcode == OperatorCode::PostIncrement ||
+            node->opcode == OperatorCode::PostDecrement) {
+            (*this)(node->expr);
+            definitions_ += GetOperatorString(node->opcode);
+        } else {
+            definitions_ += GetOperatorString(node->opcode);
+            (*this)(node->expr);
+        }
     }
 
     auto operator()(const ASTBinaryOp* node) -> void {
-        (*this)(node->left);
-        definitions_ += " "sv;
-        definitions_ += GetOperatorString(node->opcode);
-        definitions_ += " "sv;
-        (*this)(node->right);
+        if (auto* replacement = env_.find(current_scope_, node)) {
+            auto [func_type, self_type, _] =
+                std::get<CodeGenEnvironment::FunctionCall>(*replacement);
+            definitions_ += "_op_"sv;
+            mangler_(definitions_, node->opcode);
+            definitions_ += "_0"sv;
+            mangler_(definitions_, func_type->parameters_[0]);
+            if (!holds_monostate(node->right)) {
+                mangler_(definitions_, func_type->parameters_[1]);
+            }
+            definitions_ += "("sv;
+            (*this)(node->left);
+            if (!holds_monostate(node->right)) {
+                definitions_ += ", "sv;
+                (*this)(node->right);
+            }
+            definitions_ += ")"sv;
+        } else {
+            (*this)(node->left);
+            definitions_ += " "sv;
+            definitions_ += GetOperatorString(node->opcode);
+            definitions_ += " "sv;
+            (*this)(node->right);
+        }
     }
 
     auto operator()(const ASTStructInitialization* node) -> void {
@@ -776,7 +811,7 @@ public:
     }
 
     auto operator()(const ASTFunctionCall* node) -> void {
-        const auto& [func_type, self_type, is_constructor, is_operator_overload] =
+        const auto& [func_type, self_type, is_constructor] =
             std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
         if (is_constructor) {
             definitions_ += "_init_"sv;

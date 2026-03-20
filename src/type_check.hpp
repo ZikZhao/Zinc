@@ -46,19 +46,12 @@ public:
         const FunctionType* func_type;
         const Type* self_type;
         bool is_constructor;
-        bool is_operator_overload;
-    };
-
-    struct AccessChain {
-        const Scope* scope;
-        std::size_t end_of_static_part;
-        std::span<const Object*> instantiation_args;
     };
 
     using TableValue = std::variant<
-        const Type*,   // type expression
-        FunctionCall,  // function call
-        AccessChain>;  // member access
+        const Type*,    // type expression
+        const Scope*,   // member access
+        FunctionCall>;  // function call
 
     using Table = GlobalMemory::FlatMap<const ASTNode*, TableValue>;
 
@@ -111,18 +104,9 @@ public:
         scope_map_[current_scope][node] = type;
     }
 
-    auto map_access_chain(
-        const Scope* current_scope,
-        const ASTNode* node,
-        const Scope* scope,
-        std::size_t end_of_static_part,
-        std::span<const Object*> instantiation_args
-    ) -> void {
-        scope_map_[current_scope][node] = AccessChain{
-            .scope = scope,
-            .end_of_static_part = end_of_static_part,
-            .instantiation_args = instantiation_args
-        };
+    auto map_member_access(const Scope* current_scope, const ASTNode* node, const Scope* scope)
+        -> void {
+        scope_map_[current_scope][node] = scope;
     }
 
     auto map_function_call(
@@ -130,14 +114,12 @@ public:
         const ASTNode* node,
         const FunctionType* func_type,
         const Type* self_type,
-        bool is_constructor,
-        bool is_operator_overload
+        bool is_constructor
     ) -> void {
         scope_map_[current_scope][node] = FunctionCall{
             .func_type = func_type,
             .self_type = self_type,
             .is_constructor = is_constructor,
-            .is_operator_overload = is_operator_overload
         };
     }
 
@@ -1004,8 +986,7 @@ public:
             Sema::get_if<SymbolKind::Method>(callee)
                 ? Sema::get<SymbolKind::Method>(callee).object.effective_type()
                 : nullptr,
-            Sema::get_if<SymbolKind::Type>(callee),
-            Sema::get_if<SymbolKind::Term>(callee)
+            Sema::get_if<SymbolKind::Type>(callee)
         );
         if (auto func_value = overload->dyn_cast<FunctionValue>()) {
             // return func_value->invoke(args);
@@ -2279,7 +2260,13 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
     Symbol base_symbol = ValueContextEvaluator{sema_, nullptr, false}(node->base);
     if (auto* type = Sema::get_if<SymbolKind::Type>(base_symbol)) {
         if (auto* instance_type = (*type)->dyn_cast<InstanceType>()) {
-            return eval_static_access(instance_type->scope_, node->member);
+            Symbol result = eval_static_access(instance_type->scope_, node->member);
+            if (Sema::get_if<SymbolKind::Term>(result)) {
+                sema_.codegen_env_.map_member_access(
+                    sema_.current_scope_, node, instance_type->scope_
+                );
+            }
+            return result;
         }
     } else if (auto* term = Sema::get_if<SymbolKind::Term>(base_symbol)) {
         Term decayed = Sema::decay(*term);
@@ -2289,7 +2276,11 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
             return eval_instance_access(*term, node->member);
         }
     } else if (auto* namespace_scope = Sema::get_if<SymbolKind::Namespace>(base_symbol)) {
-        return eval_static_access(*namespace_scope, node->member);
+        Symbol result = eval_static_access(*namespace_scope, node->member);
+        if (Sema::get_if<SymbolKind::Term>(result)) {
+            sema_.codegen_env_.map_member_access(sema_.current_scope_, node, *namespace_scope);
+        }
+        return result;
     }
     return {};
     // sema_.codegen_env_.map_access_chain(
