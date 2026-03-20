@@ -724,7 +724,6 @@ protected:
                 return cmp;
             }
         }
-        assumed_equal.insert({return_type_, other_func->return_type_});
         return return_type_->compare(other_func->return_type_, assumed_equal);
     }
 

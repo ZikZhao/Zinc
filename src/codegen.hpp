@@ -120,6 +120,9 @@ public:
             break;
         case Kind::Reference:
             output(out, type->cast<ReferenceType>()->referenced_type_, types);
+            if (!type->dyn_cast<MutableType>()) {
+                out += " const"sv;
+            }
             out += "&"sv;
             break;
         case Kind::Pointer:
@@ -319,6 +322,9 @@ public:
 
     auto mangle_all_instantiations(CodeGenEnvironment& env) const -> void {
         for (auto& [scope, args] : env.instantiations_) {
+            if (scope->is_extern_) {
+                continue;
+            }
             GlobalMemory::String mangled_part = "0";
             for (const Object* arg : args) {
                 std::size_t prev_size = mangled_part.size();
@@ -738,6 +744,11 @@ public:
 
     auto operator()(const ASTConstant* node) -> void { definitions_ += node->value->repr(); }
 
+    auto operator()(const ASTStringConstant* node) -> void {
+        definitions_ += node->value;
+        definitions_ += "sv"sv;
+    }
+
     auto operator()(const ASTSelfExpr* node) -> void {
         assert(!node->is_type);
         definitions_ += "self"sv;
@@ -747,7 +758,14 @@ public:
 
     auto operator()(const ASTMemberAccess* node) -> void {
         if (auto* replacement = env_.find(current_scope_, node)) {
-            mangler_(definitions_, std::get<const Scope*>(*replacement));
+            const Scope* member_scope = std::get<const Scope*>(*replacement);
+            if (member_scope->is_extern_) {
+                (*this)(node->base);
+                definitions_ += "::"sv;
+                definitions_ += node->member;
+            } else {
+                mangler_(definitions_, std::get<const Scope*>(*replacement));
+            }
         } else {
             (*this)(node->base);
             definitions_ += "."sv;
@@ -768,29 +786,31 @@ public:
 
     auto operator()(const ASTBinaryOp* node) -> void {
         if (auto* replacement = env_.find(current_scope_, node)) {
-            auto [func_type, self_type, _] =
+            auto [func_type, self_type, _, is_extern] =
                 std::get<CodeGenEnvironment::FunctionCall>(*replacement);
-            definitions_ += "_op_"sv;
-            mangler_(definitions_, node->opcode);
-            definitions_ += "_0"sv;
-            mangler_(definitions_, func_type->parameters_[0]);
-            if (!holds_monostate(node->right)) {
-                mangler_(definitions_, func_type->parameters_[1]);
+            if (!is_extern) {
+                definitions_ += "_op_"sv;
+                mangler_(definitions_, node->opcode);
+                definitions_ += "_0"sv;
+                mangler_(definitions_, func_type->parameters_[0]);
+                if (!holds_monostate(node->right)) {
+                    mangler_(definitions_, func_type->parameters_[1]);
+                }
+                definitions_ += "("sv;
+                (*this)(node->left);
+                if (!holds_monostate(node->right)) {
+                    definitions_ += ", "sv;
+                    (*this)(node->right);
+                }
+                definitions_ += ")"sv;
+                return;
             }
-            definitions_ += "("sv;
-            (*this)(node->left);
-            if (!holds_monostate(node->right)) {
-                definitions_ += ", "sv;
-                (*this)(node->right);
-            }
-            definitions_ += ")"sv;
-        } else {
-            (*this)(node->left);
-            definitions_ += " "sv;
-            definitions_ += GetOperatorString(node->opcode);
-            definitions_ += " "sv;
-            (*this)(node->right);
         }
+        (*this)(node->left);
+        definitions_ += " "sv;
+        definitions_ += GetOperatorString(node->opcode);
+        definitions_ += " "sv;
+        (*this)(node->right);
     }
 
     auto operator()(const ASTStructInitialization* node) -> void {
@@ -811,20 +831,24 @@ public:
     }
 
     auto operator()(const ASTFunctionCall* node) -> void {
-        const auto& [func_type, self_type, is_constructor] =
+        const auto& [func_type, self_type, is_constructor, is_extern] =
             std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
-        if (is_constructor) {
-            definitions_ += "_init_"sv;
-            mangler_(definitions_, func_type->return_type_);
-        } else {
+        if (is_extern) {
             (*this)(node->function);
-        }
-        definitions_ += "_0"sv;
-        if (self_type) {
-            mangler_(definitions_, self_type);
-        }
-        for (auto* param_type : func_type->parameters_) {
-            mangler_(definitions_, param_type);
+        } else {
+            if (is_constructor) {
+                definitions_ += "_init_"sv;
+                mangler_(definitions_, func_type->return_type_);
+            } else {
+                (*this)(node->function);
+            }
+            definitions_ += "_0"sv;
+            if (self_type) {
+                mangler_(definitions_, self_type);
+            }
+            for (auto* param_type : func_type->parameters_) {
+                mangler_(definitions_, param_type);
+            }
         }
         definitions_ += "("sv;
         const char* sep = "";
@@ -907,7 +931,39 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
         std::cerr << "Failed to open output file: " << out_path << "\n";
         return EXIT_FAILURE;
     }
-    out << "#include <any>\n#include <cstdint>\n#include <functional>\n\n";
+    out << "#include <algorithm>\n"
+           "#include <array>\n"
+           "#include <cassert>\n"
+           "#include <cmath>\n"
+           "#include <compare>\n"
+           "#include <concepts>\n"
+           "#include <expected>\n"
+           "#include <filesystem>\n"
+           "#include <format>\n"
+           "#include <fstream>\n"
+           "#include <functional>\n"
+           "#include <future>\n"
+           "#include <generator>\n"
+           "#include <initializer_list>\n"
+           "#include <iostream>\n"
+           "#include <iterator>\n"
+           "#include <map>\n"
+           "#include <memory>\n"
+           "#include <memory_resource>\n"
+           "#include <numeric>\n"
+           "#include <print>\n"
+           "#include <ranges>\n"
+           "#include <set>\n"
+           "#include <stdexcept>\n"
+           "#include <string>\n"
+           "#include <string_view>\n"
+           "#include <tuple>\n"
+           "#include <type_traits>\n"
+           "#include <typeindex>\n"
+           "#include <unordered_map>\n"
+           "#include <utility>\n"
+           "#include <vector>\n"
+           "using namespace std::literals;\n\n";
 
     GlobalMemory::Vector<const Type*> types;
     TypeCodeGen{out, types}();

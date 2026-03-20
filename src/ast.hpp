@@ -399,6 +399,7 @@ struct ASTNamespaceDefinition final : public ASTNode {
 
 struct ASTTemplateParameter final : public ASTNode {
     bool is_nttp;  // true if non-type template parameter, false if type template parameter
+    bool is_variadic;
     std::string_view identifier;
     ASTExprVariant constraint;
     ASTExprVariant default_value;

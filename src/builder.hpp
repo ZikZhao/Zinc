@@ -884,6 +884,7 @@ private:
         return ASTTemplateParameter{
             loc(ctx),
             false,
+            ctx->OP_ELLIPSIS() != nullptr,
             text(ctx->identifier_),
             std::monostate{},
             visit_expr(ctx->default_),
@@ -895,6 +896,7 @@ private:
         return ASTTemplateParameter{
             loc(ctx),
             true,
+            ctx->OP_ELLIPSIS() != nullptr,
             text(ctx->identifier_),
             visit_expr(ctx->type_),
             std::monostate{},

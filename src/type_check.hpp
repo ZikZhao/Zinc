@@ -46,6 +46,7 @@ public:
         const FunctionType* func_type;
         const Type* self_type;
         bool is_constructor;
+        bool is_extern;
     };
 
     using TableValue = std::variant<
@@ -97,6 +98,7 @@ public:
     auto add_function_output(
         const Scope* current_scope, ASTNodeVariant node, const FunctionType* func_obj
     ) -> void {
+        if (current_scope->is_extern_) return;
         functions_.push_back({current_scope, node, func_obj});
     }
 
@@ -114,12 +116,14 @@ public:
         const ASTNode* node,
         const FunctionType* func_type,
         const Type* self_type,
-        bool is_constructor
+        bool is_constructor,
+        bool is_extern
     ) -> void {
         scope_map_[current_scope][node] = FunctionCall{
             .func_type = func_type,
             .self_type = self_type,
             .is_constructor = is_constructor,
+            .is_extern = is_extern,
         };
     }
 
@@ -651,12 +655,20 @@ public:
             return {};
         }
         Scope& inst_scope = Scope::make(*sema_.current_scope_);
+        for (size_t i = 0; i < primary->parameters.size(); i++) {
+            inst_scope.set_template_argument(primary->parameters[i].identifier, args[i]);
+        }
+        if (primary->parameters.back().is_variadic) {
+            TemplateArgs pack_args = args.subspan(primary->parameters.size() - 1);
+            inst_scope.set_template_pack(primary->parameters.back().identifier, pack_args);
+        }
+        /// TODO: parameter pack
         Sema::Guard inner_guard(sema_, inst_scope);
         sema_.codegen_env_.map_instantiation(&inst_scope, args);
         sema_.deferred_analysis(inst_scope, primary->target_node);
         Symbol result = sema_.lookup_symbol(primary->identifier);
-        if (const Type* type = std::get<static_cast<size_t>(SymbolKind::Type)>(result)) {
-            if (auto instance_type = type->dyn_cast<InstanceType>()) {
+        if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
+            if (auto instance_type = (*type)->dyn_cast<InstanceType>()) {
                 instance_type->primary_template_ = &primary;
                 instance_type->template_args_ = args;
             }
@@ -756,7 +768,7 @@ private:
                 index = auto_value->index_;
             }
             const ASTTemplateParameter& template_param = at(is_nttp, index);
-            scope.add_template_argument(template_param.identifier, value);
+            scope.set_template_argument(template_param.identifier, value);
         }
     }
 
@@ -767,167 +779,6 @@ private:
         }
         return std::bit_cast<MetaFunction>(family.primary)(args);
     }
-};
-
-class OperationHandler final : public GlobalMemory::MonotonicAllocated {
-public:
-    static auto is_primitive(Term operand) noexcept -> bool {
-        if (operand) {
-            Term decayed = Sema::decay(operand);
-            return decayed->kind_ == Kind::Integer || decayed->kind_ == Kind::Float ||
-                   decayed->kind_ == Kind::Boolean;
-        }
-        return true;
-    }
-
-private:
-    Sema& sema_;
-
-public:
-    OperationHandler(Sema& sema) noexcept : sema_(sema) {}
-
-    auto eval_type_op(OperatorCode opcode, const Type* left, const Type* right = nullptr) const
-        -> const Type* {
-        /// TODO: implement type-level operations
-        return nullptr;
-    }
-
-    [[nodiscard]] auto eval_primitive_op(
-        OperatorCode opcode, Term left, Term right = {}
-    ) const noexcept -> Term {
-        bool comptime = left.is_comptime() && (right ? right.is_comptime() : true);
-        bool left_is_mutable = Sema::is_mutable(left);
-        Term decayed_left = Sema::decay(left);
-        Term decayed_right = Sema::decay(right);
-        const Type* left_type = decayed_left.effective_type();
-        Kind left_kind = decayed_left->kind_;
-        Kind right_kind = decayed_right ? decayed_right->kind_ : Kind::Unknown;
-        if (comptime) {
-            Value* left_value = decayed_left.get_comptime();
-            Value* right_value = decayed_right ? decayed_right.get_comptime() : nullptr;
-            switch (GetOperatorGroup(opcode)) {
-            case OperatorGroup::Arithmetic:
-                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(
-                        PrimitiveOperations::integer_op(opcode, left_value, right_value)
-                    );
-                } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
-                    return Term::prvalue(
-                        PrimitiveOperations::float_op(opcode, left_value, right_value)
-                    );
-                }
-                break;
-            case OperatorGroup::UnaryArithmetic:
-                assert(!right);
-                if (left_kind == Kind::Integer) {
-                    return Term::prvalue(PrimitiveOperations::integer_op(opcode, left_value));
-                } else if (left_kind == Kind::Float) {
-                    return Term::prvalue(PrimitiveOperations::float_op(opcode, left_value));
-                }
-                break;
-            case OperatorGroup::Comparison:
-                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(
-                        PrimitiveOperations::integer_op(opcode, left_value, right_value)
-                    );
-                } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
-                    return Term::prvalue(
-                        PrimitiveOperations::float_op(opcode, left_value, right_value)
-                    );
-                }
-                break;
-            case OperatorGroup::Logical:
-                if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
-                    return Term::prvalue(
-                        PrimitiveOperations::boolean_op(opcode, left_value, right_value)
-                    );
-                }
-                break;
-            case OperatorGroup::UnaryLogical:
-                assert(!right);
-                if (left_kind == Kind::Boolean) {
-                    return Term::prvalue(PrimitiveOperations::boolean_op(opcode, left_value));
-                }
-                break;
-            case OperatorGroup::Bitwise:
-                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(
-                        PrimitiveOperations::integer_op(opcode, left_value, right_value)
-                    );
-                }
-                break;
-            case OperatorGroup::UnaryBitwise:
-                if (left_kind == Kind::Integer) {
-                    return Term::prvalue(PrimitiveOperations::integer_op(opcode, left_value));
-                }
-                break;
-            case OperatorGroup::Assignment:
-                /// TODO:
-                if (!left_is_mutable) break;
-                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
-                    (left_kind == Kind::Float && right_kind == Kind::Float) ||
-                    (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
-                    return Term::lvalue(left_type);
-                }
-                break;
-            }
-        } else {
-            switch (GetOperatorGroup(opcode)) {
-            case OperatorGroup::Arithmetic:
-                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
-                    (left_kind == Kind::Float && right_kind == Kind::Float)) {
-                    return Term::prvalue(left_type);
-                }
-                break;
-            case OperatorGroup::UnaryArithmetic:
-                if (left_kind == Kind::Integer || left_kind == Kind::Float) {
-                    return Term::prvalue(left_type);
-                }
-                break;
-            case OperatorGroup::Comparison:
-                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
-                    (left_kind == Kind::Float && right_kind == Kind::Float)) {
-                    return Term::prvalue(&BooleanType::instance);
-                }
-                break;
-            case OperatorGroup::Logical:
-                if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
-                    return Term::prvalue(&BooleanType::instance);
-                }
-                break;
-            case OperatorGroup::UnaryLogical:
-                if (left_kind == Kind::Boolean) {
-                    return Term::prvalue(&BooleanType::instance);
-                }
-                break;
-            case OperatorGroup::Bitwise:
-                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(left_type);
-                }
-                break;
-            case OperatorGroup::UnaryBitwise:
-                if (left_kind == Kind::Integer) {
-                    return Term::prvalue(left_type);
-                }
-                break;
-            case OperatorGroup::Assignment:
-                /// TODO:
-                if (!left_is_mutable) break;
-                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
-                    (left_kind == Kind::Float && right_kind == Kind::Float) ||
-                    (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
-                    return Term::lvalue(left_type);
-                }
-                break;
-            }
-        }
-        /// TODO: throw error
-        return Term::unknown();
-    }
-
-    auto eval_overloaded_op(
-        const ASTNode* node, OperatorCode opcode, Term left, Term right = {}
-    ) const noexcept -> Term;
 };
 
 class CallHandler final : public GlobalMemory::MonotonicAllocated {
@@ -979,6 +830,7 @@ public:
             /// TODO: throw no matching overload error
             throw;
         }
+        const FunctionType* type = get_func_type(overload);
         sema_.codegen_env_.map_function_call(
             sema_.current_scope_,
             node,
@@ -986,7 +838,10 @@ public:
             Sema::get_if<SymbolKind::Method>(callee)
                 ? Sema::get<SymbolKind::Method>(callee).object.effective_type()
                 : nullptr,
-            Sema::get_if<SymbolKind::Type>(callee)
+            Sema::get_if<SymbolKind::Type>(callee),
+            Sema::get_if<SymbolKind::Function>(callee)
+                ? Sema::get<SymbolKind::Function>(callee).first->is_extern_
+                : false
         );
         if (auto func_value = overload->dyn_cast<FunctionValue>()) {
             // return func_value->invoke(args);
@@ -1356,6 +1211,183 @@ private:
             }
             return find_method(instance_value->type_->scope_);
         }
+    }
+};
+
+class OperationHandler final : public GlobalMemory::MonotonicAllocated {
+public:
+    static auto is_primitive(Term operand) noexcept -> bool {
+        if (operand) {
+            Term decayed = Sema::decay(operand);
+            return decayed->kind_ == Kind::Integer || decayed->kind_ == Kind::Float ||
+                   decayed->kind_ == Kind::Boolean;
+        }
+        return true;
+    }
+
+private:
+    Sema& sema_;
+
+public:
+    OperationHandler(Sema& sema) noexcept : sema_(sema) {}
+
+    auto eval_type_op(OperatorCode opcode, const Type* left, const Type* right = nullptr) const
+        -> const Type* {
+        /// TODO: implement type-level operations
+        return nullptr;
+    }
+
+    [[nodiscard]] auto eval_primitive_op(
+        OperatorCode opcode, Term left, Term right = {}
+    ) const noexcept -> Term {
+        bool comptime = left.is_comptime() && (right ? right.is_comptime() : true);
+        bool left_is_mutable = Sema::is_mutable(left);
+        Term decayed_left = Sema::decay(left);
+        Term decayed_right = Sema::decay(right);
+        const Type* left_type = decayed_left.effective_type();
+        Kind left_kind = decayed_left->kind_;
+        Kind right_kind = decayed_right ? decayed_right->kind_ : Kind::Unknown;
+        if (comptime) {
+            Value* left_value = decayed_left.get_comptime();
+            Value* right_value = decayed_right ? decayed_right.get_comptime() : nullptr;
+            switch (GetOperatorGroup(opcode)) {
+            case OperatorGroup::Arithmetic:
+                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
+                    return Term::prvalue(
+                        PrimitiveOperations::integer_op(opcode, left_value, right_value)
+                    );
+                } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
+                    return Term::prvalue(
+                        PrimitiveOperations::float_op(opcode, left_value, right_value)
+                    );
+                }
+                break;
+            case OperatorGroup::UnaryArithmetic:
+                assert(!right);
+                if (left_kind == Kind::Integer) {
+                    return Term::prvalue(PrimitiveOperations::integer_op(opcode, left_value));
+                } else if (left_kind == Kind::Float) {
+                    return Term::prvalue(PrimitiveOperations::float_op(opcode, left_value));
+                }
+                break;
+            case OperatorGroup::Comparison:
+                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
+                    return Term::prvalue(
+                        PrimitiveOperations::integer_op(opcode, left_value, right_value)
+                    );
+                } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
+                    return Term::prvalue(
+                        PrimitiveOperations::float_op(opcode, left_value, right_value)
+                    );
+                }
+                break;
+            case OperatorGroup::Logical:
+                if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
+                    return Term::prvalue(
+                        PrimitiveOperations::boolean_op(opcode, left_value, right_value)
+                    );
+                }
+                break;
+            case OperatorGroup::UnaryLogical:
+                assert(!right);
+                if (left_kind == Kind::Boolean) {
+                    return Term::prvalue(PrimitiveOperations::boolean_op(opcode, left_value));
+                }
+                break;
+            case OperatorGroup::Bitwise:
+                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
+                    return Term::prvalue(
+                        PrimitiveOperations::integer_op(opcode, left_value, right_value)
+                    );
+                }
+                break;
+            case OperatorGroup::UnaryBitwise:
+                if (left_kind == Kind::Integer) {
+                    return Term::prvalue(PrimitiveOperations::integer_op(opcode, left_value));
+                }
+                break;
+            case OperatorGroup::Assignment:
+                /// TODO:
+                if (!left_is_mutable) break;
+                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
+                    (left_kind == Kind::Float && right_kind == Kind::Float) ||
+                    (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
+                    return Term::lvalue(left_type);
+                }
+                break;
+            }
+        } else {
+            switch (GetOperatorGroup(opcode)) {
+            case OperatorGroup::Arithmetic:
+                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
+                    (left_kind == Kind::Float && right_kind == Kind::Float)) {
+                    return Term::prvalue(left_type);
+                }
+                break;
+            case OperatorGroup::UnaryArithmetic:
+                if (left_kind == Kind::Integer || left_kind == Kind::Float) {
+                    return Term::prvalue(left_type);
+                }
+                break;
+            case OperatorGroup::Comparison:
+                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
+                    (left_kind == Kind::Float && right_kind == Kind::Float)) {
+                    return Term::prvalue(&BooleanType::instance);
+                }
+                break;
+            case OperatorGroup::Logical:
+                if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
+                    return Term::prvalue(&BooleanType::instance);
+                }
+                break;
+            case OperatorGroup::UnaryLogical:
+                if (left_kind == Kind::Boolean) {
+                    return Term::prvalue(&BooleanType::instance);
+                }
+                break;
+            case OperatorGroup::Bitwise:
+                if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
+                    return Term::prvalue(left_type);
+                }
+                break;
+            case OperatorGroup::UnaryBitwise:
+                if (left_kind == Kind::Integer) {
+                    return Term::prvalue(left_type);
+                }
+                break;
+            case OperatorGroup::Assignment:
+                /// TODO:
+                if (!left_is_mutable) break;
+                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
+                    (left_kind == Kind::Float && right_kind == Kind::Float) ||
+                    (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
+                    return Term::lvalue(left_type);
+                }
+                break;
+            }
+        }
+        /// TODO: throw error
+        return Term::unknown();
+    }
+
+    auto eval_overloaded_op(
+        const ASTNode* node, OperatorCode opcode, Term left, Term right = {}
+    ) const noexcept -> Term {
+        const Type* left_type = Sema::decay(left.effective_type());
+        const Type* right_type = right ? Sema::decay(right.effective_type()) : nullptr;
+        if (left_type->kind_ != Kind::Instance && right_type &&
+            right_type->kind_ != Kind::Instance) {
+            throw;
+        }
+        std::array<Term, 2> args = {left, right};
+        if (opcode == OperatorCode::PostIncrement || opcode == OperatorCode::PostDecrement) {
+            args[1] = Term::prvalue(&IntegerValue::zero);
+        }
+        return sema_.call_handler_->eval_call(
+            node,
+            std::tuple{opcode, left_type, right_type},
+            args[1] ? args : std::span(args).subspan(0, 1)
+        );
     }
 };
 
@@ -1972,6 +2004,78 @@ inline Sema::Sema(Scope& root, CodeGenEnvironment& codegen_env) noexcept
       access_handler_(std::make_unique<AccessHandler>(*this)),
       call_handler_(std::make_unique<CallHandler>(*this)) {}
 
+inline auto Sema::eval_type(
+    std::string_view identifier, Scope& scope, const ScopeValue& value
+) noexcept -> TypeResolution {
+    if (auto* object = value.get<const Object*>()) {
+        if (auto* type = object->dyn_type()) {
+            return type;
+        }
+        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
+    }
+    // Check cache
+    auto [it_id_cache, inserted] = type_cache_.insert({{&scope, identifier}, TypeResolution()});
+    if (!inserted) {
+        return it_id_cache->second;
+    }
+    // Cache miss; resolve
+    Guard guard(*this, scope);
+    if (auto type_alias = value.get<const ASTExprVariant*>()) {
+        TypeContextEvaluator{*this, it_id_cache->second}(*type_alias);
+    } else if (auto class_def = value.get<const ASTClassDefinition*>()) {
+        TypeContextEvaluator{*this, it_id_cache->second}(class_def);
+    } else {
+        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
+    }
+    // Ignore incomplete types in cache to prevent type interning bypassed
+    if (TypeRegistry::is_type_incomplete(it_id_cache->second)) {
+        const Type* incomplete_type = it_id_cache->second;
+        type_cache_.erase(it_id_cache);
+        return incomplete_type;
+    } else {
+        return it_id_cache->second;
+    }
+}
+
+inline auto Sema::eval_symbol(
+    std::string_view identifier, Scope& scope, const ScopeValue& value
+) noexcept -> Symbol {
+    if (auto* object = value.get<const Object*>()) {
+        if (auto* type = object->dyn_type()) {
+            return type;
+        } else {
+            return Term::prvalue(const_cast<Value*>(object->cast<Value>()));
+        }
+    } else if (auto* pack = value.get<std::span<const Object*>*>()) {
+        return *pack;
+    } else if (value.get<const ASTExprVariant*>() || value.get<const ASTClassDefinition*>()) {
+        TypeResolution out = eval_type(identifier, scope, value);
+        return out.get();
+    } else if (auto var_init = value.get<const VariableInitialization*>()) {
+        Term init{};
+        if (!holds_monostate(var_init->value)) {
+            Symbol init_symbol = ValueContextEvaluator{*this, nullptr, false}(var_init->value);
+            if (!Sema::get_if<SymbolKind::Term>(init_symbol)) return {};
+            init = Term::lvalue(std::get<Term>(init_symbol));
+        }
+        if (holds_monostate(var_init->type)) return init;
+        TypeResolution type;
+        TypeContextEvaluator{*this, type}(var_init->type);
+        AutoBindings auto_bindings;
+        if (init && !type->assignable_from(init.effective_type(), auto_bindings)) return {};
+        return Term::lvalue(type.get());
+    } else if (value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+        return std::pair{&scope, &value};
+    } else if (auto* template_family = value.get<TemplateFamily*>()) {
+        return template_family;
+    } else if (auto* scope_ptr = value.get<Scope*>()) {
+        return scope_ptr;
+    } else {
+        /// TODO: throw
+        assert(false);
+    }
+}
+
 inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void {
     SymbolCollector{scope}(variant);
     Guard guard(*this, scope);
@@ -1981,14 +2085,36 @@ inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void
 inline auto TemplateHandler::inference(
     Scope* scope, const ASTTemplateDefinition* primary, std::span<const Type*> args
 ) noexcept -> FunctionObject {
+    // check if variadic argument count matches
+    std::size_t param_count = 0;
+    std::string_view variadic_param = primary->parameters.back().is_variadic
+                                          ? primary->parameters.back().identifier
+                                          : std::string_view{};
+    if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&primary->target_node)) {
+        param_count = (*func_def)->parameters.size();
+    } else if (auto* ctor_def = std::get_if<const ASTCtorDtorDefinition*>(&primary->target_node)) {
+        param_count = (*ctor_def)->parameters.size();
+    } else if (auto* op_def = std::get_if<const ASTOperatorDefinition*>(&primary->target_node)) {
+        param_count = 1 + static_cast<bool>((*op_def)->right);
+    } else {
+        UNREACHABLE();
+    }
+    if (param_count != args.size() && variadic_param.empty()) {
+        throw;
+    }
     // prepare auto instances
-    GlobalMemory::Vector<const Object*> auto_instances = TypeRegistry::get_auto_instances(
-        primary->parameters | std::views::transform(&ASTTemplateParameter::is_nttp)
-    );
+    GlobalMemory::Vector<bool> is_nttp_flags =
+        primary->parameters | std::views::transform(&ASTTemplateParameter::is_nttp) |
+        GlobalMemory::collect<GlobalMemory::Vector>();
+    for (std::size_t i = param_count; i < args.size(); i++) {
+        is_nttp_flags.push_back(false);
+    }
+    GlobalMemory::Vector<const Object*> auto_instances =
+        TypeRegistry::get_auto_instances(is_nttp_flags);
     Scope& pattern_scope = Scope::make(*scope);
     for (std::size_t i = 0; i < primary->parameters.size(); i++) {
         const ASTTemplateParameter& param = primary->parameters[i];
-        pattern_scope.add_template_argument(param.identifier, args[i]);
+        pattern_scope.set_template_argument(param.identifier, auto_instances[i]);
     }
     // make patterns
     Sema::Guard guard(sema_, pattern_scope);
@@ -1999,10 +2125,26 @@ inline auto TemplateHandler::inference(
                 ValueContextEvaluator{sema_, nullptr, false, true}(pattern.type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
         }
+        for (size_t i = param_count; i < args.size(); i++) {
+            const Object* auto_inst = auto_instances[i - param_count + primary->parameters.size()];
+            pattern_scope.set_template_argument(variadic_param, auto_inst);
+            Symbol pattern_symbol = ValueContextEvaluator{
+                sema_, nullptr, false, true
+            }((*func_def)->parameters.back().type);
+            patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
+        }
     } else if (auto* ctor_def = std::get_if<const ASTCtorDtorDefinition*>(&primary->target_node)) {
         for (const auto& pattern : (*ctor_def)->parameters) {
             Symbol pattern_symbol =
                 ValueContextEvaluator{sema_, nullptr, false, true}(pattern.type);
+            patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
+        }
+        for (size_t i = param_count; i < args.size(); i++) {
+            const Object* auto_inst = auto_instances[i - param_count + primary->parameters.size()];
+            pattern_scope.set_template_argument(variadic_param, auto_inst);
+            Symbol pattern_symbol = ValueContextEvaluator{
+                sema_, nullptr, false, true
+            }((*func_def)->parameters.back().type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
         }
     } else if (auto* op_def = std::get_if<const ASTOperatorDefinition*>(&primary->target_node)) {
@@ -2035,8 +2177,22 @@ inline auto TemplateHandler::inference(
     // instantiate the template with auto bindings
     Symbol func_symbol = instantiate(scope, primary, instantiation_args);
     if (!holds_monostate(func_symbol)) {
-        return Sema::get<SymbolKind::Term>(func_symbol).get();
+        auto [inst_scope, value] = Sema::get<SymbolKind::Function>(func_symbol);
+        FunctionOverloadDef overload_def =
+            (*value->get<GlobalMemory::Vector<FunctionOverloadDef>*>())[0];
+        if (auto* func_def = overload_def.get<const ASTFunctionDefinition*>()) {
+            return sema_.call_handler_->get_func_obj(inst_scope, func_def);
+        } else if (auto* ctor_def = overload_def.get<const ASTCtorDtorDefinition*>()) {
+            return sema_.call_handler_->get_func_obj(inst_scope, ctor_def);
+        } else if (auto* op_def = overload_def.get<const ASTOperatorDefinition*>()) {
+            return sema_.call_handler_->get_func_obj(inst_scope, op_def);
+        } else {
+            UNREACHABLE();
+        }
     }
+    /// TODO: class initialization
+    throw;
+    return {};
 }
 
 inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) noexcept -> Symbol {
@@ -2066,7 +2222,7 @@ inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) n
 inline auto TemplateHandler::validate(
     const ASTTemplateDefinition& primary, TemplateArgs args
 ) noexcept -> bool {
-    if (primary.parameters.size() != args.size()) {
+    if (primary.parameters.size() != args.size() && !primary.parameters.back().is_variadic) {
         return false;
     }
     for (size_t i = 0; i < args.size(); i++) {
@@ -2103,6 +2259,9 @@ inline auto TemplateHandler::validate(
         } else {
             /// TODO: type constraint validation
         }
+    }
+    for (size_t i = primary.parameters.size(); i < args.size(); i++) {
+        /// TODO: variadic parameter validation
     }
     return true;
 }
@@ -2190,7 +2349,7 @@ inline auto TemplateHandler::specialization_resolution(
     Scope& inst_scope = Scope::make(*sema_.current_scope_);
     Sema::Guard guard(sema_, inst_scope);
     for (size_t i = 0; i < args.size(); i++) {
-        inst_scope.add_template_argument(family.primary->parameters[i].identifier, args[i]);
+        inst_scope.set_template_argument(family.primary->parameters[i].identifier, args[i]);
     }
     return {&inst_scope, family.primary->target_node};
 }
@@ -2209,7 +2368,7 @@ inline auto TemplateHandler::get_prototype(
     it->second.patterns = GlobalMemory::alloc_array<const Object*>(specialization.patterns.size());
     it->second.skolems = GlobalMemory::alloc_array<const Object*>(specialization.patterns.size());
     for (size_t i = 0; i < specialization.parameters.size(); i++) {
-        pattern_scope.add_template_argument(
+        pattern_scope.set_template_argument(
             specialization.parameters[i].identifier, auto_instances[i]
         );
     }
@@ -2221,7 +2380,7 @@ inline auto TemplateHandler::get_prototype(
     }
     pattern_scope.clear();
     for (const auto& param : specialization.parameters) {
-        pattern_scope.add_template_argument(
+        pattern_scope.set_template_argument(
             param.identifier,
             param.is_nttp ? static_cast<const Object*>(&UnknownValue::instance)
                           : &UnknownType::instance
@@ -2237,22 +2396,66 @@ inline auto TemplateHandler::get_prototype(
     return it->second;
 }
 
-inline auto OperationHandler::eval_overloaded_op(
-    const ASTNode* node, OperatorCode opcode, Term left, Term right
-) const noexcept -> Term {
-    const Type* left_type = Sema::decay(left.effective_type());
-    const Type* right_type = right ? Sema::decay(right.effective_type()) : nullptr;
-    if (left_type->kind_ != Kind::Instance && right_type && right_type->kind_ != Kind::Instance) {
-        throw;
+inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload) noexcept
+    -> FunctionObject {
+    auto get_param_type = [&](const ASTFunctionParameter& param) -> const Type* {
+        TypeResolution type;
+        TypeContextEvaluator{sema_, type}(param.type);
+        return type;
+    };
+    Sema::Guard guard{sema_, *scope};
+    bool any_error = false;
+    GlobalMemory::Vector<const Type*> params;
+    TypeResolution return_type;
+    if (auto func_def = overload.get<const ASTFunctionDefinition*>()) {
+        for (const ASTFunctionParameter& param : func_def->parameters) {
+            if (param.is_variadic) {
+                Symbol pack =
+                    ValueContextEvaluator{sema_, nullptr, true}(func_def->parameters.back().type);
+                for (const Object* param_type : Sema::get<SymbolKind::ParameterPack>(pack)) {
+                    params.push_back(param_type->cast<Type>());
+                }
+                break;
+            }
+            params.push_back(get_param_type(param));
+        }
+        if (!holds_monostate(func_def->return_type)) {
+            TypeContextEvaluator{sema_, return_type}(func_def->return_type);
+        } else {
+            return_type = &VoidType::instance;
+        }
+    } else if (auto ctor_def = overload.get<const ASTCtorDtorDefinition*>()) {
+        for (const ASTFunctionParameter& param : ctor_def->parameters) {
+            if (param.is_variadic) {
+                Symbol pack =
+                    ValueContextEvaluator{sema_, nullptr, true}(ctor_def->parameters.back().type);
+                for (const Object* param_type : Sema::get<SymbolKind::ParameterPack>(pack)) {
+                    params.push_back(param_type->cast<Type>());
+                }
+                break;
+            }
+            params.push_back(get_param_type(param));
+        }
+        return_type = sema_.get_self_type();
+    } else if (auto* operator_def = overload.get<const ASTOperatorDefinition*>()) {
+        TypeResolution left_type;
+        TypeContextEvaluator{sema_, left_type}(operator_def->left.type);
+        params.push_back(left_type.get());
+        if (operator_def->right) {
+            TypeResolution right_type;
+            TypeContextEvaluator{sema_, right_type}(operator_def->right->type);
+            params.push_back(right_type.get());
+        }
+        TypeContextEvaluator{sema_, return_type}(operator_def->return_type);
+    } else {
+        UNREACHABLE();
     }
-    std::array<Term, 2> args = {left, right};
-    if (opcode == OperatorCode::PostIncrement || opcode == OperatorCode::PostDecrement) {
-        args[1] = Term::prvalue(&IntegerValue::zero);
+    if (any_error) {
+        return TypeRegistry::get_unknown();
     }
-    return sema_.call_handler_->eval_call(
-        node,
-        std::tuple{opcode, left_type, right_type},
-        args[1] ? args : std::span(args).subspan(0, 1)
+    /// TODO: handle constexpr functions
+    return TypeRegistry::get<FunctionType>(
+        params | GlobalMemory::collect<std::span>(), return_type
     );
 }
 
@@ -2261,11 +2464,7 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
     if (auto* type = Sema::get_if<SymbolKind::Type>(base_symbol)) {
         if (auto* instance_type = (*type)->dyn_cast<InstanceType>()) {
             Symbol result = eval_static_access(instance_type->scope_, node->member);
-            if (Sema::get_if<SymbolKind::Term>(result)) {
-                sema_.codegen_env_.map_member_access(
-                    sema_.current_scope_, node, instance_type->scope_
-                );
-            }
+            sema_.codegen_env_.map_member_access(sema_.current_scope_, node, instance_type->scope_);
             return result;
         }
     } else if (auto* term = Sema::get_if<SymbolKind::Term>(base_symbol)) {
@@ -2277,9 +2476,7 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
         }
     } else if (auto* namespace_scope = Sema::get_if<SymbolKind::Namespace>(base_symbol)) {
         Symbol result = eval_static_access(*namespace_scope, node->member);
-        if (Sema::get_if<SymbolKind::Term>(result)) {
-            sema_.codegen_env_.map_member_access(sema_.current_scope_, node, *namespace_scope);
-        }
+        sema_.codegen_env_.map_member_access(sema_.current_scope_, node, *namespace_scope);
         return result;
     }
     return {};
@@ -2288,125 +2485,6 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
     //     arg_terms
     // );
     // return result;
-}
-
-inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload) noexcept
-    -> FunctionObject {
-    Sema::Guard guard{sema_, *scope};
-    bool any_error = false;
-    std::span<const Type*> params;
-    TypeResolution return_type;
-    if (auto func_def = overload.get<const ASTFunctionDefinition*>()) {
-        params = func_def->parameters |
-                 std::views::transform([&](const ASTFunctionParameter& param) -> const Type* {
-                     TypeResolution param_type;
-                     TypeContextEvaluator{sema_, param_type}(param.type);
-                     return param_type;
-                 }) |
-                 GlobalMemory::collect<std::span<const Type*>>();
-        if (!holds_monostate(func_def->return_type)) {
-            TypeContextEvaluator{sema_, return_type}(func_def->return_type);
-        } else {
-            return_type = &VoidType::instance;
-        }
-    } else if (auto ctor_def = overload.get<const ASTCtorDtorDefinition*>()) {
-        params = ctor_def->parameters |
-                 std::views::transform([&](const ASTFunctionParameter& param) -> const Type* {
-                     TypeResolution param_type;
-                     TypeContextEvaluator{sema_, param_type}(param.type);
-                     return param_type;
-                 }) |
-                 GlobalMemory::collect<std::span<const Type*>>();
-        return_type = sema_.get_self_type();
-    } else if (auto* operator_def = overload.get<const ASTOperatorDefinition*>()) {
-        TypeResolution left_type;
-        TypeResolution right_type;
-        TypeContextEvaluator{sema_, left_type}(operator_def->left.type);
-        TypeContextEvaluator{sema_, return_type}(operator_def->return_type);
-        if (operator_def->right) {
-            TypeContextEvaluator{sema_, right_type}(operator_def->right->type);
-            params = GlobalMemory::pack_array(left_type.get(), right_type.get());
-        } else {
-            params = GlobalMemory::pack_array(left_type.get());
-        }
-    } else {
-        UNREACHABLE();
-    }
-    if (any_error) {
-        return TypeRegistry::get_unknown();
-    }
-    /// TODO: handle constexpr functions
-    return TypeRegistry::get<FunctionType>(params, return_type);
-}
-
-inline auto Sema::eval_type(
-    std::string_view identifier, Scope& scope, const ScopeValue& value
-) noexcept -> TypeResolution {
-    if (auto* object = value.get<const Object*>()) {
-        if (auto* type = object->dyn_type()) {
-            return type;
-        }
-        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
-    }
-    // Check cache
-    auto [it_id_cache, inserted] = type_cache_.insert({{&scope, identifier}, TypeResolution()});
-    if (!inserted) {
-        return it_id_cache->second;
-    }
-    // Cache miss; resolve
-    Guard guard(*this, scope);
-    if (auto type_alias = value.get<const ASTExprVariant*>()) {
-        TypeContextEvaluator{*this, it_id_cache->second}(*type_alias);
-    } else if (auto class_def = value.get<const ASTClassDefinition*>()) {
-        TypeContextEvaluator{*this, it_id_cache->second}(class_def);
-    } else {
-        throw UnlocatedProblem::make<SymbolCategoryMismatchError>(true);
-    }
-    // Ignore incomplete types in cache to prevent type interning bypassed
-    if (TypeRegistry::is_type_incomplete(it_id_cache->second)) {
-        const Type* incomplete_type = it_id_cache->second;
-        type_cache_.erase(it_id_cache);
-        return incomplete_type;
-    } else {
-        return it_id_cache->second;
-    }
-}
-
-inline auto Sema::eval_symbol(
-    std::string_view identifier, Scope& scope, const ScopeValue& value
-) noexcept -> Symbol {
-    if (auto* object = value.get<const Object*>()) {
-        if (auto* type = object->dyn_type()) {
-            return type;
-        } else {
-            return Term::prvalue(const_cast<Value*>(object->cast<Value>()));
-        }
-    } else if (value.get<const ASTExprVariant*>() || value.get<const ASTClassDefinition*>()) {
-        TypeResolution out = eval_type(identifier, scope, value);
-        return out.get();
-    } else if (auto var_init = value.get<const VariableInitialization*>()) {
-        Term init{};
-        if (!holds_monostate(var_init->value)) {
-            Symbol init_symbol = ValueContextEvaluator{*this, nullptr, false}(var_init->value);
-            if (!Sema::get_if<SymbolKind::Term>(init_symbol)) return {};
-            init = Term::lvalue(std::get<Term>(init_symbol));
-        }
-        if (holds_monostate(var_init->type)) return init;
-        TypeResolution type;
-        TypeContextEvaluator{*this, type}(var_init->type);
-        AutoBindings auto_bindings;
-        if (init && !type->assignable_from(init.effective_type(), auto_bindings)) return {};
-        return Term::lvalue(type.get());
-    } else if (value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
-        return std::pair{&scope, &value};
-    } else if (auto* template_family = value.get<TemplateFamily*>()) {
-        return template_family;
-    } else if (auto* scope_ptr = value.get<Scope*>()) {
-        return scope_ptr;
-    } else {
-        /// TODO: throw
-        assert(false);
-    }
 }
 
 inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
