@@ -156,14 +156,10 @@ static_assert_statement:
 	)? OP_RPAREN OP_SEMICOLON;
 
 expr:
-	KW_SELF						# SelfExpr
-	| constant_ = constant		# ConstExpr
-	| identifier_ = identifier	# IdentifierExpr
-	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)+ (
-		instantiation_list_ = instantiation_list
-	)?																							# AccessChainExpr
-	| base_ = expr (OP_DOT members_ += T_IDENTIFIER)* instantiation_list_ = instantiation_list	#
-		AccessChainExprAlternate
+	KW_SELF											# SelfExpr
+	| constant_ = constant							# ConstExpr
+	| identifier_ = identifier						# IdentifierExpr
+	| base_ = expr OP_DOT member_ = T_IDENTIFIER	# MemberAccessExpr
 	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN							# CallExpr
@@ -180,6 +176,7 @@ expr:
 	| KW_MOVE inner_expr_ = expr												# MoveExpr
 	| KW_FORWARD inner_expr_ = expr												# ForwardExpr
 	| OP_LPAREN inner_expr_ = expr OP_RPAREN									# ParenExpr
+	| template_ = expr instantiation_list_ = instantiation_list					# InstantiationExpr
 	| <assoc = right> op_ = (
 		OP_INC
 		| OP_DEC
@@ -247,13 +244,9 @@ type:
 		| KW_FLOAT64
 		| KW_BOOL
 		| KW_STRVIEW
-	)							# PrimitiveType
-	| identifier_ = identifier	# IdentifierType
-	| base_ = type (OP_DOT members_ += T_IDENTIFIER)+ (
-		instantiation_list_ = instantiation_list
-	)?																							# AccessChainType
-	| base_ = type (OP_DOT members_ += T_IDENTIFIER)* instantiation_list_ = instantiation_list	#
-		AccessChainTypeAlternate
+	)												# PrimitiveType
+	| identifier_ = identifier						# IdentifierType
+	| base_ = type OP_DOT member_ = T_IDENTIFIER	# MemberAccessType
 	| OP_LBRACE (
 		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
 	)? OP_RBRACE # StructType
@@ -262,12 +255,13 @@ type:
 	)? OP_RBRACKET # ArrayType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
-	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
-	| KW_MUT inner_type_ = type						# MutableType
-	| KW_MOVE? OP_BITAND inner_type_ = type			# ReferenceType
-	| OP_MUL inner_type_ = type						# PointerType
-	| inner_type_ = type OP_QUESTION				# OptionalType
-	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
+	)? OP_RPAREN OP_ARROW return_type_ = type					# FunctionType
+	| KW_MUT inner_type_ = type									# MutableType
+	| KW_MOVE? OP_BITAND inner_type_ = type						# ReferenceType
+	| OP_MUL inner_type_ = type									# PointerType
+	| inner_type_ = type OP_QUESTION							# OptionalType
+	| OP_LBRACKET inner_type_ = type OP_RBRACKET				# ParenType
+	| template_ = type instantiation_list_ = instantiation_list	# InstantiatedType;
 
 field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 

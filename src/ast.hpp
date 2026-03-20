@@ -55,7 +55,7 @@ struct ASTSelfExpr;
 struct ASTConstant;
 struct ASTStringConstant;
 struct ASTIdentifier;
-struct ASTAccessChain;
+struct ASTMemberAccess;
 struct ASTParenExpr;
 struct ASTUnaryOp;
 struct ASTBinaryOp;
@@ -65,6 +65,7 @@ struct ASTStructInitialization;
 struct ASTArrayInitialization;
 struct ASTArrayAccess;
 struct ASTFunctionCall;
+struct ASTTemplateInstantiation;
 struct ASTPrimitiveType;
 struct ASTFunctionType;
 struct ASTStructType;
@@ -104,12 +105,13 @@ using ASTNodeVariant = std::variant<
     const ASTStringConstant*,
     const ASTSelfExpr*,
     const ASTIdentifier*,
-    const ASTAccessChain*,
+    const ASTMemberAccess*,
     const ASTUnaryOp*,
     const ASTBinaryOp*,
-    // Member access and calls
+    // Member access, calls and instantiations
     const ASTStructInitialization*,
     const ASTFunctionCall*,
+    const ASTTemplateInstantiation*,
     // Type expressions
     const ASTPrimitiveType*,
     const ASTFunctionType*,
@@ -148,7 +150,7 @@ using ASTExprVariant = std::variant<
     const ASTStringConstant*,
     const ASTSelfExpr*,
     const ASTIdentifier*,
-    const ASTAccessChain*,
+    const ASTMemberAccess*,
     const ASTUnaryOp*,
     const ASTBinaryOp*,
     // Member access and calls
@@ -156,6 +158,7 @@ using ASTExprVariant = std::variant<
     const ASTArrayInitialization*,
     const ASTArrayAccess*,
     const ASTFunctionCall*,
+    const ASTTemplateInstantiation*,
     // Type expressions
     const ASTPrimitiveType*,
     const ASTArrayType*,
@@ -200,10 +203,9 @@ struct ASTIdentifier final : public ASTExpression {
     std::string_view str;
 };
 
-struct ASTAccessChain final : public ASTExpression {
+struct ASTMemberAccess final : public ASTExpression {
     ASTExprVariant base;
-    std::span<std::string_view> members;
-    std::span<ASTExprVariant> instantiation_args;
+    std::string_view member;
 };
 
 struct ASTConstant final : public ASTExpression {
@@ -250,6 +252,11 @@ struct ASTArrayAccess final : public ASTExpression {
 
 struct ASTFunctionCall final : public ASTExpression {
     ASTExprVariant function;
+    std::span<ASTExprVariant> arguments;
+};
+
+struct ASTTemplateInstantiation final : public ASTExpression {
+    ASTExprVariant template_expr;
     std::span<ASTExprVariant> arguments;
 };
 

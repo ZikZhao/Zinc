@@ -365,8 +365,6 @@ public:
 
     auto operator()(GlobalMemory::String& out, const Type* type) const -> void {
         switch (type->kind_) {
-        case Kind::Unknown:
-            UNREACHABLE();
         case Kind::Void:
             out += "v"sv;
             break;
@@ -394,13 +392,17 @@ public:
         case Kind::Boolean:
             out += "b"sv;
             break;
-        case Kind::Function:
-        case Kind::Interface:
         case Kind::Mutable:
+            out += "m"sv;
+            (*this)(out, type->cast<MutableType>()->target_type_);
+            break;
         case Kind::Reference:
+            out += "r"sv;
+            (*this)(out, type->cast<ReferenceType>()->referenced_type_);
+            break;
         case Kind::Pointer:
-            /// TODO
-            UNREACHABLE();
+            out += "p"sv;
+            (*this)(out, type->cast<PointerType>()->pointed_type_);
             break;
         case Kind::Struct:
         case Kind::Instance: {
@@ -413,6 +415,127 @@ public:
     }
 
     auto operator()(auto out, const Value* value) const -> void { assert(false); }
+
+    auto operator()(GlobalMemory::String& out, OperatorCode opcode) const noexcept -> void {
+        switch (opcode) {
+        case OperatorCode::Add:
+            out += "add"sv;
+            break;
+        case OperatorCode::Subtract:
+            out += "sub"sv;
+            break;
+        case OperatorCode::Negate:
+            out += "neg"sv;
+            break;
+        case OperatorCode::Multiply:
+            out += "mul"sv;
+            break;
+        case OperatorCode::Divide:
+            out += "div"sv;
+            break;
+        case OperatorCode::Remainder:
+            out += "mod"sv;
+            break;
+        case OperatorCode::Increment:
+            out += "inc"sv;
+            break;
+        case OperatorCode::PostIncrement:
+            out += "post_inc"sv;
+            break;
+        case OperatorCode::Decrement:
+            out += "dec"sv;
+            break;
+        case OperatorCode::PostDecrement:
+            out += "post_dec"sv;
+            break;
+        case OperatorCode::Equal:
+            out += "eq"sv;
+            break;
+        case OperatorCode::NotEqual:
+            out += "ne"sv;
+            break;
+        case OperatorCode::LessThan:
+            out += "lt"sv;
+            break;
+        case OperatorCode::LessEqual:
+            out += "le"sv;
+            break;
+        case OperatorCode::GreaterThan:
+            out += "gt"sv;
+            break;
+        case OperatorCode::GreaterEqual:
+            out += "ge"sv;
+            break;
+        case OperatorCode::LogicalAnd:
+            out += "land"sv;
+            break;
+        case OperatorCode::LogicalOr:
+            out += "lor"sv;
+            break;
+        case OperatorCode::LogicalNot:
+            out += "lnot"sv;
+            break;
+        case OperatorCode::BitwiseAnd:
+            out += "band"sv;
+            break;
+        case OperatorCode::BitwiseOr:
+            out += "bor"sv;
+            break;
+        case OperatorCode::BitwiseXor:
+            out += "bxor"sv;
+            break;
+        case OperatorCode::BitwiseNot:
+            out += "bnot"sv;
+            break;
+        case OperatorCode::LeftShift:
+            out += "shl"sv;
+            break;
+        case OperatorCode::RightShift:
+            out += "shr"sv;
+            break;
+        case OperatorCode::Assign:
+            out += "assign"sv;
+            break;
+        case OperatorCode::AddAssign:
+            out += "add_assign"sv;
+            break;
+        case OperatorCode::SubtractAssign:
+            out += "sub_assign"sv;
+            break;
+        case OperatorCode::MultiplyAssign:
+            out += "mul_assign"sv;
+            break;
+        case OperatorCode::DivideAssign:
+            out += "div_assign"sv;
+            break;
+        case OperatorCode::RemainderAssign:
+            out += "mod_assign"sv;
+            break;
+        case OperatorCode::LogicalAndAssign:
+            out += "land_assign"sv;
+            break;
+        case OperatorCode::LogicalOrAssign:
+            out += "lor_assign"sv;
+            break;
+        case OperatorCode::BitwiseAndAssign:
+            out += "band_assign"sv;
+            break;
+        case OperatorCode::BitwiseOrAssign:
+            out += "bor_assign"sv;
+            break;
+        case OperatorCode::BitwiseXorAssign:
+            out += "bxor_assign"sv;
+            break;
+        case OperatorCode::LeftShiftAssign:
+            out += "shl_assign"sv;
+            break;
+        case OperatorCode::RightShiftAssign:
+            out += "shr_assign"sv;
+            break;
+        default:
+            UNREACHABLE();
+        }
+    }
 };
 
 class CodeGen final {
@@ -468,6 +591,8 @@ public:
                 }
             } else if (auto* ctor_def = std::get_if<const ASTCtorDtorDefinition*>(&node)) {
                 (*this)(*ctor_def, func_obj);
+            } else if (auto* op_def = std::get_if<const ASTOperatorDefinition*>(&node)) {
+                (*this)(*op_def, func_obj);
             } else {
                 UNREACHABLE();
             }
@@ -493,7 +618,7 @@ public:
     auto operator()(
         const ASTFunctionDefinition* node,
         std::string_view mangled_path,
-        const FunctionType* func_obj
+        const FunctionType* func_type
     ) -> void {
         auto gen = [&](GlobalMemory::String& out) {
             std::format_to(std::back_inserter(out), "auto {}("sv, mangled_path);
@@ -501,7 +626,7 @@ public:
             for (std::size_t i = 0; i < node->parameters.size(); i++) {
                 out += sep;
                 const ASTFunctionParameter& param = node->parameters[i];
-                TypeCodeGen::output(out, func_obj->parameters_[i], types_);
+                TypeCodeGen::output(out, func_type->parameters_[i], types_);
                 out += " "sv;
                 out += param.identifier;
                 sep = ", "sv;
@@ -510,7 +635,7 @@ public:
             if (mangled_path == "main"sv) {
                 out += "int"sv;
             } else {
-                TypeCodeGen::output(out, func_obj->return_type_, types_);
+                TypeCodeGen::output(out, func_type->return_type_, types_);
             }
         };
         gen(forward_declarations_);
@@ -563,6 +688,41 @@ public:
         newline();
     }
 
+    auto operator()(const ASTOperatorDefinition* node, const FunctionType* func_type) -> void {
+        auto gen = [&](GlobalMemory::String& out) {
+            out += "auto _op_"sv;
+            mangler_(out, node->opcode);
+            out += "_0"sv;
+            for (const Type* param_type : func_type->parameters_) {
+                mangler_(out, param_type);
+            }
+            out += "("sv;
+            TypeCodeGen::output(out, func_type->parameters_[0], types_);
+            out += " "sv;
+            out += node->left.identifier;
+            if (node->right) {
+                out += ", "sv;
+                TypeCodeGen::output(out, func_type->parameters_[1], types_);
+                out += " "sv;
+                out += node->right->identifier;
+            }
+            out += ") -> "sv;
+            TypeCodeGen::output(out, func_type->return_type_, types_);
+        };
+        gen(forward_declarations_);
+        forward_declarations_ += ";\n"sv;
+        gen(definitions_);
+        definitions_ += " {"sv;
+        indent_level_++;
+        for (const ASTNodeVariant& child : node->body) {
+            newline();
+            (*this)(child);
+        }
+        indent_level_--;
+        definitions_ += "}"sv;
+        newline();
+    }
+
     auto operator()(const ASTLocalBlock* node) -> void {
         Guard guard{*this, node};
         for (const ASTNodeVariant& child : node->statements) {
@@ -585,7 +745,7 @@ public:
     auto operator()(const ASTIdentifier* node) -> void { definitions_ += node->str; }
 
     auto operator()(const ASTUnaryOp* node) -> void {
-        /// TODO: postfix unary ops
+        /// TODO: postfix unary ops·
         definitions_ += GetOperatorString(node->opcode);
         (*this)(node->expr);
     }
@@ -599,6 +759,11 @@ public:
     }
 
     auto operator()(const ASTStructInitialization* node) -> void {
+        if (!holds_monostate(node->struct_type)) {
+            auto* variant = env_.find(current_scope_, node);
+            const Type* struct_type = std::get<const Type*>(*variant);
+            std::format_to(std::back_inserter(definitions_), "t{}"sv, index(types_, struct_type));
+        }
         definitions_ += "{"sv;
         newline();
         for (const ASTFieldInitialization& field_init : node->field_inits) {
@@ -645,7 +810,7 @@ public:
         const Type* type = std::get<const Type*>(*env_.find(current_scope_, node));
         TypeCodeGen::output(definitions_, type, types_);
         std::format_to(std::back_inserter(definitions_), " {}", node->identifier);
-        if (nonnull(node->expr)) {
+        if (!holds_monostate(node->expr)) {
             definitions_ += " = "sv;
             (*this)(node->expr);
         }
@@ -667,19 +832,28 @@ public:
         definitions_ += "for ("sv;
         if (node->initializer_decl) {
             (*this)(node->initializer_decl);
-        } else if (nonnull(node->initializer_expr)) {
+        } else if (!holds_monostate(node->initializer_expr)) {
             (*this)(node->initializer_expr);
         }
         definitions_ += "; "sv;
-        if (nonnull(node->condition)) {
+        if (!holds_monostate(node->condition)) {
             (*this)(node->condition);
         }
         definitions_ += "; "sv;
-        if (nonnull(node->increment)) {
+        if (!holds_monostate(node->increment)) {
             (*this)(node->increment);
         }
         definitions_ += ") "sv;
         (*this)(node->body);
+    }
+
+    auto operator()(const ASTReturnStatement* node) -> void {
+        definitions_ += "return"sv;
+        if (!holds_monostate(node->expr)) {
+            definitions_ += " "sv;
+            (*this)(node->expr);
+        }
+        definitions_ += ";"sv;
     }
 
 private:

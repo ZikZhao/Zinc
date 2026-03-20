@@ -472,7 +472,8 @@ public:
         return false;
     }
 
-    [[nodiscard]] static auto apply_mutable(Term term) -> Term {
+    [[nodiscard]] static auto apply_mutable(Term term, bool is_mutable) -> Term {
+        if (!is_mutable) return term;
         if (auto value = term.get_comptime()) {
             return Term::forward_like(
                 term, new MutableValue(TypeRegistry::get<MutableType>(term.effective_type()), value)
@@ -630,7 +631,7 @@ private:
 public:
     TemplateHandler(Sema& sema) noexcept : sema_(sema) {}
 
-    [[nodiscard]] auto is_template_about_type(const TemplateFamily& family) const noexcept -> bool;
+    inline auto instantiate(const ASTTemplateInstantiation* node) noexcept -> Symbol;
 
     inline auto instantiate(TemplateFamily& family, TemplateArgs args) -> Symbol {
         if (auto meta_result = catch_meta_instantiation(family, args)) {
@@ -1313,90 +1314,46 @@ private:
 public:
     AccessHandler(Sema& sema) noexcept : sema_(sema) {}
 
-    auto eval_access(const ASTAccessChain& node) noexcept -> Symbol;
+    auto eval_access(const ASTMemberAccess* node) noexcept -> Symbol;
 
 private:
-    auto eval_next_static_access(
-        Symbol& base, std::string_view member, const Scope*& base_scope
-    ) noexcept -> bool {
-        if (auto* namespace_scope = Sema::get_if<SymbolKind::Namespace>(base)) {
-            auto next = (*namespace_scope)->find(member);
-            if (!next) {
-                throw UnlocatedProblem::make<UndeclaredIdentifierError>(member);
-            } else if (auto* next_namespace = next->get<Scope*>()) {
-                base = next_namespace;
-                base_scope = next_namespace;
-            } else if (auto* family = next->get<TemplateFamily*>()) {
-                base = family;
-                base_scope = next_namespace;
-            } else {
-                base = sema_.eval_symbol(member, **namespace_scope, *next);
-            }
-            return true;
+    auto eval_static_access(Scope* static_scope, std::string_view member) noexcept -> Symbol {
+        auto* next = static_scope->find(member);
+        if (!next) {
+            throw UnlocatedProblem::make<UndeclaredIdentifierError>(member);
+            return {};
+        }
+        if (auto* next_namespace = next->get<Scope*>()) {
+            return next_namespace;
+        } else if (auto* family = next->get<TemplateFamily*>()) {
+            return family;
         } else {
-            return false;
+            return sema_.eval_symbol(member, *static_scope, *next);
         }
     }
 
-    auto eval_next_access(Symbol& base, Term& self, std::string_view member) noexcept -> bool {
-        if (auto* type = Sema::get_if<SymbolKind::Type>(base)) {
-            // class static scope access
-            if ((*type)->kind_ != Kind::Instance) {
-                throw;
-            }
-            auto instance_type = (*type)->cast<InstanceType>();
-            auto next = instance_type->scope_->find(member);
-            if (!next) {
-                throw;
-            } else if (auto* namespace_scope = next->get<Scope*>()) {
-                base = namespace_scope;
-            } else {
-                base = sema_.eval_symbol(member, *instance_type->scope_, *next);
-            }
-        } else if (auto* term = Sema::get_if<SymbolKind::Term>(base)) {
-            // value access
-            Term decayed = Sema::decay(*term);
-            Symbol result;
-            if (decayed->kind_ == Kind::Struct) {
-                result = struct_access(decayed, member);
-            } else if (decayed->kind_ == Kind::Instance) {
-                result = instance_access(decayed, member);
-            } else {
-                throw UnlocatedProblem::make<OperationNotDefinedError>(
-                    ".", decayed->repr(), member
-                );
-            }
-            if (holds_monostate(result)) {
-                /// TODO: throw member not found error
-                throw;
-            }
-            self = *term;
-            base = result;
-
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    auto struct_access(Term object, std::string_view member) -> Term {
-        if (auto struct_type = object->dyn_cast<StructType>()) {
+    auto eval_struct_access(Term object, std::string_view member) -> Term {
+        Term decayed = Sema::decay(object);
+        bool is_mutable = Sema::is_mutable(object);
+        if (auto struct_type = decayed->dyn_cast<StructType>()) {
             auto attr_it = struct_type->fields_.find(member);
             if (attr_it != struct_type->fields_.end()) {
-                return Term::forward_like(object, attr_it->second);
+                return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
             }
 
         } else {
-            auto struct_value = object.get_comptime()->cast<StructValue>();
+            auto struct_value = decayed.get_comptime()->cast<StructValue>();
             auto attr_it = struct_value->type_->fields_.find(member);
             if (attr_it != struct_value->type_->fields_.end()) {
-                return Term::forward_like(object, attr_it->second);
+                return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
             }
         }
         return {};
     }
 
-    auto instance_access(Term object, std::string_view member) -> Symbol {
+    auto eval_instance_access(Term object, std::string_view member) -> Symbol {
+        Term decayed = Sema::decay(object);
+        bool is_mutable = Sema::is_mutable(object);
         auto find_method = [&](Scope* scope) -> Symbol {
             const ScopeValue* value = scope->find(member);
             if (value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
@@ -1404,17 +1361,17 @@ private:
             }
             return {};
         };
-        if (auto instance_type = object->cast<InstanceType>()) {
+        if (auto instance_type = decayed->cast<InstanceType>()) {
             auto attr_it = instance_type->attrs_.find(member);
             if (attr_it != instance_type->attrs_.end()) {
-                return Term::forward_like(object, attr_it->second);
+                return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
             }
             return find_method(instance_type->scope_);
         } else {
-            auto instance_value = object.get_comptime()->cast<InstanceValue>();
+            auto instance_value = decayed.get_comptime()->cast<InstanceValue>();
             auto attr_it = instance_value->attrs_.find(member);
             if (attr_it != instance_value->attrs_.end()) {
-                return Term::forward_like(object, attr_it->second);
+                return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
             }
             return find_method(instance_value->type_->scope_);
         }
@@ -1473,8 +1430,8 @@ public:
         out_ = result;
     }
 
-    void operator()(const ASTAccessChain* node) {
-        Symbol result = sema_.access_handler_->eval_access(*node);
+    void operator()(const ASTMemberAccess* node) {
+        Symbol result = sema_.access_handler_->eval_access(node);
         if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
             out_ = *type;
         } else {
@@ -1601,6 +1558,13 @@ public:
         TypeRegistry::get_at<InstanceType>(
             out_, sema_.current_scope_, node->identifier, base, interfaces, std::move(attrs)
         );
+    }
+
+    void operator()(const ASTTemplateInstantiation* node) {
+        Symbol result = sema_.template_handler_->instantiate(node);
+        if (Sema::expect(result, SymbolKind::Type)) {
+            out_ = Sema::get<SymbolKind::Type>(result);
+        }
     }
 
     void operator()(const auto* node) { UNREACHABLE(); }
@@ -1742,7 +1706,8 @@ public:
         try {
             Symbol symbol = sema_.lookup_symbol(node->str);
             if (require_comptime_) {
-                if (auto* term = Sema::get_if<SymbolKind::Term>(symbol); !term->is_comptime()) {
+                if (auto* term = Sema::get_if<SymbolKind::Term>(symbol);
+                    term && !term->is_comptime()) {
                     Diagnostic::report(NotConstantExpressionError(node->location));
                     return {};
                 }
@@ -1754,8 +1719,8 @@ public:
         }
     }
 
-    auto operator()(const ASTAccessChain* node) -> Symbol {
-        return sema_.access_handler_->eval_access(*node);
+    auto operator()(const ASTMemberAccess* node) -> Symbol {
+        return sema_.access_handler_->eval_access(node);
     }
 
     auto operator()(const ASTUnaryOp* node) -> Symbol {
@@ -1808,10 +1773,11 @@ public:
     auto operator()(const ASTStructInitialization* node) -> Symbol {
         /// TODO: constexpr
         const Type* type = nullptr;
-        if (nonnull(node->struct_type)) {
+        if (!holds_monostate(node->struct_type)) {
             TypeResolution struct_type;
             TypeContextEvaluator{sema_, struct_type}(node->struct_type);
             type = struct_type;
+            sema_.codegen_env_.map_type(sema_.current_scope_, node, struct_type);
         } else if (auto* self = sema_.get_self_type()) {
             type = self;
         } else {
@@ -1846,6 +1812,10 @@ public:
         }
         Symbol func_symbol = ValueContextEvaluator{*this, nullptr}(node->function);
         return sema_.call_handler_->eval_call(node, func_symbol, args_terms);
+    }
+
+    auto operator()(const ASTTemplateInstantiation* node) -> Symbol {
+        return sema_.template_handler_->instantiate(node);
     }
 
     auto operator()(const auto* node) -> Symbol { UNREACHABLE(); }
@@ -1887,7 +1857,7 @@ public:
     }
 
     void operator()(const ASTDeclaration* node) noexcept {
-        if (nonnull(node->declared_type)) {
+        if (!holds_monostate(node->declared_type)) {
             TypeResolution declared_type;
             TypeContextEvaluator{sema_, declared_type}(node->declared_type);
             sema_.codegen_env_.map_type(sema_.current_scope_, node, declared_type);
@@ -1961,6 +1931,17 @@ public:
         }
     }
 
+    void operator()(const ASTOperatorDefinition* node) noexcept {
+        FunctionObject func_obj = sema_.call_handler_->get_func_obj(sema_.current_scope_, node);
+        Sema::Guard guard(sema_, node);
+        sema_.codegen_env_.add_function_output(
+            sema_.current_scope_, node, CallHandler::get_func_type(func_obj)
+        );
+        for (auto& stmt : node->body) {
+            (*this)(stmt);
+        }
+    }
+
     void operator()(const ASTClassDefinition* node) noexcept {
         TypeResolution class_type =
             sema_.lookup_type(node->identifier);  // trigger self type injection
@@ -1977,6 +1958,9 @@ public:
         }
         for (auto& func : node->functions) {
             (*this)(func);
+        }
+        for (auto& op : node->operators) {
+            (*this)(op);
         }
     }
 
@@ -2071,6 +2055,30 @@ inline auto TemplateHandler::inference(
     Symbol func_symbol = instantiate(scope, primary, instantiation_args);
     if (!holds_monostate(func_symbol)) {
         return Sema::get<SymbolKind::Term>(func_symbol).get();
+    }
+}
+
+inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) noexcept -> Symbol {
+    Symbol template_symbol = ValueContextEvaluator{sema_, nullptr, true}(node->template_expr);
+    if (!Sema::expect(template_symbol, SymbolKind::Template, SymbolKind::Function)) {
+        return {};
+    }
+    std::span arg_terms =
+        node->arguments | std::views::transform([&](ASTExprVariant arg) -> const Object* {
+            Symbol result = ValueContextEvaluator{sema_, nullptr, true}(arg);
+            if (Sema::expect(result, SymbolKind::Type, SymbolKind::Term)) {
+                return Sema::get_if<SymbolKind::Type>(result)
+                           ? static_cast<const Object*>(Sema::get<SymbolKind::Type>(result))
+                           : Sema::get<SymbolKind::Term>(result).get_comptime();
+            }
+            return nullptr;
+        }) |
+        GlobalMemory::collect<std::span>();
+    if (auto* family = Sema::get_if<SymbolKind::Template>(template_symbol)) {
+        return instantiate(**family, arg_terms);
+    } else {
+        // explicit template function instantiation is not supported
+        throw;
     }
 }
 
@@ -2267,72 +2275,28 @@ inline auto OperationHandler::eval_overloaded_op(
     );
 }
 
-inline auto AccessHandler::eval_access(const ASTAccessChain& node) noexcept -> Symbol {
-    const Scope* base_scope;
-    Symbol base_symbol;
-    Term self;
-    // first eval base
-    if (auto* identifier_node = std::get_if<const ASTIdentifier*>(&node.base)) {
-        auto [scope, value] = sema_.lookup((*identifier_node)->str);
-        if (!scope) {
-            Diagnostic::report(
-                UndeclaredIdentifierError((*identifier_node)->location, (*identifier_node)->str)
-            );
-            base_symbol = Term::unknown();
+inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> Symbol {
+    Symbol base_symbol = ValueContextEvaluator{sema_, nullptr, false}(node->base);
+    if (auto* type = Sema::get_if<SymbolKind::Type>(base_symbol)) {
+        if (auto* instance_type = (*type)->dyn_cast<InstanceType>()) {
+            return eval_static_access(instance_type->scope_, node->member);
         }
-        base_scope = scope;
-        if (auto* namespace_scope = value->get<Scope*>()) {
-            base_symbol = namespace_scope;
-        } else if (auto* family = value->get<TemplateFamily*>()) {
-            base_symbol = family;
-        } else {
-            base_symbol = sema_.lookup_symbol((*identifier_node)->str);
+    } else if (auto* term = Sema::get_if<SymbolKind::Term>(base_symbol)) {
+        Term decayed = Sema::decay(*term);
+        if (decayed->kind_ == Kind::Struct) {
+            return eval_struct_access(*term, node->member);
+        } else if (decayed->kind_ == Kind::Instance) {
+            return eval_instance_access(*term, node->member);
         }
-    } else {
-        base_symbol = ValueContextEvaluator{sema_, nullptr, false}(node.base);
+    } else if (auto* namespace_scope = Sema::get_if<SymbolKind::Namespace>(base_symbol)) {
+        return eval_static_access(*namespace_scope, node->member);
     }
-    // second process static accesses
-    std::span<std::string_view> remaining = node.members;
-    while (!remaining.empty()) {
-        if (!eval_next_static_access(base_symbol, remaining.front(), base_scope)) {
-            break;
-        }
-        remaining = remaining.subspan(1);
-    }
-    // third process non-static accesses
-    for (std::string_view member : remaining) {
-        if (!eval_next_access(base_symbol, self, member)) {
-            return {};
-        }
-    }
-    if (std::holds_alternative<Scope*>(base_symbol)) {
-        throw;
-    }
-    std::span<const Object*> arg_terms;
-    if (!node.instantiation_args.empty()) {
-        if (!std::holds_alternative<TemplateFamily*>(base_symbol)) {
-            throw;
-        }
-        arg_terms =
-            node.instantiation_args |
-            std::views::transform([&](ASTExprVariant arg) -> const Object* {
-                Symbol result = ValueContextEvaluator{sema_, nullptr, true}(arg);
-                if (Sema::expect(result, SymbolKind::Type, SymbolKind::Term)) {
-                    return Sema::get_if<SymbolKind::Type>(result)
-                               ? static_cast<const Object*>(Sema::get<SymbolKind::Type>(result))
-                               : Sema::get<SymbolKind::Term>(result).get_comptime();
-                }
-                return nullptr;
-            }) |
-            GlobalMemory::collect<std::span>();
-        return sema_.template_handler_->instantiate(
-            *std::get<TemplateFamily*>(base_symbol), arg_terms
-        );
-    }
-    sema_.codegen_env_.map_access_chain(
-        sema_.current_scope_, &node, base_scope, node.members.size() - remaining.size(), arg_terms
-    );
-    return base_symbol;
+    return {};
+    // sema_.codegen_env_.map_access_chain(
+    //     sema_.current_scope_, &node, base_scope, node.members.size() - remaining.size(),
+    //     arg_terms
+    // );
+    // return result;
 }
 
 inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload) noexcept
@@ -2349,7 +2313,7 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
                      return param_type;
                  }) |
                  GlobalMemory::collect<std::span<const Type*>>();
-        if (nonnull(func_def->return_type)) {
+        if (!holds_monostate(func_def->return_type)) {
             TypeContextEvaluator{sema_, return_type}(func_def->return_type);
         } else {
             return_type = &VoidType::instance;
@@ -2466,10 +2430,11 @@ inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
     }
 
     if (holds_monostate(node->length)) {
-        Symbol span = sema_.get_std_symbol("span");
+        Symbol span_symbol = sema_.get_std_symbol("span");
         std::array<const Object*, 1> array_args = {element_type.get()};
-        Symbol result =
-            sema_.template_handler_->instantiate(*std::get<TemplateFamily*>(span), array_args);
+        Symbol result = sema_.template_handler_->instantiate(
+            *std::get<TemplateFamily*>(span_symbol), array_args
+        );
         out_ = Sema::get<SymbolKind::Type>(result);
         return;
     }
@@ -2480,10 +2445,11 @@ inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
         if (!length_term.is_comptime() || !length_term.get_comptime()->dyn_cast<IntegerValue>()) {
             throw;
         }
-        Symbol array = sema_.get_std_symbol("array");
+        Symbol array_symbol = sema_.get_std_symbol("array");
         std::array<const Object*, 2> array_args = {element_type.get(), length_term.get_comptime()};
-        Symbol result =
-            sema_.template_handler_->instantiate(*std::get<TemplateFamily*>(array), array_args);
+        Symbol result = sema_.template_handler_->instantiate(
+            *std::get<TemplateFamily*>(array_symbol), array_args
+        );
         out_ = Sema::get<SymbolKind::Type>(result);
         return;
     }

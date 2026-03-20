@@ -185,7 +185,7 @@
                 ],
                 "problemMatcher": "$gcc",
                 "presentation": {
-                    "reveal": "never",
+                    "panel": "dedicated",
                     "clear": true
                 }
             },
@@ -199,7 +199,7 @@
                 ],
                 "problemMatcher": "$gcc",
                 "presentation": {
-                    "reveal": "never",
+                    "panel": "dedicated",
                     "clear": true
                 }
             },

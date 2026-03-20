@@ -85,11 +85,6 @@ concept RandomAccessRange = std::ranges::random_access_range<R> && std::ranges::
                             std::convertible_to<std::ranges::range_reference_t<R>, T>;
 
 template <typename T>
-constexpr auto nonnull(T&& variant) -> bool {
-    return !std::holds_alternative<std::monostate>(std::forward<T>(variant));
-}
-
-template <typename T>
 constexpr auto holds_monostate(T&& variant) -> bool {
     return std::holds_alternative<std::monostate>(std::forward<T>(variant));
 }
