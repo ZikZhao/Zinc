@@ -46,7 +46,7 @@ public:
         const FunctionType* func_type;
         const Type* self_type;
         bool is_constructor;
-        bool is_extern;
+        bool do_not_mangle;
     };
 
     using TableValue = std::variant<
@@ -111,19 +111,19 @@ public:
         scope_map_[current_scope][node] = scope;
     }
 
-    auto map_function_call(
+    auto map_func_call(
         const Scope* current_scope,
         const ASTNode* node,
         const FunctionType* func_type,
         const Type* self_type,
         bool is_constructor,
-        bool is_extern
+        bool do_not_mangle
     ) -> void {
         scope_map_[current_scope][node] = FunctionCall{
             .func_type = func_type,
             .self_type = self_type,
             .is_constructor = is_constructor,
-            .is_extern = is_extern,
+            .do_not_mangle = do_not_mangle,
         };
     }
 
@@ -830,8 +830,18 @@ public:
             /// TODO: throw no matching overload error
             throw;
         }
-        const FunctionType* type = get_func_type(overload);
-        sema_.codegen_env_.map_function_call(
+
+        bool do_not_mangle = false;
+        if (auto* callee_term = Sema::get_if<SymbolKind::Term>(callee);
+            callee_term && (*callee_term)->kind_ == Kind::Function) {
+            do_not_mangle = true;
+        } else if (
+            auto* callee_func = Sema::get_if<SymbolKind::Function>(callee);
+            callee_func && callee_func->first->is_extern_
+        ) {
+            do_not_mangle = true;
+        }
+        sema_.codegen_env_.map_func_call(
             sema_.current_scope_,
             node,
             get_func_type(overload),
@@ -839,9 +849,7 @@ public:
                 ? Sema::get<SymbolKind::Method>(callee).object.effective_type()
                 : nullptr,
             Sema::get_if<SymbolKind::Type>(callee),
-            Sema::get_if<SymbolKind::Function>(callee)
-                ? Sema::get<SymbolKind::Function>(callee).first->is_extern_
-                : false
+            do_not_mangle
         );
         if (auto func_value = overload->dyn_cast<FunctionValue>()) {
             // return func_value->invoke(args);
@@ -1875,6 +1883,25 @@ public:
         TypeResolution target_type;
         TypeContextEvaluator{sema_, target_type}(node->target_type);
         return sema_.operation_handler_->eval_cast(node, expr_term, target_type);
+    }
+
+    auto operator()(const ASTLambda* node) -> Symbol {
+        std::span<const Type*> param_types =
+            node->parameters | std::views::transform([&](const ASTFunctionParameter& param) {
+                TypeResolution param_type;
+                TypeContextEvaluator{sema_, param_type}(param.type);
+                return param_type.get();
+            }) |
+            GlobalMemory::collect<std::span>();
+        TypeResolution return_type;
+        if (!holds_monostate(node->return_type)) {
+            TypeContextEvaluator{sema_, return_type}(node->return_type);
+        } else {
+            return_type = &VoidType::instance;
+        }
+        const Type* func_type = TypeRegistry::get<FunctionType>(param_types, return_type);
+        sema_.codegen_env_.map_type(sema_.current_scope_, node, func_type);
+        return Term::prvalue(func_type);
     }
 
     auto operator()(const auto* node) -> Symbol { UNREACHABLE(); }

@@ -178,6 +178,14 @@ expr:
 	| OP_LPAREN inner_expr_ = expr OP_RPAREN									# ParenExpr
 	| template_ = expr instantiation_list_ = instantiation_list					# InstantiationExpr
 	| expr_ = expr KW_AS OP_QUESTION? type_ = type								# AsExpr
+	| OP_LPAREN (
+		parameters_ += parameter (
+			OP_COMMA parameters_ += parameter
+		)*
+	)? OP_RPAREN (OP_COLON return_type_ = type)? OP_LAMBDA (
+		expr_ = expr
+		| body_ = local_block
+	) # LambdaExpr
 	| <assoc = right> op_ = (
 		OP_INC
 		| OP_DEC

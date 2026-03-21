@@ -829,20 +829,22 @@ public:
             std::format_to(std::back_inserter(definitions_), "t{}"sv, index(types_, struct_type));
         }
         definitions_ += "{"sv;
-        newline();
+        indent_level_++;
         for (const ASTFieldInitialization& field_init : node->field_inits) {
+            newline();
             std::format_to(std::back_inserter(definitions_), ".{} = "sv, field_init.identifier);
             (*this)(field_init.value);
             definitions_ += ","sv;
-            newline();
         }
+        indent_level_--;
+        newline();
         definitions_ += "}"sv;
     }
 
     auto operator()(const ASTFunctionCall* node) -> void {
-        const auto& [func_type, self_type, is_constructor, is_extern] =
+        const auto& [func_type, self_type, is_constructor, do_not_mangle] =
             std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
-        if (is_extern) {
+        if (do_not_mangle) {
             (*this)(node->function);
         } else {
             if (is_constructor) {
@@ -876,6 +878,34 @@ public:
         definitions_ += ">("sv;
         (*this)(node->expr);
         definitions_ += ")"sv;
+    }
+
+    auto operator()(const ASTLambda* node) -> void {
+        definitions_ += "[&]("sv;
+        std::string_view sep = ""sv;
+        auto* replacement = env_.find(current_scope_, node);
+        const FunctionType* lambda_type = std::get<const Type*>(*replacement)->cast<FunctionType>();
+        /// TODO: make lambda output as closure instead of directly outputting as C++ lambda
+        for (size_t i = 0; i < node->parameters.size(); i++) {
+            const auto& param = node->parameters[i];
+            definitions_ += sep;
+            TypeCodeGen::output(definitions_, lambda_type->parameters_[i], types_);
+            definitions_ += " "sv;
+            definitions_ += param.identifier;
+            sep = ", "sv;
+        }
+        definitions_ += ")"sv;
+        if (lambda_type->return_type_->kind_ != Kind::Void) {
+            definitions_ += " -> "sv;
+            TypeCodeGen::output(definitions_, lambda_type->return_type_, types_);
+        }
+        if (auto* node_variant = std::get_if<ASTNodeVariant>(&node->body)) {
+            (*this)(*node_variant);
+        } else {
+            definitions_ += " { return "sv;
+            (*this)(std::get<ASTExprVariant>(node->body));
+            definitions_ += "; }"sv;
+        }
     }
 
     auto operator()(const ASTExpressionStatement* node) -> void {

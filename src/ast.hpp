@@ -67,6 +67,7 @@ struct ASTArrayAccess;
 struct ASTFunctionCall;
 struct ASTTemplateInstantiation;
 struct ASTAs;
+struct ASTLambda;
 struct ASTPrimitiveType;
 struct ASTStringViewType;
 struct ASTFunctionType;
@@ -134,12 +135,14 @@ using ASTExprVariant = std::variant<
     const ASTMemberAccess*,
     const ASTUnaryOp*,
     const ASTBinaryOp*,
-    // Member access and calls
+    // Complex expressions
     const ASTStructInitialization*,
     const ASTArrayInitialization*,
     const ASTArrayAccess*,
     const ASTFunctionCall*,
     const ASTTemplateInstantiation*,
+    const ASTAs*,
+    const ASTLambda*,
     // Type expressions
     const ASTPrimitiveType*,
     const ASTStringViewType*,
@@ -246,6 +249,12 @@ struct ASTAs final : public ASTExpression {
     ASTExprVariant expr;
     ASTExprVariant target_type;
     bool is_dynamic;
+};
+
+struct ASTLambda final : public ASTExpression {
+    std::span<ASTFunctionParameter> parameters;
+    ASTExprVariant return_type;
+    std::variant<ASTNodeVariant, ASTExprVariant> body;
 };
 
 struct ASTPrimitiveType final : public ASTExplicitTypeExpr {

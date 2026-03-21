@@ -568,6 +568,28 @@ private:
         });
     }
 
+    auto visitAsExpr(ZincParser::AsExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        return as_variant(new ASTAs{loc(ctx), visit_expr(ctx->expr_), visit_expr(ctx->type_)});
+    }
+
+    auto visitLambdaExpr(ZincParser::LambdaExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        if (ctx->expr_) {
+            return as_variant(new ASTLambda{
+                loc(ctx),
+                visit_list<ASTFunctionParameter>(ctx->parameters_),
+                visit_expr(ctx->return_type_),
+                visit_expr(ctx->expr_)
+            });
+        } else {
+            return as_variant(new ASTLambda{
+                loc(ctx),
+                visit_list<ASTFunctionParameter>(ctx->parameters_),
+                visit_expr(ctx->return_type_),
+                visit(ctx->body_)
+            });
+        }
+    }
+
     auto visitUnaryExpr(ZincParser::UnaryExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         ASTExprVariant expr = visit_expr(ctx->expr_);
         switch (ctx->op_->getType()) {
