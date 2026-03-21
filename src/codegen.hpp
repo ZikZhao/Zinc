@@ -773,13 +773,27 @@ public:
                 definitions_ += "::"sv;
                 definitions_ += node->member;
             } else {
-                mangler_(definitions_, std::get<const Scope*>(*replacement));
+                mangler_(definitions_, member_scope);
             }
         } else {
             (*this)(node->base);
             definitions_ += "."sv;
             definitions_ += node->member;
         }
+    }
+
+    auto operator()(const ASTIndexAccess* node) -> void {
+        if (auto* replacement = env_.find(current_scope_, node)) {
+            const Scope* index_scope = std::get<const Scope*>(*replacement);
+            if (!index_scope->is_extern_) {
+                mangler_(definitions_, index_scope);
+                return;
+            }
+        }
+        (*this)(node->base);
+        definitions_ += "["sv;
+        (*this)(node->index);
+        definitions_ += "]"sv;
     }
 
     auto operator()(const ASTUnaryOp* node) -> void {
@@ -841,6 +855,17 @@ public:
         definitions_ += "}"sv;
     }
 
+    auto operator()(const ASTArrayInitialization* node) -> void {
+        definitions_ += "{"sv;
+        std::string_view sep = ""sv;
+        for (const ASTExprVariant& elem : node->elements) {
+            definitions_ += sep;
+            (*this)(elem);
+            sep = ", "sv;
+        }
+        definitions_ += "}"sv;
+    }
+
     auto operator()(const ASTFunctionCall* node) -> void {
         const auto& [func_type, self_type, is_constructor, do_not_mangle] =
             std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
@@ -869,6 +894,14 @@ public:
             sep = ", ";
         }
         definitions_ += ")"sv;
+    }
+
+    auto operator()(const ASTTernaryOp* node) -> void {
+        (*this)(node->condition);
+        definitions_ += " ? "sv;
+        (*this)(node->true_expr);
+        definitions_ += " : "sv;
+        (*this)(node->false_expr);
     }
 
     auto operator()(const ASTAs* node) -> void {
@@ -929,7 +962,7 @@ public:
         (*this)(node->condition);
         definitions_ += ") "sv;
         (*this)(node->if_block);
-        if (node->else_block) {
+        if (!holds_monostate(node->else_block)) {
             definitions_ += " else "sv;
             (*this)(node->else_block);
         }
@@ -937,12 +970,14 @@ public:
 
     auto operator()(const ASTForStatement* node) -> void {
         definitions_ += "for ("sv;
-        if (node->initializer_decl) {
-            (*this)(node->initializer_decl);
-        } else if (!holds_monostate(node->initializer_expr)) {
-            (*this)(node->initializer_expr);
+        if (auto* decl = std::get_if<const ASTDeclaration*>(&node->initializer)) {
+            (*this)(decl);
+        } else if (auto* expr = std::get_if<ASTExprVariant>(&node->initializer)) {
+            if (!holds_monostate(*expr)) {
+                (*this)(*expr);
+            }
+            definitions_ += "; "sv;
         }
-        definitions_ += "; "sv;
         if (!holds_monostate(node->condition)) {
             (*this)(node->condition);
         }

@@ -10,3 +10,9 @@ CompileFlags:
 
 Index:
   Background: Build
+
+If:
+  PathMatch: [.*\.zn\.cpp]
+
+Diagnostics:
+  Suppress: ["*"]

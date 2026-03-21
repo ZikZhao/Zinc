@@ -18,6 +18,7 @@ class string_view {
     init(first: const_iterator, last: const_iterator);
 
     fn at(self: &Self, index: size_type) -> value_type;
+    operator[](self: &Self, index: size_type) -> value_type;
     fn front(self: &Self) -> value_type;
     fn back(self: &Self) -> value_type;
 
@@ -35,8 +36,8 @@ class string_view {
     fn crbegin(self: &Self) -> const_reverse_iterator;
     fn crend(self: &Self) -> const_reverse_iterator;
 
-    fn substr(self: &Self, pos: size_type);
-    fn substr(self: &Self, pos: size_type, count: size_type);
+    fn substr(self: &Self, pos: size_type) -> Self;
+    fn substr(self: &Self, pos: size_type, count: size_type) -> Self;
 
     fn find(self: &Self, needle: Self) -> size_type;
     fn find(self: &Self, needle: Self, pos: size_type) -> size_type;
@@ -88,6 +89,8 @@ class string {
 
     fn at(self: &Self, index: size_type) -> const_reference;
     fn at(self: &mut Self, index: size_type) -> reference;
+    operator[](self: &Self, index: size_type) -> const_reference;
+    operator[](self: &mut Self, index: size_type) -> reference;
     fn front(self: &Self) -> const_reference;
     fn front(self: &mut Self) -> reference;
     fn back(self: &Self) -> const_reference;
@@ -214,6 +217,8 @@ class vector<T: type> {
 
     fn at(self: &Self, index: size_type) -> const_reference;
     fn at(self: &mut Self, index: size_type) -> reference;
+    operator[](self: &Self, index: size_type) -> const_reference;
+    operator[](self: &mut Self, index: size_type) -> reference;
     fn front(self: &Self) -> const_reference;
     fn front(self: &mut Self) -> reference;
     fn back(self: &Self) -> const_reference;
@@ -272,6 +277,70 @@ class vector<T: type> {
     operator>=(self: &Self, other: &Self) -> bool;
 }
 
+class span<T: type> {
+    type element_type = T;
+    type value_type = T;
+    type size_type = usize;
+    type difference_type = isize;
+
+    type pointer = *mut element_type;
+    type const_pointer = *element_type;
+    type reference = &mut element_type;
+    type const_reference = &element_type;
+
+    type iterator = pointer;
+    type const_iterator = const_pointer;
+    type reverse_iterator = iterator;
+    type const_reverse_iterator = const_iterator;
+
+    init();
+    init(data: pointer, size: size_type);
+    init(first: iterator, last: iterator);
+    init<N: usize>(arr: &array<T, N>);
+    init<N: usize>(arr: &mut array<T, N>);
+
+    fn at(self: &Self, index: size_type) -> const_reference;
+    fn at(self: &mut Self, index: size_type) -> reference;
+    operator[](self: &Self, index: size_type) -> const_reference;
+    operator[](self: &mut Self, index: size_type) -> reference;
+    fn front(self: &Self) -> const_reference;
+    fn front(self: &mut Self) -> reference;
+    fn back(self: &Self) -> const_reference;
+    fn back(self: &mut Self) -> reference;
+
+    fn data(self: &Self) -> const_pointer;
+    fn data(self: &mut Self) -> pointer;
+
+    fn size(self: &Self) -> size_type;
+    fn size_bytes(self: &Self) -> size_type;
+    fn empty(self: &Self) -> bool;
+
+    fn begin(self: &Self) -> const_iterator;
+    fn begin(self: &mut Self) -> iterator;
+    fn end(self: &Self) -> const_iterator;
+    fn end(self: &mut Self) -> iterator;
+    fn cbegin(self: &Self) -> const_iterator;
+    fn cend(self: &Self) -> const_iterator;
+    fn rbegin(self: &Self) -> const_reverse_iterator;
+    fn rbegin(self: &mut Self) -> reverse_iterator;
+    fn rend(self: &Self) -> const_reverse_iterator;
+    fn rend(self: &mut Self) -> reverse_iterator;
+    fn crbegin(self: &Self) -> const_reverse_iterator;
+    fn crend(self: &Self) -> const_reverse_iterator;
+
+    fn first(self: &Self, count: size_type) -> Self;
+    fn last(self: &Self, count: size_type) -> Self;
+    fn subspan(self: &Self, offset: size_type) -> Self;
+    fn subspan(self: &Self, offset: size_type, count: size_type) -> Self;
+
+    operator==(self: &Self, other: &Self) -> bool;
+    operator!=(self: &Self, other: &Self) -> bool;
+    operator<(self: &Self, other: &Self) -> bool;
+    operator<=(self: &Self, other: &Self) -> bool;
+    operator>(self: &Self, other: &Self) -> bool;
+    operator>=(self: &Self, other: &Self) -> bool;
+}
+
 class array<T: type, N: usize> {
     type value_type = T;
     type size_type = usize;
@@ -289,6 +358,8 @@ class array<T: type, N: usize> {
 
     fn at(self: &Self, index: size_type) -> const_reference;
     fn at(self: &mut Self, index: size_type) -> reference;
+    operator[](self: &Self, index: size_type) -> const_reference;
+    operator[](self: &mut Self, index: size_type) -> reference;
     fn front(self: &Self) -> const_reference;
     fn front(self: &mut Self) -> reference;
     fn back(self: &Self) -> const_reference;
@@ -324,5 +395,68 @@ class array<T: type, N: usize> {
     operator>(self: &Self, other: &Self) -> bool;
     operator>=(self: &Self, other: &Self) -> bool;
 }
+
+class ostream {
+    type char_type = u8;
+
+    fn flush(self: &mut Self) -> &mut Self;
+
+    operator<<(self: &mut Self, value: bool) -> &mut Self;
+
+    operator<<(self: &mut Self, value: i8) -> &mut Self;
+    operator<<(self: &mut Self, value: i16) -> &mut Self;
+    operator<<(self: &mut Self, value: i32) -> &mut Self;
+    operator<<(self: &mut Self, value: i64) -> &mut Self;
+    operator<<(self: &mut Self, value: isize) -> &mut Self;
+
+    operator<<(self: &mut Self, value: u8) -> &mut Self;
+    operator<<(self: &mut Self, value: u16) -> &mut Self;
+    operator<<(self: &mut Self, value: u32) -> &mut Self;
+    operator<<(self: &mut Self, value: u64) -> &mut Self;
+    operator<<(self: &mut Self, value: usize) -> &mut Self;
+
+    operator<<(self: &mut Self, value: f32) -> &mut Self;
+    operator<<(self: &mut Self, value: f64) -> &mut Self;
+
+    operator<<(self: &mut Self, value: string_view) -> &mut Self;
+    operator<<(self: &mut Self, value: &string) -> &mut Self;
+    operator<<(self: &mut Self, value: *u8) -> &mut Self;
+}
+
+class istream {
+    type char_type = u8;
+
+    fn good(self: &Self) -> bool;
+    fn fail(self: &Self) -> bool;
+    fn eof(self: &Self) -> bool;
+    fn clear(self: &mut Self);
+
+    operator>>(self: &mut Self, value: &mut bool) -> &mut Self;
+
+    operator>>(self: &mut Self, value: &mut i8) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut i16) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut i32) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut i64) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut isize) -> &mut Self;
+
+    operator>>(self: &mut Self, value: &mut u8) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut u16) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut u32) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut u64) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut usize) -> &mut Self;
+
+    operator>>(self: &mut Self, value: &mut f32) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut f64) -> &mut Self;
+
+    operator>>(self: &mut Self, value: &mut string) -> &mut Self;
+}
+
+let mut cin: istream;
+let mut cout: ostream;
+let mut cerr: ostream;
+let mut clog: ostream;
+
+fn endl(out: &mut ostream) -> &mut ostream;
+fn flush(out: &mut ostream) -> &mut ostream;
 
 fn print<Args...: type>(fmt: string_view, args: Args...);

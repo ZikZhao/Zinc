@@ -901,7 +901,7 @@ private:
                 }
             }
             if (const Type* right_type = std::get<2>(*operator_fn);
-                right_type->kind_ == Kind::Instance && left_type != right_type) {
+                right_type && right_type->kind_ == Kind::Instance && left_type != right_type) {
                 Scope* scope = right_type->cast<InstanceType>()->scope_;
                 auto overloads = scope->find(GetOperatorString(std::get<0>(*operator_fn)));
                 if (overloads) {
@@ -1159,6 +1159,8 @@ public:
     AccessHandler(Sema& sema) noexcept : sema_(sema) {}
 
     auto eval_access(const ASTMemberAccess* node) noexcept -> Symbol;
+
+    auto eval_index(const ASTIndexAccess* node) noexcept -> Symbol;
 
 private:
     auto eval_static_access(Scope* static_scope, std::string_view member) noexcept -> Symbol {
@@ -1575,13 +1577,13 @@ public:
     void operator()(const ASTArrayType* node);
 
     void operator()(const ASTMutableType* node) {
-        out_ = std::type_identity<PointerType>();
+        out_ = std::type_identity<MutableType>();
         TypeResolution expr_type;
         TypeContextEvaluator{sema_, expr_type, false}(node->inner);
         if (!expr_type.is_sized()) {
             TypeRegistry::add_ref_dependency(out_, expr_type);
         }
-        TypeRegistry::get_at<PointerType>(out_, expr_type);
+        TypeRegistry::get_at<MutableType>(out_, expr_type);
     }
 
     void operator()(const ASTReferenceType* node) {
@@ -1627,42 +1629,22 @@ public:
 
 private:
     auto resolve_base(const ASTClassDefinition* node) const noexcept -> const Type* {
-        if (node->extends.empty()) {
-            return nullptr;
+        if (!holds_monostate(node->extends)) {
+            TypeResolution result;
+            TypeContextEvaluator{sema_, result}(node->extends);
+            return result.get();
         }
-        TypeResolution result;
-        try {
-            result = sema_.lookup_type(node->extends);
-        } catch (UnlocatedProblem& e) {
-            e.report_at(node->location);
-            return TypeRegistry::get_unknown();
-        }
-        const Type* type = result;
-        if (type->kind_ != Kind::Instance) {
-            Diagnostic::report(TypeMismatchError(node->location, "class", type->repr()));
-            return TypeRegistry::get_unknown();
-        }
-        return type;
+        return nullptr;
     }
 
     auto resolve_interfaces(const ASTClassDefinition* node) const noexcept
         -> std::span<const Type*> {
-        auto get_interface_type = [&](std::string_view interface_name) -> const Type* {
-            TypeResolution result;
-            try {
-                result = sema_.lookup_type(interface_name);
-            } catch (UnlocatedProblem& e) {
-                e.report_at(node->location);
-                return TypeRegistry::get_unknown();
-            }
-            const Type* type = result;
-            if (type->kind_ != Kind::Interface) {
-                Diagnostic::report(TypeMismatchError(node->location, "interface", type->repr()));
-                return TypeRegistry::get_unknown();
-            }
-            return type->cast<InterfaceType>();
-        };
-        return node->implements | std::views::transform(get_interface_type) |
+        return node->implements |
+               std::views::transform([&](ASTExprVariant interface) -> const Type* {
+                   TypeResolution result;
+                   TypeContextEvaluator{sema_, result}(interface);
+                   return result.get();
+               }) |
                GlobalMemory::collect<std::span>();
     }
 
@@ -1671,8 +1653,10 @@ private:
         return node->fields |
                std::views::transform(
                    [&](
-                       const ASTDeclaration* field_decl
+                       ASTNodeVariant field_decl_variant
                    ) -> std::pair<std::string_view, const Type*> {
+                       const ASTDeclaration* field_decl =
+                           std::get<const ASTDeclaration*>(field_decl_variant);
                        TypeResolution field_type;
                        TypeContextEvaluator{sema_, field_type}(field_decl->declared_type);
                        return {field_decl->identifier, field_type};
@@ -1738,7 +1722,7 @@ public:
                 return Term::unknown();
             }
         } else {
-            return Term::prvalue(node->value->resolve_to(nullptr));
+            return Term::prvalue(node->value);
         }
     }
 
@@ -1779,6 +1763,10 @@ public:
         return sema_.access_handler_->eval_access(node);
     }
 
+    auto operator()(const ASTIndexAccess* node) -> Symbol {
+        return sema_.access_handler_->eval_index(node);
+    }
+
     auto operator()(const ASTUnaryOp* node) -> Symbol {
         Symbol expr_symbol = ValueContextEvaluator{*this, nullptr}(node->expr);
         if (!Sema::expect(expr_symbol, SymbolKind::Term)) {
@@ -1797,8 +1785,7 @@ public:
     auto operator()(const ASTBinaryOp* node) -> Symbol {
         Symbol left_symbol = ValueContextEvaluator{*this, nullptr}(node->left);
         Symbol right_symbol = ValueContextEvaluator{*this, nullptr}(node->right);
-        bool any_error = false;
-        any_error |= !Sema::expect(left_symbol, SymbolKind::Term);
+        bool any_error = !Sema::expect(left_symbol, SymbolKind::Term);
         any_error |= !Sema::expect(right_symbol, SymbolKind::Term);
         if (any_error) {
             return {};
@@ -1964,17 +1951,20 @@ public:
         Sema::Guard guard(sema_, node);
         ValueContextEvaluator{sema_, &BooleanType::instance, false}(node->condition);
         (*this)(node->if_block);
-        if (node->else_block) {
+        if (!holds_monostate(node->else_block)) {
             (*this)(node->else_block);
         }
     }
 
     void operator()(const ASTForStatement* node) noexcept {
         Sema::Guard guard(sema_, node);
-        if (node->initializer_decl) {
-            ValueContextEvaluator{sema_, nullptr, false}(node->initializer_decl);
-        } else if (!std::holds_alternative<std::monostate>(node->initializer_expr)) {
-            ValueContextEvaluator{sema_, nullptr, false}(node->initializer_expr);
+        if (auto* decl = std::get_if<const ASTDeclaration*>(&node->initializer)) {
+            ValueContextEvaluator{sema_, nullptr, false}(*decl);
+        } else if (
+            auto* expr = std::get_if<ASTExprVariant>(&node->initializer);
+            expr && !holds_monostate(*expr)
+        ) {
+            ValueContextEvaluator{sema_, nullptr, false}(*expr);
         }
         if (!std::holds_alternative<std::monostate>(node->condition)) {
             ValueContextEvaluator{sema_, &BooleanType::instance, false}(node->condition);
@@ -2036,17 +2026,8 @@ public:
         for (auto& field : node->fields) {
             (*this)(field);
         }
-        for (auto& ctor : node->constructors) {
-            (*this)(ctor);
-        }
-        if (node->destructor) {
-            (*this)(node->destructor);
-        }
-        for (auto& func : node->functions) {
-            (*this)(func);
-        }
-        for (auto& op : node->operators) {
-            (*this)(op);
+        for (auto& item : node->scope_items) {
+            (*this)(item);
         }
     }
 
@@ -2132,11 +2113,12 @@ inline auto Sema::eval_symbol(
             init = Term::lvalue(std::get<Term>(init_symbol));
         }
         if (holds_monostate(var_init->type)) return init;
+        Guard guard(*this, scope);
         TypeResolution type;
         TypeContextEvaluator{*this, type}(var_init->type);
         AutoBindings auto_bindings;
         if (init && !type->assignable_from(init.effective_type(), auto_bindings)) return {};
-        return Term::lvalue(type.get());
+        return apply_mutable(Term::lvalue(type.get()), var_init->is_mutable);
     } else if (value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
         return std::pair{&scope, &value};
     } else if (auto* template_family = value.get<TemplateFamily*>()) {
@@ -2553,27 +2535,45 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
         return result;
     }
     return {};
-    // sema_.codegen_env_.map_access_chain(
-    //     sema_.current_scope_, &node, base_scope, node.members.size() - remaining.size(),
-    //     arg_terms
-    // );
-    // return result;
+}
+
+inline auto AccessHandler::eval_index(const ASTIndexAccess* node) noexcept -> Symbol {
+    Symbol base_symbol = ValueContextEvaluator{sema_, nullptr, false}(node->base);
+    Symbol index_symbol = ValueContextEvaluator{sema_, nullptr, false}(node->index);
+    bool has_error = !Sema::expect(base_symbol, SymbolKind::Term);
+    has_error |= !Sema::expect(index_symbol, SymbolKind::Term);
+    if (has_error) {
+        return {};
+    }
+    Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
+    Term index_term = Sema::get<SymbolKind::Term>(index_symbol);
+    const Type* base_type = Sema::decay(base_term.effective_type());
+    const Type* index_type = Sema::decay(index_term.effective_type());
+    std::array<Term, 2> arg_terms{base_term, index_term};
+    if (auto* instance_type = base_type->dyn_cast<InstanceType>();
+        instance_type && instance_type->scope_->is_extern_) {
+        if (instance_type->identifier_ == "array" || instance_type->identifier_ == "span" ||
+            instance_type->identifier_ == "string" || instance_type->identifier_ == "string_view") {
+            // implicitly cast index to usize
+            if (index_type == &IntegerType::untyped_instance) {
+                arg_terms[1] = Term::prvalue(
+                    arg_terms[1].get_comptime()->resolve_to(&IntegerType::u64_instance)
+                );
+            }
+        }
+    }
+    return sema_.call_handler_->eval_call(
+        node, std::tuple{OperatorCode::Index, base_type, index_type}, arg_terms
+    );
 }
 
 inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
     TypeResolution element_type;
     TypeContextEvaluator{sema_, element_type}(node->element_type);
-    if (!element_type.is_sized()) {
-        TypeRegistry::add_ref_dependency(out_, element_type);
-    }
-    if (std::holds_alternative<std::monostate>(node->length)) {
-        out_ = &UnknownType::instance;
-        return;
-    }
 
     if (holds_monostate(node->length)) {
         Symbol span_symbol = sema_.get_std_symbol("span");
-        std::array<const Object*, 1> array_args = {element_type.get()};
+        std::span array_args = GlobalMemory::pack_array<const Object*>(element_type.get());
         Symbol result = sema_.template_handler_->instantiate(
             *std::get<TemplateFamily*>(span_symbol), array_args
         );
@@ -2588,7 +2588,9 @@ inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) -> void {
             throw;
         }
         Symbol array_symbol = sema_.get_std_symbol("array");
-        std::array<const Object*, 2> array_args = {element_type.get(), length_term.get_comptime()};
+        std::span array_args = GlobalMemory::pack_array<const Object*>(
+            element_type.get(), static_cast<const Object*>(length_term.get_comptime())
+        );
         Symbol result = sema_.template_handler_->instantiate(
             *std::get<TemplateFamily*>(array_symbol), array_args
         );

@@ -23,6 +23,7 @@ struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
 
 struct VariableInitialization : public GlobalMemory::MonotonicAllocated {
     bool is_comptime;
+    bool is_mutable;
     ASTExprVariant type;
     ASTExprVariant value;
 };
@@ -205,7 +206,10 @@ public:
 
     void operator()(std::monostate) noexcept { UNREACHABLE(); }
 
-    void operator()(const auto*) noexcept {}
+    template <typename T>
+    void operator()(const T*) noexcept
+        requires(!std::is_pointer_v<T>)
+    {}
 
     // Root and blocks
     void operator()(const ASTRoot* node) noexcept {
@@ -243,6 +247,7 @@ public:
                 node->identifier,
                 new VariableInitialization{
                     .is_comptime = node->is_constant,
+                    .is_mutable = node->is_mutable,
                     .type = node->declared_type,
                     .value = node->expr
                 }
@@ -261,8 +266,8 @@ public:
         Scope& condition_scope = Scope::make(current_scope_, node);
         SymbolCollector condition_visitor(condition_scope);
         condition_visitor(node->condition);
-        condition_visitor(&node->if_block);
-        if (node->else_block) {
+        condition_visitor(node->if_block);
+        if (!holds_monostate(node->else_block)) {
             condition_visitor(node->else_block);
         }
     }
@@ -270,13 +275,16 @@ public:
     void operator()(const ASTForStatement* node) noexcept {
         Scope& local_scope = Scope::make(current_scope_, node);
         SymbolCollector local_visitor(local_scope);
-        if (node->initializer_decl) {
-            local_visitor(node->initializer_decl);
-        } else if (!std::holds_alternative<std::monostate>(node->initializer_expr)) {
-            local_visitor(node->initializer_expr);
+        if (auto* decl = std::get_if<const ASTDeclaration*>(&node->initializer)) {
+            local_visitor(*decl);
+        } else if (
+            auto* expr = std::get_if<ASTExprVariant>(&node->initializer);
+            expr && !holds_monostate(*expr)
+        ) {
+            local_visitor(*expr);
         }
         /// TODO: refactor to local scope
-        local_visitor(&node->body);
+        local_visitor(node->body);
     }
 
     // Functions
@@ -287,7 +295,10 @@ public:
             local_scope.add_variable(
                 param.identifier,
                 new VariableInitialization{
-                    .is_comptime = false, .type = param.type, .value = std::monostate{}
+                    .is_comptime = false,
+                    .is_mutable = param.is_mutable,
+                    .type = param.type,
+                    .value = std::monostate{}
                 }
             );
         }
@@ -306,7 +317,10 @@ public:
             local_scope.add_variable(
                 param.identifier,
                 new VariableInitialization{
-                    .is_comptime = false, .type = param.type, .value = std::monostate{}
+                    .is_comptime = false,
+                    .is_mutable = param.is_mutable,
+                    .type = param.type,
+                    .value = std::monostate{}
                 }
             );
         }
@@ -323,6 +337,7 @@ public:
             node->left.identifier,
             new VariableInitialization{
                 .is_comptime = node->declared_const,
+                .is_mutable = node->left.is_mutable,
                 .type = node->left.type,
                 .value = std::monostate{}
             }
@@ -332,6 +347,7 @@ public:
                 node->right->identifier,
                 new VariableInitialization{
                     .is_comptime = node->declared_const,
+                    .is_mutable = node->right->is_mutable,
                     .type = node->right->type,
                     .value = std::monostate{}
                 }
@@ -348,17 +364,8 @@ public:
         current_scope_.add_class(node->identifier, node);
         Scope& class_scope = Scope::make(current_scope_, node, node->identifier);
         SymbolCollector class_visitor(class_scope);
-        for (auto& ctor : node->constructors) {
-            class_visitor(ctor);
-        }
-        if (node->destructor) {
-            class_visitor(node->destructor);
-        }
-        for (auto& func : node->functions) {
-            class_visitor(func);
-        }
-        for (auto& operator_fn : node->operators) {
-            class_visitor(operator_fn);
+        for (auto& item : node->scope_items) {
+            class_visitor(item);
         }
     }
 

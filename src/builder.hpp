@@ -32,21 +32,6 @@ private:
     template <typename>
     using Any = antlrcpp::Any;
 
-    template <typename T>
-    struct Cast {
-        template <typename U>
-        friend auto operator|(U&& value, Cast) -> const T* {
-            if constexpr (requires { std::declval<U>().operator[]; }) {
-                return std::forward<U>(value) | std::views::transform([](auto& elem) -> const T* {
-                           return std::get<const T*>(elem);
-                       }) |
-                       GlobalMemory::collect<std::span>();
-            } else {
-                return std::get<const T*>(std::forward<U>(value));
-            }
-        }
-    };
-
 private:
     const SourceManager::File& file_;
     ImportManager<ASTRoot>& importer_;
@@ -185,23 +170,61 @@ private:
 
     auto visitIf_statement(ZincParser::If_statementContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
-        return as_variant(new ASTIfStatement{
-            loc(ctx),
-            visit_expr(ctx->condition_),
-            visit(ctx->if_) | Cast<ASTLocalBlock>{},
-            visit(ctx->else_) | Cast<ASTLocalBlock>{},
-        });
+        if (ctx->else_) {
+            return as_variant(new ASTIfStatement{
+                loc(ctx),
+                visit_expr(ctx->condition_),
+                std::get<const ASTLocalBlock*>(visit(ctx->if_)),
+                visit(ctx->else_),
+            });
+        } else {
+            return as_variant(new ASTIfStatement{
+                loc(ctx),
+                visit_expr(ctx->condition_),
+                std::get<const ASTLocalBlock*>(visit(ctx->if_)),
+                visit(ctx->elseif_),
+            });
+        }
     }
 
-    auto visitFor_statement(ZincParser::For_statementContext* ctx) noexcept
+    auto visitCStyleFor(ZincParser::CStyleForContext* ctx) noexcept -> Any<ASTNodeVariant> final {
+        if (ctx->init_decl_) {
+            return as_variant(new ASTForStatement{
+                loc(ctx),
+                std::get<const ASTDeclaration*>(visit(ctx->init_decl_)),
+                visit_expr(ctx->condition_),
+                visit_expr(ctx->update_),
+                std::get<const ASTLocalBlock*>(visit(ctx->body_)),
+            });
+        } else {
+            return as_variant(new ASTForStatement{
+                loc(ctx),
+                visit_expr(ctx->init_expr_),
+                visit_expr(ctx->condition_),
+                visit_expr(ctx->update_),
+                std::get<const ASTLocalBlock*>(visit(ctx->body_)),
+            });
+        }
+    }
+
+    auto visitWhileStyleFor(ZincParser::WhileStyleForContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
         return as_variant(new ASTForStatement{
             loc(ctx),
-            visit(ctx->init_decl_) | Cast<ASTDeclaration>(),
-            visit_expr(ctx->init_expr_),
+            std::monostate{},
             visit_expr(ctx->condition_),
-            visit_expr(ctx->update_),
-            visit(ctx->body_) | Cast<ASTLocalBlock>{},
+            std::monostate{},
+            std::get<const ASTLocalBlock*>(visit(ctx->body_)),
+        });
+    }
+
+    auto visitRangeBasedFor(ZincParser::RangeBasedForContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTRangeBasedForStatement{
+            loc(ctx),
+            text(ctx->identifier_),
+            visit_expr(ctx->iterable_),
+            std::get<const ASTLocalBlock*>(visit(ctx->body_)),
         });
     }
 
@@ -257,7 +280,7 @@ private:
 
     auto visitOperator_overload_definition(
         ZincParser::Operator_overload_definitionContext* ctx
-    ) noexcept -> Any<const ASTOperatorDefinition*> final {
+    ) noexcept -> Any<ASTNodeVariant> final {
         /// TODO: throw error if operator is invalid or if number of parameters doesn't match
         /// operator
         OperatorCode opcode;
@@ -359,10 +382,16 @@ private:
         case ZincParser::OP_BITXOR_ASSIGN:
             opcode = OperatorCode::BitwiseXorAssign;
             break;
+        case ZincParser::OP_LPAREN:
+            opcode = OperatorCode::Call;
+            break;
+        case ZincParser::OP_LBRACKET:
+            opcode = OperatorCode::Index;
+            break;
         default:
             UNREACHABLE();
         }
-        return const_cast<const ASTOperatorDefinition*>(new ASTOperatorDefinition{
+        return as_variant(new ASTOperatorDefinition{
             loc(ctx),
             opcode,
             visit<ASTFunctionParameter>(ctx->parameters_[0]),
@@ -418,50 +447,37 @@ private:
 
     auto visitClass_definition(ZincParser::Class_definitionContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
-        std::span implements = ctx->implements_ |
-                               std::views::transform([this](auto child) { return text(child); }) |
-                               GlobalMemory::collect<std::span<std::string_view>>();
-        std::span types = visit_list(ctx->types_) |
-                          std::views::transform([](ASTNodeVariant node) -> const ASTTypeAlias* {
-                              return std::get<const ASTTypeAlias*>(node);
-                          }) |
-                          GlobalMemory::collect<std::span>();
-        std::span classes =
-            visit_list(ctx->classes_) |
-            std::views::transform([](ASTNodeVariant node) -> const ASTClassDefinition* {
-                return std::get<const ASTClassDefinition*>(node);
-            }) |
-            GlobalMemory::collect<std::span>();
-        std::span fields = visit_list(ctx->fields_) |
-                           std::views::transform([](ASTNodeVariant node) -> const ASTDeclaration* {
-                               return std::get<const ASTDeclaration*>(node);
-                           }) |
-                           GlobalMemory::collect<std::span>();
-        std::span constructors = visit_list<const ASTCtorDtorDefinition*>(ctx->constructor_);
-        std::span destructors = visit_list<const ASTCtorDtorDefinition*>(ctx->destructor_);
-        std::span functions =
-            visit_list(ctx->functions_) |
-            std::views::transform([](ASTNodeVariant node) -> const ASTFunctionDefinition* {
-                return std::get<const ASTFunctionDefinition*>(node);
-            }) |
-            GlobalMemory::collect<std::span>();
-        std::span operators = visit_list<const ASTOperatorDefinition*>(ctx->operators_);
-        if (destructors.size() > 1) {
-            /// TODO: thread safety
-            Diagnostic::report(DuplicateDestructorError(destructors[1]->location));
+        std::span fields = visit_list(ctx->fields_);
+        std::span scope_items = GlobalMemory::alloc_array<ASTNodeVariant>(
+            ctx->aliases_.size() + ctx->classes_.size() + ctx->constructors_.size() +
+            ctx->destructors_.size() + ctx->functions_.size() + ctx->operators_.size()
+        );
+        std::size_t item_index = 0;
+        for (const auto& alias : ctx->aliases_) {
+            scope_items[item_index++] = visit(alias);
+        }
+        for (const auto& class_def : ctx->classes_) {
+            scope_items[item_index++] = visit(class_def);
+        }
+        for (const auto& constructor : ctx->constructors_) {
+            scope_items[item_index++] = visit(constructor);
+        }
+        for (const auto& destructor : ctx->destructors_) {
+            scope_items[item_index++] = visit(destructor);
+        }
+        for (const auto& function : ctx->functions_) {
+            scope_items[item_index++] = visit(function);
+        }
+        for (const auto& operator_def : ctx->operators_) {
+            scope_items[item_index++] = visit(operator_def);
         }
         auto* class_def = new ASTClassDefinition{
             loc(ctx),
             text(ctx->identifier_),
-            ctx->extends_ ? text(ctx->extends_) : "",
-            implements,
-            types,
-            classes,
+            visit_expr(ctx->extends_),
+            visit_list<ASTExprVariant>(ctx->implements_),
             fields,
-            constructors,
-            destructors.empty() ? nullptr : destructors[0],
-            functions,
-            operators,
+            scope_items,
         };
         if (ctx->template_list_) {
             if (ctx->specialize_list_) throw;
@@ -521,6 +537,13 @@ private:
         );
     }
 
+    auto visitArrayAccessExpr(ZincParser::ArrayAccessExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(
+            new ASTIndexAccess{loc(ctx), visit_expr(ctx->base_), visit_expr(ctx->length_)}
+        );
+    }
+
     auto visitCallExpr(ZincParser::CallExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         return as_variant(new ASTFunctionCall{
             loc(ctx), visit_expr(ctx->func_), visit_list<ASTExprVariant>(ctx->arguments_)
@@ -548,13 +571,6 @@ private:
         );
     }
 
-    auto visitArrayAccessExpr(ZincParser::ArrayAccessExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return as_variant(
-            new ASTArrayAccess{loc(ctx), visit_expr(ctx->base_), visit_expr(ctx->length_)}
-        );
-    }
-
     auto visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         return as_variant(new ASTParenExpr{loc(ctx), visit_expr(ctx->inner_expr_)});
     }
@@ -565,6 +581,16 @@ private:
             loc(ctx),
             visit_expr(ctx->template_),
             visit<std::span<ASTExprVariant>>(ctx->instantiation_list_)
+        });
+    }
+
+    auto visitTernaryExpr(ZincParser::TernaryExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(new ASTTernaryOp{
+            loc(ctx),
+            visit_expr(ctx->condition_),
+            visit_expr(ctx->true_expr_),
+            visit_expr(ctx->false_expr_)
         });
     }
 
@@ -603,6 +629,19 @@ private:
             return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::LogicalNot, expr});
         case ZincParser::OP_BITNOT:
             return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::BitwiseNot, expr});
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    auto visitPostfixUnaryExpr(ZincParser::PostfixUnaryExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        ASTExprVariant expr = visit_expr(ctx->expr_);
+        switch (ctx->op_->getType()) {
+        case ZincParser::OP_INC:
+            return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::PostIncrement, expr});
+        case ZincParser::OP_DEC:
+            return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::PostDecrement, expr});
         default:
             UNREACHABLE();
         }
@@ -903,7 +942,7 @@ private:
     }
 
     auto visitConstructor(ZincParser::ConstructorContext* ctx) noexcept
-        -> Any<const ASTCtorDtorDefinition*> final {
+        -> Any<ASTNodeVariant> final {
         auto* constructor_def = new ASTCtorDtorDefinition{
             loc(ctx),
             visit_list<ASTFunctionParameter>(ctx->parameters_),
@@ -911,12 +950,19 @@ private:
             true,
             ctx->KW_CONST() != nullptr
         };
-        return const_cast<const ASTCtorDtorDefinition*>(constructor_def);
+        if (ctx->template_list_) {
+            return as_variant(new ASTTemplateDefinition{
+                loc(ctx),
+                "!",
+                visit<std::span<ASTTemplateParameter>>(ctx->template_list_),
+                constructor_def
+            });
+        }
+        return as_variant(constructor_def);
     }
 
-    auto visitDestructor(ZincParser::DestructorContext* ctx) noexcept
-        -> Any<const ASTCtorDtorDefinition*> final {
-        return const_cast<const ASTCtorDtorDefinition*>(new ASTCtorDtorDefinition{
+    auto visitDestructor(ZincParser::DestructorContext* ctx) noexcept -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTCtorDtorDefinition{
             loc(ctx),
             std::span<ASTFunctionParameter>{},
             visit_list(ctx->body_),

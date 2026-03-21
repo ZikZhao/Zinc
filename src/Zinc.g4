@@ -33,7 +33,7 @@ local_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 expr_statement: expr_ = expr OP_SEMICOLON;
 
 declaration_statement:
-	KW_LET identifier_ = T_IDENTIFIER KW_MUT? (
+	KW_LET KW_MUT? identifier_ = T_IDENTIFIER (
 		OP_COLON type_ = type
 	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON # LetDecl
 	| (specialize_list_ = specialize_parameter_list)? KW_CONST identifier_ = T_IDENTIFIER (
@@ -43,15 +43,18 @@ declaration_statement:
 
 if_statement:
 	KW_IF OP_LPAREN condition_ = expr OP_RPAREN if_ = local_block (
-		KW_ELSE else_ = local_block
+		KW_ELSE (else_ = local_block | elseif_ = if_statement)
 	)?;
 
 for_statement:
 	KW_FOR OP_LPAREN (
 		init_decl_ = declaration_statement
-		| init_expr_ = expr_statement
+		| init_expr_ = expr_statement OP_SEMICOLON
 		| OP_SEMICOLON
-	) condition_ = expr? OP_SEMICOLON update_ = expr? OP_RPAREN body_ = local_block;
+	) condition_ = expr? OP_SEMICOLON update_ = expr? OP_RPAREN body_ = local_block	# CStyleFor
+	| KW_FOR OP_LPAREN condition_ = expr OP_RPAREN body_ = local_block				# WhileStyleFor
+	| KW_FOR OP_LPAREN identifier_ = T_IDENTIFIER OP_COLON iterable_ = expr OP_RPAREN body_ =
+		local_block # RangeBasedFor;
 
 break_statement: KW_BREAK OP_SEMICOLON;
 
@@ -113,6 +116,8 @@ operator_overload_definition:
 		| operator_ = OP_BITXOR_ASSIGN
 		| operator_ = OP_LT op2_ = OP_LT op3_ = OP_ASSIGN
 		| operator_ = OP_GT op2_ = OP_GT op3_ = OP_ASSIGN
+		| operator_ = OP_LPAREN OP_RPAREN
+		| operator_ = OP_LBRACKET OP_RBRACKET
 	) OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
@@ -133,16 +138,16 @@ class_definition:
 	(specialize_list_ = specialize_parameter_list)? KW_CLASS identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
 		| instantiation_list_ = instantiation_list
-	)? (KW_EXTENDS extends_ = identifier)? (
-		KW_IMPLEMENTS implements_ += identifier (
-			OP_COMMA implements_ += identifier
+	)? (KW_EXTENDS extends_ = type)? (
+		KW_IMPLEMENTS implements_ += type (
+			OP_COMMA implements_ += type
 		)*
 	)? OP_LBRACE (
-		types_ += type_alias
+		aliases_ += type_alias
 		| classes_ += class_definition
 		| fields_ += declaration_statement
-		| constructor_ += constructor
-		| destructor_ += destructor
+		| constructors_ += constructor
+		| destructors_ += destructor
 		| functions_ += function_definition
 		| operators_ += operator_overload_definition
 	)* OP_RBRACE;
@@ -156,10 +161,11 @@ static_assert_statement:
 	)? OP_RPAREN OP_SEMICOLON;
 
 expr:
-	KW_SELF											# SelfExpr
-	| constant_ = constant							# ConstExpr
-	| identifier_ = identifier						# IdentifierExpr
-	| base_ = expr OP_DOT member_ = T_IDENTIFIER	# MemberAccessExpr
+	KW_SELF													# SelfExpr
+	| constant_ = constant									# ConstExpr
+	| identifier_ = identifier								# IdentifierExpr
+	| base_ = expr OP_DOT member_ = T_IDENTIFIER			# MemberAccessExpr
+	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET	# ArrayAccessExpr
 	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN							# CallExpr
@@ -169,15 +175,15 @@ expr:
 	)? OP_RBRACE # StructInitExpr
 	| OP_LBRACKET (
 		elements_ += expr (OP_COMMA elements_ += expr)*
-	)? OP_RBRACKET																# ArrayInitExpr
-	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET						# ArrayAccessExpr
-	| base_ = expr OP_LBRACKET start_ = expr OP_COLON end_ = expr OP_RBRACKET	# SliceExpr
-	| KW_MUT inner_expr_ = expr													# MutExpr
-	| KW_MOVE inner_expr_ = expr												# MoveExpr
-	| KW_FORWARD inner_expr_ = expr												# ForwardExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN									# ParenExpr
-	| template_ = expr instantiation_list_ = instantiation_list					# InstantiationExpr
-	| expr_ = expr KW_AS OP_QUESTION? type_ = type								# AsExpr
+	)? OP_RBRACKET																	# ArrayInitExpr
+	| base_ = expr OP_LBRACKET start_ = expr OP_COLON end_ = expr OP_RBRACKET		# SliceExpr
+	| KW_MUT inner_expr_ = expr														# MutExpr
+	| KW_MOVE inner_expr_ = expr													# MoveExpr
+	| KW_FORWARD inner_expr_ = expr													# ForwardExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN										# ParenExpr
+	| template_ = expr instantiation_list_ = instantiation_list						# InstantiationExpr
+	| condition_ = expr OP_QUESTION true_expr_ = expr OP_COLON false_expr_ = expr	# TernaryExpr
+	| expr_ = expr KW_AS OP_QUESTION? type_ = type									# AsExpr
 	| OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
@@ -192,7 +198,8 @@ expr:
 		| OP_SUB
 		| OP_NOT
 		| OP_BITNOT
-	) expr_ = expr # UnaryExpr
+	) expr_ = expr											# UnaryExpr
+	| <assoc = right> expr_ = expr op_ = (OP_INC | OP_DEC)	# PostfixUnaryExpr
 	| <assoc = left> left_ = expr op_ = (
 		OP_MUL
 		| OP_DIV
@@ -277,7 +284,7 @@ field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
 field_init: identifier_ = T_IDENTIFIER OP_COLON value_ = expr;
 
 constructor:
-	KW_CONST? KW_INIT OP_LPAREN (
+	KW_CONST? KW_INIT (template_list_ = template_parameter_list)? OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*

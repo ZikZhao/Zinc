@@ -43,6 +43,8 @@ enum class OperatorCode : std::uint8_t {
     BitwiseXorAssign,
     LeftShiftAssign,
     RightShiftAssign,
+    Call,
+    Index,
 };
 
 struct ASTNode;
@@ -56,6 +58,7 @@ struct ASTConstant;
 struct ASTStringConstant;
 struct ASTIdentifier;
 struct ASTMemberAccess;
+struct ASTIndexAccess;
 struct ASTParenExpr;
 struct ASTUnaryOp;
 struct ASTBinaryOp;
@@ -63,9 +66,9 @@ struct ASTBinaryOp;
 struct ASTFieldInitialization;
 struct ASTStructInitialization;
 struct ASTArrayInitialization;
-struct ASTArrayAccess;
 struct ASTFunctionCall;
 struct ASTTemplateInstantiation;
+struct ASTTernaryOp;
 struct ASTAs;
 struct ASTLambda;
 struct ASTPrimitiveType;
@@ -82,6 +85,7 @@ struct ASTFieldDeclaration;
 struct ASTTypeAlias;
 struct ASTIfStatement;
 struct ASTForStatement;
+struct ASTRangeBasedForStatement;
 struct ASTContinueStatement;
 struct ASTBreakStatement;
 struct ASTReturnStatement;
@@ -108,6 +112,7 @@ using ASTNodeVariant = std::variant<
     const ASTTypeAlias*,
     const ASTIfStatement*,
     const ASTForStatement*,
+    const ASTRangeBasedForStatement*,
     const ASTContinueStatement*,
     const ASTBreakStatement*,
     const ASTReturnStatement*,
@@ -133,14 +138,15 @@ using ASTExprVariant = std::variant<
     const ASTSelfExpr*,
     const ASTIdentifier*,
     const ASTMemberAccess*,
+    const ASTIndexAccess*,
     const ASTUnaryOp*,
     const ASTBinaryOp*,
     // Complex expressions
     const ASTStructInitialization*,
     const ASTArrayInitialization*,
-    const ASTArrayAccess*,
     const ASTFunctionCall*,
     const ASTTemplateInstantiation*,
+    const ASTTernaryOp*,
     const ASTAs*,
     const ASTLambda*,
     // Type expressions
@@ -193,8 +199,13 @@ struct ASTMemberAccess final : public ASTExpression {
     std::string_view member;
 };
 
+struct ASTIndexAccess final : public ASTExpression {
+    ASTExprVariant base;
+    ASTExprVariant index;
+};
+
 struct ASTConstant final : public ASTExpression {
-    const Value* value;
+    Value* value;
 };
 
 struct ASTStringConstant final : public ASTExpression {
@@ -230,11 +241,6 @@ struct ASTArrayInitialization final : public ASTExpression {
     std::span<ASTExprVariant> elements;
 };
 
-struct ASTArrayAccess final : public ASTExpression {
-    ASTExprVariant base;
-    ASTExprVariant length;
-};
-
 struct ASTFunctionCall final : public ASTExpression {
     ASTExprVariant function;
     std::span<ASTExprVariant> arguments;
@@ -243,6 +249,12 @@ struct ASTFunctionCall final : public ASTExpression {
 struct ASTTemplateInstantiation final : public ASTExpression {
     ASTExprVariant template_expr;
     std::span<ASTExprVariant> arguments;
+};
+
+struct ASTTernaryOp final : public ASTExpression {
+    ASTExprVariant condition;
+    ASTExprVariant true_expr;
+    ASTExprVariant false_expr;
 };
 
 struct ASTAs final : public ASTExpression {
@@ -326,14 +338,19 @@ struct ASTTypeAlias final : public ASTNode {
 struct ASTIfStatement final : public ASTNode {
     ASTExprVariant condition;
     const ASTLocalBlock* if_block;
-    const ASTLocalBlock* else_block;
+    ASTNodeVariant else_block;
 };
 
 struct ASTForStatement final : public ASTNode {
-    const ASTDeclaration* initializer_decl;
-    ASTExprVariant initializer_expr;
+    std::variant<const ASTDeclaration*, ASTExprVariant> initializer;
     ASTExprVariant condition;
     ASTExprVariant increment;
+    const ASTLocalBlock* body;
+};
+
+struct ASTRangeBasedForStatement final : public ASTNode {
+    std::string_view identifier;
+    ASTExprVariant iterable;
     const ASTLocalBlock* body;
 };
 
@@ -380,15 +397,10 @@ struct ASTOperatorDefinition final : public ASTNode {
 
 struct ASTClassDefinition final : public ASTNode {
     std::string_view identifier;
-    std::string_view extends;
-    std::span<std::string_view> implements;
-    std::span<const ASTTypeAlias*> aliases;
-    std::span<const ASTClassDefinition*> classes;
-    std::span<const ASTDeclaration*> fields;
-    std::span<const ASTCtorDtorDefinition*> constructors;
-    const ASTCtorDtorDefinition* destructor;
-    std::span<const ASTFunctionDefinition*> functions;
-    std::span<const ASTOperatorDefinition*> operators;
+    ASTExprVariant extends;
+    std::span<ASTExprVariant> implements;
+    std::span<ASTNodeVariant> fields;
+    std::span<ASTNodeVariant> scope_items;
 };
 
 struct ASTNamespaceDefinition final : public ASTNode {
@@ -588,6 +600,8 @@ constexpr auto GetOperatorString(OperatorCode opcode) -> std::string_view {
         return "<<=";
     case OperatorCode::RightShiftAssign:
         return ">>=";
+    case OperatorCode::Index:
+        return "[]";
     default:
         UNREACHABLE();
     }

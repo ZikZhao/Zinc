@@ -314,7 +314,6 @@
                         "text": "source ${workspaceFolder}/tools/printer.py",
                     }
                 ],
-                "visualizerFile": "${workspaceFolder}/Zinc.natvis",
                 "preLaunchTask": "Build Main (Debug)"
             },
             {
@@ -347,7 +346,6 @@
                         "text": "source ${workspaceFolder}/tools/printer.py",
                     }
                 ],
-                "visualizerFile": "${workspaceFolder}/Zinc.natvis",
                 "preLaunchTask": "Build Main (Release)"
             },
             {
@@ -368,7 +366,6 @@
                         "text": "source ${workspaceFolder}/tools/printer.py",
                     }
                 ],
-                "visualizerFile": "${workspaceFolder}/Zinc.natvis",
                 "preLaunchTask": "Build UnitTests"
             },
             {
@@ -389,9 +386,40 @@
                         "text": "source ${workspaceFolder}/tools/printer.py",
                     }
                 ],
-                "visualizerFile": "${workspaceFolder}/Zinc.natvis",
                 "preLaunchTask": "Build Benchmarks"
-            }
+            },
+            {
+                "name": "Rasterizer: Debug",
+                "type": "cppdbg",
+                "request": "launch",
+                "program": "${workspaceFolder}/build/debug/bin/zinc",
+                "args": [
+                    "${workspaceFolder}/demos/rasterizer/main.zn"
+                ],
+                "stopAtEntry": false,
+                "cwd": "${workspaceFolder}/demos/rasterizer",
+                "environment": [
+                    {
+                        "name": "ASAN_OPTIONS",
+                        "value": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+                    },
+                    {
+                        "name": "UBSAN_OPTIONS",
+                        "value": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+                    }
+                ],
+                "externalConsole": false,
+                "MIMode": "gdb",
+                "setupCommands": [
+                    {
+                        "text": "-enable-pretty-printing",
+                    },
+                    {
+                        "text": "source ${workspaceFolder}/tools/printer.py",
+                    }
+                ],
+                "preLaunchTask": "Build Main (Debug)"
+            },
         ]
     }
 }
