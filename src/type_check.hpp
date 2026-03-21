@@ -1389,6 +1389,36 @@ public:
             args[1] ? args : std::span(args).subspan(0, 1)
         );
     }
+
+    auto eval_cast(const ASTAs* node, Term operand, const Type* target_type) const noexcept
+        -> Term {
+        Term decayed = Sema::decay(operand);
+        bool convertible = false;
+        const Type* source_type = decayed.effective_type();
+        if (source_type == target_type) {
+            return operand;
+        } else if (operand->kind_ == Kind::Integer || operand->kind_ == Kind::Float) {
+            if (target_type->kind_ == Kind::Integer || target_type->kind_ == Kind::Float) {
+                convertible = true;
+            }
+        } else if (operand->kind_ == Kind::Nullptr) {
+            if (target_type->kind_ == Kind::Pointer) {
+                convertible = true;
+            }
+        } else if (operand->kind_ == Kind::Pointer) {
+            if (target_type->kind_ == Kind::Pointer) {
+                if (TypeRegistry::is_reachable(source_type, target_type)) {
+                    convertible = true;
+                }
+            }
+        }
+        if (convertible) {
+            sema_.codegen_env_.map_type(sema_.current_scope_, node, target_type);
+            return Term::prvalue(target_type);
+        }
+        throw;
+        return {};
+    }
 };
 
 class TypeContextEvaluator {
@@ -1488,6 +1518,11 @@ public:
     }
 
     void operator()(const ASTPrimitiveType* node) { out_ = node->type; }
+
+    void operator()(const ASTStringViewType* node) {
+        Symbol string_view_symbol = sema_.get_std_symbol("string_view");
+        out_ = Sema::get<SymbolKind::Type>(string_view_symbol);
+    }
 
     void operator()(const ASTFunctionType* node) {
         out_ = std::type_identity<FunctionType>();
@@ -1829,6 +1864,17 @@ public:
 
     auto operator()(const ASTTemplateInstantiation* node) -> Symbol {
         return sema_.template_handler_->instantiate(node);
+    }
+
+    auto operator()(const ASTAs* node) -> Symbol {
+        Symbol expr_symbol = ValueContextEvaluator{*this, nullptr}(node->expr);
+        if (!Sema::expect(expr_symbol, SymbolKind::Term)) {
+            return {};
+        }
+        Term expr_term = Sema::get<SymbolKind::Term>(expr_symbol);
+        TypeResolution target_type;
+        TypeContextEvaluator{sema_, target_type}(node->target_type);
+        return sema_.operation_handler_->eval_cast(node, expr_term, target_type);
     }
 
     auto operator()(const auto* node) -> Symbol { UNREACHABLE(); }
@@ -2225,7 +2271,7 @@ inline auto TemplateHandler::validate(
     if (primary.parameters.size() != args.size() && !primary.parameters.back().is_variadic) {
         return false;
     }
-    for (size_t i = 0; i < args.size(); i++) {
+    for (size_t i = 0; i < primary.parameters.size(); i++) {
         const auto& param = primary.parameters[i];
         if (static_cast<bool>(args[i]->dyn_value()) != param.is_nttp) {
             return false;
@@ -2437,16 +2483,16 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
             params.push_back(get_param_type(param));
         }
         return_type = sema_.get_self_type();
-    } else if (auto* operator_def = overload.get<const ASTOperatorDefinition*>()) {
+    } else if (auto* op_def = overload.get<const ASTOperatorDefinition*>()) {
         TypeResolution left_type;
-        TypeContextEvaluator{sema_, left_type}(operator_def->left.type);
+        TypeContextEvaluator{sema_, left_type}(op_def->left.type);
         params.push_back(left_type.get());
-        if (operator_def->right) {
+        if (op_def->right) {
             TypeResolution right_type;
-            TypeContextEvaluator{sema_, right_type}(operator_def->right->type);
+            TypeContextEvaluator{sema_, right_type}(op_def->right->type);
             params.push_back(right_type.get());
         }
-        TypeContextEvaluator{sema_, return_type}(operator_def->return_type);
+        TypeContextEvaluator{sema_, return_type}(op_def->return_type);
     } else {
         UNREACHABLE();
     }

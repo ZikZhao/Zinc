@@ -326,6 +326,41 @@ private:
         case ZincParser::OP_BITNOT:
             opcode = OperatorCode::BitwiseNot;
             break;
+        case ZincParser::OP_ASSIGN:
+            opcode = OperatorCode::Assign;
+            break;
+        case ZincParser::OP_ADD_ASSIGN:
+            opcode = OperatorCode::AddAssign;
+            break;
+        case ZincParser::OP_SUB_ASSIGN:
+            opcode = OperatorCode::SubtractAssign;
+            break;
+        case ZincParser::OP_MUL_ASSIGN:
+            opcode = OperatorCode::MultiplyAssign;
+            break;
+        case ZincParser::OP_DIV_ASSIGN:
+            opcode = OperatorCode::DivideAssign;
+            break;
+        case ZincParser::OP_REM_ASSIGN:
+            opcode = OperatorCode::RemainderAssign;
+            break;
+        case ZincParser::OP_AND_ASSIGN:
+            opcode = OperatorCode::LogicalAndAssign;
+            break;
+        case ZincParser::OP_OR_ASSIGN:
+            opcode = OperatorCode::LogicalOrAssign;
+            break;
+        case ZincParser::OP_BITAND_ASSIGN:
+            opcode = OperatorCode::BitwiseAndAssign;
+            break;
+        case ZincParser::OP_BITOR_ASSIGN:
+            opcode = OperatorCode::BitwiseOrAssign;
+            break;
+        case ZincParser::OP_BITXOR_ASSIGN:
+            opcode = OperatorCode::BitwiseXorAssign;
+            break;
+        default:
+            UNREACHABLE();
         }
         return const_cast<const ASTOperatorDefinition*>(new ASTOperatorDefinition{
             loc(ctx),
@@ -739,8 +774,7 @@ private:
         case ZincParser::KW_BOOL:
             return as_variant(new ASTPrimitiveType{loc(ctx), &BooleanType::instance});
         case ZincParser::KW_STRVIEW:
-            // return as_variant(new ASTPrimitiveType{loc(ctx), &StringViewType::instance});
-            throw;
+            return as_variant(new ASTStringViewType{loc(ctx)});
         default:
             UNREACHABLE();
         }

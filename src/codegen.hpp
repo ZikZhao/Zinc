@@ -603,14 +603,14 @@ public:
                 UNREACHABLE();
             }
             mangled_path.clear();
-            newline();
+            newline(false);
         }
         stream_ << "\n// ----- Function Forward Declarations -----\n"sv;
         stream_.write(
             forward_declarations_.data(), static_cast<std::streamsize>(forward_declarations_.size())
         );
         stream_ << "\n// ----- Function Definitions -----\n"sv;
-        stream_.write(definitions_.data(), static_cast<std::streamsize>(definitions_.size()));
+        stream_.write(definitions_.data(), static_cast<std::streamsize>(definitions_.size() - 1));
     }
 
     auto operator()(ASTNodeVariant variant) -> void { return std::visit(*this, variant); }
@@ -627,20 +627,20 @@ public:
         const FunctionType* func_type
     ) -> void {
         auto gen = [&](GlobalMemory::String& out) {
-            std::format_to(std::back_inserter(out), "auto {}("sv, mangled_path);
-            std::string_view sep = ""sv;
-            for (std::size_t i = 0; i < node->parameters.size(); i++) {
-                out += sep;
-                const ASTFunctionParameter& param = node->parameters[i];
-                TypeCodeGen::output(out, func_type->parameters_[i], types_);
-                out += " "sv;
-                out += param.identifier;
-                sep = ", "sv;
-            }
-            out += ") -> "sv;
             if (mangled_path == "main"sv) {
-                out += "int"sv;
+                out += "auto main(int $argc, char** $argv) -> int"sv;
             } else {
+                std::format_to(std::back_inserter(out), "auto {}("sv, mangled_path);
+                std::string_view sep = ""sv;
+                for (std::size_t i = 0; i < node->parameters.size(); i++) {
+                    out += sep;
+                    const ASTFunctionParameter& param = node->parameters[i];
+                    TypeCodeGen::output(out, func_type->parameters_[i], types_);
+                    out += " "sv;
+                    out += param.identifier;
+                    sep = ", "sv;
+                }
+                out += ") -> "sv;
                 TypeCodeGen::output(out, func_type->return_type_, types_);
             }
         };
@@ -649,13 +649,20 @@ public:
         gen(definitions_);
         definitions_ += " {"sv;
         indent_level_++;
+        if (mangled_path == "main"sv) {
+            newline();
+            definitions_ += "const std::vector<std::string_view> $args_vec{$argv, $argv + $argc};";
+            newline();
+            definitions_ += "const std::span<const std::string_view> args{$args_vec};"sv;
+        }
         for (const ASTNodeVariant& child : node->body) {
             newline();
             (*this)(child);
         }
         indent_level_--;
-        definitions_ += "}"sv;
         newline();
+        definitions_ += "}"sv;
+        newline(false);
     }
 
     auto operator()(const ASTCtorDtorDefinition* node, const FunctionType* func_type) -> void {
@@ -690,8 +697,9 @@ public:
             (*this)(child);
         }
         indent_level_--;
-        definitions_ += "}"sv;
         newline();
+        definitions_ += "}"sv;
+        newline(false);
     }
 
     auto operator()(const ASTOperatorDefinition* node, const FunctionType* func_type) -> void {
@@ -725,8 +733,9 @@ public:
             (*this)(child);
         }
         indent_level_--;
-        definitions_ += "}"sv;
         newline();
+        definitions_ += "}"sv;
+        newline(false);
     }
 
     auto operator()(const ASTLocalBlock* node) -> void {
@@ -860,6 +869,15 @@ public:
         definitions_ += ")"sv;
     }
 
+    auto operator()(const ASTAs* node) -> void {
+        auto* replacement = env_.find(current_scope_, node);
+        definitions_ += "static_cast<"sv;
+        TypeCodeGen::output(definitions_, std::get<const Type*>(*replacement), types_);
+        definitions_ += ">("sv;
+        (*this)(node->expr);
+        definitions_ += ")"sv;
+    }
+
     auto operator()(const ASTExpressionStatement* node) -> void {
         (*this)(node->expr);
         definitions_ += ";"sv;
@@ -916,7 +934,10 @@ public:
     }
 
 private:
-    auto newline() -> void {
+    auto newline(bool no_repeat = true) -> void {
+        if (no_repeat && !definitions_.empty() && definitions_.back() == '\n') {
+            return;
+        }
         definitions_ += "\n"sv;
         for (std::size_t i = 0; i < indent_level_; i++) {
             definitions_ += "    "sv;

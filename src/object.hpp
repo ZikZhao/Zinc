@@ -56,6 +56,7 @@ class UnionType;
 
 class Value;
 class UnknownValue;
+class AutoValue;
 class NullptrValue;
 class IntegerValue;
 class FloatValue;
@@ -151,6 +152,18 @@ private:
     }
 };
 
+class ClassHierarchyGraph {
+private:
+    GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> edges_;
+
+public:
+    auto add_edge(const Type* parent, const Type* child) noexcept -> void {
+        edges_.insert({parent, child});
+    }
+
+    auto is_reachable(const Type* from, const Type* to) const noexcept -> bool;
+};
+
 class TypeResolution final {
     friend class TypeRegistry;
 
@@ -223,31 +236,13 @@ public:
             !TypeInTupleV<T, std::tuple<AnyType, NullptrType, IntegerType, FloatType, BooleanType>>
         )
     static void get_at(TypeResolution& out, auto&&... args) noexcept {
-        using Composites = std::tuple<
-            FunctionType,
-            StructType,
-            InstanceType,
-            MutableType,
-            ReferenceType,
-            PointerType,
-            UnionType>;
         if constexpr (std::is_same_v<T, InstanceType>) {
             // classes with same definition are distinct types
             out.reconstruct<T>(std::forward<decltype(args)>(args)...);
             instance->instance_types_.push_back(static_cast<const T*>(out.get()));
-        } else if constexpr (TypeInTupleV<T, Composites>) {
-            instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
+            instance->add_class_hierarchy(static_cast<const T*>(out.get()));
         } else {
-            // builtin singleton types, e.g. StringType
-            std::type_index type_index = std::type_index(typeid(T));
-            auto it = instance->builtin_types_.find(type_index);
-            if (it != instance->builtin_types_.end()) {
-                out = static_cast<T*>(it->second);
-            } else {
-                T* type = new T(std::forward<decltype(args)>(args)...);
-                instance->builtin_types_.insert({type_index, type});
-                out = type;
-            }
+            instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
         }
     }
 
@@ -271,6 +266,10 @@ public:
         return instance->graph_.is_parent(type);
     }
 
+    static auto is_reachable(const Type* from, const Type* to) noexcept -> bool {
+        return instance->class_graph_.is_reachable(from, to);
+    }
+
     template <std::ranges::input_range R>
     static auto get_auto_instances(R&& is_nttp_array) noexcept
         -> GlobalMemory::Vector<const Object*>
@@ -278,6 +277,7 @@ public:
 
 private:
     TypeDependencyGraph graph_;
+    ClassHierarchyGraph class_graph_;
     std::tuple<
         TypeSet<FunctionType>,
         TypeSet<StructType>,
@@ -288,8 +288,7 @@ private:
         types_;
     GlobalMemory::Vector<const InstanceType*> instance_types_;
     GlobalMemory::Vector<AutoType*> auto_types_;
-    // GlobalMemory::Vector<const Object*> auto_instances_;
-    GlobalMemory::FlatMap<std::type_index, Type*> builtin_types_;
+    GlobalMemory::Vector<AutoValue*> auto_values_;
 
 private:
     template <TypeClass T>
@@ -311,6 +310,8 @@ private:
     auto simplify_recursive_type(
         GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges, const Type* type
     ) noexcept -> const Type*;
+
+    auto add_class_hierarchy(const InstanceType* type) noexcept -> void;
 
 public:
     TypeRegistry() noexcept = default;
@@ -1820,6 +1821,51 @@ public:
     }
 };
 
+// ===== Implementation =====
+
+inline auto ClassHierarchyGraph::is_reachable(const Type* from, const Type* to) const noexcept
+    -> bool {
+    // search parent
+    GlobalMemory::FlatSet<const Type*> visited;
+    std::vector<const Type*> stack{from};
+    while (!stack.empty()) {
+        const Type* current = stack.back();
+        stack.pop_back();
+        if (current == to) {
+            return true;
+        }
+        if (visited.insert(current).second) {
+            if (auto* instance_type = current->dyn_cast<InstanceType>()) {
+                stack.push_back(instance_type->extends_);
+                stack.insert(
+                    stack.end(),
+                    instance_type->implements_.begin(),
+                    instance_type->implements_.end()
+                );
+            }
+        }
+    }
+    // search children
+    visited.clear();
+    stack.push_back(from);
+    while (!stack.empty()) {
+        const Type* current = stack.back();
+        stack.pop_back();
+        if (current == to) {
+            return true;
+        }
+        if (visited.insert(current).second) {
+            auto range = std::ranges::equal_range(
+                edges_, current, {}, &std::pair<const Type*, const Type*>::first
+            );
+            for (const auto& edge : range) {
+                stack.push_back(edge.second);
+            }
+        }
+    }
+    return false;
+}
+
 inline bool TypeRegistry::TypeComparator::operator()(
     const Type* lhs, const Type* rhs
 ) const noexcept {
@@ -1839,9 +1885,13 @@ inline auto TypeRegistry::get_auto_instances(R&& is_nttp_array) noexcept
     GlobalMemory::Vector<const Object*> result;
     result.reserve(is_nttp_array.size());
     std::size_t type_index = 0;
+    std::size_t value_index = 0;
     for (bool is_nttp : std::forward<R>(is_nttp_array)) {
         if (is_nttp) {
-            throw;
+            if (instance->auto_values_.size() == value_index) {
+                instance->auto_values_.push_back(new AutoValue(value_index));
+            }
+            result.push_back(instance->auto_values_[value_index++]);
         } else {
             if (instance->auto_types_.size() == type_index) {
                 instance->auto_types_.push_back(new AutoType(type_index));
@@ -1929,6 +1979,15 @@ inline const Type* TypeRegistry::simplify_recursive_type(
         }
     }
     return interned_type;
+}
+
+inline auto TypeRegistry::add_class_hierarchy(const InstanceType* type) noexcept -> void {
+    if (type->extends_) {
+        class_graph_.add_edge(type, type->extends_);
+    }
+    for (const Type* impl : type->implements_) {
+        class_graph_.add_edge(type, impl);
+    }
 }
 
 inline auto Term::unknown() noexcept -> Term { return Term::prvalue(&UnknownType::instance); }

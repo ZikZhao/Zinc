@@ -98,6 +98,8 @@ operator_overload_definition:
 		| operator_ = OP_BITOR
 		| operator_ = OP_BITXOR
 		| operator_ = OP_BITNOT
+		| operator_ = OP_LT op2_ = OP_LT
+		| operator_ = OP_GT op2_ = OP_GT
 		| operator_ = OP_ASSIGN
 		| operator_ = OP_ADD_ASSIGN
 		| operator_ = OP_SUB_ASSIGN
@@ -109,8 +111,6 @@ operator_overload_definition:
 		| operator_ = OP_BITAND_ASSIGN
 		| operator_ = OP_BITOR_ASSIGN
 		| operator_ = OP_BITXOR_ASSIGN
-		| operator_ = OP_LT op2_ = OP_LT
-		| operator_ = OP_GT op2_ = OP_GT
 		| operator_ = OP_LT op2_ = OP_LT op3_ = OP_ASSIGN
 		| operator_ = OP_GT op2_ = OP_GT op3_ = OP_ASSIGN
 	) OP_LPAREN (
@@ -177,6 +177,7 @@ expr:
 	| KW_FORWARD inner_expr_ = expr												# ForwardExpr
 	| OP_LPAREN inner_expr_ = expr OP_RPAREN									# ParenExpr
 	| template_ = expr instantiation_list_ = instantiation_list					# InstantiationExpr
+	| expr_ = expr KW_AS OP_QUESTION? type_ = type								# AsExpr
 	| <assoc = right> op_ = (
 		OP_INC
 		| OP_DEC
@@ -272,10 +273,16 @@ constructor:
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
-	)? OP_RPAREN OP_LBRACE body_ += statement* OP_RBRACE;
+	)? OP_RPAREN (
+		OP_LBRACE body_ += statement* OP_RBRACE
+		| semi_ = OP_SEMICOLON
+	);
 
 destructor:
-	KW_CONST? KW_DROP OP_LPAREN OP_RPAREN OP_LBRACE body_ += statement* OP_RBRACE;
+	KW_CONST? KW_DROP OP_LPAREN OP_RPAREN (
+		OP_LBRACE body_ += statement* OP_RBRACE
+		| semi_ = OP_SEMICOLON
+	);
 
 template_parameter_list:
 	OP_LT parameters_ += template_parameter (
@@ -347,6 +354,7 @@ KW_FORWARD: 'forward';
 KW_SPECIALIZE: 'specialize';
 KW_STATIC_ASSERT: 'static_assert';
 KW_OPERATOR: 'operator';
+KW_AS: 'as';
 
 OP_DOT: '.';
 OP_QUESTION: '?';
@@ -380,6 +388,7 @@ OP_LT: '<';
 OP_LTE: '<=';
 OP_GT: '>';
 OP_GTE: '>=';
+OP_SPACESHIP: '<=>';
 
 OP_AND: '&&';
 OP_OR: '||';

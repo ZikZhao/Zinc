@@ -66,7 +66,9 @@ struct ASTArrayInitialization;
 struct ASTArrayAccess;
 struct ASTFunctionCall;
 struct ASTTemplateInstantiation;
+struct ASTAs;
 struct ASTPrimitiveType;
+struct ASTStringViewType;
 struct ASTFunctionType;
 struct ASTStructType;
 struct ASTArrayType;
@@ -99,27 +101,6 @@ using ASTNodeVariant = std::variant<
     // Root and blocks
     const ASTRoot*,
     const ASTLocalBlock*,
-    // Expressions
-    const ASTParenExpr*,
-    const ASTConstant*,
-    const ASTStringConstant*,
-    const ASTSelfExpr*,
-    const ASTIdentifier*,
-    const ASTMemberAccess*,
-    const ASTUnaryOp*,
-    const ASTBinaryOp*,
-    // Member access, calls and instantiations
-    const ASTStructInitialization*,
-    const ASTFunctionCall*,
-    const ASTTemplateInstantiation*,
-    // Type expressions
-    const ASTPrimitiveType*,
-    const ASTFunctionType*,
-    const ASTFieldDeclaration*,
-    const ASTStructType*,
-    const ASTMutableType*,
-    const ASTReferenceType*,
-    const ASTPointerType*,
     // Statements
     const ASTExpressionStatement*,
     const ASTDeclaration*,
@@ -161,6 +142,7 @@ using ASTExprVariant = std::variant<
     const ASTTemplateInstantiation*,
     // Type expressions
     const ASTPrimitiveType*,
+    const ASTStringViewType*,
     const ASTArrayType*,
     const ASTFunctionType*,
     const ASTStructType*,
@@ -260,9 +242,17 @@ struct ASTTemplateInstantiation final : public ASTExpression {
     std::span<ASTExprVariant> arguments;
 };
 
+struct ASTAs final : public ASTExpression {
+    ASTExprVariant expr;
+    ASTExprVariant target_type;
+    bool is_dynamic;
+};
+
 struct ASTPrimitiveType final : public ASTExplicitTypeExpr {
     const Type* type;
 };
+
+struct ASTStringViewType final : public ASTExplicitTypeExpr {};
 
 struct ASTFunctionType final : public ASTExplicitTypeExpr {
     std::span<ASTExprVariant> parameter_types;
