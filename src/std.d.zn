@@ -529,4 +529,139 @@ namespace chrono {
     fn now() -> time_point;
 }
 
+fn abs(value: i8) -> i8;
+fn abs(value: i16) -> i16;
+fn abs(value: i32) -> i32;
+fn abs(value: i64) -> i64;
+fn abs(value: isize) -> isize;
+fn abs(value: f32) -> f32;
+fn abs(value: f64) -> f64;
+
+fn floor(value: f32) -> f32;
+fn floor(value: f64) -> f64;
+
+fn ceil(value: f32) -> f32;
+fn ceil(value: f64) -> f64;
+
+fn round(value: f32) -> f32;
+fn round(value: f64) -> f64;
+
+fn trunc(value: f32) -> f32;
+fn trunc(value: f64) -> f64;
+
+fn sqrt(value: f32) -> f32;
+fn sqrt(value: f64) -> f64;
+
+fn cbrt(value: f32) -> f32;
+fn cbrt(value: f64) -> f64;
+
+fn pow(base: f32, exponent: f32) -> f32;
+fn pow(base: f64, exponent: f64) -> f64;
+
+fn exp(value: f32) -> f32;
+fn exp(value: f64) -> f64;
+
+fn exp2(value: f32) -> f32;
+fn exp2(value: f64) -> f64;
+
+fn exp10(value: f32) -> f32;
+fn exp10(value: f64) -> f64;
+
+fn log(value: f32) -> f32;
+fn log(value: f64) -> f64;
+
+fn log2(value: f32) -> f32;
+fn log2(value: f64) -> f64;
+
+fn log10(value: f32) -> f32;
+fn log10(value: f64) -> f64;
+
+fn sin(value: f32) -> f32;
+fn sin(value: f64) -> f64;
+
+fn cos(value: f32) -> f32;
+fn cos(value: f64) -> f64;
+
+fn tan(value: f32) -> f32;
+fn tan(value: f64) -> f64;
+
+fn asin(value: f32) -> f32;
+fn asin(value: f64) -> f64;
+
+fn acos(value: f32) -> f32;
+fn acos(value: f64) -> f64;
+
+fn atan(value: f32) -> f32;
+fn atan(value: f64) -> f64;
+
+fn atan2(y: f32, x: f32) -> f32;
+fn atan2(y: f64, x: f64) -> f64;
+
+fn sinh(value: f32) -> f32;
+fn sinh(value: f64) -> f64;
+
+fn cosh(value: f32) -> f32;
+fn cosh(value: f64) -> f64;
+
+fn tanh(value: f32) -> f32;
+fn tanh(value: f64) -> f64;
+
+fn asinh(value: f32) -> f32;
+fn asinh(value: f64) -> f64;
+
+fn acosh(value: f32) -> f32;
+fn acosh(value: f64) -> f64;
+
+fn atanh(value: f32) -> f32;
+fn atanh(value: f64) -> f64;
+
+fn hypot(x: f32, y: f32) -> f32;
+fn hypot(x: f64, y: f64) -> f64;
+
+fn min<T: type>(a: T, b: T) -> T;
+fn max<T: type>(a: T, b: T) -> T;
+
+class unique_ptr<T: type> {
+    type element_type = T;
+    type pointer = *T;
+
+    init();
+    init(ptr: pointer);
+    init<U: type>(other: unique_ptr<U>);
+
+    fn get(self: &Self) -> pointer;
+    fn release(self: &mut Self) -> pointer;
+    fn reset(self: &mut Self) -> void;
+    fn reset(self: &mut Self, ptr: pointer) -> void;
+
+    operator*(self: &Self) -> &T;
+    operator->(self: &Self) -> pointer;
+    operator=(self: &mut Self, other: unique_ptr<T>) -> &mut Self;
+    operator=<U: type>(self: &mut Self, other: unique_ptr<U>) -> &mut Self;
+}
+
+class shared_ptr<T: type> {
+    type element_type = T;
+    type pointer = *T;
+
+    init();
+    init(ptr: pointer);
+    init(other: shared_ptr<T>);
+    init<U: type>(other: shared_ptr<U>);
+    init<U: type>(other: unique_ptr<U>);
+
+    fn get(self: &Self) -> pointer;
+    fn reset(self: &mut Self) -> void;
+    fn reset(self: &mut Self, ptr: pointer) -> void;
+    fn use_count(self: &Self) -> i64;
+
+    operator*(self: &Self) -> &T;
+    operator->(self: &Self) -> pointer;
+    operator=(self: &mut Self, other: shared_ptr<T>) -> &mut Self;
+    operator=<U: type>(self: &mut Self, other: shared_ptr<U>) -> &mut Self;
+}
+
+fn make_unique<T: type, Args...: type>(args: Args...) -> unique_ptr<T>;
+fn make_shared<T: type, Args...: type>(args: Args...) -> shared_ptr<T>;
+
 fn print<Args...: type>(fmt: string_view, args: Args...);

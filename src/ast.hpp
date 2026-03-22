@@ -45,6 +45,8 @@ enum class OperatorCode : std::uint8_t {
     RightShiftAssign,
     Call,
     Index,
+    Deref,
+    Pointer
 };
 
 struct ASTNode;
@@ -58,6 +60,7 @@ struct ASTConstant;
 struct ASTStringConstant;
 struct ASTIdentifier;
 struct ASTMemberAccess;
+struct ASTPointerAccess;
 struct ASTIndexAccess;
 struct ASTParenExpr;
 struct ASTUnaryOp;
@@ -143,6 +146,7 @@ using ASTExprVariant = std::variant<
     const ASTSelfExpr*,
     const ASTIdentifier*,
     const ASTMemberAccess*,
+    const ASTPointerAccess*,
     const ASTIndexAccess*,
     const ASTUnaryOp*,
     const ASTBinaryOp*,
@@ -200,6 +204,11 @@ struct ASTIdentifier final : public ASTExpression {
 };
 
 struct ASTMemberAccess final : public ASTExpression {
+    ASTExprVariant base;
+    std::string_view member;
+};
+
+struct ASTPointerAccess final : public ASTExpression {
     ASTExprVariant base;
     std::string_view member;
 };
@@ -617,8 +626,14 @@ constexpr auto GetOperatorString(OperatorCode opcode) -> std::string_view {
         return "<<=";
     case OperatorCode::RightShiftAssign:
         return ">>=";
+    case OperatorCode::Call:
+        return "()";
     case OperatorCode::Index:
         return "[]";
+    case OperatorCode::Deref:
+        return "*";
+    case OperatorCode::Pointer:
+        return "->";
     default:
         UNREACHABLE();
     }

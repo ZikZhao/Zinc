@@ -121,7 +121,8 @@ operator_overload_definition:
 		| operator_ = OP_GT op2_ = OP_GT op3_ = OP_ASSIGN
 		| operator_ = OP_LPAREN OP_RPAREN
 		| operator_ = OP_LBRACKET OP_RBRACKET
-	) OP_LPAREN (
+		| operator_ = OP_ARROW
+	) (template_list_ = template_parameter_list)? OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
@@ -178,7 +179,8 @@ expr:
 	| constant_ = constant									# ConstExpr
 	| identifier_ = identifier								# IdentifierExpr
 	| base_ = expr OP_DOT member_ = T_IDENTIFIER			# MemberAccessExpr
-	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET	# ArrayAccessExpr
+	| base_ = expr OP_ARROW member_ = T_IDENTIFIER			# PointerAccessExpr
+	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET	# IndexAccessExpr
 	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN							# CallExpr
@@ -441,7 +443,7 @@ OP_BITAND_ASSIGN: '&=';
 OP_BITOR_ASSIGN: '|=';
 OP_BITXOR_ASSIGN: '^=';
 
-T_FLOAT: T_HEX_FLOAT | T_DEC_FLOAT;
+T_FLOAT: (T_HEX_FLOAT | T_DEC_FLOAT) [fF]?;
 
 fragment T_HEX_FLOAT:
 	'0' [xX] [0-9a-fA-F]* '.' [0-9a-fA-F]+ [pP] [+-]? [0-9]+

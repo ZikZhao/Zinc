@@ -399,10 +399,13 @@ private:
         case ZincParser::OP_LBRACKET:
             opcode = OperatorCode::Index;
             break;
+        case ZincParser::OP_ARROW:
+            opcode = OperatorCode::Pointer;
+            break;
         default:
             UNREACHABLE();
         }
-        return as_variant(new ASTOperatorDefinition{
+        auto* op_def = new ASTOperatorDefinition{
             loc(ctx),
             opcode,
             visit<ASTFunctionParameter>(ctx->parameters_[0]),
@@ -412,7 +415,16 @@ private:
             visit_expr(ctx->return_type_),
             visit_list(ctx->body_),
             ctx->KW_CONST() != nullptr
-        });
+        };
+        if (ctx->template_list_) {
+            return as_variant(new ASTTemplateDefinition{
+                loc(ctx),
+                GetOperatorString(opcode),
+                visit<std::span<ASTTemplateParameter>>(ctx->template_list_),
+                op_def
+            });
+        }
+        return as_variant(op_def);
     }
 
     auto visitSelfParam(ZincParser::SelfParamContext* ctx) noexcept
@@ -566,7 +578,14 @@ private:
         );
     }
 
-    auto visitArrayAccessExpr(ZincParser::ArrayAccessExprContext* ctx) noexcept
+    auto visitPointerAccessExpr(ZincParser::PointerAccessExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(
+            new ASTPointerAccess{loc(ctx), visit_expr(ctx->base_), text(ctx->member_)}
+        );
+    }
+
+    auto visitIndexAccessExpr(ZincParser::IndexAccessExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         return as_variant(
             new ASTIndexAccess{loc(ctx), visit_expr(ctx->base_), visit_expr(ctx->length_)}
@@ -937,10 +956,13 @@ private:
             return as_variant(
                 new ASTConstant{loc(ctx), Value::from_literal<IntegerValue>(text(ctx->value_))}
             );
-        case ZincParser::T_FLOAT:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<FloatValue>(text(ctx->value_))}
-            );
+        case ZincParser::T_FLOAT: {
+            auto* float_value = Value::from_literal<FloatValue>(text(ctx->value_));
+            if (text(ctx->value_).back() == 'f' || text(ctx->value_).back() == 'F') {
+                float_value = float_value->resolve_to(&FloatType::f32_instance);
+            }
+            return as_variant(new ASTConstant{loc(ctx), float_value});
+        }
         case ZincParser::T_STRING:
             return as_variant(new ASTStringConstant{loc(ctx), text(ctx->value_)});
         case ZincParser::T_BOOL:

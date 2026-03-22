@@ -1,0 +1,213 @@
+// Lightweight GLM-style declarations for Zinc demos.
+
+const PI: f32 = 3.14159265358979323846;
+
+class vec2 {
+	let x: f32;
+	let y: f32;
+
+	init();
+	init(scalar: f32);
+	init(x: f32, y: f32);
+
+	operator[](self: &Self, index: usize) -> &f32;
+	operator[](self: &mut Self, index: usize) -> &mut f32;
+
+	operator+(self: &Self, rhs: &Self) -> Self;
+	operator-(self: &Self, rhs: &Self) -> Self;
+	operator*(self: &Self, rhs: &Self) -> Self;
+	operator/(self: &Self, rhs: &Self) -> Self;
+
+	operator+(self: &Self, rhs: f32) -> Self;
+	operator-(self: &Self, rhs: f32) -> Self;
+	operator*(self: &Self, rhs: f32) -> Self;
+	operator/(self: &Self, rhs: f32) -> Self;
+
+	operator+(lhs: f32, self: &Self) -> Self;
+	operator-(lhs: f32, self: &Self) -> Self;
+	operator*(lhs: f32, self: &Self) -> Self;
+	operator/(lhs: f32, self: &Self) -> Self;
+
+	operator+=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator-=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator*=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator/=(self: &mut Self, rhs: &Self) -> &mut Self;
+
+	operator+=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator-=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator*=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator/=(self: &mut Self, rhs: f32) -> &mut Self;
+
+	operator==(self: &Self, rhs: &Self) -> bool;
+	operator!=(self: &Self, rhs: &Self) -> bool;
+
+	operator-(self: &Self) -> Self;
+	operator+(self: &Self) -> Self;
+};
+
+class vec3 {
+	let x: f32;
+	let y: f32;
+	let z: f32;
+
+	init();
+	init(scalar: f32);
+	init(x: f32, y: f32, z: f32);
+	init(xy: vec2, z: f32);
+	init(v: vec4);
+
+	operator[](self: &Self, index: usize) -> &f32;
+	operator[](self: &mut Self, index: usize) -> &mut f32;
+
+	operator+(self: &Self, rhs: &Self) -> Self;
+	operator-(self: &Self, rhs: &Self) -> Self;
+	operator*(self: &Self, rhs: &Self) -> Self;
+	operator/(self: &Self, rhs: &Self) -> Self;
+
+	operator+(self: &Self, rhs: f32) -> Self;
+	operator-(self: &Self, rhs: f32) -> Self;
+	operator*(self: &Self, rhs: f32) -> Self;
+	operator/(self: &Self, rhs: f32) -> Self;
+
+	operator+(lhs: f32, self: &Self) -> Self;
+	operator-(lhs: f32, self: &Self) -> Self;
+	operator*(lhs: f32, self: &Self) -> Self;
+	operator/(lhs: f32, self: &Self) -> Self;
+
+	operator+=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator-=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator*=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator/=(self: &mut Self, rhs: &Self) -> &mut Self;
+
+	operator+=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator-=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator*=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator/=(self: &mut Self, rhs: f32) -> &mut Self;
+
+	operator==(self: &Self, rhs: &Self) -> bool;
+	operator!=(self: &Self, rhs: &Self) -> bool;
+
+	operator-(self: &Self) -> Self;
+	operator+(self: &Self) -> Self;
+};
+
+class vec4 {
+	let x: f32;
+	let y: f32;
+	let z: f32;
+	let w: f32;
+
+	init();
+	init(scalar: f32);
+	init(x: f32, y: f32, z: f32, w: f32);
+	init(xyz: vec3, w: f32);
+
+	operator[](self: &Self, index: usize) -> &f32;
+	operator[](self: &mut Self, index: usize) -> &mut f32;
+
+	operator+(self: &Self, rhs: &Self) -> Self;
+	operator-(self: &Self, rhs: &Self) -> Self;
+	operator*(self: &Self, rhs: &Self) -> Self;
+	operator/(self: &Self, rhs: &Self) -> Self;
+
+	operator+(self: &Self, rhs: f32) -> Self;
+	operator-(self: &Self, rhs: f32) -> Self;
+	operator*(self: &Self, rhs: f32) -> Self;
+	operator/(self: &Self, rhs: f32) -> Self;
+
+	operator+(lhs: f32, self: &Self) -> Self;
+	operator-(lhs: f32, self: &Self) -> Self;
+	operator*(lhs: f32, self: &Self) -> Self;
+	operator/(lhs: f32, self: &Self) -> Self;
+
+	operator+=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator-=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator*=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator/=(self: &mut Self, rhs: &Self) -> &mut Self;
+
+	operator+=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator-=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator*=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator/=(self: &mut Self, rhs: f32) -> &mut Self;
+
+	operator==(self: &Self, rhs: &Self) -> bool;
+	operator!=(self: &Self, rhs: &Self) -> bool;
+
+	operator-(self: &Self) -> Self;
+	operator+(self: &Self) -> Self;
+};
+
+class mat3 {
+	init();
+	init(diagonal: f32);
+	init(col0: vec3, col1: vec3, col2: vec3);
+
+	operator[](self: &Self, index: usize) -> &vec3;
+	operator[](self: &mut Self, index: usize) -> &mut vec3;
+
+	operator*(self: &Self, rhs: &Self) -> Self;
+	operator*(self: &Self, rhs: &vec3) -> vec3;
+	operator*(self: &Self, rhs: f32) -> Self;
+	operator*(lhs: f32, self: &Self) -> Self;
+	operator/(self: &Self, rhs: f32) -> Self;
+
+	operator==(self: &Self, rhs: &Self) -> bool;
+	operator!=(self: &Self, rhs: &Self) -> bool;
+};
+
+class mat4 {
+	init();
+	init(diagonal: f32);
+
+	operator[](self: &Self, index: usize) -> &vec4;
+	operator[](self: &mut Self, index: usize) -> &mut vec4;
+
+	operator*(self: &Self, rhs: &Self) -> Self;
+	operator*(self: &Self, rhs: &vec4) -> vec4;
+	operator*(self: &Self, rhs: f32) -> Self;
+	operator*(lhs: f32, self: &Self) -> Self;
+	operator/(self: &Self, rhs: f32) -> Self;
+
+	operator==(self: &Self, rhs: &Self) -> bool;
+	operator!=(self: &Self, rhs: &Self) -> bool;
+};
+
+fn radians(degrees: f32) -> f32;
+fn degrees(radians: f32) -> f32;
+
+fn dot(lhs: &vec2, rhs: &vec2) -> f32;
+fn dot(lhs: &vec3, rhs: &vec3) -> f32;
+fn dot(lhs: &vec4, rhs: &vec4) -> f32;
+
+fn cross(lhs: &vec3, rhs: &vec3) -> vec3;
+
+fn length(v: &vec2) -> f32;
+fn length(v: &vec3) -> f32;
+fn length(v: &vec4) -> f32;
+
+fn normalize(v: &vec2) -> vec2;
+fn normalize(v: &vec3) -> vec3;
+fn normalize(v: &vec4) -> vec4;
+
+fn distance(lhs: &vec2, rhs: &vec2) -> f32;
+fn distance(lhs: &vec3, rhs: &vec3) -> f32;
+fn distance(lhs: &vec4, rhs: &vec4) -> f32;
+
+fn transpose(m: &mat3) -> mat3;
+fn transpose(m: &mat4) -> mat4;
+
+fn min(lhs: f32, rhs: f32) -> f32;
+fn max(lhs: f32, rhs: f32) -> f32;
+fn clamp(v: f32, lo: f32, hi: f32) -> f32;
+
+fn min(lhs: &vec2, rhs: &vec2) -> vec2;
+fn min(lhs: &vec3, rhs: &vec3) -> vec3;
+fn min(lhs: &vec4, rhs: &vec4) -> vec4;
+
+fn max(lhs: &vec2, rhs: &vec2) -> vec2;
+fn max(lhs: &vec3, rhs: &vec3) -> vec3;
+fn max(lhs: &vec4, rhs: &vec4) -> vec4;
+
+fn clamp(v: &vec2, lo: &vec2, hi: &vec2) -> vec2;
+fn clamp(v: &vec3, lo: &vec3, hi: &vec3) -> vec3;
+fn clamp(v: &vec4, lo: &vec4, hi: &vec4) -> vec4;

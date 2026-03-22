@@ -1160,6 +1160,8 @@ public:
 
     auto eval_access(const ASTMemberAccess* node) noexcept -> Symbol;
 
+    auto eval_pointer(const ASTPointerAccess* node) noexcept -> Symbol;
+
     auto eval_index(const ASTIndexAccess* node) noexcept -> Symbol;
 
 private:
@@ -1485,6 +1487,15 @@ public:
 
     void operator()(const ASTMemberAccess* node) {
         Symbol result = sema_.access_handler_->eval_access(node);
+        if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
+            out_ = *type;
+        } else {
+            out_ = TypeRegistry::get_unknown();
+        }
+    }
+
+    void operator()(const ASTPointerAccess* node) {
+        Symbol result = sema_.access_handler_->eval_pointer(node);
         if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
             out_ = *type;
         } else {
@@ -2534,6 +2545,31 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
         Symbol result = eval_static_access(*namespace_scope, node->member);
         sema_.codegen_env_.map_member_access(sema_.current_scope_, node, *namespace_scope);
         return result;
+    }
+    return {};
+}
+
+inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -> Symbol {
+    Symbol base_symbol = ValueContextEvaluator{sema_, nullptr, false}(node->base);
+    if (!Sema::expect(base_symbol, SymbolKind::Term)) {
+        return {};
+    }
+    Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
+    Term decayed = Sema::decay(base_term);
+    if (auto* pointer_type = decayed.effective_type()->dyn_cast<PointerType>()) {
+        Term dereferenced;
+        if (auto* value = decayed.get_comptime()) {
+            dereferenced = Term::lvalue(value->cast<PointerValue>()->pointed_value_);
+        } else {
+            dereferenced = Term::lvalue(pointer_type->pointed_type_);
+        }
+        if (pointer_type->pointed_type_->dyn_cast<StructType>()) {
+            return eval_struct_access(dereferenced, node->member);
+        } else if (pointer_type->pointed_type_->dyn_cast<InstanceType>()) {
+            return eval_instance_access(dereferenced, node->member);
+        }
+    } else if (decayed.effective_type()->dyn_cast<InstanceType>()) {
+        return sema_.operation_handler_->eval_overloaded_op(node, OperatorCode::Pointer, base_term);
     }
     return {};
 }
