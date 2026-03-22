@@ -18,6 +18,7 @@ type Colour = {
 };
 
 class ImageBuffer<T: type> {
+
     let width_: usize;
     let height_: usize;
     let data_: std.vector<T>;
@@ -33,13 +34,13 @@ class ImageBuffer<T: type> {
     fn sample(self: &Self, u: f32, v: f32) -> T {
         u = u - std.floor(u);
         v = v - std.floor(v);
-        let ix = (u * (width_ - 1) as f32) as usize;
-        let iy = (v * (height_ - 1) as f32) as usize;
-        if (ix >= width_) { ix = width_ - 1; }
-        if (iy >= height_) { iy = height_ - 1; }
-        return data_[iy * width_ + ix];
+        let ix = (u * (self.width_ - 1) as f32) as usize;
+        let iy = (v * (self.height_ - 1) as f32) as usize;
+        if (ix >= self.width_) { ix = self.width_ - 1; }
+        if (iy >= self.height_) { iy = self.height_ - 1; }
+        return self.data_[iy * self.width_ + ix];
     }
-};
+}
 
 type Texture = ImageBuffer<Colour>;
 
@@ -47,7 +48,7 @@ enum Shading {
     FLAT,
     GOURAUD,
     PHONG
-};
+}
 
 type Material = {
     texture: std.shared_ptr<Texture>,
@@ -56,11 +57,11 @@ type Material = {
     shininess: f32,
     metallic: f32,
     shading: Shading,
-    ior: f32;  // Index of refraction (1.0 = no refraction, 1.5 = glass)
-    td: f32;   // Transmission Depth: The distance at which the base_color is reached
-    tw: f32;   // Transparency weight (0 = opaque, 1 = fully transparent)
-    sigma_a: glm.vec3;  // Absorption coefficient for Beer-Lambert (optional override)
-    emission: glm.vec3;  // Emissive radiance (area light)
+    ior: f32,  // Index of refraction (1.0 = no refraction, 1.5 = glass)
+    td: f32,   // Transmission Depth: The distance at which the base_color is reached
+    tw: f32,   // Transparency weight (0 = opaque, 1 = fully transparent)
+    sigma_a: glm.vec3,  // Absorption coefficient for Beer-Lambert (optional override)
+    emission: glm.vec3,  // Emissive radiance (area light)
 };
 
 type ClipVertex = {
@@ -102,7 +103,7 @@ class Camera {
         let u = glm.normalize(glm.cross(r, f));
         let c = std.cos(roll_);
         let s = std.sin(roll_);
-        let rotate_axis = (v: &glm.vec3) -> glm.vec3 {
+        let rotate_axis = (v: &glm.vec3): glm.vec3 => {
             return v * c + glm.cross(f, v) * s + f * glm.dot(f, v) * (1.0f - c);
         };
         r = rotate_axis(r);
@@ -114,7 +115,7 @@ class Camera {
         return o;
     }
 
-    fn forward(self: &Self) -> glm.vec3 {
+    fn go_forward(self: &Self) -> glm.vec3 {
         let cos_pitch = std.cos(pitch_);
         let sin_pitch = std.sin(pitch_);
         let cos_yaw = std.cos(yaw_);
@@ -122,17 +123,16 @@ class Camera {
         return glm.vec3(sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch);
     }
 
-    fn right(self: &Self) -> glm.vec3 {  
+    fn go_right(self: &Self) -> glm.vec3 {  
         let o = orientation();
         return glm.normalize(o[0]);
     }
 
-    fn up(self: &Self) -> glm.vec3 {
+    fn go_up(self: &Self) -> glm.vec3 {
         let o = orientation();
         return glm.normalize(o[1]);
     }
 
-public:
     /// Projects a world-space vertex to homogeneous clip space.
     fn world_to_clip(self: &Self, vertex: &glm.vec3) -> glm.vec4 {
         let view_vector = vertex - position_;
@@ -165,7 +165,7 @@ public:
     fn orbiting(self: &mut Self) {
         if (self.is_orbiting_) {
             self.yaw_ += Constant.OrbitAngleIncrement;
-            self.position_ = -self.forward() * self.orbit_radius_;
+            self.position_ = -self.go_forward() * self.orbit_radius_;
         }
     }
 
@@ -179,14 +179,14 @@ public:
 
     fn roll(self: &mut Self, delta_roll: f32) { self.roll_ += delta_roll; }
 
-    fn move(
+    fn translate(
         self: &mut Self, forward_delta: f32, right_delta: f32, up_delta: f32, dt: f32
     ) {
-        self.position_ += self.forward() * (forward_delta * dt);
-        self.position_ += self.right() * (right_delta * dt);
-        self.position_ += self.up() * (up_delta * dt);
+        self.position_ += self.go_forward() * (forward_delta * dt);
+        self.position_ += self.go_right() * (right_delta * dt);
+        self.position_ += self.go_up() * (up_delta * dt);
     }
-};
+}
 
 type Face = {
     v_indices: [std.uint32_t; 3],
@@ -222,33 +222,33 @@ class World {
     let all_vertex_normals_by_vertex_: std.vector<glm.vec3>;
     let camera_: Camera;
 
-    init(filenames: &std.vector<std.string>) {
+    init(filenames: [strview]) {
         // Scene ingestion: load HDR environment, OBJ models or text scenes; then merge into a single
         // geometry store
         for (filename : filenames) {
             let path = std.filesystem.path(filename);
             if (std.filesystem.is_directory(path)) {
-                throw std.runtime_error("File does not exist: " + filename);
+                throw std.runtime_error("File does not exist: " + std.string(filename));
             }
-            std.string ext = path.extension().string();
+            let ext = path.extension().string();
             std.transform(ext.begin(), ext.end(), ext.begin(), std.tolower);
 
             if (ext == ".hdr") {
                 // load_hdr_env_map(path);
             } else if (ext == ".txt") {
                 // Text scene
-                Model model;
-                parse_txt(model, path);
+                let mut model: Model;
+                parse_txt(mut model, path);
                 models_.emplace_back(move model);
             } else if (ext == ".obj") {
                 // Standard OBJ model
                 /*
-                Model model;
-                parse_obj(model, path);
+                let mut model: Model;
+                parse_obj(mut model, path);
                 models_.emplace_back(move model);
                 */
             } else {
-                throw std.runtime_error("Unsupported file format: " + filename);
+                throw std.runtime_error("Unsupported file format: " + std.string(filename));
             }
         }
         merge_models();
@@ -256,20 +256,39 @@ class World {
 
     static fn parse_index_token(token: &std.string) -> [i32; 3] {
         // Parses an OBJ index token of the form "v", "v/vt", "v//vn", or "v/vt/vn"
-        let v_i = -1;
-        let vt_i = -1;
-        let vn_i = -1;
-        let parts: std.vector<std.string> = std.split(*token, '/');
-        if (!parts.empty()) {
-            v_i = std.stoi(parts[0]);
-            if (parts.size() > 1 && !parts[1].empty()) {
-                vt_i = std.stoi(parts[1]);
+        let idx: [i32; 3] = [0, 0, 0];
+
+        let first_slash = token.find('/');
+        if (first_slash == std.string.npos) {
+            // Format: v
+            if (!token.empty()) {
+                idx.v = std.stoi(token);
             }
-            if (parts.size() > 2 && !parts[2].empty()) {
-                vn_i = std.stoi(parts[2]);
+            return idx;
+        }
+
+        // Parse vertex index (before first slash)
+        if (first_slash > 0) {
+            idx.v = std.stoi(token.substr(0, first_slash));
+        }
+
+        let second_slash = token.find('/', first_slash + 1);
+        if (second_slash == std.string.npos) {
+            // Format: v/vt
+            if (first_slash + 1 < token.size()) {
+                idx.vt = std.stoi(token.substr(first_slash + 1));
+            }
+        } else {
+            // Format: v/vt/vn or v//vn
+            if (second_slash > first_slash + 1) {
+                idx.vt = std.stoi(token.substr(first_slash + 1, second_slash - first_slash - 1));
+            }
+            if (second_slash + 1 < token.size()) {
+                idx.vn = std.stoi(token.substr(second_slash + 1));
             }
         }
-        return [v_i, vt_i, vn_i];
+
+        return idx;
     }
 
     fn parse_mtl(model: &mut Model, path: &std.filesystem.path) {
@@ -280,65 +299,71 @@ class World {
         }
 
         let line: std.string;
-        while (std.getline(file, line)) {
+        for (std.getline(file, line)) {
             let iss = std.istringstream(line);
-            let type: std.string;
-            iss >> type;
-            if (type == "newmtl") {
+            let keyword: std.string;
+            iss >> keyword;
+            if (keyword == "newmtl") {
                 let name: std.string;
                 iss >> name;
                 assert(model.materials.find(name) == model.materials.end());
                 current_material = model.materials.emplace(name, Material{}).first;
-            } else if (type == "Kd") {
+            } else if (keyword == "Kd") {
                 assert(current_material != model.materials.end());
-                let r, g, b: f32;
+                let r: f32;
+                let g: f32;
+                let b: f32;
                 iss >> r >> g >> b;
                 current_material->second.base_color = glm.vec3(r, g, b);
-            } else if (type == "Ns") {
+            } else if (keyword == "Ns") {
                 assert(current_material != model.materials.end());
                 let ns: f32;
                 iss >> ns;
                 current_material->second.shininess = ns;
-            } else if (type == "Mt") {
+            } else if (keyword == "Mt") {
                 assert(current_material != model.materials.end());
                 let metallic_value: f32;
                 iss >> metallic_value;
                 current_material->second.metallic = std.clamp(metallic_value, 0.0f, 1.0f);
-            } else if (type == "ior") {
+            } else if (keyword == "ior") {
                 assert(current_material != model.materials.end());
                 let ior_value: f32;
                 iss >> ior_value;
                 current_material->second.ior = std.max(1.0f, ior_value);
-            } else if (type == "td") {
+            } else if (keyword == "td") {
                 assert(current_material != model.materials.end());
                 let td_value: f32;
                 iss >> td_value;
                 current_material->second.td = std.max(0.0f, td_value);
-            } else if (type == "tw") {
+            } else if (keyword == "tw") {
                 assert(current_material != model.materials.end());
                 let tw_value: f32;
                 iss >> tw_value;
                 current_material->second.tw = std.clamp(tw_value, 0.0f, 1.0f);
-            } else if (type == "Ke") {
+            } else if (keyword == "Ke") {
                 assert(current_material != model.materials.end());
-                let r, g, b: f32;
+                let r: f32;
+                let g: f32;
+                let b: f32;
                 iss >> r >> g >> b;
                 current_material->second.emission =
                     glm.vec3(std.max(0.0f, r), std.max(0.0f, g), std.max(0.0f, b));
-            } else if (type == "sigma_a") {
+            } else if (keyword == "sigma_a") {
                 assert(current_material != model.materials.end());
-                let r, g, b: f32;
+                let r: f32;
+                let g: f32;
+                let b: f32;
                 iss >> r >> g >> b;
                 current_material->second.sigma_a =
                     glm.vec3(std.max(0.0f, r), std.max(0.0f, g), std.max(0.0f, b));
-            } else if (type == "map_Kd") {
+            } else if (keyword == "map_Kd") {
                 assert(current_material != model.materials.end());
                 let texture_filename: std.string;
                 iss >> texture_filename;
                 texture_filename = (path.parent_path() / texture_filename).string();
                 current_material->second.texture =
                     std.make_shared<Texture>(load_texture(texture_filename));
-            } else if (type == "map_Bump") {
+            } else if (keyword == "map_Bump") {
                 assert(current_material != model.materials.end());
                 let normal_filename: std.string;
                 iss >> normal_filename;
@@ -366,11 +391,11 @@ class World {
         let vertex_offset = 0;
         let tex_offset = 0;
         let normal_offset = 0;
-        while (std.getline(file, line)) {
+        for (std.getline(file, line)) {
             let iss = std.istringstream(line);
-            let type: std.string;
-            iss >> type;
-            if (type == "Environ") {
+            let keyword: std.string;
+            iss >> keyword;
+            if (keyword == "Environ") {
                 // Environment map HDR file
                 /*
                 let hdr: std.string;
@@ -378,7 +403,7 @@ class World {
                 let hdr_path = (std.filesystem.path(path).parent_path() / hdr).string();
                 load_hdr_env_map(hdr_path);
                 */
-            } else if (type == "Include") {
+            } else if (keyword == "Include") {
                 // Include another scene file
                 let rel: std.string;
                 iss >> rel;
@@ -386,55 +411,59 @@ class World {
                     let inc_path = (std.filesystem.path(path).parent_path() / rel).string();
                     parse_txt(model, inc_path);
                 }
-            } else if (type == "Material") {
+            } else if (keyword == "Material") {
                 // Begin a new material block
                 let name: std.string;
                 iss >> name;
                 current_material = model.materials.emplace(name, Material{}).first;
-            } else if (type == "Colour") {
+            } else if (keyword == "Colour") {
                 // Albedo (diffuse base color)
                 if (current_material != model.materials.end()) {
-                    let r, g, b: f32;
+                    let r: f32;
+                    let g: f32;
+                    let b: f32;
                     iss >> r >> g >> b;
                     current_material->second.base_color = glm.vec3(r, g, b);
                 }
-            } else if (type == "Metallic") {
+            } else if (keyword == "Metallic") {
                 // Metallic factor for specular reflection weighting [0,1]
                 if (current_material != model.materials.end()) {
                     let m: f32;
                     iss >> m;
                     current_material->second.metallic = std.clamp(m, 0.0f, 1.0f);
                 }
-            } else if (type == "IOR") {
+            } else if (keyword == "IOR") {
                 // Index of refraction for dielectrics (>= 1.0)
                 if (current_material != model.materials.end()) {
                     let i: f32;
                     iss >> i;
                     current_material->second.ior = std.max(1.0f, i);
                 }
-            } else if (type == "AtDistance") {
+            } else if (keyword == "AtDistance") {
                 // Absorption length td; used to derive sigma_a when not provided
                 if (current_material != model.materials.end()) {
                     let td: f32;
                     iss >> td;
                     current_material->second.td = std.max(0.0f, td);
                 }
-            } else if (type == "TransmissionWeight") {
+            } else if (keyword == "TransmissionWeight") {
                 // Transmission weight for mixing reflection/refraction
                 if (current_material != model.materials.end()) {
                     let tw: f32;
                     iss >> tw;
                     current_material->second.tw = std.clamp(tw, 0.0f, 1.0f);
                 }
-            } else if (type == "Emission") {
+            } else if (keyword == "Emission") {
                 // Emissive colour
                 if (current_material != model.materials.end()) {
-                    let r, g, b: f32;
+                    let r: f32;
+                    let g: f32;
+                    let b: f32;
                     iss >> r >> g >> b;
                     current_material->second.emission =
                         glm.vec3(std.max(0.0f, r), std.max(0.0f, g), std.max(0.0f, b));
                 }
-            } else if (type == "Texture") {
+            } else if (keyword == "Texture") {
                 // Bind a PPM texture to the material
                 if (current_material != model.materials.end()) {
                     let tex_name: std.string;
@@ -444,7 +473,7 @@ class World {
                     current_material->second.texture =
                         std.make_shared<Texture>(load_texture(texture_filename));
                 }
-            } else if (type == "NormalMap") {
+            } else if (keyword == "NormalMap") {
                 // Bind a PPM normal map to the material
                 /*
                 if (current_material != model.materials.end()) {
@@ -456,7 +485,7 @@ class World {
                         std.make_shared<NormalMap>(load_normal_map(normal_filename));
                 }
                 */
-            } else if (type == "Object") {
+            } else if (keyword == "Object") {
                 // Begin an object block; record offsets for local indexing within this file
                 let rest: std.string;
                 std.getline(iss, rest);
@@ -472,7 +501,7 @@ class World {
                 vertex_offset = model.vertices.size() as i32;
                 tex_offset = model.texture_coords.size() as i32;
                 normal_offset = model.vertex_normals.size() as i32;
-            } else if (type == "Use") {
+            } else if (keyword == "Use") {
                 // Assign current material to the object
                 if (current_obj != model.objects.end()) {
                     let mat_name: std.string;
@@ -484,7 +513,7 @@ class World {
                         current_obj->material.shading = prev_shading;
                     }
                 }
-            } else if (type == "Shading") {
+            } else if (keyword == "Shading") {
                 // Select shading method (Flat/Gouraud/Phong)
                 if (current_obj != model.objects.end()) {
                     let mode: std.string;
@@ -497,17 +526,21 @@ class World {
                         current_obj->material.shading = Shading.PHONG;
                     }
                 }
-            } else if (type == "Vertex") {
+            } else if (keyword == "Vertex") {
                 // Vertex position with optional inline normal ("x y z / nx ny nz")
                 if (current_obj != model.objects.end()) {
-                    let x, y, z: f32;
+                    let x: f32;
+                    let y: f32;
+                    let z: f32;
                     iss >> x >> y >> z;
                     model.vertices.emplace_back(x, y, z);
                     model.vertex_normals_by_vertex.emplace_back(glm.vec3(0.0f));
                     let c: char;
                     if (iss >> c) {
                         if (c == '/') {
-                            let xn, yn, zn: f32;
+                            let xn: f32;
+                            let yn: f32;
+                            let zn: f32;
                             iss >> xn >> yn >> zn;
                             model.vertex_normals_by_vertex.back() =
                                 glm.normalize(glm.vec3(xn, yn, zn));
@@ -516,17 +549,20 @@ class World {
                         }
                     }
                 }
-            } else if (type == "TextureCoord") {
+            } else if (keyword == "TextureCoord") {
                 // UV coordinate
-                let u, v: f32;
+                let u: f32;
+                let v: f32;
                 iss >> u >> v;
                 model.texture_coords.emplace_back(u, v);
-            } else if (type == "Normal") {
+            } else if (keyword == "Normal") {
                 // Vertex normal (normalized)
-                let x, y, z: f32;
+                let x: f32;
+                let y: f32;
+                let z: f32;
                 iss >> x >> y >> z;
                 model.vertex_normals.emplace_back(glm.normalize(glm.vec3(x, y, z)));
-            } else if (type == "Face") {
+            } else if (keyword == "Face") {
                 // Triangle face -- parse indices (v/vt/vn) and create Face with material
                 if (current_obj == model.objects.end()) { continue; }
                 let tok: [std.string; 3];
@@ -582,14 +618,14 @@ class World {
                         [vi_out[0] as u32,
                          vi_out[1] as u32,
                          vi_out[2] as u32],
-                    vt_indices: {vt_out[0], vt_out[1], vt_out[2]},
+                    vt_indices: [vt_out[0], vt_out[1], vt_out[2]],
                     vn_indices:
-                        {vn_out[0] >= 0 ? vn_out[0] as u32
+                        [vn_out[0] >= 0 ? vn_out[0] as u32
                                         : std.numeric_limits<std.uint32_t>.max(),
                          vn_out[1] >= 0 ? vn_out[1] as u32
                                         : std.numeric_limits<std.uint32_t>.max(),
                          vn_out[2] >= 0 ? vn_out[2] as u32
-                                        : std.numeric_limits<std.uint32_t>.max()},
+                                        : std.numeric_limits<std.uint32_t>.max()],
                     material: current_obj->material,
                     face_normal: glm.vec3(0.0f)
                 };
@@ -603,20 +639,21 @@ class World {
 
     fn load_texture(path: &std.filesystem.path) -> Texture {
         let ppm = Utils.ReadPPM(path);
-        let texture_data: std::vector<Colour>;
+        let texture_data: std.vector<Colour>;
         texture_data.resize(ppm.width * ppm.height);
         for (let i: usize = 0; i < ppm.width * ppm.height; i++) {
             let red = ppm.stream.get();
             let green = ppm.stream.get();
             let blue = ppm.stream.get();
-            if (red == EOF || green == EOF || blue == EOF)
-                throw std::runtime_error(
+            if (red == EOF || green == EOF || blue == EOF) {
+                throw std.runtime_error(
                     "Unexpected end of file while reading texture: " + path.string()
                 );
+            }
             texture_data[i] = Colour{
-                red: static_cast<std::uint8_t>(red),
-                green: static_cast<std::uint8_t>(green),
-                blue: static_cast<std::uint8_t>(blue)
+                red: static_cast<std.uint8_t>(red),
+                green: static_cast<std.uint8_t>(green),
+                blue: static_cast<std.uint8_t>(blue)
             };
         }
         return Texture(ppm.width, ppm.height, move texture_data);
@@ -625,9 +662,9 @@ class World {
     fn compute_all_face_normals(model: &mut Model) {
         for (obj : model.objects) {
             for (f : obj.faces) {
-                let v0: &glm::vec3 = model.vertices[f.v_indices[0]];
-                let v1: &glm::vec3 = model.vertices[f.v_indices[1]];
-                let v2: &glm::vec3 = model.vertices[f.v_indices[2]];
+                let v0: &glm.vec3 = model.vertices[f.v_indices[0]];
+                let v1: &glm.vec3 = model.vertices[f.v_indices[1]];
+                let v2: &glm.vec3 = model.vertices[f.v_indices[2]];
                 f.face_normal = FaceNormal(v0, v1, v2);
             }
         }
@@ -649,12 +686,12 @@ class World {
 
     fn merge_models(self: &mut Self) {
         self.reserve_global_buffers();
-        for (const auto& model : self.models_) {
+        for (model : self.models_) {
             self.append_model_data(model);
         }
         self.collect_emissive_faces();
 
-        std::cout << std::format(
+        std.cout << std.format(
             "[World] All models loaded: Vertex: {} | Vertex Normal: {} | Face: {} | Environment: Not supported\n",
             self.all_vertices_.size(),
             self.all_vertex_normals_.size() + self.all_vertex_normals_by_vertex_.size(),
@@ -712,16 +749,16 @@ class World {
         for (local_face : model.all_faces) {
             let global_face = local_face;
 
-            for (int k = 0; k < 3; ++k) {
+            for (let k = 0; k < 3; ++k) {
                 global_face.v_indices[k] += v_offset;
-                if (global_face.vt_indices[k] != std::numeric_limits<std::uint32_t>::max()) {
+                if (global_face.vt_indices[k] != std.numeric_limits<std.uint32_t>.max()) {
                     global_face.vt_indices[k] += vt_offset;
                 }
-                if (global_face.vn_indices[k] != std::numeric_limits<std::uint32_t>::max()) {
+                if (global_face.vn_indices[k] != std.numeric_limits<std.uint32_t>.max()) {
                     global_face.vn_indices[k] += vn_offset;
                 }
             }
             self.all_faces_.push_back(move global_face);
         }
     }
-};
+}

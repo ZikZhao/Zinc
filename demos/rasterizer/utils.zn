@@ -4,12 +4,12 @@
 /// Elements are constructed in a preallocated buffer and capacity is limited
 /// to `N`. Intended for hot paths where heap allocation is undesirable.
 class InplaceVector<T: type, N: usize> {
-    let data_: [i8, N * sizeof(T)];
+    let data_: [i8; N * sizeof(T)];
     let size_: usize = 0;
 
     init() {
         return Self{};
-    };
+    }
 
     init(values: [T]) {
         for (item : values) {
@@ -19,22 +19,22 @@ class InplaceVector<T: type, N: usize> {
 
     fn size(self: &Self) -> usize { return self.size_; }
 
-    fn operator[](self: &Self, index: usize) -> &T {
-        return *std.launder(std.reinterpret_cast<T*>(&data_[index * sizeof(T)]));
+    operator[](self: &Self, index: usize) -> &T {
+        return *std.launder(std.reinterpret_cast<*T>(&self.data_[index * sizeof(T)]));
     }
 
-    fn operator[](self: &mut Self, index: usize) -> &mut T {
-        return *std.launder(std.reinterpret_cast<T*>(&data_[index * sizeof(T)]));
+    operator[](self: &mut Self, index: usize) -> &mut T {
+        return *std.launder(std.reinterpret_cast<*mut T>(&self.data_[index * sizeof(T)]));
     }
     
-    fn push_back(self: &mut Self, value: T) noexcept {
+    fn push_back(self: &mut Self, value: T) {
         assert(self.size_ < N);
-        std.construct_at(std.next(reinterpret_cast<T*>(self.data_), self.size_), value);
+        std.construct_at(std.next(reinterpret_cast<*T>(self.data_), self.size_), value);
         self.size_++;
     }
 
-    static fn reinterpret_cast<Target: type>(ptr: *const i8) -> Target;
-};
+    static fn reinterpret_cast<Target: type>(ptr: *i8) -> Target;
+}
 
 type PPMData = {
     width: usize,
@@ -61,12 +61,13 @@ fn ReadPPM(path: &std.filesystem.path) -> PPMData {
 
     let line: std.string;
     std.getline(file, line);
-    while (!line.empty() && line[0] == '#') {
+    for (!line.empty() && line[0] == '#') {
         std.getline(file, line);
     }
 
     let size_stream = std.istringstream(line);
-    let width, height: usize;
+    let width: usize;
+    let height: usize;
     if (!(size_stream >> width >> height)) {
         throw std.runtime_error("Failed to parse PPM dimensions: " + path.string());
     }
@@ -78,7 +79,7 @@ fn ReadPPM(path: &std.filesystem.path) -> PPMData {
         throw std.runtime_error("Failed to parse PPM max value: " + path.string());
     }
 
-    return PPMData{width, height, max, move file};
+    return PPMData{width: width, height: height, max: max, stream: move file};
 }
 
 /// Write a PPM (P6 binary) image file.

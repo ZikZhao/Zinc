@@ -29,6 +29,7 @@ statement:
 	| function_definition
 	| class_definition
 	| enum_definition
+	| throw_statement
 	| static_assert_statement;
 
 local_block: OP_LBRACE statements_ += statement* OP_RBRACE;
@@ -166,6 +167,8 @@ enum_definition:
 namespace_definition:
 	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += top_level_statement* OP_RBRACE;
 
+throw_statement: KW_THROW expr_ = expr OP_SEMICOLON;
+
 static_assert_statement:
 	KW_STATIC_ASSERT OP_LPAREN condition_ = expr (
 		OP_COMMA message_ = expr
@@ -183,8 +186,7 @@ expr:
 	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET	# IndexAccessExpr
 	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
-	)? OP_RPAREN							# CallExpr
-	| OP_BITAND KW_MUT? inner_expr_ = expr	# AddressOfExpr
+	)? OP_RPAREN # CallExpr
 	| (struct_ = type)? OP_LBRACE (
 		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
 	)? OP_RBRACE # StructInitExpr
@@ -207,12 +209,14 @@ expr:
 		expr_ = expr
 		| body_ = local_block
 	) # LambdaExpr
-	| <assoc = right> op_ = (
-		OP_INC
-		| OP_DEC
-		| OP_SUB
-		| OP_NOT
-		| OP_BITNOT
+	| <assoc = right> (
+		op_ = OP_INC
+		| op_ = OP_DEC
+		| op_ = OP_SUB
+		| op_ = OP_NOT
+		| op_ = OP_BITNOT
+		| op_ = OP_BITAND KW_MUT?
+		| op_ = OP_MUL
 	) expr_ = expr											# UnaryExpr
 	| <assoc = right> expr_ = expr op_ = (OP_INC | OP_DEC)	# PostfixUnaryExpr
 	| <assoc = left> left_ = expr op_ = (
@@ -256,7 +260,15 @@ expr:
 identifier: name_ = T_IDENTIFIER;
 
 constant:
-	value_ = (T_INT | T_FLOAT | T_STRING | T_BOOL | KW_NULLPTR);
+	value_ = (
+		T_INT
+		| T_FLOAT
+		| T_STRING
+		| T_CHAR
+		| KW_TRUE
+		| KW_FALSE
+		| KW_NULLPTR
+	);
 
 type:
 	KW_SELF_TYPE # SelfType
@@ -357,6 +369,8 @@ KW_USIZE: 'usize';
 KW_FLOAT32: 'f32';
 KW_FLOAT64: 'f64';
 KW_BOOL: 'bool';
+KW_TRUE: 'true';
+KW_FALSE: 'false';
 KW_NULLPTR: 'nullptr';
 KW_STRVIEW: 'strview';
 KW_IF: 'if';
@@ -387,6 +401,7 @@ KW_OPERATOR: 'operator';
 KW_AS: 'as';
 KW_IMPORT: 'import';
 KW_ENUM: 'enum';
+KW_THROW: 'throw';
 
 OP_DOT: '.';
 OP_QUESTION: '?';
@@ -463,7 +478,7 @@ T_INT:
 	| [0-9]+;
 
 T_STRING: '"' (~["\r\n] | '\\' .)* '"';
-T_BOOL: 'true' | 'false';
+T_CHAR: '\'' (~['\r\n] | '\\' .) '\'';
 T_IDENTIFIER: [a-zA-Z_][a-zA-Z0-9_]*;
 
 WHITESPACE: [ \t\n\r\f]+ -> skip;

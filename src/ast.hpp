@@ -63,6 +63,8 @@ struct ASTMemberAccess;
 struct ASTPointerAccess;
 struct ASTIndexAccess;
 struct ASTParenExpr;
+struct ASTAddressOfExpr;
+struct ASTDereference;
 struct ASTUnaryOp;
 struct ASTBinaryOp;
 
@@ -102,6 +104,7 @@ struct ASTNamespaceDefinition;
 struct ASTTemplateParameter;
 struct ASTTemplateDefinition;
 struct ASTTemplateSpecialization;
+struct ASTThrowStatement;
 struct ASTStaticAssertStatement;
 struct ASTImportStatement;
 
@@ -133,6 +136,8 @@ using ASTNodeVariant = std::variant<
     const ASTTemplateSpecialization*,
     // Static asserts
     const ASTStaticAssertStatement*,
+    // Error handling
+    const ASTThrowStatement*,
     // Import
     const ASTImportStatement*>;
 
@@ -148,6 +153,8 @@ using ASTExprVariant = std::variant<
     const ASTMemberAccess*,
     const ASTPointerAccess*,
     const ASTIndexAccess*,
+    const ASTAddressOfExpr*,
+    const ASTDereference*,
     const ASTUnaryOp*,
     const ASTBinaryOp*,
     // Complex expressions
@@ -228,6 +235,15 @@ struct ASTStringConstant final : public ASTExpression {
 
 struct ASTParenExpr final : public ASTExpression {
     ASTExprVariant inner;
+};
+
+struct ASTAddressOfExpr final : public ASTExpression {
+    ASTExprVariant operand;
+    bool is_mutable;
+};
+
+struct ASTDereference final : public ASTExpression {
+    ASTExprVariant operand;
 };
 
 struct ASTUnaryOp final : public ASTExpression {
@@ -446,6 +462,10 @@ struct ASTTemplateSpecialization final : public ASTNode {
     std::span<ASTTemplateParameter> parameters;
     std::span<ASTExprVariant> patterns;
     ASTNodeVariant target_node;
+};
+
+struct ASTThrowStatement final : public ASTNode {
+    ASTExprVariant expr;
 };
 
 struct ASTStaticAssertStatement final : public ASTNode {

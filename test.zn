@@ -1,3 +1,9 @@
 fn main(args: [strview]) {
-    
+    let a = A(args);
+}
+
+class A {
+    init(a: [strview]) {
+        return A{};
+    }
 }

@@ -412,5 +412,7 @@ public:
             node->module_scope = &Scope::make(current_scope_, node, node->alias);
         }
         current_scope_.add_namespace(node->alias, *node->module_scope);
+        SymbolCollector module_visitor(*node->module_scope);
+        module_visitor(node->module_root);
     }
 };

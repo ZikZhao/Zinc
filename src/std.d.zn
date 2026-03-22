@@ -664,4 +664,28 @@ class shared_ptr<T: type> {
 fn make_unique<T: type, Args...: type>(args: Args...) -> unique_ptr<T>;
 fn make_shared<T: type, Args...: type>(args: Args...) -> shared_ptr<T>;
 
+fn stoi(text: &string) -> i32;
+fn stoi(text: &string, pos: *usize, base: i32) -> i32;
+
+fn stol(text: &string) -> i64;
+fn stol(text: &string, pos: *usize, base: i32) -> i64;
+
+fn stoll(text: &string) -> i64;
+fn stoll(text: &string, pos: *usize, base: i32) -> i64;
+
+fn stoul(text: &string) -> u64;
+fn stoul(text: &string, pos: *usize, base: i32) -> u64;
+
+fn stoull(text: &string) -> u64;
+fn stoull(text: &string, pos: *usize, base: i32) -> u64;
+
+fn stof(text: &string) -> f32;
+fn stof(text: &string, pos: *usize) -> f32;
+
+fn stod(text: &string) -> f64;
+fn stod(text: &string, pos: *usize) -> f64;
+
+fn stold(text: &string) -> f64;
+fn stold(text: &string, pos: *usize) -> f64;
+
 fn print<Args...: type>(fmt: string_view, args: Args...);

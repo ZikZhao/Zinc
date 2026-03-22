@@ -10,10 +10,14 @@
 #include "source.hpp"
 
 class ErrorTracker : public antlr4::BaseErrorListener {
-public:
-    bool has_error = false;
+private:
+    bool& has_error_;
+    std::string_view file_path_;
 
 public:
+    explicit ErrorTracker(bool& has_error, std::string_view file_path)
+        : has_error_(has_error), file_path_(file_path) {}
+
     void syntaxError(
         antlr4::Recognizer* recognizer,
         antlr4::Token* offendingSymbol,
@@ -22,7 +26,9 @@ public:
         const std::string& msg,
         std::exception_ptr e
     ) override {
-        has_error = true;
+        has_error_ = true;
+        std::cerr << file_path_ << ": line " << line << ":" << charPositionInLine << " " << msg
+                  << "\n";
     }
 };
 
@@ -35,6 +41,7 @@ private:
 private:
     SourceManager& sources_;
     std::uint32_t file_id_;
+    bool has_error_ = false;
 
 private:
     auto loc(const antlr4::ParserRuleContext* ctx) noexcept -> Location {
@@ -49,20 +56,14 @@ private:
         return location;
     }
 
-    auto text(const antlr4::ParserRuleContext* ctx) noexcept -> std::string_view {
-        assert(ctx != nullptr);
-        auto start = ctx->getStart();
-        auto stop = ctx->getStop();
-        std::size_t begin_offset = start->getStartIndex();
-        std::size_t end_offset = stop->getStopIndex() + 1;
-        return {sources_[file_id_].content.data() + begin_offset, end_offset - begin_offset};
+    auto text(antlr4::ParserRuleContext* ctx) noexcept -> std::string_view {
+        std::string str = ctx->getText();
+        return GlobalMemory::persist_string(str);
     }
 
     auto text(const antlr4::Token* token) noexcept -> std::string_view {
-        assert(token != nullptr);
-        std::size_t begin_offset = token->getStartIndex();
-        std::size_t end_offset = token->getStopIndex() + 1;
-        return {sources_[file_id_].content.data() + begin_offset, end_offset - begin_offset};
+        std::string str = token->getText();
+        return GlobalMemory::persist_string(str);
     }
 
     template <typename R>
@@ -105,6 +106,9 @@ private:
         } else {
             const ASTRoot* module_root = ASTBuilder{sources_, module_file_id}();
             sources_.set_cache(module_file_id, module_root);
+            if (module_root == nullptr) {
+                has_error_ = true;
+            }
             return module_root;
         }
     }
@@ -120,17 +124,18 @@ public:
         antlr4::ANTLRInputStream input(
             sources_[file_id_].content.data(), sources_[file_id_].content.size()
         );
+        input.name = sources_[file_id_].path;  // For better error messages
         ZincLexer lexer(&input);
         antlr4::CommonTokenStream tokens(&lexer);
         ZincParser parser(&tokens);
-        ErrorTracker tracker;
+        ErrorTracker tracker{has_error_, sources_[file_id_].path};
+        lexer.removeErrorListeners();
+        parser.removeErrorListeners();
         lexer.addErrorListener(&tracker);
         parser.addErrorListener(&tracker);
         antlr4::tree::ParseTree* tree = parser.program();
-        if (tracker.has_error) {
-            return nullptr;
-        }
-        return std::get<const ASTRoot*>(visit(tree));
+        const ASTRoot* root = std::get<const ASTRoot*>(visit(tree));
+        return has_error_ ? nullptr : root;
     }
 
 private:
@@ -542,6 +547,11 @@ private:
         });
     }
 
+    auto visitThrow_statement(ZincParser::Throw_statementContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTThrowStatement{loc(ctx), visit_expr(ctx->expr_)});
+    }
+
     auto visitStatic_assert_statement(ZincParser::Static_assert_statementContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
         return as_variant(new ASTStaticAssertStatement{
@@ -596,13 +606,6 @@ private:
         return as_variant(new ASTFunctionCall{
             loc(ctx), visit_expr(ctx->func_), visit_list<ASTExprVariant>(ctx->arguments_)
         });
-    }
-
-    auto visitAddressOfExpr(ZincParser::AddressOfExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return as_variant(
-            new ASTReferenceType{loc(ctx), visit_expr(ctx->inner_expr_), ctx->KW_MUT() != nullptr}
-        );
     }
 
     auto visitStructInitExpr(ZincParser::StructInitExprContext* ctx) noexcept
@@ -677,6 +680,12 @@ private:
             return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::LogicalNot, expr});
         case ZincParser::OP_BITNOT:
             return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::BitwiseNot, expr});
+        case ZincParser::OP_BITAND:
+            return as_variant(
+                new ASTAddressOfExpr{loc(ctx), visit_expr(ctx->expr_), ctx->KW_MUT() != nullptr}
+            );
+        case ZincParser::OP_MUL:
+            return as_variant(new ASTDereference{loc(ctx), visit_expr(ctx->expr_)});
         default:
             UNREACHABLE();
         }
@@ -953,26 +962,43 @@ private:
     auto visitConstant(ZincParser::ConstantContext* ctx) noexcept -> Any<ASTExprVariant> final {
         switch (ctx->value_->getType()) {
         case ZincParser::T_INT:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<IntegerValue>(text(ctx->value_))}
-            );
+            return as_variant(new ASTConstant{loc(ctx), new IntegerValue(text(ctx->value_))});
         case ZincParser::T_FLOAT: {
-            auto* float_value = Value::from_literal<FloatValue>(text(ctx->value_));
-            if (text(ctx->value_).back() == 'f' || text(ctx->value_).back() == 'F') {
+            std::string str = ctx->value_->getText();
+            double value = 0.0;
+            auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), value);
+            if (ec == std::errc::result_out_of_range) {
+                throw;
+            } else if (ec != std::errc{}) {
+                throw;
+            }
+            auto* float_value = new FloatValue(value);
+            if (!str.empty() && (str.back() == 'f' || str.back() == 'F')) {
                 float_value = float_value->resolve_to(&FloatType::f32_instance);
             }
             return as_variant(new ASTConstant{loc(ctx), float_value});
         }
-        case ZincParser::T_STRING:
-            return as_variant(new ASTStringConstant{loc(ctx), text(ctx->value_)});
-        case ZincParser::T_BOOL:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<BooleanValue>(text(ctx->value_))}
-            );
+        case ZincParser::T_STRING: {
+            std::string str = ctx->value_->getText();
+            unescape_string(str);
+            std::string_view persisted =
+                GlobalMemory::persist_string({str.data() + 1, str.size() - 2});
+            return as_variant(new ASTStringConstant{loc(ctx), persisted});
+        }
+        case ZincParser::T_CHAR: {
+            std::string str = ctx->value_->getText();
+            unescape_string(str);
+            return as_variant(new ASTConstant{
+                loc(ctx),
+                new IntegerValue(&IntegerType::i8_instance, static_cast<std::size_t>(str[1]))
+            });
+        }
+        case ZincParser::KW_TRUE:
+            return as_variant(new ASTConstant{loc(ctx), new BooleanValue(true)});
+        case ZincParser::KW_FALSE:
+            return as_variant(new ASTConstant{loc(ctx), new BooleanValue(false)});
         case ZincParser::KW_NULLPTR:
-            return as_variant(
-                new ASTConstant{loc(ctx), Value::from_literal<NullptrValue>(text(ctx->value_))}
-            );
+            return as_variant(new ASTConstant{loc(ctx), new NullptrValue()});
         default:
             UNREACHABLE();
         }

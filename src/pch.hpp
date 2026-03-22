@@ -387,6 +387,12 @@ public:
         return {result.data(), input.size() * 2 + 3};
     }
 
+    static auto persist_string(std::string_view str) -> std::string_view {
+        std::span<char> ptr = alloc_array<char>(str.size() + 1);
+        std::ranges::copy(str, ptr.begin());
+        return {ptr.data(), str.size()};
+    }
+
 public:
     GlobalMemory() = delete;
 };
@@ -806,6 +812,44 @@ class GlobalMemory::RangeCollector<GlobalMemory::String> {
     }
 };
 
+auto unescape_string(auto& input) -> void {
+    std::size_t write_index = 0;
+    for (std::size_t read_index = 0; read_index < input.size(); ++read_index) {
+        if (input[read_index] == '\\' && read_index + 1 < input.size()) {
+            char next_char = input[read_index + 1];
+            switch (next_char) {
+            case 'n':
+                input[write_index++] = '\n';
+                break;
+            case 't':
+                input[write_index++] = '\t';
+                break;
+            case 'r':
+                input[write_index++] = '\r';
+                break;
+            case '\\':
+                input[write_index++] = '\\';
+                break;
+            case '\'':
+                input[write_index++] = '\'';
+                break;
+            case '\"':
+                input[write_index++] = '\"';
+                break;
+            default:
+                // If it's an unrecognized escape sequence, keep the backslash and the character
+                input[write_index++] = '\\';
+                input[write_index++] = next_char;
+                break;
+            }
+            read_index++;  // Skip the next character since it's part of the escape sequence
+        } else {
+            input[write_index++] = input[read_index];
+        }
+    }
+    input.resize(write_index);
+}
+
 class BigInt {
     friend struct std::hash<BigInt>;
 
@@ -990,6 +1034,7 @@ public:
         }
 
         std::size_t start = 0;
+        std::uint32_t base = 10;
         if (str[0] == '-') {
             is_negative_ = true;
             start = 1;
@@ -997,13 +1042,38 @@ public:
             start = 1;
         }
 
+        if (start + 1 < str.size() && str[start] == '0') {
+            char prefix = str[start + 1];
+            if (prefix == 'x' || prefix == 'X') {
+                base = 16;
+                start += 2;
+            } else if (prefix == 'b' || prefix == 'B') {
+                base = 2;
+                start += 2;
+            } else if (prefix == 'o' || prefix == 'O') {
+                base = 8;
+                start += 2;
+            }
+        }
+
+        if (start >= str.size()) {
+            throw std::invalid_argument("Invalid BigInt string");
+        }
+
+        auto parse_digit = [](char ch) -> int {
+            if (ch >= '0' && ch <= '9') return ch - '0';
+            if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+            if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+            return -1;
+        };
+
         digits_.push_back(0);
         for (std::size_t i = start; i < str.size(); ++i) {
-            char ch = str[i];
-            if (!std::isdigit(static_cast<unsigned char>(ch))) {
+            int digit = parse_digit(str[i]);
+            if (digit < 0 || digit >= static_cast<int>(base)) {
                 throw std::invalid_argument("Invalid character in BigInt string");
             }
-            *this = mul_digit(10) + BigInt(static_cast<std::uint64_t>(ch - '0'));
+            *this = mul_digit(base) + BigInt(static_cast<std::uint64_t>(digit));
         }
         normalize();
     }

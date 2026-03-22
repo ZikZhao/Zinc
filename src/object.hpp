@@ -1196,52 +1196,6 @@ protected:
 };
 
 class Value : public Object {
-public:
-    template <ValueClass V>
-    static auto from_literal(std::string_view literal) -> Value* {
-        if constexpr (std::is_same_v<V, NullptrValue>) {
-            assert(literal == "nullptr");
-            return new V();
-        } else if constexpr (std::is_same_v<V, IntegerValue>) {
-            int64_t value = 0;
-            auto [ptr, ec] =
-                std::from_chars(literal.data(), literal.data() + literal.size(), value);
-            if (ec == std::errc()) {
-                return new V(literal);
-            } else if (ec == std::errc::result_out_of_range && literal[0] != '-') {
-                uint64_t uvalue = 0;
-                auto [uptr, uec] =
-                    std::from_chars(literal.data(), literal.data() + literal.size(), uvalue);
-                if (uec == std::errc()) {
-                    return new V(literal);
-                }
-            }
-            return nullptr;
-        } else if constexpr (std::is_same_v<V, FloatValue>) {
-            double value = 0.0;
-            auto [ptr, ec] =
-                std::from_chars(literal.data(), literal.data() + literal.size(), value);
-            if (ec == std::errc()) {
-                return new V(value);
-            }
-            return nullptr;
-        } else if constexpr (std::is_same_v<V, ArrayValue>) {
-            // String literal is treated as array of characters
-            assert(literal.size() >= 2 && literal.front() == '"' && literal.back() == '"');
-            std::string_view content = literal.substr(1, literal.size() - 2);
-            return new V(content);
-        } else if constexpr (std::is_same_v<V, BooleanValue>) {
-            assert(literal == "true" || literal == "false");
-            if (literal == "true") {
-                return new V(true);
-            } else {
-                return new V(false);
-            }
-        } else {
-            static_assert(false, "Unknown literal type");
-        }
-    };
-
 protected:
     Value(Kind kind) noexcept : Object(kind, false) {}
     virtual auto do_less_compare(const Value* other) const noexcept -> bool = 0;
@@ -1478,7 +1432,7 @@ public:
             }
             // default to double
             return new FloatValue(&FloatType::f64_instance, value_);
-        } else if (type_) {
+        } else if (type_ != &FloatType::untyped_instance) {
             const FloatType* float_target = target->cast<FloatType>();
             if (type_ == float_target) {
                 return new FloatValue(*this);

@@ -43,7 +43,7 @@ class vec2 {
 
 	operator-(self: &Self) -> Self;
 	operator+(self: &Self) -> Self;
-};
+}
 
 class vec3 {
 	let x: f32;
@@ -89,7 +89,7 @@ class vec3 {
 
 	operator-(self: &Self) -> Self;
 	operator+(self: &Self) -> Self;
-};
+}
 
 class vec4 {
 	let x: f32;
@@ -135,7 +135,7 @@ class vec4 {
 
 	operator-(self: &Self) -> Self;
 	operator+(self: &Self) -> Self;
-};
+}
 
 class mat3 {
 	init();
@@ -153,7 +153,7 @@ class mat3 {
 
 	operator==(self: &Self, rhs: &Self) -> bool;
 	operator!=(self: &Self, rhs: &Self) -> bool;
-};
+}
 
 class mat4 {
 	init();
@@ -170,7 +170,7 @@ class mat4 {
 
 	operator==(self: &Self, rhs: &Self) -> bool;
 	operator!=(self: &Self, rhs: &Self) -> bool;
-};
+}
 
 fn radians(degrees: f32) -> f32;
 fn degrees(radians: f32) -> f32;

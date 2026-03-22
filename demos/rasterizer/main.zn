@@ -1,4 +1,5 @@
 import "constants.zn" as Constant;
+import "world.zn" as World;
 
 fn main(args: [strview]) {
     if (args.size() < 2) {
@@ -7,10 +8,10 @@ fn main(args: [strview]) {
     }
 
     // Load world assets from CLI arguments
-    let mut world = World(std.span<strview>(std.next(args.begin()), args.end()));
+    let mut world = World.World(std.span<strview>(std.next(args.begin()), args.end()));
 
     // Initialize output window and rendering engines
-    let mut window = Window(Constant.WindowWidth, Constant.WindowHeight);
+    let mut window = Window.Window(Constant.WindowWidth, Constant.WindowHeight);
     world.camera_.set_aspect_ratio(
         Constant.WindowWidth as f32 / Constant.WindowHeight as f32
     );

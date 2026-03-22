@@ -1778,6 +1778,28 @@ public:
         return sema_.access_handler_->eval_index(node);
     }
 
+    auto operator()(const ASTAddressOfExpr* node) -> Symbol {
+        Symbol operand_symbol = ValueContextEvaluator{*this, nullptr}(node->operand);
+        if (!Sema::expect(operand_symbol, SymbolKind::Term)) {
+            return {};
+        }
+        Term operand_term = Sema::get<SymbolKind::Term>(operand_symbol);
+        return Term::prvalue(TypeRegistry::get<PointerType>(operand_term.effective_type()));
+    }
+
+    auto operator()(const ASTDereference* node) -> Symbol {
+        Symbol operand_symbol = ValueContextEvaluator{*this, nullptr}(node->operand);
+        if (!Sema::expect(operand_symbol, SymbolKind::Term)) {
+            return {};
+        }
+        Term operand_term = Sema::get<SymbolKind::Term>(operand_symbol);
+        if (auto* pointer_type = operand_term.effective_type()->dyn_cast<PointerType>()) {
+            return Term::lvalue(pointer_type->pointed_type_);
+        }
+        throw;
+        return {};
+    }
+
     auto operator()(const ASTUnaryOp* node) -> Symbol {
         Symbol expr_symbol = ValueContextEvaluator{*this, nullptr}(node->expr);
         if (!Sema::expect(expr_symbol, SymbolKind::Term)) {
@@ -2471,7 +2493,6 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
         return type;
     };
     Sema::Guard guard{sema_, *scope};
-    bool any_error = false;
     GlobalMemory::Vector<const Type*> params;
     TypeResolution return_type;
     if (auto func_def = overload.get<const ASTFunctionDefinition*>()) {
@@ -2517,10 +2538,11 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
     } else {
         UNREACHABLE();
     }
-    if (any_error) {
-        return TypeRegistry::get_unknown();
-    }
     /// TODO: handle constexpr functions
+    if (std::ranges::contains(params, nullptr)) {
+        throw;
+        return {};
+    }
     return TypeRegistry::get<FunctionType>(
         params | GlobalMemory::collect<std::span>(), return_type
     );
