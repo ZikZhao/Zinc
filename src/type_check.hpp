@@ -2031,6 +2031,8 @@ public:
         }
     }
 
+    void operator()(const ASTEnumDefinition* node) noexcept {}
+
     void operator()(const ASTNamespaceDefinition* node) noexcept {
         Sema::Guard guard(sema_, node);
         for (const auto& item : node->items) {
@@ -2155,7 +2157,7 @@ inline auto TemplateHandler::inference(
         UNREACHABLE();
     }
     if (param_count != args.size() && variadic_param.empty()) {
-        throw;
+        return {};
     }
     // prepare auto instances
     GlobalMemory::Vector<bool> is_nttp_flags =
@@ -2222,7 +2224,7 @@ inline auto TemplateHandler::inference(
             // Diagnostic::report(TemplateArgumentTypeMismatchError(
             //     primary->parameters[i].identifier, args[i]->repr(), patterns[i]->repr()
             // ));
-            throw;
+            return {};
         }
     }
     GlobalMemory::Vector<const Object*> instantiation_args;
@@ -2246,7 +2248,6 @@ inline auto TemplateHandler::inference(
         }
     }
     /// TODO: class initialization
-    throw;
     return {};
 }
 

@@ -11,8 +11,10 @@ top_level_statement:
 	| type_alias
 	| function_definition
 	| class_definition
+	| enum_definition
 	| namespace_definition
-	| static_assert_statement;
+	| static_assert_statement
+	| import_statement;
 
 statement:
 	local_block
@@ -26,6 +28,7 @@ statement:
 	| type_alias
 	| function_definition
 	| class_definition
+	| enum_definition
 	| static_assert_statement;
 
 local_block: OP_LBRACE statements_ += statement* OP_RBRACE;
@@ -152,6 +155,13 @@ class_definition:
 		| operators_ += operator_overload_definition
 	)* OP_RBRACE;
 
+enum_definition:
+	KW_ENUM identifier_ = T_IDENTIFIER OP_LBRACE (
+		enumerators_ += T_IDENTIFIER (
+			OP_COMMA enumerators_ += T_IDENTIFIER
+		)* OP_COMMA?
+	)? OP_RBRACE;
+
 namespace_definition:
 	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += top_level_statement* OP_RBRACE;
 
@@ -159,6 +169,9 @@ static_assert_statement:
 	KW_STATIC_ASSERT OP_LPAREN condition_ = expr (
 		OP_COMMA message_ = expr
 	)? OP_RPAREN OP_SEMICOLON;
+
+import_statement:
+	KW_IMPORT path_ = T_STRING KW_AS identifier_ = T_IDENTIFIER OP_SEMICOLON;
 
 expr:
 	KW_SELF													# SelfExpr
@@ -370,6 +383,8 @@ KW_SPECIALIZE: 'specialize';
 KW_STATIC_ASSERT: 'static_assert';
 KW_OPERATOR: 'operator';
 KW_AS: 'as';
+KW_IMPORT: 'import';
+KW_ENUM: 'enum';
 
 OP_DOT: '.';
 OP_QUESTION: '?';

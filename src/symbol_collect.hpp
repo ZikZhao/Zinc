@@ -369,9 +369,28 @@ public:
         }
     }
 
+    // Enums
+    void operator()(const ASTEnumDefinition* node) noexcept {
+        Scope& enum_scope = Scope::make(current_scope_, node, node->identifier);
+        SymbolCollector enum_visitor(enum_scope);
+        for (size_t i = 0; i < node->enumerators.size(); ++i) {
+            enum_scope.add_variable(
+                node->enumerators[i],
+                new VariableInitialization{
+                    .is_comptime = true,
+                    .is_mutable = false,
+                    .type = std::monostate{},
+                    .value = ASTExprVariant{new ASTConstant{
+                        Location{}, new IntegerValue(&IntegerType::untyped_instance, i)
+                    }},
+                }
+            );
+        }
+    }
+
     // Namespaces
     void operator()(const ASTNamespaceDefinition* node) noexcept {
-        Scope& namespace_scope = Scope::make(current_scope_, node);
+        Scope& namespace_scope = Scope::make(current_scope_, node, node->identifier);
         SymbolCollector namespace_visitor(namespace_scope);
         for (auto& item : node->items) {
             namespace_visitor(item);
@@ -386,5 +405,12 @@ public:
 
     void operator()(const ASTTemplateSpecialization* node) noexcept {
         current_scope_.add_template(node->identifier, node);
+    }
+
+    void operator()(const ASTImportStatement* node) noexcept {
+        if (!node->module_scope) {
+            node->module_scope = &Scope::make(current_scope_, node, node->alias);
+        }
+        current_scope_.add_namespace(node->alias, *node->module_scope);
     }
 };

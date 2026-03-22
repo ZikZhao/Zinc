@@ -459,4 +459,74 @@ let mut clog: ostream;
 fn endl(out: &mut ostream) -> &mut ostream;
 fn flush(out: &mut ostream) -> &mut ostream;
 
+fn advance<Iter: type>(it: &mut Iter, n: isize);
+
+fn next<Iter: type>(it: Iter) -> Iter;
+fn next<Iter: type>(it: Iter, n: isize) -> Iter;
+
+fn prev<Iter: type>(it: Iter) -> Iter;
+fn prev<Iter: type>(it: Iter, n: isize) -> Iter;
+
+namespace chrono {
+    class duration {
+        type rep = i64;
+
+        init();
+        init(count: rep);
+
+        fn count(self: &Self) -> rep;
+        fn zero() -> Self;
+        fn min() -> Self;
+        fn max() -> Self;
+
+        operator+(self: &Self, other: &Self) -> Self;
+        operator-(self: &Self, other: &Self) -> Self;
+        operator+=(self: &mut Self, other: &Self) -> &mut Self;
+        operator-=(self: &mut Self, other: &Self) -> &mut Self;
+
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
+
+    class time_point {
+        type duration_type = duration;
+
+        init();
+        init(d: duration_type);
+
+        fn time_since_epoch(self: &Self) -> duration_type;
+
+        operator+(self: &Self, d: duration_type) -> Self;
+        operator-(self: &Self, d: duration_type) -> Self;
+        operator-(self: &Self, other: &Self) -> duration_type;
+
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
+
+    class steady_clock {
+        type duration = chrono.duration;
+        type time_point = chrono.time_point;
+
+        static fn now() -> time_point;
+    }
+
+    class system_clock {
+        type duration = chrono.duration;
+        type time_point = chrono.time_point;
+
+        static fn now() -> time_point;
+    }
+
+    fn now() -> time_point;
+}
+
 fn print<Args...: type>(fmt: string_view, args: Args...);

@@ -1,3 +1,5 @@
+import "constants.zn" as Constant;
+
 fn main(args: [strview]) {
     if (args.size() < 2) {
         std.cerr << "Usage: " << args[0] << " <scene1.obj> [<scene2.obj> ...]" << std.endl;
@@ -5,7 +7,7 @@ fn main(args: [strview]) {
     }
 
     // Load world assets from CLI arguments
-    let mut world = World(std.vector<std.string>(args.begin() + 1, args.end()));
+    let mut world = World(std.span<strview>(std.next(args.begin()), args.end()));
 
     // Initialize output window and rendering engines
     let mut window = Window(Constant.WindowWidth, Constant.WindowHeight);
@@ -281,3 +283,6 @@ fn main(args: [strview]) {
         }
     }
 }
+
+const EXIT_SUCCESS: i32 = 0;
+const EXIT_FAILURE: i32 = 1;

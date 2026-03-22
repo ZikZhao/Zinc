@@ -27,9 +27,9 @@ public:
     }
 };
 
-auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer) -> Scope& {
+auto get_std_scope(SourceManager& sources) -> Scope& {
     static Scope& std_scope = [&]() -> Scope& {
-        ASTBuilder builder(*sources.load_std(), importer);
+        ASTBuilder builder(sources, sources.load_std());
         const ASTRoot* std_root = builder();
         static Scope scope;
         scope.scope_id_ = "std";
@@ -40,7 +40,7 @@ auto get_root(SourceManager& sources, ImportManager<ASTRoot>& importer) -> Scope
         }
         return scope;
     }();
-    return Scope::root(std_scope);
+    return std_scope;
 }
 
 auto main(int argc, char* argv[]) -> int {
@@ -52,16 +52,15 @@ auto main(int argc, char* argv[]) -> int {
     ThreadGuard guard;
 
     SourceManager sources;
-    ImportManager<ASTRoot> importer(sources);
-    ASTBuilder builder(*sources.load(argv[1]), importer);
-    const ASTRoot* root = builder();
+    Scope& std_scope = get_std_scope(sources);
+    const ASTRoot* root = ASTBuilder{sources, sources.load(argv[1])}();
 
     if (root == nullptr) {
         Diagnostic::error("Failed to parse input");
         return EXIT_FAILURE;
     }
 
-    Scope& scope = get_root(sources, importer);
+    Scope& scope = Scope::root(std_scope);
     SymbolCollector{scope}(root);
 
     CodeGenEnvironment codegen_env;

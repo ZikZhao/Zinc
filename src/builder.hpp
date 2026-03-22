@@ -33,8 +33,8 @@ private:
     using Any = antlrcpp::Any;
 
 private:
-    const SourceManager::File& file_;
-    ImportManager<ASTRoot>& importer_;
+    SourceManager& sources_;
+    std::uint32_t file_id_;
 
 private:
     auto loc(const antlr4::ParserRuleContext* ctx) noexcept -> Location {
@@ -42,7 +42,7 @@ private:
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
         Location location{
-            .id = file_.id,
+            .id = file_id_,
             .begin = static_cast<std::uint32_t>(start->getStartIndex()),
             .end = static_cast<std::uint32_t>(stop->getStopIndex() + 1)
         };
@@ -55,14 +55,14 @@ private:
         auto stop = ctx->getStop();
         std::size_t begin_offset = start->getStartIndex();
         std::size_t end_offset = stop->getStopIndex() + 1;
-        return {file_.content.data() + begin_offset, end_offset - begin_offset};
+        return {sources_[file_id_].content.data() + begin_offset, end_offset - begin_offset};
     }
 
     auto text(const antlr4::Token* token) noexcept -> std::string_view {
         assert(token != nullptr);
         std::size_t begin_offset = token->getStartIndex();
         std::size_t end_offset = token->getStopIndex() + 1;
-        return {file_.content.data() + begin_offset, end_offset - begin_offset};
+        return {sources_[file_id_].content.data() + begin_offset, end_offset - begin_offset};
     }
 
     template <typename R>
@@ -97,18 +97,29 @@ private:
         }
     }
 
-    auto import_module(std::string_view path) -> std::shared_future<ASTRoot> {
-        return importer_.import(path, [this](const SourceManager::File& file) {
-            return *ASTBuilder(file, importer_)();
-        });
+    auto import_module(std::string_view path) -> const ASTRoot* {
+        std::uint32_t module_file_id =
+            sources_.load(std::string_view(path).substr(1, path.size() - 2), file_id_);
+        if (const void* cached = sources_.get_cache(module_file_id)) {
+            return static_cast<const ASTRoot*>(cached);
+        } else {
+            const ASTRoot* module_root = ASTBuilder{sources_, module_file_id}();
+            sources_.set_cache(module_file_id, module_root);
+            return module_root;
+        }
     }
 
 public:
-    ASTBuilder(const SourceManager::File& file, ImportManager<ASTRoot>& importer) noexcept
-        : file_(file), importer_(importer) {}
+    ASTBuilder(SourceManager& sources, std::uint32_t file_id) noexcept
+        : sources_(sources), file_id_(file_id) {}
 
     auto operator()() noexcept -> const ASTRoot* {
-        antlr4::ANTLRInputStream input(file_.content.data(), file_.content.size());
+        if (file_id_ == std::numeric_limits<std::uint32_t>::max()) {
+            return nullptr;
+        }
+        antlr4::ANTLRInputStream input(
+            sources_[file_id_].content.data(), sources_[file_id_].content.size()
+        );
         ZincLexer lexer(&input);
         antlr4::CommonTokenStream tokens(&lexer);
         ZincParser parser(&tokens);
@@ -501,6 +512,17 @@ private:
         }
     }
 
+    auto visitEnum_definition(ZincParser::Enum_definitionContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTEnumDefinition{
+            loc(ctx),
+            text(ctx->identifier_),
+            ctx->enumerators_ | std::views::transform([this](auto& enumerator) {
+                return text(enumerator);
+            }) | GlobalMemory::collect<std::span>()
+        });
+    }
+
     auto visitNamespace_definition(ZincParser::Namespace_definitionContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
         return as_variant(new ASTNamespaceDefinition{
@@ -514,6 +536,13 @@ private:
             loc(ctx),
             visit_expr(ctx->condition_),
             visit_expr(ctx->message_),
+        });
+    }
+
+    auto visitImport_statement(ZincParser::Import_statementContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTImportStatement{
+            loc(ctx), text(ctx->path_), text(ctx->identifier_), import_module(text(ctx->path_))
         });
     }
 

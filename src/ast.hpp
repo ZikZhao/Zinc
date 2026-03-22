@@ -94,11 +94,13 @@ struct ASTFunctionDefinition;
 struct ASTCtorDtorDefinition;
 struct ASTOperatorDefinition;
 struct ASTClassDefinition;
+struct ASTEnumDefinition;
 struct ASTNamespaceDefinition;
 struct ASTTemplateParameter;
 struct ASTTemplateDefinition;
 struct ASTTemplateSpecialization;
 struct ASTStaticAssertStatement;
+struct ASTImportStatement;
 
 // All AST node types (base classes and final classes)
 using ASTNodeVariant = std::variant<
@@ -121,12 +123,15 @@ using ASTNodeVariant = std::variant<
     const ASTCtorDtorDefinition*,
     const ASTOperatorDefinition*,
     const ASTClassDefinition*,
+    const ASTEnumDefinition*,
     const ASTNamespaceDefinition*,
     // Templates
     const ASTTemplateDefinition*,
     const ASTTemplateSpecialization*,
     // Static asserts
-    const ASTStaticAssertStatement*>;
+    const ASTStaticAssertStatement*,
+    // Import
+    const ASTImportStatement*>;
 
 // All expression node types (all ASTExpression derivatives)
 using ASTExprVariant = std::variant<
@@ -403,6 +408,11 @@ struct ASTClassDefinition final : public ASTNode {
     std::span<ASTNodeVariant> scope_items;
 };
 
+struct ASTEnumDefinition final : public ASTNode {
+    std::string_view identifier;
+    std::span<std::string_view> enumerators;
+};
+
 struct ASTNamespaceDefinition final : public ASTNode {
     std::string_view identifier;
     std::span<ASTNodeVariant> items;
@@ -432,6 +442,13 @@ struct ASTTemplateSpecialization final : public ASTNode {
 struct ASTStaticAssertStatement final : public ASTNode {
     ASTExprVariant condition;
     ASTExprVariant message;
+};
+
+struct ASTImportStatement final : public ASTNode {
+    std::string_view path;
+    std::string_view alias;
+    const ASTRoot* module_root;
+    mutable Scope* module_scope = nullptr;
 };
 
 enum class OperatorGroup : std::uint8_t {

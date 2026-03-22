@@ -1,0 +1,53 @@
+// Window
+const WindowWidth: usize = 1920;
+const WindowHeight: usize = 1080;
+const TargetFrameTime = std.chrono.microseconds(15000);  // ~66 FPS cap
+
+// Camera
+const OrbitInterval = std.chrono.seconds(1) / 60;
+const FOV = 45.0;
+const NearPlane = 0.001;
+const FarPlane = 100.0;
+const MaxPitch = 1.553343;              // glm::radians(89.0f)
+const OrbitAngleIncrement = -0.004363;  // glm::radians(-0.25f)
+
+// Input
+const MoveSpeed = 3.0;
+const RollSpeed = 0.5;
+const MouseSensitivity = 0.002;
+const RotateSpeed = 0.2;
+const ZoomFactor = 1.1;
+const GammaStep = 0.01;
+
+// Renderer
+const TileSize = 32;      // Tile-based rendering block size
+const VideoSamples = 64;  // SPP for video recording mode
+const TargetFPS = 60;     // Target FPS for video recording
+const DefaultGamma = 2.2;
+
+// Ray Tracing
+const MaxRayDepth = 64;          // Absolute max recursion depth
+const RayEpsilon = 0.001;        // Offset to avoid self-intersection
+const Epsilon = 1e-6;            // General numerical epsilon
+const AmbientIntensity = 0.025;  // Ambient light contribution
+
+// Photon Mapping
+const TargetStoredPhotons = 50000;   // Target caustic photons
+const MaxEmittedPhotons = 10000000;  // Safety bailout
+const PhotonBatchSize = 5000;
+const MaxPhotonBounces = 5;
+const MinPhotonPower = 0.01;
+const CausticSearchRadius = 0.4;
+const PhotonGridCellSize = CausticSearchRadius;
+const RussianRouletteThreshold = 0.5;
+const PhotonVisualizationExposure = 10000.0;
+const ConeFilterK = 1.1;  // Cone filter constant for density estimation
+
+// BVH
+const SAHTraversalCost = 1.0;
+const SAHIntersectionCost = 1.0;
+const SAHBuckets = 12;
+const BVHLeafThreshold = 4;
+
+// Auto Exposure
+const TargetMiddleGray = 0.3;
