@@ -134,7 +134,9 @@ private:
     static void print_code(
         SourceManager& sources, const Location& location, std::size_t indent = 0
     ) {
-        const auto& [_, path, content, line_offsets] = sources[location.id];
+        const SourceFile& file = sources[location.id];
+        strview content = file.content_;
+        std::filesystem::path relative = std::filesystem::proximate(file.path_);
 
         std::size_t context_start = content.rfind('\n', location.begin);
         context_start = (context_start == GlobalMemory::String::npos) ? 0 : context_start + 1;
@@ -142,14 +144,8 @@ private:
         std::size_t context_end = content.find('\n', location.end);
         context_end = (context_end == GlobalMemory::String::npos) ? content.size() : context_end;
 
-        auto get_line_number = [&](std::size_t where) -> std::int64_t {
-            return static_cast<std::int64_t>(std::distance(
-                line_offsets.begin(),
-                std::upper_bound(line_offsets.begin(), line_offsets.end(), where)
-            ));
-        };
-        std::int64_t start_line_num = get_line_number(context_start);
-        std::int64_t end_line_num = get_line_number(context_end);
+        std::int64_t start_line_num = file.get_line_number(context_start);
+        std::int64_t end_line_num = file.get_line_number(context_end);
         std::size_t line_num_width = std::formatted_size("{}", end_line_num);
 
         std::size_t col_num = location.begin - context_start + 1;
@@ -160,7 +156,7 @@ private:
             indent,
             ColourEscape::DIM,
             ColourEscape::UNDERLINE,
-            path,
+            relative.string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>(),
             start_line_num,
             col_num,
             ColourEscape::RESET

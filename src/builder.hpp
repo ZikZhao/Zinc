@@ -12,11 +12,15 @@
 class ErrorTracker : public antlr4::BaseErrorListener {
 private:
     bool& has_error_;
-    strview file_path_;
+    GlobalMemory::String file_path_;
 
 public:
-    explicit ErrorTracker(bool& has_error, strview file_path)
-        : has_error_(has_error), file_path_(file_path) {}
+    explicit ErrorTracker(bool& has_error, std::filesystem::path file_path)
+        : has_error_(has_error) {
+        std::filesystem::path relative = std::filesystem::proximate(file_path);
+        file_path_ =
+            relative.string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
+    }
 
     void syntaxError(
         antlr4::Recognizer* recognizer,
@@ -46,24 +50,33 @@ private:
 private:
     auto loc(const antlr4::ParserRuleContext* ctx) noexcept -> Location {
         assert(ctx != nullptr);
+        const SourceFile& file = sources_[file_id_];
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
         Location location{
             .id = file_id_,
-            .begin = static_cast<std::uint32_t>(start->getStartIndex()),
-            .end = static_cast<std::uint32_t>(stop->getStopIndex() + 1)
+            .begin = static_cast<std::uint32_t>(file.to_byte_index(start->getStartIndex())),
+            .end = static_cast<std::uint32_t>(file.to_byte_index(stop->getStopIndex() + 1))
         };
         return location;
     }
 
     auto text(antlr4::ParserRuleContext* ctx) noexcept -> strview {
-        std::string str = ctx->getText();
-        return GlobalMemory::persist_string(str);
+        assert(ctx != nullptr);
+        const SourceFile& file = sources_[file_id_];
+        auto start = ctx->getStart();
+        auto stop = ctx->getStop();
+        std::size_t begin_offset = file.to_byte_index(start->getStartIndex());
+        std::size_t end_offset = file.to_byte_index(stop->getStopIndex() + 1);
+        return {file.content_.data() + begin_offset, end_offset - begin_offset};
     }
 
     auto text(const antlr4::Token* token) noexcept -> strview {
-        std::string str = token->getText();
-        return GlobalMemory::persist_string(str);
+        assert(token != nullptr);
+        const SourceFile& file = sources_[file_id_];
+        std::size_t begin_offset = file.to_byte_index(token->getStartIndex());
+        std::size_t end_offset = file.to_byte_index(token->getStopIndex() + 1);
+        return {file.content_.data() + begin_offset, end_offset - begin_offset};
     }
 
     template <typename R>
@@ -122,13 +135,12 @@ public:
             return nullptr;
         }
         antlr4::ANTLRInputStream input(
-            sources_[file_id_].content.data(), sources_[file_id_].content.size()
+            sources_[file_id_].content_.data(), sources_[file_id_].content_.size()
         );
-        input.name = sources_[file_id_].path;  // For better error messages
         ZincLexer lexer(&input);
         antlr4::CommonTokenStream tokens(&lexer);
         ZincParser parser(&tokens);
-        ErrorTracker tracker{has_error_, sources_[file_id_].path};
+        ErrorTracker tracker{has_error_, sources_[file_id_].path_};
         lexer.removeErrorListeners();
         parser.removeErrorListeners();
         lexer.addErrorListener(&tracker);
