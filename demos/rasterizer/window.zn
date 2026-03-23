@@ -11,9 +11,9 @@ enum Trigger {
 type KeyState = [bool; sdl.SDL_NUM_SCANCODES];
 
 class Window {
-    type KeyHandler = std.function<(&Keystate, f32) -> void>;
-    type MouseHandler = std.function<(i32, i32, f32) -> void>;
-    type ScrollHandler = std.function<(i32) -> void>;
+    type KeyHandler = (&KeyState, f32) -> void;
+    type MouseHandler = (i32, i32, f32) -> void;
+    type ScrollHandler = (i32) -> void;
 
     type KeyBinding = {
         keys: std.unordered_set<sdl.SDL_Scancode>,

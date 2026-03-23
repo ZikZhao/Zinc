@@ -1,6 +1,6 @@
 // Window
-const WindowWidth: usize = 1920;
-const WindowHeight: usize = 1080;
+const WindowWidth: i32 = 1920;
+const WindowHeight: i32 = 1080;
 const TargetFrameTime = std.chrono.microseconds(15000);  // ~66 FPS cap
 
 // Camera

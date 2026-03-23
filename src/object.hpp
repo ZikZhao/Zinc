@@ -1,14 +1,12 @@
 #pragma once
 #include "pch.hpp"
 
-#include <algorithm>
-
 #include "diagnosis.hpp"
 
 enum class Kind : std::uint8_t {
-    Unknown,
+    None,
     Auto,
-    Any,
+    Skolem,
     Void,
     Nullptr,
     Integer,
@@ -22,8 +20,6 @@ enum class Kind : std::uint8_t {
     Reference,
     Pointer,
     Union,
-    Overload,
-    Template,
 };
 
 enum class ValueCategory : std::uint8_t {
@@ -37,9 +33,6 @@ class Scope;
 class Object;
 
 class Type;
-class UnknownType;
-class AutoType;
-class AnyType;
 class VoidType;
 class NullptrType;
 class IntegerType;
@@ -55,8 +48,6 @@ class PointerType;
 class UnionType;
 
 class Value;
-class UnknownValue;
-class AutoValue;
 class NullptrValue;
 class IntegerValue;
 class FloatValue;
@@ -70,6 +61,9 @@ class MutableValue;
 class ReferenceValue;
 class PointerValue;
 
+class AutoObject;
+class SkolemObject;
+
 template <typename T>
 concept TypeClass = std::derived_from<T, Type> && !std::is_abstract_v<T>;
 template <typename V>
@@ -77,7 +71,7 @@ concept ValueClass = std::derived_from<V, Value> && !std::is_abstract_v<V>;
 
 using FunctionObject = const Object*;  // either FunctionType or FunctionValue
 
-using AutoBindings = GlobalMemory::FlatMap<const Object*, const Object*>;
+using AutoBindings = GlobalMemory::FlatMap<const AutoObject*, const Object*>;
 
 class TypeDependencyGraph {
 public:
@@ -152,169 +146,6 @@ private:
     }
 };
 
-class ClassHierarchyGraph {
-private:
-    GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> edges_;
-
-public:
-    auto add_edge(const Type* parent, const Type* child) noexcept -> void {
-        edges_.insert({parent, child});
-    }
-
-    auto is_reachable(const Type* from, const Type* to) const noexcept -> bool;
-};
-
-class TypeResolution final {
-    friend class TypeRegistry;
-
-private:
-    /// Indicates whether the type is complete
-    static constexpr std::uintptr_t flag = 1;
-
-private:
-    std::uintptr_t ptr_;
-
-public:
-    TypeResolution() noexcept : ptr_(0) {};
-
-    TypeResolution(const Type* type) noexcept : ptr_(std::bit_cast<std::uintptr_t>(type)) {}
-
-    template <TypeClass T>
-    TypeResolution(std::type_identity<T> identity) noexcept
-        : ptr_(std::bit_cast<std::uintptr_t>(GlobalMemory::alloc_raw(identity)) | flag) {}
-
-    template <std::derived_from<Type> T>
-    operator const T*() const noexcept {
-        return static_cast<const T*>(std::bit_cast<const Type*>(ptr_ & ~flag));
-    }
-
-    auto get() const noexcept -> const Type* { return std::bit_cast<const Type*>(ptr_ & ~flag); }
-
-    auto operator->() const noexcept -> const Type* { return get(); }
-
-    auto is_sized() const noexcept -> bool { return (ptr_ & flag) == 0; }
-
-private:
-    template <TypeClass T>
-        requires(!std::is_same_v<T, InstanceType>)
-    auto construct(auto&&... args) noexcept -> T* {
-        assert(ptr_ && !is_sized());
-        std::construct_at(std::bit_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...);
-        ptr_ &= ~flag;
-        return std::bit_cast<T*>(ptr_);
-    }
-
-    template <std::same_as<InstanceType> T>
-    auto reconstruct(auto&&... args) noexcept -> T* {
-        assert(ptr_ && is_sized());
-        std::destroy_at(std::bit_cast<T*>(ptr_ & ~flag));
-        std::construct_at(std::bit_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...);
-        return std::bit_cast<T*>(ptr_);
-    }
-};
-
-class TypeRegistry {
-    friend class ThreadGuard;
-    friend class TypeCodeGen;
-
-private:
-    struct TypeComparator {
-        bool operator()(const Type* a, const Type* b) const noexcept;
-    };
-
-    template <typename T>
-    using TypeSet = GlobalMemory::FlatSet<const T*, TypeComparator>;
-
-private:
-    static thread_local std::optional<TypeRegistry> instance;
-
-public:
-    template <TypeClass T>
-        requires(
-            !TypeInTupleV<T, std::tuple<AnyType, NullptrType, IntegerType, FloatType, BooleanType>>
-        )
-    static void get_at(TypeResolution& out, auto&&... args) noexcept {
-        if constexpr (std::is_same_v<T, InstanceType>) {
-            // classes with same definition are distinct types
-            out.reconstruct<T>(std::forward<decltype(args)>(args)...);
-            instance->instance_types_.push_back(static_cast<const T*>(out.get()));
-            instance->add_class_hierarchy(static_cast<const T*>(out.get()));
-        } else {
-            instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
-        }
-    }
-
-    template <typename T>
-        requires(
-            !TypeInTupleV<T, std::tuple<AnyType, NullptrType, IntegerType, FloatType, BooleanType>>
-        )
-    static auto get(auto&&... args) noexcept -> const T* {
-        TypeResolution out = std::type_identity<T>();
-        get_at<T>(out, std::forward<decltype(args)>(args)...);
-        return static_cast<const T*>(out);
-    }
-
-    static auto get_unknown() noexcept -> const Type*;
-
-    static void add_ref_dependency(const Type* parent, const Type* child) noexcept {
-        instance->graph_.add_ref_dependency(parent, child);
-    }
-
-    static auto is_type_incomplete(const Type* type) noexcept -> bool {
-        return instance->graph_.is_parent(type);
-    }
-
-    static auto is_reachable(const Type* from, const Type* to) noexcept -> bool {
-        return instance->class_graph_.is_reachable(from, to);
-    }
-
-    template <std::ranges::input_range R>
-    static auto get_auto_instances(R&& is_nttp_array) noexcept
-        -> GlobalMemory::Vector<const Object*>
-        requires std::same_as<std::ranges::range_value_t<R>, bool>;
-
-private:
-    TypeDependencyGraph graph_;
-    ClassHierarchyGraph class_graph_;
-    std::tuple<
-        TypeSet<FunctionType>,
-        TypeSet<StructType>,
-        TypeSet<MutableType>,
-        TypeSet<ReferenceType>,
-        TypeSet<PointerType>,
-        TypeSet<UnionType>>
-        types_;
-    GlobalMemory::Vector<const InstanceType*> instance_types_;
-    GlobalMemory::Vector<AutoType*> auto_types_;
-    GlobalMemory::Vector<AutoValue*> auto_values_;
-
-private:
-    template <TypeClass T>
-    void get_interned(TypeResolution& out, auto&&... args) noexcept {
-        T* type = out.construct<T>(std::forward<decltype(args)>(args)...);
-        if (type->can_intern(graph_)) {
-            auto [it, _] = std::get<TypeSet<T>>(types_).insert(type);
-            out = *it;
-        } else {
-            auto active_edges = graph_.extract_cycles(type);
-            if (!active_edges.empty()) {
-                out = simplify_recursive_type(active_edges, type);
-            }
-        }
-    }
-
-    auto dispatch_pool(const Type* type) noexcept -> std::pair<const Type*, bool>;
-
-    auto simplify_recursive_type(
-        GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges, const Type* type
-    ) noexcept -> const Type*;
-
-    auto add_class_hierarchy(const InstanceType* type) noexcept -> void;
-
-public:
-    TypeRegistry() noexcept = default;
-};
-
 class Term : public GlobalMemory::MonotonicAllocated {
 public:
     enum class Category : std::uint8_t {
@@ -323,7 +154,6 @@ public:
     };
 
 public:
-    static auto unknown() noexcept -> Term;
     static auto prvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Right); }
     static auto lvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Left); }
     static auto lvalue(Term term) noexcept -> Term {
@@ -360,20 +190,28 @@ public:
     auto effective_type() const noexcept -> const Type*;
     auto value_category() const noexcept -> ValueCategory { return value_category_; }
 
-    auto is_unknown() const noexcept -> bool;
     auto is_comptime() const noexcept -> bool { return is_comptime_; }
     auto get_comptime() const noexcept -> Value* { return is_comptime() ? value_ : nullptr; }
 };
 
 class Object : public GlobalMemory::MonotonicAllocated {
 public:
+    static auto any_pattern(auto&& elements) noexcept -> bool {
+        return std::ranges::any_of(
+            std::forward<decltype(elements)>(elements), std::identity{}, &Object::is_pattern
+        );
+    }
+
+public:
     Kind kind_;
 
 private:
     bool is_type_;
+    bool is_pattern_;
 
 public:
-    Object(Kind kind, bool is_type) noexcept : kind_(kind), is_type_(is_type) {}
+    Object(Kind kind, bool is_type, bool is_pattern) noexcept
+        : kind_(kind), is_type_(is_type), is_pattern_(is_pattern) {}
     virtual ~Object() = default;
 
     auto dyn_type(this auto& self)
@@ -446,6 +284,9 @@ public:
         return do_pattern_match(target, auto_bindings);
     }
 
+public:
+    auto is_pattern() const noexcept -> bool { return is_pattern_; }
+
 private:
     virtual auto do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept
         -> bool = 0;
@@ -453,7 +294,7 @@ private:
 
 class Type : public Object {
 protected:
-    Type(Kind kind) noexcept : Object(kind, true) {}
+    Type(Kind kind, bool is_pattern) noexcept : Object(kind, true, is_pattern) {}
 
 public:
     auto dyn_type() -> Type* = delete;
@@ -492,7 +333,7 @@ protected:
 
 class PrimitiveType : public Type {
 protected:
-    PrimitiveType(Kind kind) noexcept : Type(kind) {}
+    PrimitiveType(Kind kind) noexcept : Type(kind, false) {}
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final { return true; }
 
@@ -504,60 +345,6 @@ protected:
 
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         return this == target;
-    }
-};
-
-class UnknownType final : public PrimitiveType {
-    friend class Object;
-    friend class TypeRegistry;
-
-public:
-    static constexpr Kind kind = Kind::Unknown;
-    static UnknownType instance;
-
-private:
-    UnknownType() noexcept : PrimitiveType(kind) {}
-
-public:
-    GlobalMemory::String repr() const final { return "unknown"; }
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        return true;
-    }
-    Term default_construct() const noexcept final;
-};
-
-class AutoType final : public Type {
-public:
-    static constexpr Kind kind = Kind::Auto;
-
-public:
-    std::size_t index_;
-
-public:
-    AutoType(std::size_t index) noexcept : Type(kind), index_(index) {}
-    GlobalMemory::String repr() const final { UNREACHABLE(); }
-    bool can_intern(TypeDependencyGraph& graph) noexcept final { return true; }
-    std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
-    ) const noexcept final {
-        return this <=> other;
-    }
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        if (auto_bindings.contains(this)) {
-            return auto_bindings[this] == source;
-        } else {
-            auto_bindings[this] = source;
-            return true;
-        }
-    }
-    Term default_construct() const noexcept final { UNREACHABLE(); }
-    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
-        if (auto_bindings.contains(this)) {
-            return auto_bindings[this] == target;
-        } else {
-            auto_bindings[this] = target;
-            return true;
-        }
     }
 };
 
@@ -573,20 +360,6 @@ public:
         return source->kind_ == Kind::Void;
     }
     Term default_construct() const noexcept final { UNREACHABLE(); }
-};
-
-class AnyType final : public PrimitiveType {
-public:
-    static constexpr Kind kind = Kind::Any;
-    static AnyType instance;
-
-public:
-    AnyType() noexcept : PrimitiveType(kind) {}
-    GlobalMemory::String repr() const final { return "any"; }
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        return true;
-    }
-    Term default_construct() const noexcept final;
 };
 
 class NullptrType final : public PrimitiveType {
@@ -683,7 +456,9 @@ public:
 
 public:
     FunctionType(std::span<const Type*> parameters, const Type* return_type) noexcept
-        : Type(kind), parameters_(parameters), return_type_(return_type) {}
+        : Type(kind, any_pattern(parameters) || return_type->is_pattern()),
+          parameters_(parameters),
+          return_type_(return_type) {}
 
     GlobalMemory::String repr() const final {
         GlobalMemory::String params_repr =
@@ -757,7 +532,7 @@ public:
 
 public:
     StructType(GlobalMemory::FlatMap<strview, const Type*> fields) noexcept
-        : Type(kind), fields_(std::move(fields)) {}
+        : Type(kind, any_pattern(fields | std::views::values)), fields_(std::move(fields)) {}
 
     GlobalMemory::String repr() const final {
         // TODO
@@ -839,7 +614,7 @@ private:
     GlobalMemory::FlatMap<strview, std::span<const FunctionType*>> methods_;
 
 public:
-    InterfaceType() noexcept : Type(kind) {}
+    InterfaceType() noexcept : Type(kind, false) {}
 
     GlobalMemory::String repr() const override {
         /// TODO:
@@ -881,7 +656,15 @@ public:
     mutable std::span<const Object*> template_args_;
 
 public:
-    InstanceType(strview identifier) : Type(kind), identifier_(identifier) {}
+    InstanceType(strview identifier) : Type(kind, false), identifier_(identifier) {}
+
+    InstanceType(
+        strview identifier, const void* primary_template, std::span<const Object*> template_args
+    ) noexcept
+        : Type(kind, true),
+          identifier_(identifier),
+          primary_template_(primary_template),
+          template_args_(template_args) {}
 
     InstanceType(
         Scope* scope,
@@ -890,7 +673,7 @@ public:
         std::span<const Type*> interfaces,
         GlobalMemory::FlatMap<strview, const Type*> attrs
     ) noexcept
-        : Type(kind),
+        : Type(kind, false),
           scope_(scope),
           identifier_(identifier),
           extends_(extends),
@@ -950,7 +733,8 @@ public:
     const Type* target_type_;
 
 public:
-    MutableType(const Type* target_type) noexcept : Type(kind), target_type_(target_type) {}
+    MutableType(const Type* target_type) noexcept
+        : Type(kind, target_type->is_pattern()), target_type_(target_type) {}
 
     GlobalMemory::String repr() const final {
         return GlobalMemory::format("mut {}", target_type_->repr());
@@ -991,7 +775,9 @@ public:
 
 public:
     ReferenceType(const Type* referenced_type, bool is_moved) noexcept
-        : Type(kind), referenced_type_(referenced_type), is_moved_(is_moved) {}
+        : Type(kind, referenced_type->is_pattern()),
+          referenced_type_(referenced_type),
+          is_moved_(is_moved) {}
     GlobalMemory::String repr() const final {
         return GlobalMemory::format("{}&{}", is_moved_ ? "move " : "", referenced_type_->repr());
     }
@@ -1036,7 +822,8 @@ public:
     const Type* pointed_type_;
 
 public:
-    PointerType(const Type* pointed_type) noexcept : Type(kind), pointed_type_(pointed_type) {}
+    PointerType(const Type* pointed_type) noexcept
+        : Type(kind, pointed_type->is_pattern()), pointed_type_(pointed_type) {}
     GlobalMemory::String repr() const final {
         return GlobalMemory::format("*{}", pointed_type_->repr());
     }
@@ -1106,7 +893,8 @@ public:
 
 public:
     UnionType(auto&&... unflattened_types) noexcept
-        : Type(kind), types_(flatten(unflattened_types...)) {}
+        : Type(kind, any_pattern(std::tuple{unflattened_types...})),
+          types_(flatten(unflattened_types...)) {}
 
     GlobalMemory::String repr() const final {
         // TODO
@@ -1170,7 +958,7 @@ protected:
 
 class Value : public Object {
 protected:
-    Value(Kind kind) noexcept : Object(kind, false) {}
+    Value(Kind kind, bool is_pattern = false) noexcept : Object(kind, false, is_pattern) {}
     virtual auto do_less_compare(const Value* other) const noexcept -> bool = 0;
 
 public:
@@ -1189,56 +977,6 @@ public:
             return kind_ < other->kind_;
         }
         return do_less_compare(other);
-    }
-};
-
-class UnknownValue final : public Value {
-    friend class Object;
-    friend class Term;
-
-public:
-    static constexpr Kind kind = Kind::Unknown;
-    static UnknownValue instance;
-
-private:
-    UnknownValue() noexcept : Value(kind) {}
-    GlobalMemory::String repr() const final { return "unknown"; }
-    UnknownType* get_type() const noexcept final { return &UnknownType::instance; }
-    UnknownValue* clone() const noexcept final { return new UnknownValue(*this); }
-    UnknownValue* resolve_to(const Type* target) const noexcept final { return new UnknownValue(); }
-    void assign_from(Value* source) noexcept final { UNREACHABLE(); }
-    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
-        UNREACHABLE();
-    }
-    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
-    std::size_t hash_code() const noexcept final { return std::bit_cast<std::size_t>(this); }
-};
-
-class AutoValue final : public Value {
-public:
-    static constexpr Kind kind = Kind::Auto;
-
-public:
-    std::size_t index_;
-
-public:
-    AutoValue(std::size_t index) noexcept : Value(kind), index_(index) {}
-    GlobalMemory::String repr() const final { UNREACHABLE(); }
-    AutoType* get_type() const noexcept final { UNREACHABLE(); }
-    AutoValue* clone() const noexcept final { UNREACHABLE(); }
-    AutoValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
-    void assign_from(Value* source) noexcept final { UNREACHABLE(); }
-    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
-        if (auto_bindings.contains(this)) {
-            return target == auto_bindings[this];
-        } else {
-            auto_bindings[this] = target;
-            return true;
-        }
-    }
-    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
-    std::size_t hash_code() const noexcept final {
-        return hash_combine(std::bit_cast<std::size_t>(this), index_);
     }
 };
 
@@ -1745,178 +1483,399 @@ public:
     }
 };
 
-// ===== Implementation =====
+class AutoObject final : public Type, public Value {
+public:
+    static constexpr Kind kind = Kind::Auto;
 
-inline auto ClassHierarchyGraph::is_reachable(const Type* from, const Type* to) const noexcept
-    -> bool {
-    // search parent
-    GlobalMemory::FlatSet<const Type*> visited;
-    std::vector<const Type*> stack{from};
-    while (!stack.empty()) {
-        const Type* current = stack.back();
-        stack.pop_back();
-        if (current == to) {
-            return true;
-        }
-        if (visited.insert(current).second) {
-            if (auto* instance_type = current->dyn_cast<InstanceType>()) {
-                stack.push_back(instance_type->extends_);
-                stack.insert(
-                    stack.end(),
-                    instance_type->implements_.begin(),
-                    instance_type->implements_.end()
-                );
-            }
-        }
-    }
-    // search children
-    visited.clear();
-    stack.push_back(from);
-    while (!stack.empty()) {
-        const Type* current = stack.back();
-        stack.pop_back();
-        if (current == to) {
-            return true;
-        }
-        if (visited.insert(current).second) {
-            auto range = std::ranges::equal_range(
-                edges_, current, {}, &std::pair<const Type*, const Type*>::first
-            );
-            for (const auto& edge : range) {
-                stack.push_back(edge.second);
-            }
-        }
-    }
-    return false;
-}
-
-inline bool TypeRegistry::TypeComparator::operator()(
-    const Type* lhs, const Type* rhs
-) const noexcept {
-    GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
-    return lhs->compare(rhs, assumed_equal) == std::strong_ordering::less;
-}
-
-inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
-
-inline const Type* TypeRegistry::get_unknown() noexcept { return &UnknownType::instance; }
-
-template <std::ranges::input_range R>
-inline auto TypeRegistry::get_auto_instances(R&& is_nttp_array) noexcept
-    -> GlobalMemory::Vector<const Object*>
-    requires std::same_as<std::ranges::range_value_t<R>, bool>
-{
-    GlobalMemory::Vector<const Object*> result;
-    result.reserve(is_nttp_array.size());
-    std::size_t type_index = 0;
-    std::size_t value_index = 0;
-    for (bool is_nttp : std::forward<R>(is_nttp_array)) {
+public:
+    AutoObject() noexcept : Type(kind, true), Value(kind, true) {}
+    auto as_object(bool is_nttp) const noexcept -> const Object* {
         if (is_nttp) {
-            if (instance->auto_values_.size() == value_index) {
-                instance->auto_values_.push_back(new AutoValue(value_index));
-            }
-            result.push_back(instance->auto_values_[value_index++]);
+            return static_cast<const Value*>(this);
         } else {
-            if (instance->auto_types_.size() == type_index) {
-                instance->auto_types_.push_back(new AutoType(type_index));
-            }
-            result.push_back(instance->auto_types_[type_index++]);
+            return static_cast<const Type*>(this);
         }
     }
-    return result;
-}
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
+        auto [it, inserted] = auto_bindings.insert({this, target});
+        if (!inserted) {
+            return it->second == target;
+        }
+        return true;
+    }
+    bool do_assignable_from(
+        const Type* source, AutoBindings& auto_bindings
+    ) const noexcept override {
+        auto [it, inserted] = auto_bindings.insert({this, source});
+        if (!inserted) {
+            return it->second == source;
+        }
+        return true;
+    }
 
-inline std::pair<const Type*, bool> TypeRegistry::dispatch_pool(const Type* type) noexcept {
-    switch (type->kind_) {
-    case Kind::Function: {
-        auto [it, inserted] =
-            std::get<TypeSet<FunctionType>>(types_).insert(type->cast<FunctionType>());
-        return {*it, inserted};
-    }
-    case Kind::Struct: {
-        auto [it, inserted] =
-            std::get<TypeSet<StructType>>(types_).insert(type->cast<StructType>());
-        return {*it, inserted};
-    }
-    case Kind::Interface:
-        // std::get<TypeSet<InterfaceType>>(types_).insert(type->cast<InterfaceType>());
-        return {nullptr, false};
-    case Kind::Instance:
-        // std::get<TypeSet<ClassType>>(types_).insert(type->cast<ClassType>());
-        return {nullptr, false};
-    case Kind::Mutable: {
-        auto [it, inserted] =
-            std::get<TypeSet<MutableType>>(types_).insert(type->cast<MutableType>());
-        return {*it, inserted};
-    }
-    case Kind::Reference: {
-        auto [it, inserted] =
-            std::get<TypeSet<ReferenceType>>(types_).insert(type->cast<ReferenceType>());
-        return {*it, inserted};
-    }
-    case Kind::Pointer: {
-        auto [it, inserted] =
-            std::get<TypeSet<PointerType>>(types_).insert(type->cast<PointerType>());
-        return {*it, inserted};
-    }
-    case Kind::Union: {
-        auto [it, inserted] = std::get<TypeSet<UnionType>>(types_).insert(type->cast<UnionType>());
-        return {*it, inserted};
-    }
-    default:
+private:
+    GlobalMemory::String repr() const final { UNREACHABLE(); }
+    const Type* get_type() const noexcept final { UNREACHABLE(); }
+    Value* clone() const noexcept final { UNREACHABLE(); }
+    AutoObject* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
+    void assign_from(Value* source) noexcept final { UNREACHABLE(); }
+    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
+    auto hash_code() const noexcept -> std::size_t final { UNREACHABLE(); }
+    auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
+    auto default_construct() const noexcept -> Term final { UNREACHABLE(); }
+    auto do_compare(
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept -> std::strong_ordering final {
         UNREACHABLE();
     }
-}
+};
 
-inline const Type* TypeRegistry::simplify_recursive_type(
-    GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges, const Type* type
-) noexcept {
-    GlobalMemory::FlatSet<const Type*, TypeComparator> unique_types;
-    GlobalMemory::FlatSet<const Type*> visited_types{type};
-    std::ignore = [&](this auto&& self,
-                      const Type* child,
-                      std::span<TypeDependencyGraph::Edge> subspan) -> decltype(subspan)::iterator {
-        auto pivot = std::partition(subspan.begin(), subspan.end(), [&](const auto& edge) {
-            return edge.child != child;
-        });
-        auto [it, inserted] = unique_types.insert(child);
-        for (const auto& edge : std::ranges::subrange(pivot, subspan.end())) {
-            if (!inserted) {
-                *edge.action = *it;
-            }
-            if (visited_types.contains(edge.parent)) {
-                continue;
-            }
-            visited_types.insert(edge.parent);
-            pivot = self(edge.parent, std::span(subspan.begin(), pivot));
-        }
-        return pivot;
-    }(type, active_edges);
+class SkolemObject final : public Type, public Value {
+public:
+    static constexpr Kind kind = Kind::Skolem;
 
-    // Intern the type and its unique descendants
-    auto [interned_type, inserted] = dispatch_pool(type);
-    if (inserted) {
-        for (const Type* candidate : unique_types) {
-            if (candidate == type) continue;
-            auto [_, subtype_inserted] = dispatch_pool(candidate);
-            assert(subtype_inserted);
+public:
+    SkolemObject() noexcept : Type(kind, true), Value(kind, true) {}
+    auto as_object(bool is_nttp) const noexcept -> const Object* {
+        if (is_nttp) {
+            return static_cast<const Value*>(this);
+        } else {
+            return static_cast<const Type*>(this);
         }
     }
-    return interned_type;
-}
-
-inline auto TypeRegistry::add_class_hierarchy(const InstanceType* type) noexcept -> void {
-    if (type->extends_) {
-        class_graph_.add_edge(type, type->extends_);
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
+        if (target->kind_ != Kind::Skolem) {
+            return false;
+        }
+        if (auto* target_type = target->dyn_type()) {
+            return this == target_type->cast<SkolemObject>();
+        } else {
+            return this == target->cast<Value>()->cast<SkolemObject>();
+        }
     }
-    for (const Type* impl : type->implements_) {
-        class_graph_.add_edge(type, impl);
+    bool do_assignable_from(
+        const Type* source, AutoBindings& auto_bindings
+    ) const noexcept override {
+        if (source->kind_ != Kind::Skolem) {
+            return false;
+        }
+        return this == source->cast<SkolemObject>();
     }
-}
 
-inline auto Term::unknown() noexcept -> Term { return Term::prvalue(&UnknownType::instance); }
+private:
+    GlobalMemory::String repr() const final { UNREACHABLE(); }
+    const Type* get_type() const noexcept final { UNREACHABLE(); }
+    Value* clone() const noexcept final { UNREACHABLE(); }
+    AutoObject* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
+    void assign_from(Value* source) noexcept final { UNREACHABLE(); }
+    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
+    auto hash_code() const noexcept -> std::size_t final { UNREACHABLE(); }
+    auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
+    auto default_construct() const noexcept -> Term final { UNREACHABLE(); }
+    auto do_compare(
+        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+    ) const noexcept -> std::strong_ordering final {
+        UNREACHABLE();
+    }
+};
 
-inline auto Term::is_unknown() const noexcept -> bool { return ptr_->kind_ == Kind::Unknown; }
+class ClassHierarchyGraph {
+private:
+    GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> edges_;
+
+public:
+    auto add_edge(const Type* parent, const Type* child) noexcept -> void {
+        edges_.insert({parent, child});
+    }
+
+    auto is_reachable(const Type* from, const Type* to) const noexcept -> bool {
+        // search parent
+        GlobalMemory::FlatSet<const Type*> visited;
+        std::vector<const Type*> stack{from};
+        while (!stack.empty()) {
+            const Type* current = stack.back();
+            stack.pop_back();
+            if (current == to) {
+                return true;
+            }
+            if (visited.insert(current).second) {
+                if (auto* instance_type = current->dyn_cast<InstanceType>()) {
+                    stack.push_back(instance_type->extends_);
+                    stack.insert(
+                        stack.end(),
+                        instance_type->implements_.begin(),
+                        instance_type->implements_.end()
+                    );
+                }
+            }
+        }
+        // search children
+        visited.clear();
+        stack.push_back(from);
+        while (!stack.empty()) {
+            const Type* current = stack.back();
+            stack.pop_back();
+            if (current == to) {
+                return true;
+            }
+            if (visited.insert(current).second) {
+                auto range = std::ranges::equal_range(
+                    edges_, current, {}, &std::pair<const Type*, const Type*>::first
+                );
+                for (const auto& edge : range) {
+                    stack.push_back(edge.second);
+                }
+            }
+        }
+        return false;
+    }
+};
+
+class TypeResolution final {
+    friend class TypeRegistry;
+
+private:
+    /// Indicates whether the type is complete
+    static constexpr std::uintptr_t flag = 1;
+
+private:
+    std::uintptr_t ptr_;
+
+public:
+    TypeResolution() noexcept : ptr_(0) {};
+
+    TypeResolution(const Type* type) noexcept : ptr_(std::bit_cast<std::uintptr_t>(type)) {}
+
+    template <TypeClass T>
+    TypeResolution(std::type_identity<T> identity) noexcept
+        : ptr_(std::bit_cast<std::uintptr_t>(GlobalMemory::alloc_raw(identity)) | flag) {}
+
+    template <std::derived_from<Type> T>
+    operator const T*() const noexcept {
+        return static_cast<const T*>(std::bit_cast<const Type*>(ptr_ & ~flag));
+    }
+
+    auto get() const noexcept -> const Type* { return std::bit_cast<const Type*>(ptr_ & ~flag); }
+
+    auto operator->() const noexcept -> const Type* { return get(); }
+
+    auto is_sized() const noexcept -> bool { return (ptr_ & flag) == 0; }
+
+private:
+    template <TypeClass T>
+        requires(!std::is_same_v<T, InstanceType>)
+    auto construct(auto&&... args) noexcept -> T* {
+        assert(ptr_ && !is_sized());
+        std::construct_at(std::bit_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...);
+        ptr_ &= ~flag;
+        return std::bit_cast<T*>(ptr_);
+    }
+
+    template <std::same_as<InstanceType> T>
+    auto reconstruct(auto&&... args) noexcept -> T* {
+        assert(ptr_ && is_sized());
+        std::destroy_at(std::bit_cast<T*>(ptr_ & ~flag));
+        std::construct_at(std::bit_cast<T*>(ptr_ & ~flag), std::forward<decltype(args)>(args)...);
+        return std::bit_cast<T*>(ptr_);
+    }
+};
+
+class TypeRegistry {
+    friend class ThreadGuard;
+    friend class TypeCodeGen;
+
+private:
+    struct TypeComparator {
+        bool operator()(const Type* lhs, const Type* rhs) const noexcept {
+            GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
+            return lhs->compare(rhs, assumed_equal) == std::strong_ordering::less;
+        }
+    };
+
+    template <typename T>
+    using TypeSet = GlobalMemory::FlatSet<const T*, TypeComparator>;
+
+private:
+    static thread_local std::optional<TypeRegistry> instance;
+
+public:
+    template <TypeClass T>
+        requires(!TypeInTupleV<T, std::tuple<NullptrType, IntegerType, FloatType, BooleanType>>)
+    static void get_at(TypeResolution& out, auto&&... args) noexcept {
+        if constexpr (std::is_same_v<T, InstanceType>) {
+            // classes with same definition are distinct types
+            out.reconstruct<T>(std::forward<decltype(args)>(args)...);
+            instance->instance_types_.push_back(static_cast<const T*>(out.get()));
+            instance->add_class_hierarchy(static_cast<const T*>(out.get()));
+        } else {
+            instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
+        }
+    }
+
+    template <typename T>
+        requires(!TypeInTupleV<T, std::tuple<NullptrType, IntegerType, FloatType, BooleanType>>)
+    static auto get(auto&&... args) noexcept -> const T* {
+        TypeResolution out = std::type_identity<T>();
+        get_at<T>(out, std::forward<decltype(args)>(args)...);
+        return static_cast<const T*>(out);
+    }
+
+    static void add_ref_dependency(const Type* parent, const Type* child) noexcept {
+        instance->graph_.add_ref_dependency(parent, child);
+    }
+
+    static auto is_type_incomplete(const Type* type) noexcept -> bool {
+        return instance->graph_.is_parent(type);
+    }
+
+    static auto is_reachable(const Type* from, const Type* to) noexcept -> bool {
+        return instance->class_graph_.is_reachable(from, to);
+    }
+
+    static auto get_auto_instances(std::size_t count) noexcept -> std::span<const AutoObject*> {
+        while (instance->auto_objects_.size() < count) {
+            instance->auto_objects_.push_back(new AutoObject());
+        }
+        return {instance->auto_objects_.data(), count};
+    }
+
+    static auto get_skolem_objects(std::size_t count) noexcept -> std::span<const SkolemObject*> {
+        while (instance->skolem_objects_.size() < count) {
+            instance->skolem_objects_.push_back(new SkolemObject());
+        }
+        return {instance->skolem_objects_.data(), count};
+    }
+
+private:
+    TypeDependencyGraph graph_;
+    ClassHierarchyGraph class_graph_;
+    std::tuple<
+        TypeSet<FunctionType>,
+        TypeSet<StructType>,
+        TypeSet<MutableType>,
+        TypeSet<ReferenceType>,
+        TypeSet<PointerType>,
+        TypeSet<UnionType>>
+        types_;
+    GlobalMemory::Vector<const InstanceType*> instance_types_;
+    GlobalMemory::Vector<const AutoObject*> auto_objects_;
+    GlobalMemory::Vector<const SkolemObject*> skolem_objects_;
+
+private:
+    template <TypeClass T>
+    void get_interned(TypeResolution& out, auto&&... args) noexcept {
+        T* type = out.construct<T>(std::forward<decltype(args)>(args)...);
+        if (type->is_pattern()) {
+            return;
+        }
+        if (type->can_intern(graph_)) {
+            auto [it, _] = std::get<TypeSet<T>>(types_).insert(type);
+            out = *it;
+        } else {
+            auto active_edges = graph_.extract_cycles(type);
+            if (!active_edges.empty()) {
+                out = simplify_recursive_type(active_edges, type);
+            }
+        }
+    }
+
+    auto dispatch_pool(const Type* type) noexcept -> std::pair<const Type*, bool> {
+        switch (type->kind_) {
+        case Kind::Function: {
+            auto [it, inserted] =
+                std::get<TypeSet<FunctionType>>(types_).insert(type->cast<FunctionType>());
+            return {*it, inserted};
+        }
+        case Kind::Struct: {
+            auto [it, inserted] =
+                std::get<TypeSet<StructType>>(types_).insert(type->cast<StructType>());
+            return {*it, inserted};
+        }
+        case Kind::Interface:
+            // std::get<TypeSet<InterfaceType>>(types_).insert(type->cast<InterfaceType>());
+            return {nullptr, false};
+        case Kind::Instance:
+            // std::get<TypeSet<ClassType>>(types_).insert(type->cast<ClassType>());
+            return {nullptr, false};
+        case Kind::Mutable: {
+            auto [it, inserted] =
+                std::get<TypeSet<MutableType>>(types_).insert(type->cast<MutableType>());
+            return {*it, inserted};
+        }
+        case Kind::Reference: {
+            auto [it, inserted] =
+                std::get<TypeSet<ReferenceType>>(types_).insert(type->cast<ReferenceType>());
+            return {*it, inserted};
+        }
+        case Kind::Pointer: {
+            auto [it, inserted] =
+                std::get<TypeSet<PointerType>>(types_).insert(type->cast<PointerType>());
+            return {*it, inserted};
+        }
+        case Kind::Union: {
+            auto [it, inserted] =
+                std::get<TypeSet<UnionType>>(types_).insert(type->cast<UnionType>());
+            return {*it, inserted};
+        }
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    auto simplify_recursive_type(
+        GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges, const Type* type
+    ) noexcept -> const Type* {
+        GlobalMemory::FlatSet<const Type*, TypeComparator> unique_types;
+        GlobalMemory::FlatSet<const Type*> visited_types{type};
+        std::ignore =
+            [&](this auto&& self,
+                const Type* child,
+                std::span<TypeDependencyGraph::Edge> subspan) -> decltype(subspan)::iterator {
+            auto pivot = std::partition(subspan.begin(), subspan.end(), [&](const auto& edge) {
+                return edge.child != child;
+            });
+            auto [it, inserted] = unique_types.insert(child);
+            for (const auto& edge : std::ranges::subrange(pivot, subspan.end())) {
+                if (!inserted) {
+                    *edge.action = *it;
+                }
+                if (visited_types.contains(edge.parent)) {
+                    continue;
+                }
+                visited_types.insert(edge.parent);
+                pivot = self(edge.parent, std::span(subspan.begin(), pivot));
+            }
+            return pivot;
+        }(type, active_edges);
+
+        // Intern the type and its unique descendants
+        auto [interned_type, inserted] = dispatch_pool(type);
+        if (inserted) {
+            for (const Type* candidate : unique_types) {
+                if (candidate == type) continue;
+                auto [_, subtype_inserted] = dispatch_pool(candidate);
+                assert(subtype_inserted);
+            }
+        }
+        return interned_type;
+    }
+
+    auto add_class_hierarchy(const InstanceType* type) noexcept -> void {
+        if (type->extends_) {
+            class_graph_.add_edge(type, type->extends_);
+        }
+        for (const Type* impl : type->implements_) {
+            class_graph_.add_edge(type, impl);
+        }
+    }
+
+public:
+    TypeRegistry() noexcept = default;
+};
+
+// ===== Implementation =====
+
+inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
 
 inline auto Term::effective_type() const noexcept -> const Type* {
     return is_comptime_ ? value_->get_type() : type_;
@@ -1938,19 +1897,7 @@ inline auto Type::assignable_from(const Type* source, AutoBindings& auto_binding
     return do_assignable_from(source, auto_bindings);
 }
 
-inline UnknownType UnknownType::instance;
-
-inline auto UnknownType::default_construct() const noexcept -> Term {
-    return Term::prvalue(&UnknownValue::instance);
-}
-
 inline VoidType VoidType::instance;
-
-inline AnyType AnyType::instance;
-
-inline auto AnyType::default_construct() const noexcept -> Term {
-    return Term::prvalue(&UnknownValue::instance);
-}
 
 inline NullptrType NullptrType::instance;
 
@@ -2113,8 +2060,6 @@ inline auto UnionType::default_construct() const noexcept -> Term {
     assert(false);
     return Term{};
 }
-
-inline UnknownValue UnknownValue::instance;
 
 inline NullptrValue NullptrValue::instance;
 

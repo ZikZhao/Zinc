@@ -76,8 +76,8 @@ private:
 public:
     Scope() noexcept = default;
 
-    void set_template_argument(strview identifier, const Object* term) noexcept {
-        identifiers_[identifier] = term;
+    void set_template_argument(strview identifier, const Object* obj) noexcept {
+        identifiers_[identifier] = obj;
     }
 
     void set_template_pack(strview identifier, std::span<const Object*> terms) noexcept {

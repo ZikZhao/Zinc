@@ -1,9 +1,8 @@
 fn main(args: [strview]) {
-    let a = A(args);
+    type Keystate = [bool; A.a];
+    let b: Keystate;
 }
 
-class A {
-    init(a: [strview]) {
-        return A{};
-    }
+namespace A {
+    const a: i32 = 1;
 }

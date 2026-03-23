@@ -84,13 +84,8 @@ class TypeCodeGen final {
 public:
     static void output(GlobalMemory::String& out, const Type* type, TypeSeq types) {
         switch (type->kind_) {
-        case Kind::Unknown:
-            UNREACHABLE();
         case Kind::Void:
             out += "void"sv;
-            break;
-        case Kind::Any:
-            out += "std::any"sv;
             break;
         case Kind::Nullptr:
             out += "std::nullptr_t"sv;
@@ -130,8 +125,7 @@ public:
             out += "*"sv;
             break;
         default:
-            /// TODO:
-            assert(false);
+            UNREACHABLE();
         }
     }
 
@@ -262,9 +256,6 @@ class ValueCodeGen final {
 public:
     void operator()(GlobalMemory::String& out, const Value* value, TypeSeq types) {
         switch (value->kind_) {
-        case Kind::Any:
-            out += "std::any{}"sv;
-            break;
         case Kind::Nullptr:
             out += "nullptr"sv;
             break;
@@ -374,9 +365,6 @@ public:
         case Kind::Void:
             out += "v"sv;
             break;
-        case Kind::Any:
-            out += "a"sv;
-            break;
         case Kind::Nullptr:
             out += "n"sv;
             break;
@@ -420,7 +408,7 @@ public:
         }
     }
 
-    auto operator()(GlobalMemory::String& out, const Value* value) const -> void { assert(false); }
+    auto operator()(GlobalMemory::String& out, const Value* value) const -> void { throw; }
 
     auto operator()(GlobalMemory::String& out, OperatorCode opcode) const noexcept -> void {
         switch (opcode) {
@@ -1009,7 +997,7 @@ private:
 };
 
 auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env) -> int {
-    std::filesystem::path out_path = sources.files[0].relative_path_.concat(".cpp");
+    std::filesystem::path out_path = sources.files[1].relative_path_.concat(".cpp");
     std::ofstream out(out_path);
     if (!out) {
         std::cerr << "Failed to open output file: " << out_path << "\n";
