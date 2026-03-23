@@ -672,12 +672,13 @@ public:
         sema_.codegen_env_.map_instantiation(&inst_scope, args);
         sema_.deferred_analysis(inst_scope, primary->target_node);
         Symbol result = sema_.lookup_symbol(primary->identifier);
-        if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
-            if (auto instance_type = (*type)->dyn_cast<InstanceType>()) {
-                instance_type->primary_template_ = primary;
-                instance_type->template_args_ = args;
-            }
-        }
+        /// TODO: class template argument deduction
+        // if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
+        //     if (auto instance_type = (*type)->dyn_cast<InstanceType>()) {
+        //         instance_type->primary_template_ = primary;
+        //         instance_type->template_args_ = args;
+        //     }
+        // }
         return result;
     }
 
@@ -805,6 +806,7 @@ public:
         if (!overload) {
             /// TODO: throw no matching overload error
             Diagnostic::error_no_matching_overload(node->location);
+            resolve_overload(callee, transformed_args);  // for debugging
             return {};
         }
 
@@ -1642,6 +1644,7 @@ public:
         : sema_(sema), expected_(expected), require_comptime_(require_comptime) {}
 
     auto operator()(const ASTExprVariant& variant) noexcept -> Symbol {
+        Diagnostic::ErrorTrap trap{ASTNodePtrGetter{}(variant)->location};
         if (std::visit(
                 [](auto node) -> bool {
                     return std::is_convertible_v<decltype(node), const ASTExplicitTypeExpr*>;
@@ -1823,7 +1826,6 @@ public:
             const Type* element_type = instance_type->template_args_[0]->cast<Type>();
             const IntegerValue* size_value = instance_type->template_args_[1]->cast<IntegerValue>();
             if (node->elements.size() != static_cast<std::size_t>(size_value->value_)) {
-                ;
                 Diagnostic::error_array_initializer_size_mismatch(
                     node->location, static_cast<size_t>(size_value->value_), node->elements.size()
                 );
@@ -2151,6 +2153,8 @@ inline auto Sema::eval_symbol(strview identifier, Scope& scope, const ScopeValue
             Guard guard(*this, scope);
             TypeContextEvaluator{*this, type}(var_init->type);
             if (!type.get()) return {};
+            // std::cout << "Evaluating variable initialization for '" << identifier << "'\n";
+            // std::cout << "Type: " << type.get()->repr() << "\n";
         }
         if (holds_monostate(var_init->value)) {
             return type.get() ? Symbol{Term::lvalue(type.get())} : Symbol{};
@@ -2306,17 +2310,6 @@ inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) n
     if (!Sema::expect(template_symbol, SymbolKind::Template, SymbolKind::Function)) {
         return {};
     }
-    // std::span arg_terms =
-    //     node->arguments | std::views::transform([&](ASTExprVariant arg) -> const Object* {
-    //         Symbol result = ValueContextEvaluator{sema_, nullptr, true}(arg);
-    //         if (Sema::expect(result, SymbolKind::Type, SymbolKind::Term)) {
-    //             return Sema::get_if<SymbolKind::Type>(result)
-    //                        ? static_cast<const Object*>(Sema::get<SymbolKind::Type>(result))
-    //                        : Sema::get<SymbolKind::Term>(result).get_comptime();
-    //         }
-    //         return nullptr;
-    //     }) |
-    //     GlobalMemory::collect<std::span>();
     GlobalMemory::Vector<const Object*> arg_terms;
     for (const ASTExprVariant& arg : node->arguments) {
         Diagnostic::ErrorTrap trap{ASTNodePtrGetter{}(arg)->location};
@@ -2470,7 +2463,7 @@ inline auto TemplateHandler::specialization_resolution(
         for (std::size_t i = 0; i < best_candidate->parameters.size(); i++) {
             const ASTTemplateParameter& param = best_candidate->parameters[i];
             inst_scope.set_template_argument(
-                param.identifier, auto_instances[i]->as_object(param.is_nttp)
+                param.identifier, best_auto_bindings[auto_instances[i]]
             );
         }
         return {&inst_scope, best_candidate->target_node};
@@ -2479,7 +2472,8 @@ inline auto TemplateHandler::specialization_resolution(
     Scope& inst_scope = Scope::make(*sema_.current_scope_);
     Sema::Guard guard(sema_, inst_scope);
     for (size_t i = 0; i < args.size(); i++) {
-        inst_scope.set_template_argument(family.primary->parameters[i].identifier, args[i]);
+        const ASTTemplateParameter& param = family.primary->parameters[i];
+        inst_scope.set_template_argument(param.identifier, args[i]);
     }
     return {&inst_scope, family.primary->target_node};
 }

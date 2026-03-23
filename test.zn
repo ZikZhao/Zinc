@@ -1,8 +1,13 @@
 fn main(args: [strview]) {
-    type Keystate = [bool; A.a];
-    let b: Keystate;
+    let a = Window();
+    a.get_pixel_buffer();
 }
 
-namespace A {
-    const a: i32 = 1;
+class Window {
+    init() {
+        return Self{};
+    }
+    fn get_pixel_buffer(self: &Self) -> &std.vector<u32> {
+        
+    }
 }

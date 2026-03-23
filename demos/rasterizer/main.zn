@@ -277,7 +277,7 @@ fn main(args: [strview]) {
         fps++;
         let now = std.chrono.steady_clock.now();
         let elapsed: std.chrono.duration<f64> = now - last_print;
-        if (elapsed >= std.chrono.seconds(1)) {
+        if (elapsed >= std.chrono.seconds(1 as i64)) {
             std.cout << std.format(
                 "[Renderer] FPS: {:#.3g} | Avg Frame Time: {:#.4g} ms\n",
                 fps as f64 / elapsed.count(),

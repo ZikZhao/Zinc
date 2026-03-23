@@ -680,7 +680,19 @@ public:
           implements_(interfaces),
           attrs_(std::move(attrs)) {}
 
-    GlobalMemory::String repr() const override { return GlobalMemory::format("{}", identifier_); }
+    GlobalMemory::String repr() const override {
+        GlobalMemory::String str = GlobalMemory::format("{}", identifier_);
+        if (primary_template_) {
+            std::string_view sep = "<"sv;
+            for (const Object* arg : template_args_) {
+                str += sep;
+                str += arg->repr();
+                sep = ", "sv;
+            }
+            str += ">";
+        }
+        return str;
+    }
 
     auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
 

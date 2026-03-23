@@ -304,9 +304,10 @@ type:
 		| KW_FLOAT64
 		| KW_BOOL
 		| KW_STRVIEW
-	)												# PrimitiveType
-	| identifier_ = T_IDENTIFIER					# IdentifierType
-	| base_ = type OP_DOT member_ = any_identifier	# MemberAccessType
+	)															# PrimitiveType
+	| identifier_ = T_IDENTIFIER								# IdentifierType
+	| template_ = type instantiation_list_ = instantiation_list	# InstantiatedType
+	| base_ = type OP_DOT member_ = any_identifier				# MemberAccessType
 	| OP_LBRACE (
 		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
 	)? OP_RBRACE # StructType
@@ -315,13 +316,12 @@ type:
 	)? OP_RBRACKET # ArrayType
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
-	)? OP_RPAREN OP_ARROW return_type_ = type					# FunctionType
-	| KW_MUT inner_type_ = type									# MutableType
-	| KW_MOVE? OP_BITAND inner_type_ = type						# ReferenceType
-	| OP_MUL inner_type_ = type									# PointerType
-	| inner_type_ = type OP_QUESTION							# OptionalType
-	| OP_LBRACKET inner_type_ = type OP_RBRACKET				# ParenType
-	| template_ = type instantiation_list_ = instantiation_list	# InstantiatedType;
+	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
+	| KW_MUT inner_type_ = type						# MutableType
+	| KW_MOVE? OP_BITAND inner_type_ = type			# ReferenceType
+	| OP_MUL inner_type_ = type						# PointerType
+	| inner_type_ = type OP_QUESTION				# OptionalType
+	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
 
 field_decl: identifier_ = any_identifier OP_COLON type_ = type;
 
