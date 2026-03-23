@@ -12,10 +12,10 @@
 class ErrorTracker : public antlr4::BaseErrorListener {
 private:
     bool& has_error_;
-    std::string_view file_path_;
+    strview file_path_;
 
 public:
-    explicit ErrorTracker(bool& has_error, std::string_view file_path)
+    explicit ErrorTracker(bool& has_error, strview file_path)
         : has_error_(has_error), file_path_(file_path) {}
 
     void syntaxError(
@@ -56,12 +56,12 @@ private:
         return location;
     }
 
-    auto text(antlr4::ParserRuleContext* ctx) noexcept -> std::string_view {
+    auto text(antlr4::ParserRuleContext* ctx) noexcept -> strview {
         std::string str = ctx->getText();
         return GlobalMemory::persist_string(str);
     }
 
-    auto text(const antlr4::Token* token) noexcept -> std::string_view {
+    auto text(const antlr4::Token* token) noexcept -> strview {
         std::string str = token->getText();
         return GlobalMemory::persist_string(str);
     }
@@ -98,9 +98,9 @@ private:
         }
     }
 
-    auto import_module(std::string_view path) -> const ASTRoot* {
+    auto import_module(strview path) -> const ASTRoot* {
         std::uint32_t module_file_id =
-            sources_.load(std::string_view(path).substr(1, path.size() - 2), file_id_);
+            sources_.load(strview(path).substr(1, path.size() - 2), file_id_);
         if (const void* cached = sources_.get_cache(module_file_id)) {
             return static_cast<const ASTRoot*>(cached);
         } else {
@@ -981,8 +981,7 @@ private:
         case ZincParser::T_STRING: {
             std::string str = ctx->value_->getText();
             unescape_string(str);
-            std::string_view persisted =
-                GlobalMemory::persist_string({str.data() + 1, str.size() - 2});
+            strview persisted = GlobalMemory::persist_string({str.data() + 1, str.size() - 2});
             return as_variant(new ASTStringConstant{loc(ctx), persisted});
         }
         case ZincParser::T_CHAR: {

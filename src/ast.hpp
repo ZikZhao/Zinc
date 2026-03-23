@@ -175,7 +175,7 @@ using ASTExprVariant = std::variant<
     const ASTReferenceType*,
     const ASTPointerType*>;
 
-struct NodePtrVisitor {
+struct ASTNodePtrGetter {
     auto operator()(ASTNodeVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
     auto operator()(ASTExprVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
     template <typename T>
@@ -207,17 +207,17 @@ struct ASTSelfExpr final : public ASTExpression {
 };
 
 struct ASTIdentifier final : public ASTExpression {
-    std::string_view str;
+    strview str;
 };
 
 struct ASTMemberAccess final : public ASTExpression {
     ASTExprVariant base;
-    std::string_view member;
+    strview member;
 };
 
 struct ASTPointerAccess final : public ASTExpression {
     ASTExprVariant base;
-    std::string_view member;
+    strview member;
 };
 
 struct ASTIndexAccess final : public ASTExpression {
@@ -230,7 +230,7 @@ struct ASTConstant final : public ASTExpression {
 };
 
 struct ASTStringConstant final : public ASTExpression {
-    std::string_view value;
+    strview value;
 };
 
 struct ASTParenExpr final : public ASTExpression {
@@ -258,7 +258,7 @@ struct ASTBinaryOp final : public ASTExpression {
 };
 
 struct ASTFieldInitialization final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     ASTExprVariant value;
 };
 
@@ -311,7 +311,7 @@ struct ASTFunctionType final : public ASTExplicitTypeExpr {
 };
 
 struct ASTFieldDeclaration final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     ASTExprVariant type;
 };
 
@@ -338,13 +338,13 @@ struct ASTPointerType final : public ASTExplicitTypeExpr {
 };
 
 // struct ASTTemplateInstantiation final : public ASTExpression {
-//     std::string_view template_identifier;
+//     strview template_identifier;
 //     std::span<ASTExprVariant> arguments;
 // };
 
 // struct ASTTemplateMemberAccessInstantiation final : public ASTExpression {
 //     ASTExprVariant target;
-//     std::string_view member;
+//     strview member;
 //     std::span<ASTExprVariant> arguments;
 // };
 
@@ -353,7 +353,7 @@ struct ASTExpressionStatement final : public ASTNode {
 };
 
 struct ASTDeclaration final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     ASTExprVariant declared_type;
     ASTExprVariant expr;
     bool is_mutable;
@@ -361,7 +361,7 @@ struct ASTDeclaration final : public ASTNode {
 };
 
 struct ASTTypeAlias final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     ASTExprVariant type;
 };
 
@@ -379,7 +379,7 @@ struct ASTForStatement final : public ASTNode {
 };
 
 struct ASTRangeBasedForStatement final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     ASTExprVariant iterable;
     const ASTLocalBlock* body;
 };
@@ -393,7 +393,7 @@ struct ASTReturnStatement final : public ASTNode {
 };
 
 struct ASTFunctionParameter final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     ASTExprVariant type;
     ASTExprVariant default_value;
     bool is_mutable;
@@ -401,7 +401,7 @@ struct ASTFunctionParameter final : public ASTNode {
 };
 
 struct ASTFunctionDefinition final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     std::span<ASTFunctionParameter> parameters;
     ASTExprVariant return_type;
     std::span<ASTNodeVariant> body;
@@ -426,7 +426,7 @@ struct ASTOperatorDefinition final : public ASTNode {
 };
 
 struct ASTClassDefinition final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     ASTExprVariant extends;
     std::span<ASTExprVariant> implements;
     std::span<ASTNodeVariant> fields;
@@ -434,31 +434,31 @@ struct ASTClassDefinition final : public ASTNode {
 };
 
 struct ASTEnumDefinition final : public ASTNode {
-    std::string_view identifier;
-    std::span<std::string_view> enumerators;
+    strview identifier;
+    std::span<strview> enumerators;
 };
 
 struct ASTNamespaceDefinition final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     std::span<ASTNodeVariant> items;
 };
 
 struct ASTTemplateParameter final : public ASTNode {
     bool is_nttp;  // true if non-type template parameter, false if type template parameter
     bool is_variadic;
-    std::string_view identifier;
+    strview identifier;
     ASTExprVariant constraint;
     ASTExprVariant default_value;
 };
 
 struct ASTTemplateDefinition final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     std::span<ASTTemplateParameter> parameters;
     ASTNodeVariant target_node;
 };
 
 struct ASTTemplateSpecialization final : public ASTNode {
-    std::string_view identifier;
+    strview identifier;
     std::span<ASTTemplateParameter> parameters;
     std::span<ASTExprVariant> patterns;
     ASTNodeVariant target_node;
@@ -474,8 +474,8 @@ struct ASTStaticAssertStatement final : public ASTNode {
 };
 
 struct ASTImportStatement final : public ASTNode {
-    std::string_view path;
-    std::string_view alias;
+    strview path;
+    strview alias;
     const ASTRoot* module_root;
     mutable Scope* module_scope = nullptr;
 };
@@ -573,7 +573,7 @@ constexpr auto GetAssignmentEquivalent(OperatorCode opcode) -> OperatorCode {
     }
 }
 
-constexpr auto GetOperatorString(OperatorCode opcode) -> std::string_view {
+constexpr auto GetOperatorString(OperatorCode opcode) -> strview {
     switch (opcode) {
     case OperatorCode::Add:
         return "+";

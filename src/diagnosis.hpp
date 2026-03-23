@@ -3,331 +3,58 @@
 
 #include "source.hpp"
 
-class Problem {
-    friend class Diagnostic;
-
-public:
-    enum class Severity : std::uint8_t {
-        Info,
-        Warning,
-        Error,
-    };
-
-private:
-    Severity severity_;
-    Location location_;
-    std::string_view message_;
-
-protected:
-    Problem() = delete;
-    Problem(Severity severity, Location location, std::string_view message)
-        : severity_(severity), location_(location), message_(message) {}
-    auto sub_problems() const noexcept -> std::generator<Problem> { co_return; }
+enum class Severity : std::uint8_t {
+    Info,
+    Warning,
+    Error,
 };
 
-class NameError : public Problem {
-protected:
-    NameError(const Location& location, std::string_view message)
-        : Problem(Severity::Error, location, message) {}
-};
-
-class UndeclaredIdentifierError final : public NameError {
-public:
-    UndeclaredIdentifierError(const Location& location, std::string_view identifier)
-        : NameError(
-              location, GlobalMemory::format_view("Undeclared identifier: '{}'", identifier)
-          ) {}
-};
-
-class RedeclaredIdentifierError final : public NameError {
-public:
-    RedeclaredIdentifierError(const Location& location, std::string_view identifier)
-        : NameError(
-              location, GlobalMemory::format_view("Redeclared identifier: '{}'", identifier)
-          ) {}
-};
-
-class SymbolCategoryMismatchError final : public NameError {
-public:
-    SymbolCategoryMismatchError(const Location& location, bool expected_is_type)
-        : NameError(
-              location,
-              GlobalMemory::format_view(
-                  "Symbol kind mismatch: expected {}, got {}",
-                  expected_is_type ? "type" : "value",
-                  !expected_is_type ? "type" : "value"
-              )
-          ) {}
-};
-
-class TypeError : public Problem {
-protected:
-    TypeError(const Location& location, std::string_view message)
-        : Problem(Severity::Error, location, message) {}
-};
-
-class TypeMismatchError final : public TypeError {
-public:
-    TypeMismatchError(const Location& location, std::string_view expected, std::string_view actual)
-        : TypeError(
-              location,
-              GlobalMemory::format_view("Type mismatch: expected '{}', got '{}'", expected, actual)
-          ) {}
-};
-
-class OperationNotDefinedError final : public TypeError {
-public:
-    OperationNotDefinedError(
-        const Location& location,
-        std::string_view operator_repr,
-        std::string_view left_type_repr,
-        std::string_view right_type_repr = ""
-    )
-        : TypeError(
-              location,
-              right_type_repr.size()
-                  ? GlobalMemory::format_view(
-                        "Undefined operator '{}' for types '{}' and '{}'",
-                        operator_repr,
-                        left_type_repr,
-                        right_type_repr
-                    )
-                  : GlobalMemory::format_view(
-                        "Undefined operator '{}' for type '{}'", operator_repr, left_type_repr
-                    )
-          ) {}
-};
-
-class NotCallableError final : public TypeError {
-public:
-    NotCallableError(const Location& location, std::string_view type_repr)
-        : TypeError(location, GlobalMemory::format_view("Type '{}' is not callable", type_repr)) {}
-};
-
-class ArgumentCountMismatchError final : public TypeError {
-public:
-    ArgumentCountMismatchError(
-        const Location& location, std::size_t expected_count, std::size_t actual_count
-    )
-        : TypeError(
-              location,
-              GlobalMemory::format_view(
-                  "Argument count mismatch: expected {}, got {}", expected_count, actual_count
-              )
-          ) {}
-};
-
-class ArgumentMismatchError final : public TypeError {
-public:
-    ArgumentMismatchError(
-        const Location& location,
-        std::size_t index,
-        std::string_view expected,
-        std::string_view actual
-    )
-        : TypeError(
-              location,
-              GlobalMemory::format_view(
-                  "Argument type mismatch at index {}: expected '{}', got '{}'",
-                  index,
-                  expected,
-                  actual
-              )
-          ) {}
-};
-
-class CircularTypeDependencyError final : public TypeError {
-public:
-    CircularTypeDependencyError(const Location& location)
-        : TypeError(location, GlobalMemory::format_view("Circular type definition detected")) {}
-};
-
-class ImmutableMutationError final : public TypeError {
-public:
-    ImmutableMutationError(const Location& location)
-        : TypeError(location, GlobalMemory::format_view("Attempted mutation of immutable value")) {}
-};
-
-class InvalidAssignmentTargetError final : public TypeError {
-public:
-    InvalidAssignmentTargetError(const Location& location)
-        : TypeError(location, "Left-hand side of assignment is not an lvalue") {}
-};
-
-class DivisionByZeroError final : public TypeError {
-public:
-    DivisionByZeroError(const Location& location)
-        : TypeError(location, "Division by zero in constant expression") {}
-};
-
-class ShiftByNegativeError final : public TypeError {
-public:
-    ShiftByNegativeError(const Location& location)
-        : TypeError(location, "Shift by negative amount") {}
-};
-
-class MultiplyStringByNonPositiveIntegerError final : public TypeError {
-public:
-    MultiplyStringByNonPositiveIntegerError(const Location& location)
-        : TypeError(location, "Cannot multiply string by non-positive integer") {}
-};
-
-class DuplicateDestructorError final : public TypeError {
-public:
-    DuplicateDestructorError(const Location& location)
-        : TypeError(location, "Multiple destructors defined for a class") {}
-};
-
-class AttributeError : public TypeError {
-public:
-    AttributeError(const Location& location, std::string_view message)
-        : TypeError(location, message) {}
-};
-
-class DuplicateAttributeError final : public AttributeError {
-public:
-    DuplicateAttributeError(const Location& location, std::string_view attribute)
-        : AttributeError(
-              location, GlobalMemory::format_view("Duplicate attribute: '{}'", attribute)
-          ) {}
-};
-
-class UnknownAttributeError final : public AttributeError {
-public:
-    UnknownAttributeError(const Location& location, std::string_view attribute)
-        : AttributeError(
-              location, GlobalMemory::format_view("Unknown attribute: '{}'", attribute)
-          ) {}
-};
-
-class AttributeTypeMismatchError final : public AttributeError {
-public:
-    AttributeTypeMismatchError(
-        const Location& location,
-        std::string_view attribute,
-        std::string_view expected_type,
-        std::string_view actual_type
-    )
-        : AttributeError(
-              location,
-              GlobalMemory::format_view(
-                  "Attribute type mismatch for '{}': expected '{}', got '{}'",
-                  attribute,
-                  expected_type,
-                  actual_type
-              )
-          ) {}
-};
-
-class UninitializedAttributeError final : public AttributeError {
-public:
-    UninitializedAttributeError(const Location& location, std::string_view attribute)
-        : AttributeError(
-              location,
-              GlobalMemory::format_view(
-                  "Attribute '{}' is not initialized and has no default value", attribute
-              )
-          ) {}
-};
-
-class CompileTimeEvaluationError : public Problem {
-public:
-    CompileTimeEvaluationError(const Location& location, std::string_view message)
-        : Problem(Severity::Error, location, message) {}
-};
-
-class InvalidLiteralError final : public CompileTimeEvaluationError {
-public:
-    InvalidLiteralError(const Location& location, std::string_view literal, std::string_view type)
-        : CompileTimeEvaluationError(
-              location,
-              GlobalMemory::format_view("Invalid literal '{}' for type '{}'", literal, type)
-          ) {}
-};
-
-class OverflowError final : public CompileTimeEvaluationError {
-public:
-    OverflowError(const Location& location, std::string_view literal, std::string_view type)
-        : CompileTimeEvaluationError(
-              location,
-              GlobalMemory::format_view(
-                  "Literal '{}' overflows the range of type '{}'", literal, type
-              )
-          ) {}
-};
-
-class NotConstantExpressionError final : public CompileTimeEvaluationError {
-public:
-    NotConstantExpressionError(const Location& location)
-        : CompileTimeEvaluationError(location, "Expression is not a constant expression") {}
-};
-
-class TemplateError : public Problem {
-protected:
-    TemplateError(const Location& location, std::string_view message)
-        : Problem(Severity::Error, location, message) {}
-};
-
-class TemplateArgumentCountMismatchError final : public TemplateError {
-public:
-    TemplateArgumentCountMismatchError(
-        const Location& location, std::size_t expected_count, std::size_t actual_count
-    )
-        : TemplateError(
-              location,
-              GlobalMemory::format_view(
-                  "Template argument count mismatch: expected {}, got {}",
-                  expected_count,
-                  actual_count
-              )
-          ) {}
-};
-
-class TemplateArgumentCategoryMismatchError final : public TemplateError {
-public:
-    TemplateArgumentCategoryMismatchError(
-        const Location& location, std::string_view param_name, bool expected_is_type
-    )
-        : TemplateError(
-              location,
-              GlobalMemory::format_view(
-                  "Template argument category mismatch for parameter '{}': expected {}, got {}",
-                  param_name,
-                  expected_is_type ? "type" : "value",
-                  !expected_is_type ? "type" : "value"
-              )
-          ) {}
-};
-
-class TemplateArgumentTypeMismatchError final : public TemplateError {
-public:
-    TemplateArgumentTypeMismatchError(
-        const Location& location,
-        std::string_view param_name,
-        std::string_view expected_type,
-        std::string_view actual_type
-    )
-        : TemplateError(
-              location,
-              GlobalMemory::format_view(
-                  "Template argument type mismatch for parameter '{}': expected type '{}', got "
-                  "type '{}'",
-                  param_name,
-                  expected_type,
-                  actual_type
-              )
-          ) {}
+struct Problem {
+    Severity severity;
+    Location location;
+    GlobalMemory::String message;
+    GlobalMemory::Vector<Problem> subproblems;
 };
 
 class Diagnostic {
     friend class ThreadGuard;
+
+public:
+    class ErrorTrap {
+        friend class Diagnostic;
+
+    private:
+        Location location_;
+        GlobalMemory::Vector<Problem> problems_;
+        ErrorTrap* prev_;
+
+    public:
+        ErrorTrap(Location location) noexcept
+            : location_(location), prev_(std::exchange(instance->current_trap_, this)) {}
+
+        ~ErrorTrap() noexcept {
+            for (Problem& problem : problems_) {
+                problem.location = location_;
+                instance->problems_.push_back(std::move(problem));
+            }
+            instance->current_trap_ = prev_;
+        }
+    };
 
 private:
     static inline std::mutex print_mutex_;
     static thread_local std::optional<Diagnostic> instance;
 
 public:
-    static void report(Problem&& problem) { instance->problems_.push_back(std::move(problem)); }
+    static void report(Problem&& problem) {
+        assert(instance->current_trap_);
+        instance->current_trap_->problems_.push_back(std::move(problem));
+    }
+
+    static void report_subproblem(Problem&& problem) {
+        assert(instance->current_trap_ && !instance->current_trap_->problems_.empty());
+        instance->current_trap_->problems_.back().subproblems.push_back(std::move(problem));
+    }
 
     static auto print(SourceManager& sources) -> bool {
         std::lock_guard lock(print_mutex_);
@@ -335,14 +62,14 @@ public:
         std::size_t warning_count = 0;
         for (const Problem& problem : instance->problems_) {
             print_problem(sources, problem);
-            switch (problem.severity_) {
-            case Problem::Severity::Error:
+            switch (problem.severity) {
+            case Severity::Error:
                 ++error_count;
                 break;
-            case Problem::Severity::Warning:
+            case Severity::Warning:
                 ++warning_count;
                 break;
-            case Problem::Severity::Info:
+            case Severity::Info:
                 break;
             }
         }
@@ -363,13 +90,13 @@ public:
         return true;
     }
 
-    static void message(std::string_view msg) {
+    static void info_msg(strview msg) {
         std::lock_guard lock(print_mutex_);
         std::print(std::cout, "{}[INFO]{} {}\n", ColourEscape::CYAN, ColourEscape::RESET, msg);
         std::cout.flush();
     }
 
-    static void error(std::string_view msg) {
+    static void error_msg(strview msg) {
         std::lock_guard lock(print_mutex_);
         std::print(std::cerr, "{}[ERROR]{} {}\n", ColourEscape::RED, ColourEscape::RESET, msg);
         std::cerr.flush();
@@ -379,27 +106,27 @@ private:
     static void print_problem(
         SourceManager& sources, const Problem& problem, std::size_t indent = 0
     ) {
-        std::string_view prefix;
+        strview prefix;
         const char* colour = nullptr;
-        switch (problem.severity_) {
-        case Problem::Severity::Info:
+        switch (problem.severity) {
+        case Severity::Info:
             prefix = "INFO";
             colour = ColourEscape::CYAN;
             break;
-        case Problem::Severity::Warning:
+        case Severity::Warning:
             prefix = "WARNING";
             colour = ColourEscape::YELLOW;
             break;
-        case Problem::Severity::Error:
+        case Severity::Error:
             prefix = "ERROR";
             colour = ColourEscape::RED;
             break;
         }
         std::print(
-            std::cerr, "{}[{}]{} {}\n", colour, prefix, ColourEscape::RESET, problem.message_
+            std::cerr, "{}[{}]{} {}\n", colour, prefix, ColourEscape::RESET, problem.message
         );
-        print_code(sources, problem.location_, indent + 2);
-        for (const Problem& sub_problem : problem.sub_problems()) {
+        print_code(sources, problem.location, indent + 2);
+        for (const Problem& sub_problem : problem.subproblems) {
             print_problem(sources, sub_problem, indent + 2);
         }
     }
@@ -439,45 +166,42 @@ private:
             ColourEscape::RESET
         );
 
-        auto print_line = [&](std::int64_t line_idx,
-                              std::string_view prefix,
-                              std::string_view match,
-                              std::string_view suffix) {
-            std::print(
-                std::cerr,
-                "{:{}}{}{:>{}} |{}",
-                "",
-                indent,
-                ColourEscape::DIM,
-                line_idx,
-                line_num_width,
-                ColourEscape::RESET
-            );
-
-            if (!prefix.empty())
-                std::print(std::cerr, " {}", prefix);
-            else
-                std::print(std::cerr, " ");
-
-            if (!match.empty()) {
+        auto print_line =
+            [&](std::int64_t line_idx, strview prefix, strview match, strview suffix) {
                 std::print(
-                    std::cerr, "{}{}{}", ColourEscape::HI_MAGENTA, match, ColourEscape::RESET
+                    std::cerr,
+                    "{:{}}{}{:>{}} |{}",
+                    "",
+                    indent,
+                    ColourEscape::DIM,
+                    line_idx,
+                    line_num_width,
+                    ColourEscape::RESET
                 );
-            }
 
-            if (!suffix.empty()) std::print(std::cerr, "{}", suffix);
+                if (!prefix.empty())
+                    std::print(std::cerr, " {}", prefix);
+                else
+                    std::print(std::cerr, " ");
 
-            std::print(std::cerr, "\n");
-        };
+                if (!match.empty()) {
+                    std::print(
+                        std::cerr, "{}{}{}", ColourEscape::HI_MAGENTA, match, ColourEscape::RESET
+                    );
+                }
 
-        std::string_view full_context =
-            std::string_view(content).substr(context_start, context_end - context_start);
+                if (!suffix.empty()) std::print(std::cerr, "{}", suffix);
+
+                std::print(std::cerr, "\n");
+            };
+
+        strview full_context = strview(content).substr(context_start, context_end - context_start);
 
         std::size_t current_pos_in_file = context_start;
         std::int64_t current_line_num = start_line_num;
 
         for (const auto& line_range : std::views::split(full_context, '\n')) {
-            std::string_view line(
+            strview line(
                 &*line_range.begin(), static_cast<std::size_t>(std::ranges::distance(line_range))
             );
             std::size_t line_start = current_pos_in_file;
@@ -485,9 +209,9 @@ private:
             std::size_t hl_start = std::clamp<std::size_t>(location.begin, line_start, line_end);
             std::size_t hl_end = std::clamp<std::size_t>(location.end, line_start, line_end);
 
-            std::string_view prefix = line.substr(0, hl_start - line_start);
-            std::string_view match = line.substr(hl_start - line_start, hl_end - hl_start);
-            std::string_view suffix = line.substr(hl_end - line_start);
+            strview prefix = line.substr(0, hl_start - line_start);
+            strview match = line.substr(hl_start - line_start, hl_end - hl_start);
+            strview suffix = line.substr(hl_end - line_start);
 
             print_line(current_line_num++, prefix, match, suffix);
 
@@ -497,30 +221,205 @@ private:
 
 private:
     std::vector<Problem> problems_;
+    ErrorTrap* current_trap_ = nullptr;
 
 public:
     Diagnostic() noexcept = default;
-};
-
-class UnlocatedProblem : std::runtime_error {
-public:
-    template <typename T, typename... Args>
-        requires std::is_base_of_v<Problem, T> && std::is_constructible_v<T, Location, Args...>
-    static auto make(Args&&... args) -> UnlocatedProblem {
-        std::move_only_function<void(Location) &&> callback =
-            [... params = std::forward<Args>(args)](Location loc) {
-                Diagnostic::report(T(loc, std::move(params)...));
-            };
-        return UnlocatedProblem(std::move(callback));
-    }
 
 private:
-    std::move_only_function<void(Location) &&> callback_;
+    static auto unlocated_error(GlobalMemory::String&& msg) noexcept -> void {
+        Diagnostic::report(Problem{.severity = Severity::Error, .message = std::move(msg)});
+    }
 
 public:
-    UnlocatedProblem(decltype(callback_)&& callback)
-        : std::runtime_error(""), callback_(std::move(callback)) {}
-    void report_at(Location location) { std::move(callback_)(location); }
+    static auto error_undeclared_identifier(strview identifier) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Undeclared identifier: '{}'", identifier));
+    }
+
+    static auto error_redeclared_identifier(strview identifier) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Redeclared identifier: '{}'", identifier));
+    }
+
+    static auto error_symbol_category_mismatch(strview expected, strview actual) noexcept -> void {
+        unlocated_error(
+            GlobalMemory::format("Symbol kind mismatch: expected '{}', got '{}'", expected, actual)
+        );
+    }
+
+    static auto error_symbol_category_mismatch(
+        Location location, strview expected, strview actual
+    ) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format(
+                    "Symbol kind mismatch: expected '{}', got '{}'", expected, actual
+                )
+            }
+        );
+    }
+
+    static auto error_circular_type_dependency(Location location) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Circular type definition detected:"));
+    }
+
+    static auto error_duplicate_attribute(Location location, strview attribute_name) noexcept
+        -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format("Duplicate attribute name: '{}'", attribute_name)
+            }
+        );
+    }
+
+    static auto error_decl_of_duplicate_attribute(Location location) noexcept -> void {
+        Diagnostic::report_subproblem(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Previous declaration of attribute is here:"sv)
+            }
+        );
+    }
+
+    static auto error_overflow(auto literal, strview type) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Literal '{}' overflows type '{}'", literal, type));
+    }
+
+    static auto error_uninitialized_attribute(strview attribute_name) noexcept -> void {
+        unlocated_error(
+            GlobalMemory::format(
+                "Attribute '{}' is not initialized and is not default constructible", attribute_name
+            )
+        );
+    }
+
+    static auto error_unrecognized_attribute(strview attribute_name) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Unrecognized attribute: '{}'", attribute_name));
+    }
+
+    static auto error_type_mismatch(strview expected, strview actual) noexcept -> void {
+        unlocated_error(
+            GlobalMemory::format("Type mismatch: expected '{}', got '{}'", expected, actual)
+        );
+    }
+
+    static auto error_operation_not_defined(
+        strview operator_repr, strview left_type_repr, strview right_type_repr = ""
+    ) noexcept -> void {
+        if (right_type_repr.empty()) {
+            unlocated_error(
+                GlobalMemory::format(
+                    "Undefined operator '{}' for type '{}'", operator_repr, left_type_repr
+                )
+            );
+        } else {
+            unlocated_error(
+                GlobalMemory::format(
+                    "Undefined operator '{}' for types '{}' and '{}'",
+                    operator_repr,
+                    left_type_repr,
+                    right_type_repr
+                )
+            );
+        }
+    }
+
+    static auto error_no_matching_overload(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("No matching overload found"sv)
+            }
+        );
+    }
+
+    static auto error_candidate_argument_count_mismatch(
+        strview signature, std::size_t expected, std::size_t actual
+    ) noexcept -> void {
+        unlocated_error(
+            GlobalMemory::format(
+                "Candidate with mismatching argument count: expected {}, got {}",
+                signature,
+                expected,
+                actual
+            )
+        );
+    }
+
+    static auto error_candidate_type_mismatch(
+        strview signature, std::size_t index, strview expected, strview actual
+    ) noexcept -> void {
+        unlocated_error(
+            GlobalMemory::format(
+                "Candidate with mismatching argument types at index {}: expected '{}', got '{}'",
+                signature,
+                index,
+                expected,
+                actual
+            )
+        );
+    }
+
+    static auto error_invalid_literal(strview literal, strview type) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Invalid literal '{}' for type '{}'", literal, type));
+    }
+
+    static auto error_not_constant_expression(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Expression is not a constant expression"sv)
+            }
+        );
+    }
+
+    static auto error_construct_instance_out_of_class(
+        Location location, strview class_name
+    ) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format(
+                    "Cannot construct instance of class '{}' outside of its scope, calling "
+                    "constructor instead",
+                    class_name
+                )
+            }
+        );
+    }
+
+    static auto error_invalid_cast(Location location, strview from_type, strview to_type) noexcept
+        -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message =
+                    GlobalMemory::format("Invalid cast from '{}' to '{}'", from_type, to_type)
+            }
+        );
+    }
+
+    static auto error_array_initializer_size_mismatch(
+        Location location, std::size_t expected, std::size_t actual
+    ) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format(
+                    "Array initializer size mismatch: expected {}, got {}", expected, actual
+                )
+            }
+        );
+    }
 };
 
 inline thread_local std::optional<Diagnostic> Diagnostic::instance;

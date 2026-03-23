@@ -218,7 +218,7 @@
                 "problemMatcher": "$gcc",
                 "dependsOn": [
                     "Configure (Debug)",
-                    "Clang-Tidy (Debug, Report Only)"
+                    // "Clang-Tidy (Debug)"
                 ],
                 "dependsOrder": "sequence"
             },
@@ -237,7 +237,7 @@
                 "problemMatcher": "$gcc",
                 "dependsOn": [
                     "Configure (Release)",
-                    "Clang-Tidy (Release, Report Only)"
+                    // "Clang-Tidy (Release)"
                 ],
                 "dependsOrder": "sequence"
             },
@@ -256,7 +256,7 @@
                 "problemMatcher": "$gcc",
                 "dependsOn": [
                     "Configure (Debug)",
-                    "Clang-Tidy (Debug, Report Only)"
+                    // "Clang-Tidy (Debug)"
                 ],
                 "dependsOrder": "sequence"
             },
@@ -275,7 +275,7 @@
                 "problemMatcher": "$gcc",
                 "dependsOn": [
                     "Configure (Release)",
-                    "Clang-Tidy (Release, Report Only)"
+                    // "Clang-Tidy (Release)"
                 ],
                 "dependsOrder": "sequence"
             },

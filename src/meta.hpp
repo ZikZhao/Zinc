@@ -124,7 +124,7 @@ auto is_mut(const Type* type) -> bool { return type->kind_ == Kind::Mutable; }
 
 auto is_const(const Type* type) -> bool { return !is_mut(type); }
 
-auto get_metas() -> std::generator<std::pair<std::string_view, MetaFunction>> {
+auto get_metas() -> std::generator<std::pair<strview, MetaFunction>> {
     // scope.add_meta("is_void", MetaWrapper<is_void>{});
     co_yield {"is_integral", MetaWrapper<is_integral>::invoke};
     co_yield {"is_floating_point", MetaWrapper<is_floating_point>::invoke};

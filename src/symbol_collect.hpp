@@ -5,8 +5,8 @@
 #include "meta.hpp"
 #include "object.hpp"
 
-inline constexpr std::string_view constructor_symbol = "!";
-inline constexpr std::string_view destructor_symbol = "~";
+inline constexpr strview constructor_symbol = "!";
+inline constexpr strview destructor_symbol = "~";
 
 using FunctionOverloadDef = PointerVariant<
     const ASTFunctionDefinition*,
@@ -43,13 +43,13 @@ class Scope final : public GlobalMemory::MonotonicAllocated {
     friend class CodeGen;
 
 public:
-    static auto root(Scope& std_scope) -> Scope& {
+    static auto root(Scope& std_scope) noexcept -> Scope& {
         auto* scope = new Scope(nullptr, {});
         scope->add_namespace("std", std_scope);
         return *scope;
     }
 
-    static auto make(Scope& parent, const ASTNode* origin = nullptr, std::string_view scope_id = {})
+    static auto make(Scope& parent, const ASTNode* origin = nullptr, strview scope_id = {}) noexcept
         -> Scope& {
         auto* scope = new Scope(&parent, scope_id);
         parent.children_.insert({origin, scope});
@@ -58,18 +58,16 @@ public:
 
 private:
     GlobalMemory::FlatMap<const void*, Scope*> children_;
-    GlobalMemory::FlatMap<std::string_view, ScopeValue> identifiers_;
+    GlobalMemory::FlatMap<strview, ScopeValue> identifiers_;
 
 public:
-    Scope* const parent_ = nullptr;
-    std::string_view scope_id_;
+    Scope* parent_ = nullptr;
+    strview scope_id_;
     const Type* self_type_ = nullptr;
-    bool in_constructor_ = false;
     bool is_extern_ = false;
 
 private:
-    Scope(Scope* parent, std::string_view scope_id) noexcept
-        : parent_(parent), scope_id_(scope_id) {
+    Scope(Scope* parent, strview scope_id) noexcept : parent_(parent), scope_id_(scope_id) {
         if (parent) {
             is_extern_ = parent->is_extern_;
         }
@@ -77,43 +75,38 @@ private:
 
 public:
     Scope() noexcept = default;
-    Scope(const Scope&) = delete;
-    Scope(Scope&&) = delete;
-    auto operator=(const Scope&) -> Scope& = delete;
-    auto operator=(Scope&&) -> Scope& = delete;
-    ~Scope() noexcept = default;
 
-    void set_template_argument(std::string_view identifier, const Object* term) noexcept {
+    void set_template_argument(strview identifier, const Object* term) noexcept {
         identifiers_[identifier] = term;
     }
 
-    void set_template_pack(std::string_view identifier, std::span<const Object*> terms) noexcept {
+    void set_template_pack(strview identifier, std::span<const Object*> terms) noexcept {
         std::span<const Object*>* ptr = GlobalMemory::alloc<std::span<const Object*>>(terms);
         identifiers_[identifier] = ptr;
     }
 
-    void add_alias(std::string_view identifier, const ASTExprVariant* expr) {
+    void add_alias(strview identifier, const ASTExprVariant* expr) noexcept {
         auto [_, inserted] = identifiers_.insert({identifier, expr});
         if (!inserted) {
-            throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+            Diagnostic::error_redeclared_identifier(identifier);
         }
     }
 
-    void add_class(std::string_view identifier, const ASTClassDefinition* class_def) {
+    void add_class(strview identifier, const ASTClassDefinition* class_def) noexcept {
         auto [_, inserted] = identifiers_.insert({identifier, class_def});
         if (!inserted) {
-            throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+            Diagnostic::error_redeclared_identifier(identifier);
         }
     }
 
-    void add_variable(std::string_view identifier, const VariableInitialization* init) {
+    void add_variable(strview identifier, const VariableInitialization* init) noexcept {
         auto [_, inserted] = identifiers_.insert({identifier, init});
         if (!inserted) {
-            throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+            Diagnostic::error_redeclared_identifier(identifier);
         }
     }
 
-    void add_function(std::string_view identifier, const auto* func) {
+    void add_function(strview identifier, const auto* func) noexcept {
         if (auto it = identifiers_.find(identifier); it == identifiers_.end()) {
             auto overloads = GlobalMemory::alloc<GlobalMemory::Vector<FunctionOverloadDef>>();
             overloads->push_back(func);
@@ -121,13 +114,14 @@ public:
         } else {
             auto overloads = it->second.get<GlobalMemory::Vector<FunctionOverloadDef>*>();
             if (!overloads) {
-                throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+                Diagnostic::error_redeclared_identifier(identifier);
+                return;
             }
             overloads->push_back(func);
         }
     }
 
-    void add_template(std::string_view identifier, const ASTTemplateDefinition* definition) {
+    void add_template(strview identifier, const ASTTemplateDefinition* definition) noexcept {
         ASTNodeVariant target = definition->target_node;
         if (std::holds_alternative<const ASTFunctionDefinition*>(target) ||
             std::holds_alternative<const ASTCtorDtorDefinition*>(target) ||
@@ -144,26 +138,28 @@ public:
              }}
         );
         if (!inserted) {
-            throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+            Diagnostic::error_redeclared_identifier(identifier);
         }
     }
 
     void add_template(
-        std::string_view identifier, const ASTTemplateSpecialization* specialization
-    ) {
+        strview identifier, const ASTTemplateSpecialization* specialization
+    ) noexcept {
         auto it = identifiers_.find(identifier);
         if (it == identifiers_.end()) {
-            throw UnlocatedProblem::make<UndeclaredIdentifierError>(identifier);
+            Diagnostic::error_undeclared_identifier(identifier);
+            return;
         }
         auto family = it->second.get<TemplateFamily*>();
         if (!family) {
-            throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+            Diagnostic::error_redeclared_identifier(identifier);
+            return;
         }
         assert(family->decl_scope != nullptr);
         family->specializations.push_back(specialization);
     }
 
-    void add_meta(std::string_view identifier, MetaFunction func) noexcept {
+    void add_meta(strview identifier, MetaFunction func) noexcept {
         auto [_, inserted] = identifiers_.insert(
             {identifier,
              new TemplateFamily{
@@ -175,14 +171,14 @@ public:
         assert(inserted);
     }
 
-    void add_namespace(std::string_view identifier, Scope& scope) {
+    void add_namespace(strview identifier, Scope& scope) noexcept {
         auto [_, inserted] = identifiers_.insert({identifier, &scope});
         if (!inserted) {
-            throw UnlocatedProblem::make<RedeclaredIdentifierError>(identifier);
+            Diagnostic::error_redeclared_identifier(identifier);
         }
     }
 
-    [[nodiscard]] auto find(std::string_view identifier) const noexcept -> const ScopeValue* {
+    auto find(strview identifier) const noexcept -> const ScopeValue* {
         auto it = identifiers_.find(identifier);
         if (it != identifiers_.end()) {
             return &it->second;
@@ -228,36 +224,36 @@ public:
 
     // Struct initialization
     void operator()(const ASTStructInitialization* node) noexcept {
-        auto fields =
-            node->field_inits |
-            std::views::transform([&](const ASTFieldInitialization& init) -> std::string_view {
-                return init.identifier;
-            }) |
-            GlobalMemory::collect<GlobalMemory::Vector>();
-        std::ranges::sort(fields);
-        if (std::ranges::adjacent_find(fields) != fields.end()) {
-            throw UnlocatedProblem::make<DuplicateAttributeError>(fields.front());
+        GlobalMemory::FlatSet<strview> fields;
+        for (const auto& init : node->field_inits) {
+            auto [_, inserted] = fields.insert(init.identifier);
+            if (!inserted) {
+                Diagnostic::error_duplicate_attribute(init.location, init.identifier);
+                auto prev = std::ranges::find(
+                    node->field_inits, init.identifier, &ASTFieldInitialization::identifier
+                );
+                Diagnostic::error_decl_of_duplicate_attribute(prev->location);
+                return;
+            }
         }
     }
 
     // Declarations
     void operator()(const ASTDeclaration* node) noexcept {
-        try {
-            current_scope_.add_variable(
-                node->identifier,
-                new VariableInitialization{
-                    .is_comptime = node->is_constant,
-                    .is_mutable = node->is_mutable,
-                    .type = node->declared_type,
-                    .value = node->expr
-                }
-            );
-        } catch (UnlocatedProblem& e) {
-            e.report_at(node->location);
-        }
+        Diagnostic::ErrorTrap trap{node->location};
+        current_scope_.add_variable(
+            node->identifier,
+            new VariableInitialization{
+                .is_comptime = node->is_constant,
+                .is_mutable = node->is_mutable,
+                .type = node->declared_type,
+                .value = node->expr
+            }
+        );
     }
 
     void operator()(const ASTTypeAlias* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         current_scope_.add_alias(node->identifier, &node->type);
     }
 
@@ -283,15 +279,16 @@ public:
         ) {
             local_visitor(*expr);
         }
-        /// TODO: refactor to local scope
         local_visitor(node->body);
     }
 
     // Functions
     void operator()(const ASTFunctionDefinition* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         current_scope_.add_function(node->identifier, node);
         Scope& local_scope = Scope::make(current_scope_, node);
         for (auto& param : node->parameters) {
+            Diagnostic::ErrorTrap param_trap{param.location};
             local_scope.add_variable(
                 param.identifier,
                 new VariableInitialization{
@@ -309,11 +306,13 @@ public:
     }
 
     void operator()(const ASTCtorDtorDefinition* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         current_scope_.add_function(
             node->is_constructor ? constructor_symbol : destructor_symbol, node
         );
         Scope& local_scope = Scope::make(current_scope_, node);
         for (auto& param : node->parameters) {
+            Diagnostic::ErrorTrap param_trap{param.location};
             local_scope.add_variable(
                 param.identifier,
                 new VariableInitialization{
@@ -331,6 +330,7 @@ public:
     }
 
     void operator()(const ASTOperatorDefinition* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         current_scope_.add_function(GetOperatorString(node->opcode), node);
         Scope& local_scope = Scope::make(current_scope_, node);
         local_scope.add_variable(
@@ -343,6 +343,7 @@ public:
             }
         );
         if (node->right) {
+            Diagnostic::ErrorTrap right_trap{node->right->location};
             local_scope.add_variable(
                 node->right->identifier,
                 new VariableInitialization{
@@ -361,6 +362,7 @@ public:
 
     // Classes
     void operator()(const ASTClassDefinition* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         current_scope_.add_class(node->identifier, node);
         Scope& class_scope = Scope::make(current_scope_, node, node->identifier);
         SymbolCollector class_visitor(class_scope);
@@ -371,6 +373,7 @@ public:
 
     // Enums
     void operator()(const ASTEnumDefinition* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         Scope& enum_scope = Scope::make(current_scope_, node, node->identifier);
         SymbolCollector enum_visitor(enum_scope);
         for (size_t i = 0; i < node->enumerators.size(); ++i) {
@@ -390,6 +393,7 @@ public:
 
     // Namespaces
     void operator()(const ASTNamespaceDefinition* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         Scope& namespace_scope = Scope::make(current_scope_, node, node->identifier);
         SymbolCollector namespace_visitor(namespace_scope);
         for (auto& item : node->items) {
@@ -400,14 +404,17 @@ public:
 
     // Templates
     void operator()(const ASTTemplateDefinition* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         current_scope_.add_template(node->identifier, node);
     }
 
     void operator()(const ASTTemplateSpecialization* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         current_scope_.add_template(node->identifier, node);
     }
 
     void operator()(const ASTImportStatement* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         if (!node->module_scope) {
             node->module_scope = &Scope::make(current_scope_, node, node->alias);
         }

@@ -188,13 +188,11 @@ public:
         return static_cast<const T*>(std::bit_cast<const Type*>(ptr_ & ~flag));
     }
 
-    [[nodiscard]] auto get() const noexcept -> const Type* {
-        return std::bit_cast<const Type*>(ptr_ & ~flag);
-    }
+    auto get() const noexcept -> const Type* { return std::bit_cast<const Type*>(ptr_ & ~flag); }
 
     auto operator->() const noexcept -> const Type* { return get(); }
 
-    [[nodiscard]] auto is_sized() const noexcept -> bool { return (ptr_ & flag) == 0; }
+    auto is_sized() const noexcept -> bool { return (ptr_ & flag) == 0; }
 
 private:
     template <TypeClass T>
@@ -356,17 +354,15 @@ private:
 public:
     Term() noexcept = default;
 
-    [[nodiscard]] auto get() const noexcept -> const Object* { return ptr_; }
+    auto get() const noexcept -> const Object* { return ptr_; }
     operator bool() const noexcept { return ptr_ != nullptr; }
     auto operator->() const noexcept -> const Object* { return ptr_; }
-    [[nodiscard]] auto effective_type() const noexcept -> const Type*;
-    [[nodiscard]] auto value_category() const noexcept -> ValueCategory { return value_category_; }
+    auto effective_type() const noexcept -> const Type*;
+    auto value_category() const noexcept -> ValueCategory { return value_category_; }
 
-    [[nodiscard]] auto is_unknown() const noexcept -> bool;
-    [[nodiscard]] auto is_comptime() const noexcept -> bool { return is_comptime_; }
-    [[nodiscard]] auto get_comptime() const noexcept -> Value* {
-        return is_comptime() ? value_ : nullptr;
-    }
+    auto is_unknown() const noexcept -> bool;
+    auto is_comptime() const noexcept -> bool { return is_comptime_; }
+    auto get_comptime() const noexcept -> Value* { return is_comptime() ? value_ : nullptr; }
 };
 
 class Object : public GlobalMemory::MonotonicAllocated {
@@ -750,18 +746,17 @@ public:
     /// validated against the initializers. This function may also be used to initialize a instance
     /// type, in which case the field types will be validated against the instance's attribute
     /// types.
-    static auto construct(
-        const Type* type, GlobalMemory::FlatMap<std::string_view, Term> inits
-    ) noexcept -> Term;
+    static auto construct(const Type* type, GlobalMemory::FlatMap<strview, Term> inits) noexcept
+        -> Term;
 
 public:
     static constexpr Kind kind = Kind::Struct;
 
 public:
-    GlobalMemory::FlatMap<std::string_view, const Type*> fields_;
+    GlobalMemory::FlatMap<strview, const Type*> fields_;
 
 public:
-    StructType(GlobalMemory::FlatMap<std::string_view, const Type*> fields) noexcept
+    StructType(GlobalMemory::FlatMap<strview, const Type*> fields) noexcept
         : Type(kind), fields_(std::move(fields)) {}
 
     GlobalMemory::String repr() const final {
@@ -841,7 +836,7 @@ public:
     static constexpr Kind kind = Kind::Interface;
 
 private:
-    GlobalMemory::FlatMap<std::string_view, std::span<const FunctionType*>> methods_;
+    GlobalMemory::FlatMap<strview, std::span<const FunctionType*>> methods_;
 
 public:
     InterfaceType() noexcept : Type(kind) {}
@@ -878,22 +873,22 @@ public:
 
 public:
     Scope* scope_;
-    std::string_view identifier_;
+    strview identifier_;
     const Type* extends_;
     std::span<const Type*> implements_;
-    GlobalMemory::FlatMap<std::string_view, const Type*> attrs_;
+    GlobalMemory::FlatMap<strview, const Type*> attrs_;
     mutable const void* primary_template_;
     mutable std::span<const Object*> template_args_;
 
 public:
-    InstanceType(std::string_view identifier) : Type(kind), identifier_(identifier) {}
+    InstanceType(strview identifier) : Type(kind), identifier_(identifier) {}
 
     InstanceType(
         Scope* scope,
-        std::string_view identifier,
+        strview identifier,
         const Type* extends,
         std::span<const Type*> interfaces,
-        GlobalMemory::FlatMap<std::string_view, const Type*> attrs
+        GlobalMemory::FlatMap<strview, const Type*> attrs
     ) noexcept
         : Type(kind),
           scope_(scope),
@@ -904,7 +899,7 @@ public:
 
     InstanceType(
         Scope* scope,
-        std::string_view identifier,
+        strview identifier,
         const void* primary_template,
         std::span<const Object*> template_args
     ) noexcept
@@ -921,16 +916,6 @@ public:
     auto default_construct() const noexcept -> Term final {
         /// TODO:
         assert(false);
-    }
-
-    auto get_attr(std::string_view name) const -> const Type* {
-        auto it = attrs_.find(name);
-        if (it == attrs_.end()) {
-            throw UnlocatedProblem::make<AttributeError>(
-                GlobalMemory::format_view("Class {} has no attribute named {}", identifier_, name)
-            );
-        }
-        return it->second;
     }
 
 protected:
@@ -1205,8 +1190,8 @@ public:
     Value* dyn_value() = delete;
     virtual const Type* get_type() const noexcept = 0;
     virtual Value* clone() const noexcept = 0;
-    virtual auto resolve_to(const Type* target) const -> Value* = 0;
-    virtual void assign_from(Value* source) = 0;
+    virtual auto resolve_to(const Type* target) const noexcept -> Value* = 0;
+    virtual void assign_from(Value* source) noexcept = 0;
     virtual auto hash_code() const noexcept -> std::size_t = 0;
     bool less_compare(const Value* other) const noexcept {
         if (this == other) {
@@ -1233,7 +1218,7 @@ private:
     UnknownType* get_type() const noexcept final { return &UnknownType::instance; }
     UnknownValue* clone() const noexcept final { return new UnknownValue(*this); }
     UnknownValue* resolve_to(const Type* target) const noexcept final { return new UnknownValue(); }
-    void assign_from(Value* source) final { UNREACHABLE(); }
+    void assign_from(Value* source) noexcept final { UNREACHABLE(); }
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         UNREACHABLE();
     }
@@ -1254,7 +1239,7 @@ public:
     AutoType* get_type() const noexcept final { UNREACHABLE(); }
     AutoValue* clone() const noexcept final { UNREACHABLE(); }
     AutoValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
-    void assign_from(Value* source) final { UNREACHABLE(); }
+    void assign_from(Value* source) noexcept final { UNREACHABLE(); }
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         if (auto_bindings.contains(this)) {
             return target == auto_bindings[this];
@@ -1276,17 +1261,16 @@ public:
 
 public:
     NullptrValue() noexcept : Value(kind) {}
-    GlobalMemory::String repr() const final { return "null"; }
+    GlobalMemory::String repr() const final { return "nullptr"; }
     const NullptrType* get_type() const noexcept final { return &NullptrType::instance; }
     NullptrValue* clone() const noexcept final { return new NullptrValue(*this); }
-    NullptrValue* resolve_to(const Type* target) const final {
-        assert(target);
-        if (target->kind_ != Kind::Nullptr) {
-            throw UnlocatedProblem::make<TypeMismatchError>("null", target->repr());
+    NullptrValue* resolve_to(const Type* target) const noexcept final {
+        if (target && target->kind_ != Kind::Nullptr && target->kind_ != Kind::Pointer) {
+            return nullptr;
         }
         return new NullptrValue();
     }
-    void assign_from(Value* source) final { UNREACHABLE(); }
+    void assign_from(Value* source) noexcept final { UNREACHABLE(); }
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const NullptrValue* other_nullptr = target->dyn_cast<NullptrValue>();
         return other_nullptr != nullptr;
@@ -1305,7 +1289,7 @@ public:
     BigInt value_;
 
 public:
-    explicit IntegerValue(std::string_view value) noexcept
+    explicit IntegerValue(strview value) noexcept
         : Value(kind), type_(&IntegerType::untyped_instance), value_(value) {}
     IntegerValue(const IntegerType* type, BigInt value) noexcept
         : Value(kind), type_(type), value_(std::move(value)) {}
@@ -1314,9 +1298,9 @@ public:
     }
     auto get_type() const noexcept -> const IntegerType* final { return type_; }
     auto clone() const noexcept -> IntegerValue* final { return new IntegerValue(*this); }
-    auto resolve_to(const Type* target) const -> IntegerValue* final {
+    auto resolve_to(const Type* target) const noexcept -> IntegerValue* final {
         if (target && !target->dyn_cast<IntegerType>()) {
-            throw UnlocatedProblem::make<TypeMismatchError>("integer", target->repr());
+            return nullptr;
         }
         if (target == nullptr) {
             // most suitable type inference
@@ -1327,27 +1311,24 @@ public:
             } else if (value_.fits_in<std::int64_t>()) {
                 return new IntegerValue(&IntegerType::i64_instance, value_);
             } else {
-                throw UnlocatedProblem::make<OverflowError>(
-                    value_.to_string(), "cannot fit into i64"
-                );
+                Diagnostic::error_overflow(value_.to_string(), target->repr());
+                return nullptr;
             }
         } else if (type_ != &IntegerType::untyped_instance) {
             // implicit convert to the specified target type (must be wider type)
             const IntegerType* int_target = target->cast<IntegerType>();
             if (type_->is_signed_ != int_target->is_signed_) {
-                throw UnlocatedProblem::make<TypeMismatchError>(target->repr(), type_->repr());
+                return nullptr;
             }
             if (type_->bits_ > int_target->bits_) {
-                throw UnlocatedProblem::make<OverflowError>(
-                    value_.to_string(),
-                    GlobalMemory::format_view("cannot fit into {}", target->repr())
-                );
+                Diagnostic::error_overflow(value_.to_string(), target->repr());
+                return nullptr;
             }
             return new IntegerValue(int_target, value_);
         } else {
             // convert to the specified target type
             const IntegerType* int_target = target->cast<IntegerType>();
-            std::string_view error_type;
+            strview error_type;
             if (int_target->is_signed_) {
                 switch (int_target->bits_) {
                 case 8:
@@ -1384,12 +1365,13 @@ public:
                 }
             }
             if (!error_type.empty()) {
-                throw UnlocatedProblem::make<OverflowError>(value_.to_string(), error_type);
+                Diagnostic::error_overflow(value_.to_string(), error_type);
+                return nullptr;
             }
             return new IntegerValue(int_target, value_);
         }
     }
-    void assign_from(Value* source) final {
+    void assign_from(Value* source) noexcept final {
         IntegerValue* int_source = source->cast<IntegerValue>();
         this->value_ = int_source->value_;
     }
@@ -1422,9 +1404,9 @@ public:
     GlobalMemory::String repr() const final { return GlobalMemory::format("{}", value_); }
     const FloatType* get_type() const noexcept final { return type_; }
     FloatValue* clone() const noexcept final { return new FloatValue(*this); }
-    auto resolve_to(const Type* target) const -> FloatValue* final {
+    auto resolve_to(const Type* target) const noexcept -> FloatValue* final {
         if (target && !target->dyn_cast<FloatType>()) {
-            throw UnlocatedProblem::make<TypeMismatchError>("float", target->repr());
+            return nullptr;
         }
         if (target == nullptr) {
             if (type_ != &FloatType::untyped_instance) {
@@ -1437,7 +1419,7 @@ public:
             if (type_ == float_target) {
                 return new FloatValue(*this);
             } else if (type_) {
-                throw UnlocatedProblem::make<TypeMismatchError>(type_->repr(), target->repr());
+                return nullptr;
             }
             return new FloatValue(float_target, value_);
         } else {
@@ -1445,7 +1427,7 @@ public:
             return new FloatValue(float_target, value_);
         }
     }
-    void assign_from(Value* source) final {
+    void assign_from(Value* source) noexcept final {
         FloatValue* float_source = source->cast<FloatValue>();
         this->value_ = float_source->value_;
     }
@@ -1471,13 +1453,13 @@ public:
     GlobalMemory::String repr() const noexcept final { return this->value_ ? "true" : "false"; }
     const BooleanType* get_type() const noexcept final { return &BooleanType::instance; }
     BooleanValue* clone() const noexcept final { return new BooleanValue(*this); }
-    BooleanValue* resolve_to(const Type* target) const final {
+    BooleanValue* resolve_to(const Type* target) const noexcept final {
         if (target && target->kind_ != Kind::Boolean) {
-            throw UnlocatedProblem::make<TypeMismatchError>("boolean", target->repr());
+            return nullptr;
         }
         return new BooleanValue(*this);
     }
-    void assign_from(Value* source) final {
+    void assign_from(Value* source) noexcept final {
         BooleanValue* bool_source = source->cast<BooleanValue>();
         this->value_ = bool_source->value_;
     }
@@ -1509,12 +1491,12 @@ public:
     const FunctionType* get_type() const noexcept final { return type_; }
     FunctionValue* clone() const noexcept final { UNREACHABLE(); }
     FunctionValue* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
-    void assign_from(Value* source) final { UNREACHABLE(); }
+    void assign_from(Value* source) noexcept final { UNREACHABLE(); }
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
-        throw;
+        UNREACHABLE();
     }
-    bool do_less_compare(const Value* other) const noexcept final { throw; }
-    auto hash_code() const noexcept -> std::size_t final { throw; }
+    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
+    auto hash_code() const noexcept -> std::size_t final { UNREACHABLE(); }
 
     auto invoke(std::span<Term> args) const -> Term { return callback_(args); }
 };
@@ -1525,7 +1507,7 @@ public:
 
 public:
     const StructType* type_;
-    GlobalMemory::FlatMap<std::string_view, Value*> fields_;
+    GlobalMemory::FlatMap<strview, Value*> fields_;
 
 public:
     StructValue(const StructType* type, decltype(fields_) fields) noexcept
@@ -1535,19 +1517,19 @@ public:
     }
     const StructType* get_type() const noexcept final { return type_; }
     StructValue* clone() const noexcept final {
-        GlobalMemory::FlatMap<std::string_view, Value*> cloned_fields;
+        GlobalMemory::FlatMap<strview, Value*> cloned_fields;
         for (const auto& [name, value] : fields_) {
             cloned_fields.insert({name, value->clone()});
         }
         return new StructValue(type_, std::move(cloned_fields));
     }
-    StructValue* resolve_to(const Type* target) const final {
+    StructValue* resolve_to(const Type* target) const noexcept final {
         if (target && target != type_) {
-            throw UnlocatedProblem::make<TypeMismatchError>("struct", target->repr());
+            return nullptr;
         }
         return new StructValue(*this);
     }
-    void assign_from(Value* source) final {
+    void assign_from(Value* source) noexcept final {
         StructValue* struct_source = source->cast<StructValue>();
         this->fields_ = struct_source->fields_;
     }
@@ -1564,7 +1546,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] auto hash_code() const noexcept -> std::size_t final {
+    auto hash_code() const noexcept -> std::size_t final {
         auto hash = std::bit_cast<std::size_t>(type_);
         for (const auto& [_, value] : fields_) {
             hash = hash_combine(hash, value->hash_code());
@@ -1591,7 +1573,7 @@ public:
 
 public:
     const InstanceType* type_;
-    GlobalMemory::FlatMap<std::string_view, Value*> attrs_;
+    GlobalMemory::FlatMap<strview, Value*> attrs_;
 
 public:
     InstanceValue(const InstanceType* type, decltype(attrs_) attributes) noexcept
@@ -1601,19 +1583,19 @@ public:
     }
     const InstanceType* get_type() const noexcept final { return type_; }
     InstanceValue* clone() const noexcept final {
-        GlobalMemory::FlatMap<std::string_view, Value*> cloned_attributes;
+        GlobalMemory::FlatMap<strview, Value*> cloned_attributes;
         for (const auto& [name, value] : attrs_) {
             cloned_attributes.insert({name, value->clone()});
         }
         return new InstanceValue(type_, std::move(cloned_attributes));
     }
-    InstanceValue* resolve_to(const Type* target) const final {
+    InstanceValue* resolve_to(const Type* target) const noexcept final {
         if (target && target != type_) {
-            throw UnlocatedProblem::make<TypeMismatchError>("instance", target->repr());
+            return nullptr;
         }
         return new InstanceValue(*this);
     }
-    void assign_from(Value* source) final {
+    void assign_from(Value* source) noexcept final {
         InstanceValue* instance_source = source->cast<InstanceValue>();
         this->attrs_ = instance_source->attrs_;
     }
@@ -1631,7 +1613,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] auto hash_code() const noexcept -> std::size_t final {
+    auto hash_code() const noexcept -> std::size_t final {
         auto hash = std::bit_cast<std::size_t>(type_);
         for (const auto& [_, value] : attrs_) {
             hash = hash_combine(hash, value->hash_code());
@@ -1650,7 +1632,7 @@ public:
         }
         return false;
     }
-    auto get_attr(std::string_view attr) noexcept -> Value* { return attrs_.at(attr); }
+    auto get_attr(strview attr) noexcept -> Value* { return attrs_.at(attr); }
 };
 
 class MutableValue final : public Value {
@@ -1669,13 +1651,13 @@ public:
     }
     const MutableType* get_type() const noexcept final { return type_; }
     MutableValue* clone() const noexcept final { return new MutableValue(*this); }
-    MutableValue* resolve_to(const Type* target) const final {
+    MutableValue* resolve_to(const Type* target) const noexcept final {
         if (target && !target->dyn_cast<MutableType>()) {
-            throw UnlocatedProblem::make<TypeMismatchError>("mutable", target->repr());
+            return nullptr;
         }
         return new MutableValue(*this);
     }
-    void assign_from(Value* source) final {
+    void assign_from(Value* source) noexcept final {
         MutableValue* mut_source = source->cast<MutableValue>();
         this->value_ = mut_source->value_;
     }
@@ -1685,7 +1667,7 @@ public:
     bool do_less_compare(const Value* other) const noexcept final {
         return value_->less_compare(other->cast<MutableValue>()->value_);
     }
-    [[nodiscard]] auto hash_code() const noexcept -> std::size_t final {
+    auto hash_code() const noexcept -> std::size_t final {
         return hash_combine(std::bit_cast<std::size_t>(type_), value_->hash_code());
     }
 };
@@ -1706,13 +1688,13 @@ public:
     }
     const ReferenceType* get_type() const noexcept final { return type_; }
     ReferenceValue* clone() const noexcept final { return new ReferenceValue(*this); }
-    ReferenceValue* resolve_to(const Type* target) const final {
+    ReferenceValue* resolve_to(const Type* target) const noexcept final {
         if (target && !target->dyn_cast<ReferenceType>()) {
-            throw UnlocatedProblem::make<TypeMismatchError>("reference", target->repr());
+            return nullptr;
         }
         return new ReferenceValue(*this);
     }
-    void assign_from(Value* source) final {
+    void assign_from(Value* source) noexcept final {
         ReferenceValue* ref_source = source->cast<ReferenceValue>();
         referenced_value_ = ref_source->referenced_value_;
     }
@@ -1724,7 +1706,7 @@ public:
         const ReferenceValue* other_ref = other->cast<ReferenceValue>();
         return referenced_value_->less_compare(other_ref->referenced_value_);
     }
-    [[nodiscard]] auto hash_code() const noexcept -> std::size_t final {
+    auto hash_code() const noexcept -> std::size_t final {
         return hash_combine(std::bit_cast<std::size_t>(type_), referenced_value_->hash_code());
     }
 };
@@ -1749,14 +1731,14 @@ public:
 
     PointerValue* clone() const noexcept final { return new PointerValue(*this); }
 
-    PointerValue* resolve_to(const Type* target) const final {
+    PointerValue* resolve_to(const Type* target) const noexcept final {
         if (target && !target->dyn_cast<PointerType>()) {
-            throw UnlocatedProblem::make<TypeMismatchError>("pointer", target->repr());
+            return nullptr;
         }
         return new PointerValue(*this);
     }
 
-    void assign_from(Value* source) final {
+    void assign_from(Value* source) noexcept final {
         PointerValue* ptr_source = source->cast<PointerValue>();
         this->pointed_value_ = ptr_source->pointed_value_;
     }
@@ -1770,7 +1752,7 @@ public:
         return pointed_value_->less_compare(other->cast<PointerValue>()->pointed_value_);
     }
 
-    [[nodiscard]] auto hash_code() const noexcept -> std::size_t final {
+    auto hash_code() const noexcept -> std::size_t final {
         return hash_combine(std::bit_cast<std::size_t>(type_), pointed_value_->hash_code());
     }
 };
@@ -2041,17 +2023,18 @@ inline auto FunctionType::default_construct() const noexcept -> Term {
 }
 
 inline auto StructType::construct(
-    const Type* type, GlobalMemory::FlatMap<std::string_view, Term> inits
+    const Type* type, GlobalMemory::FlatMap<strview, Term> inits
 ) noexcept -> Term {
-    const GlobalMemory::FlatMap<std::string_view, const Type*>* field_types = nullptr;
+    const GlobalMemory::FlatMap<strview, const Type*>* field_types = nullptr;
     if (auto struct_type = type->dyn_cast<StructType>()) {
         field_types = &struct_type->fields_;
     } else if (auto instance_type = type->dyn_cast<InstanceType>()) {
         field_types = &instance_type->attrs_;
     } else {
-        throw;
+        Diagnostic::error_type_mismatch("struct or class", type->repr());
+        return {};
     }
-    GlobalMemory::FlatMap<std::string_view, const Type*> init_types;
+    GlobalMemory::FlatMap<strview, const Type*> init_types;
     bool is_comptime = true;
     for (const auto& [id, term] : inits) {
         if (!term.is_comptime()) {
@@ -2066,31 +2049,30 @@ inline auto StructType::construct(
             if (auto default_value = field_type->default_construct()) {
                 inits.insert({field_name, default_value});
             } else {
-                throw UnlocatedProblem::make<UninitializedAttributeError>(field_name);
-                return Term::unknown();
+                Diagnostic::error_uninitialized_attribute(field_name);
+                return {};
             }
         } else if (!field_type->assignable_from(it->second, auto_bindings)) {
-            throw UnlocatedProblem::make<TypeMismatchError>(
-                GlobalMemory::format_view("field '{}'", field_name), it->second->repr()
-            );
+            Diagnostic::error_type_mismatch(field_type->repr(), it->second->repr());
+            return {};
         } else {
             init_types.erase(it);
         }
     }
     if (!init_types.empty()) {
-        // throw UnlocatedProblem::make<UnrecognizedAttributeError>(init_types.begin()->first);
-        throw;
+        for (const auto& [id, _] : init_types) {
+            Diagnostic::error_unrecognized_attribute(id);
+        }
+        return {};
     }
     if (is_comptime) {
         auto values = inits |
                       std::views::transform(
-                          [](
-                              const std::pair<std::string_view, Term>& pair
-                          ) -> std::pair<std::string_view, Value*> {
+                          [](const std::pair<strview, Term>& pair) -> std::pair<strview, Value*> {
                               return {pair.first, pair.second.get_comptime()};
                           }
                       ) |
-                      GlobalMemory::collect<GlobalMemory::FlatMap<std::string_view, Value*>>();
+                      GlobalMemory::collect<GlobalMemory::FlatMap<strview, Value*>>();
         if (type->dyn_cast<StructType>()) {
             return Term::prvalue(new StructValue(type->cast<StructType>(), std::move(values)));
         } else {
@@ -2102,7 +2084,7 @@ inline auto StructType::construct(
 }
 
 inline auto StructType::default_construct() const noexcept -> Term {
-    GlobalMemory::FlatMap<std::string_view, Term> values;
+    GlobalMemory::FlatMap<strview, Term> values;
     bool is_comptime = true;
     for (const auto& [name, field_type] : fields_) {
         Term default_value = field_type->default_construct();
@@ -2117,8 +2099,7 @@ inline auto StructType::default_construct() const noexcept -> Term {
             this,
             values |
                 std::views::transform(
-                    [](const std::pair<std::string_view, Term>& pair)
-                        -> std::pair<std::string_view, Value*> {
+                    [](const std::pair<strview, Term>& pair) -> std::pair<strview, Value*> {
                         return {pair.first, pair.second.get_comptime()};
                     }
                 ) |

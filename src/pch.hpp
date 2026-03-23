@@ -50,6 +50,8 @@
 
 using namespace std::literals::string_view_literals;
 
+using strview = std::string_view;
+
 template <typename T, typename Tuple>
 struct TypeInTuple;
 
@@ -304,7 +306,7 @@ public:
         return span;
     }
 
-    static constexpr auto persist(const GlobalMemory::String& str) -> std::string_view {
+    static constexpr auto persist(const GlobalMemory::String& str) -> strview {
         std::span<char> ptr = alloc_array<char>(str.size() + 1);
         std::ranges::copy(str, ptr.begin());
         return {ptr.data(), str.size()};
@@ -366,15 +368,15 @@ public:
     }
 
     template <typename... Args>
-    static auto format_view(std::format_string<Args...> fmt, Args&&... args) -> std::string_view {
+    static auto format_view(std::format_string<Args...> fmt, Args&&... args) -> strview {
         std::size_t size = std::formatted_size(fmt, std::forward<Args>(args)...);
         std::span<char> result = alloc_array<char>(size);
         std::format_to(result.begin(), fmt, std::forward<Args>(args)...);
         return {result.data(), result.size()};
     }
 
-    static auto hex_string(std::string_view input) -> std::string_view {
-        constexpr std::string_view hex_chars = "0123456789ABCDEF";
+    static auto hex_string(strview input) -> strview {
+        constexpr strview hex_chars = "0123456789ABCDEF";
         std::span<char> result = alloc_array<char>(input.size() * 2 + 3);
         for (std::size_t i = 0; i < input.size(); ++i) {
             auto byte = static_cast<unsigned char>(input[i]);
@@ -387,7 +389,7 @@ public:
         return {result.data(), input.size() * 2 + 3};
     }
 
-    static auto persist_string(std::string_view str) -> std::string_view {
+    static auto persist_string(strview str) -> strview {
         std::span<char> ptr = alloc_array<char>(str.size() + 1);
         std::ranges::copy(str, ptr.begin());
         return {ptr.data(), str.size()};
@@ -695,8 +697,8 @@ public:
         }
     }
 
-    [[nodiscard]] constexpr auto size() const noexcept -> std::size_t { return entries_.size(); }
-    [[nodiscard]] constexpr auto empty() const noexcept -> bool { return entries_.empty(); }
+    constexpr auto size() const noexcept -> std::size_t { return entries_.size(); }
+    constexpr auto empty() const noexcept -> bool { return entries_.empty(); }
 
     auto insert(std::pair<K, V> pair) -> iterator {
         auto compare = [](const value_type& a, const value_type& b) {
@@ -1027,7 +1029,7 @@ public:
         }
     }
 
-    explicit BigInt(std::string_view str) : is_negative_(false) {
+    explicit BigInt(strview str) : is_negative_(false) {
         if (str.empty()) {
             digits_.push_back(0);
             return;

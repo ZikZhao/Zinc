@@ -8,8 +8,8 @@
 // private:
 //     StringViewType() : ClassType("string_view", nullptr, {}, get_attr(), get_methods()) {}
 
-//     GlobalMemory::FlatMap<std::string_view, FunctionOverloads> get_methods() {
-//         return GlobalMemory::FlatMap<std::string_view, FunctionOverloads>{
+//     GlobalMemory::FlatMap<strview, FunctionOverloads> get_methods() {
+//         return GlobalMemory::FlatMap<strview, FunctionOverloads>{
 //             {"init",
 //              {new FunctionType(
 //                  GlobalMemory::pack_array<const Type*>(
@@ -25,8 +25,8 @@
 //         };
 //     }
 
-//     GlobalMemory::FlatMap<std::string_view, const Type*> get_attr() {
-//         return GlobalMemory::FlatMap<std::string_view, const Type*>{
+//     GlobalMemory::FlatMap<strview, const Type*> get_attr() {
+//         return GlobalMemory::FlatMap<strview, const Type*>{
 //             {"length_", &IntegerType::u64_instance}
 //         };
 //     }
@@ -38,8 +38,8 @@
 // private:
 //     StringType() : ClassType("string", nullptr, {}, get_attr(), get_methods()) {}
 
-//     GlobalMemory::FlatMap<std::string_view, FunctionOverloads> get_methods() {
-//         return GlobalMemory::FlatMap<std::string_view, FunctionOverloads>{
+//     GlobalMemory::FlatMap<strview, FunctionOverloads> get_methods() {
+//         return GlobalMemory::FlatMap<strview, FunctionOverloads>{
 //             {"at",
 //              {new FunctionType(
 //                  GlobalMemory::pack_array<const Type*>(&IntegerType::u64_instance),
@@ -48,8 +48,8 @@
 //         };
 //     }
 
-//     GlobalMemory::FlatMap<std::string_view, const Type*> get_attr() {
-//         return GlobalMemory::FlatMap<std::string_view, const Type*>{
+//     GlobalMemory::FlatMap<strview, const Type*> get_attr() {
+//         return GlobalMemory::FlatMap<strview, const Type*>{
 //             {"length_", &IntegerType::u64_instance}
 //         };
 //     }

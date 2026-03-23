@@ -24,13 +24,9 @@ fn main(args: [strview]) {
     let mut last_print = std.chrono.steady_clock.now();
 
     // Centralized input callbacks: movement and UI toggles
+    let translate_keys: [usize; 6] = [SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_A, SDL_SCANCODE_D, SDL_SCANCODE_SPACE, SDL_SCANCODE_C];
     window.register_key(
-        [SDL_SCANCODE_W,
-         SDL_SCANCODE_S,
-         SDL_SCANCODE_A,
-         SDL_SCANCODE_D,
-         SDL_SCANCODE_SPACE,
-         SDL_SCANCODE_C],
+        translate_keys,
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let video_fixed_dt = 1.0 / Constant.TargetFPS;
@@ -52,8 +48,9 @@ fn main(args: [strview]) {
         }
     );
 
+    let roll_keys: [usize; 2] = [SDL_SCANCODE_Q, SDL_SCANCODE_E];
     window.register_key(
-        [SDL_SCANCODE_Q, SDL_SCANCODE_E],
+        roll_keys,
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let video_fixed_dt = 1.0 / Constant.TargetFPS;
@@ -66,8 +63,9 @@ fn main(args: [strview]) {
         }
     );
 
+    let orbit_keys: [usize; 1] = [SDL_SCANCODE_O];
     window.register_key(
-        [SDL_SCANCODE_O],
+        orbit_keys,
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             if (!world.camera_.is_orbiting_) {
@@ -79,8 +77,11 @@ fn main(args: [strview]) {
         }
     );
 
+    let mode_keys: [usize; 5] = [
+        SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_0
+    ];
     window.register_key(
-        [SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_0],
+        mode_keys,
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let mode_name: strview;
@@ -110,15 +111,18 @@ fn main(args: [strview]) {
         }
     );
 
+    let gamma_keys: [usize; 1] = [SDL_SCANCODE_G];
     window.register_key(
-        [SDL_SCANCODE_G],
+        gamma_keys,
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             renderer.gamma_ = (renderer.gamma_ == 2.2) ? 1.0 : 2.2;
         }
     );
+
+    let caustics_keys: [usize; 1] = [SDL_SCANCODE_P];
     window.register_key(
-        [SDL_SCANCODE_P],
+        caustics_keys,
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             if (renderer.is_photon_map_ready()) {
@@ -134,8 +138,9 @@ fn main(args: [strview]) {
     );
 
     // Aperture control (+/-)
+    let aperture_keys: [usize; 2] = [SDL_SCANCODE_EQUALS, SDL_SCANCODE_MINUS];
     window.register_key(
-        [SDL_SCANCODE_EQUALS, SDL_SCANCODE_MINUS],
+        aperture_keys,
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let aperture: &mut f32 = mut renderer.aperture_size_;
@@ -152,8 +157,9 @@ fn main(args: [strview]) {
     );
 
     // Screenshot save (Ctrl+S)
+    let screenshot_keys: [usize; 2] = [SDL_SCANCODE_LCTRL, SDL_SCANCODE_S];
     window.register_key(
-        [SDL_SCANCODE_LCTRL, SDL_SCANCODE_S],
+        screenshot_keys,
         Window.Trigger.ALL_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             window.save_ppm("screenshot.ppm");
@@ -163,15 +169,17 @@ fn main(args: [strview]) {
     );
 
     // Video recording toggle (Ctrl+R)
+    let video_keys: [usize; 2] = [SDL_SCANCODE_LCTRL, SDL_SCANCODE_R];
     window.register_key(
-        [SDL_SCANCODE_LCTRL, SDL_SCANCODE_R],
+        video_keys,
         Window.Trigger.ALL_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => video_recorder.toggle_recording()
     );
 
     // Offline/Realtime render mode toggle (V)
+    let capture_keys: [usize; 1] = [SDL_SCANCODE_V];
     window.register_key(
-        [SDL_SCANCODE_V],
+        capture_keys,
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             renderer.offline_render_mode_ = !renderer.offline_render_mode_;
@@ -185,8 +193,9 @@ fn main(args: [strview]) {
     );
 
     // Normal debug mode toggle (N) - only for raytracing modes
+    let normal_debug_keys: [usize; 1] = [SDL_SCANCODE_N];
     window.register_key(
-        [SDL_SCANCODE_N],
+        normal_debug_keys,
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             renderer.normal_debug_mode_ = !renderer.normal_debug_mode_;
@@ -216,8 +225,11 @@ fn main(args: [strview]) {
     );
 
     // Keyboard look (arrow keys)
+    let look_keys: [usize; 4] = [
+        SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT
+    ];
     window.register_key(
-        [SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT],
+        look_keys,
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let video_fixed_dt = 1.0 / Constant.TargetFPS;
@@ -287,3 +299,27 @@ fn main(args: [strview]) {
 
 const EXIT_SUCCESS: i32 = 0;
 const EXIT_FAILURE: i32 = 1;
+
+const SDL_SCANCODE_W: usize = 26;
+const SDL_SCANCODE_S: usize = 22;
+const SDL_SCANCODE_A: usize = 4;
+const SDL_SCANCODE_D: usize = 7;
+const SDL_SCANCODE_SPACE: usize = 44;
+const SDL_SCANCODE_C: usize = 6;
+const SDL_SCANCODE_Q: usize = 16;
+const SDL_SCANCODE_E: usize = 8;
+const SDL_SCANCODE_O: usize = 24;
+const SDL_SCANCODE_1: usize = 30;
+const SDL_SCANCODE_2: usize = 31;
+const SDL_SCANCODE_3: usize = 32;
+const SDL_SCANCODE_4: usize = 33;
+const SDL_SCANCODE_0: usize = 39;
+const SDL_SCANCODE_G: usize = 34;
+const SDL_SCANCODE_P: usize = 25;
+const SDL_SCANCODE_EQUALS: usize = 46;
+const SDL_SCANCODE_MINUS: usize = 47;
+const SDL_SCANCODE_LCTRL: usize = 225;
+const SDL_SCANCODE_S: usize = 27;
+const SDL_SCANCODE_R: usize = 19;
+const SDL_SCANCODE_V: usize = 47;
+const SDL_SCANCODE_N: usize = 49;

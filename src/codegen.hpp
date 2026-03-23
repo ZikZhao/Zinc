@@ -169,7 +169,7 @@ public:
         out += "std::function<"sv;
         output(out, type->return_type_, types);
         out += "("sv;
-        std::string_view sep = ""sv;
+        strview sep = ""sv;
         for (const Type* param_type : type->parameters_) {
             out += sep;
             output(out, param_type, types);
@@ -285,7 +285,7 @@ public:
             std::format_to(
                 std::back_inserter(out), "{}{{"sv, index(types, value->cast<StructValue>()->type_)
             );
-            std::string_view sep = ""sv;
+            strview sep = ""sv;
             for (const auto& [field_name, field_value] : value->cast<StructValue>()->fields_) {
                 std::format_to(std::back_inserter(out), "{}.{} = "sv, sep, field_name);
                 (*this)(out, field_value, types);
@@ -298,7 +298,7 @@ public:
             std::format_to(
                 std::back_inserter(out), "{}{{"sv, index(types, value->cast<InstanceValue>()->type_)
             );
-            std::string_view sep = ""sv;
+            strview sep = ""sv;
             for (const auto& [field_name, field_value] : value->cast<InstanceValue>()->attrs_) {
                 std::format_to(std::back_inserter(out), "{}.{} = "sv, sep, field_name);
                 (*this)(out, field_value, types);
@@ -622,16 +622,14 @@ public:
     auto operator()(const auto*) -> void {}
 
     auto operator()(
-        const ASTFunctionDefinition* node,
-        std::string_view mangled_path,
-        const FunctionType* func_type
+        const ASTFunctionDefinition* node, strview mangled_path, const FunctionType* func_type
     ) -> void {
         auto gen = [&](GlobalMemory::String& out) {
             if (mangled_path == "main"sv) {
                 out += "auto main(int $argc, char** $argv) -> int"sv;
             } else {
                 std::format_to(std::back_inserter(out), "auto {}("sv, mangled_path);
-                std::string_view sep = ""sv;
+                strview sep = ""sv;
                 for (std::size_t i = 0; i < node->parameters.size(); i++) {
                     out += sep;
                     const ASTFunctionParameter& param = node->parameters[i];
@@ -651,9 +649,9 @@ public:
         indent_level_++;
         if (mangled_path == "main"sv) {
             newline();
-            definitions_ += "const std::vector<std::string_view> $args_vec{$argv, $argv + $argc};";
+            definitions_ += "const std::vector<strview> $args_vec{$argv, $argv + $argc};";
             newline();
-            definitions_ += "const std::span<const std::string_view> args{$args_vec};"sv;
+            definitions_ += "const std::span<const strview> args{$args_vec};"sv;
         }
         for (const ASTNodeVariant& child : node->body) {
             newline();
@@ -675,7 +673,7 @@ public:
             for (const Type* param_type : func_type->parameters_) {
                 mangler_(out, param_type);
             }
-            std::string_view sep = "("sv;
+            strview sep = "("sv;
             for (std::size_t i = 0; i < node->parameters.size(); i++) {
                 out += sep;
                 const ASTFunctionParameter& param = node->parameters[i];
@@ -857,7 +855,7 @@ public:
 
     auto operator()(const ASTArrayInitialization* node) -> void {
         definitions_ += "{"sv;
-        std::string_view sep = ""sv;
+        strview sep = ""sv;
         for (const ASTExprVariant& elem : node->elements) {
             definitions_ += sep;
             (*this)(elem);
@@ -915,7 +913,7 @@ public:
 
     auto operator()(const ASTLambda* node) -> void {
         definitions_ += "[&]("sv;
-        std::string_view sep = ""sv;
+        strview sep = ""sv;
         auto* replacement = env_.find(current_scope_, node);
         const FunctionType* lambda_type = std::get<const Type*>(*replacement)->cast<FunctionType>();
         /// TODO: make lambda output as closure instead of directly outputting as C++ lambda

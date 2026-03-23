@@ -25,7 +25,7 @@ public:
 
 public:
     /// Used to load main file
-    auto load(std::string_view input_path) noexcept -> std::uint32_t {
+    auto load(strview input_path) noexcept -> std::uint32_t {
         assert(files.size() == 1 && file_id_map_.empty());
         GlobalMemory::String path =
             std::filesystem::canonical(input_path)
@@ -50,7 +50,7 @@ public:
         return static_cast<std::uint32_t>(files.size()) - 1;
     }
 
-    auto load(std::string_view module_path, std::uint32_t relative_to) noexcept -> std::uint32_t {
+    auto load(strview module_path, std::uint32_t relative_to) noexcept -> std::uint32_t {
         assert(relative_to < files.size());
         std::filesystem::path base_path =
             std::filesystem::path(files[relative_to].path.c_str()).parent_path();
@@ -119,8 +119,7 @@ public:
     }
 
 private:
-    auto compute_line_offsets(std::string_view content) noexcept
-        -> GlobalMemory::Vector<std::size_t> {
+    auto compute_line_offsets(strview content) noexcept -> GlobalMemory::Vector<std::size_t> {
         GlobalMemory::Vector<std::size_t> offsets;
         offsets.push_back(0);
         for (std::size_t i = 0; i < content.size(); ++i) {
