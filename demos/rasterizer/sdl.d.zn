@@ -3,6 +3,18 @@
 type SDL_Scancode = i32;
 type SDL_Keycode = i32;
 
+class SDL_Window {
+}
+
+class SDL_Renderer {
+}
+
+class SDL_Texture {
+}
+
+class SDL_Surface {
+}
+
 type SDL_Keysym = {
 	scancode: SDL_Scancode,
 	sym: SDL_Keycode,

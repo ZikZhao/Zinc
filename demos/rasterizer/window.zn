@@ -8,8 +8,9 @@ enum Trigger {
     ALL_JUST_PRESSED   ///< Modifier combo: triggers on just-pressed when ALL keys held
 }
 
+type KeyState = [bool; sdl.SDL_NUM_SCANCODES];
+
 class Window {
-    type KeyState = [bool; sdl.SDL_NUM_SCANCODES];
     type KeyHandler = std.function<(&Keystate, f32) -> void>;
     type MouseHandler = std.function<(i32, i32, f32) -> void>;
     type ScrollHandler = std.function<(i32) -> void>;
@@ -35,9 +36,9 @@ class Window {
     let height_: usize;
 
     // SDL components
-    let window_: *mut SDL_Window;
-    let renderer_: *mut SDL_Renderer;
-    let texture_: *mut SDL_Texture;
+    let window_: *mut sdl.SDL_Window;
+    let renderer_: *mut sdl.SDL_Renderer;
+    let texture_: *mut sdl.SDL_Texture;
 
     // Backbuffer
     let pixel_buffer_: std.vector<u32>;
@@ -56,7 +57,7 @@ class Window {
     let mut key_bindings_: std.vector<KeyBinding>;
     let mut mouse_bindings_: std.vector<MouseBinding>;
     let mut scroll_handlers_: std.vector<ScrollHandler>;
-    let mut next_event_id_: std.size_t;
+    let mut next_event_id_: usize;
 
     init(width: i32, height: i32) {
         // Initialize SDL video subsystem

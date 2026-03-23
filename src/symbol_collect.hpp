@@ -374,6 +374,7 @@ public:
     // Enums
     void operator()(const ASTEnumDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
+        current_scope_.set_template_argument(node->identifier, &IntegerType::i32_instance);
         Scope& enum_scope = Scope::make(current_scope_, node, node->identifier);
         SymbolCollector enum_visitor(enum_scope);
         for (size_t i = 0; i < node->enumerators.size(); ++i) {

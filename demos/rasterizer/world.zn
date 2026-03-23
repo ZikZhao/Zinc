@@ -52,7 +52,6 @@ enum Shading {
 
 type Material = {
     texture: std.shared_ptr<Texture>,
-    normal_map: std.shared_ptr<NormalMap>,  // Tangent-space normal map
     base_color: glm.vec3,  // Color multiplier for texture (or base color if no texture)
     shininess: f32,
     metallic: f32,

@@ -289,7 +289,8 @@ constant:
 type:
 	KW_SELF_TYPE # SelfType
 	| primitive_ = (
-		KW_INT8
+		KW_VOID
+		| KW_INT8
 		| KW_INT16
 		| KW_INT32
 		| KW_INT64
@@ -376,6 +377,7 @@ instantiation_argument: type_ = type | value_ = expr;
 KW_LET: 'let';
 KW_MUT: 'mut';
 KW_CONST: 'const';
+KW_VOID: 'void';
 KW_INT8: 'i8';
 KW_INT16: 'i16';
 KW_INT32: 'i32';

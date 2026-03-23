@@ -329,6 +329,91 @@ class unordered_set<Key: type> {
     operator!=(self: &Self, other: &Self) -> bool;
 }
 
+class pair<T1: type, T2: type> {
+    type first_type = T1;
+    type second_type = T2;
+
+    let first: first_type;
+    let second: second_type;
+
+    init();
+    init(first: first_type, second: second_type);
+    init(other: &Self);
+
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
+
+    operator==(self: &Self, other: &Self) -> bool;
+    operator!=(self: &Self, other: &Self) -> bool;
+    operator<(self: &Self, other: &Self) -> bool;
+    operator<=(self: &Self, other: &Self) -> bool;
+    operator>(self: &Self, other: &Self) -> bool;
+    operator>=(self: &Self, other: &Self) -> bool;
+}
+
+fn make_pair<T1: type, T2: type>(first: T1, second: T2) -> pair<T1, T2>;
+
+class map<Key: type, T: type> {
+    type key_type = Key;
+    type mapped_type = T;
+    type value_type = T;
+    type size_type = usize;
+    type difference_type = isize;
+
+    type reference = &mut mapped_type;
+    type const_reference = &mapped_type;
+    type pointer = *mut mapped_type;
+    type const_pointer = *mapped_type;
+
+    type iterator = pointer;
+    type const_iterator = const_pointer;
+
+    init();
+    init(other: &Self);
+    init(first: const_iterator, last: const_iterator);
+
+    fn at(self: &Self, key: &key_type) -> const_reference;
+    fn at(self: &mut Self, key: &key_type) -> reference;
+    operator[](self: &mut Self, key: key_type) -> reference;
+
+    fn size(self: &Self) -> size_type;
+    fn empty(self: &Self) -> bool;
+
+    fn begin(self: &Self) -> const_iterator;
+    fn begin(self: &mut Self) -> iterator;
+    fn end(self: &Self) -> const_iterator;
+    fn end(self: &mut Self) -> iterator;
+    fn cbegin(self: &Self) -> const_iterator;
+    fn cend(self: &Self) -> const_iterator;
+
+    fn find(self: &Self, key: &key_type) -> const_iterator;
+    fn find(self: &mut Self, key: &key_type) -> iterator;
+    fn contains(self: &Self, key: &key_type) -> bool;
+    fn count(self: &Self, key: &key_type) -> size_type;
+
+    fn clear(self: &mut Self);
+    fn insert(self: &mut Self, key: key_type, value: mapped_type) -> bool;
+    fn emplace(self: &mut Self, key: key_type, value: mapped_type) -> iterator;
+    fn erase(self: &mut Self, key: &key_type) -> size_type;
+    fn erase(self: &mut Self, pos: const_iterator) -> iterator;
+    fn erase(self: &mut Self, first: const_iterator, last: const_iterator) -> iterator;
+    fn swap(self: &mut Self, other: &mut Self);
+
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
+    operator==(self: &Self, other: &Self) -> bool;
+    operator!=(self: &Self, other: &Self) -> bool;
+}
+
+class function<Signature: type> {
+    init();
+    init(other: &Self);
+
+    fn empty(self: &Self) -> bool;
+    fn clear(self: &mut Self);
+
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
+    operator()<Args...: type, R: type>(self: &Self, args: Args...) -> R;
+}
+
 class span<T: type> {
     type element_type = T;
     type value_type = T;
@@ -545,6 +630,7 @@ namespace chrono {
     }
 
     type microseconds = duration;
+    type milliseconds = duration;
     type seconds = duration;
 
     fn duration_cast<ToDuration: type>(d: duration) -> ToDuration;

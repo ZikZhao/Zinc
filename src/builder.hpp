@@ -901,6 +901,8 @@ private:
     auto visitPrimitiveType(ZincParser::PrimitiveTypeContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
         switch (ctx->primitive_->getType()) {
+        case ZincParser::KW_VOID:
+            return as_variant(new ASTPrimitiveType{loc(ctx), &VoidType::instance});
         case ZincParser::KW_INT8:
             return as_variant(new ASTPrimitiveType{loc(ctx), &IntegerType::i8_instance});
         case ZincParser::KW_INT16:
