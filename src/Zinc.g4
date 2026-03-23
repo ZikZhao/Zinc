@@ -21,6 +21,7 @@ statement:
 	| expr_statement
 	| declaration_statement
 	| if_statement
+	| switch_statement
 	| for_statement
 	| break_statement
 	| continue_statement
@@ -49,6 +50,15 @@ if_statement:
 	KW_IF OP_LPAREN condition_ = expr OP_RPAREN if_ = local_block (
 		KW_ELSE (else_ = local_block | elseif_ = if_statement)
 	)?;
+
+switch_statement:
+	KW_SWITCH OP_LPAREN condition_ = expr OP_RPAREN OP_LBRACE (
+		cases_ += switch_case
+	)* OP_RBRACE;
+
+switch_case:
+	KW_CASE value_ = expr OP_COLON body_ = local_block
+	| KW_DEFAULT OP_COLON body_ = local_block;
 
 for_statement:
 	KW_FOR OP_LPAREN (
@@ -180,9 +190,9 @@ import_statement:
 expr:
 	KW_SELF													# SelfExpr
 	| constant_ = constant									# ConstExpr
-	| identifier_ = identifier								# IdentifierExpr
-	| base_ = expr OP_DOT member_ = T_IDENTIFIER			# MemberAccessExpr
-	| base_ = expr OP_ARROW member_ = T_IDENTIFIER			# PointerAccessExpr
+	| identifier_ = T_IDENTIFIER							# IdentifierExpr
+	| base_ = expr OP_DOT member_ = any_identifier			# MemberAccessExpr
+	| base_ = expr OP_ARROW member_ = any_identifier		# PointerAccessExpr
 	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET	# IndexAccessExpr
 	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
@@ -257,7 +267,13 @@ expr:
 		| op_ = OP_GT OP_GT OP_ASSIGN
 	) right_ = expr # AssignExpr;
 
-identifier: name_ = T_IDENTIFIER;
+any_identifier:
+	T_IDENTIFIER
+	| KW_CLASS
+	| KW_FUNC
+	| KW_ENUM
+	| KW_NAMESPACE
+	| KW_TYPE;
 
 constant:
 	value_ = (
@@ -288,8 +304,8 @@ type:
 		| KW_BOOL
 		| KW_STRVIEW
 	)												# PrimitiveType
-	| identifier_ = identifier						# IdentifierType
-	| base_ = type OP_DOT member_ = T_IDENTIFIER	# MemberAccessType
+	| identifier_ = T_IDENTIFIER					# IdentifierType
+	| base_ = type OP_DOT member_ = any_identifier	# MemberAccessType
 	| OP_LBRACE (
 		fields_ += field_decl (OP_COMMA fields_ += field_decl)* OP_COMMA?
 	)? OP_RBRACE # StructType
@@ -306,9 +322,9 @@ type:
 	| OP_LBRACKET inner_type_ = type OP_RBRACKET				# ParenType
 	| template_ = type instantiation_list_ = instantiation_list	# InstantiatedType;
 
-field_decl: identifier_ = T_IDENTIFIER OP_COLON type_ = type;
+field_decl: identifier_ = any_identifier OP_COLON type_ = type;
 
-field_init: identifier_ = T_IDENTIFIER OP_COLON value_ = expr;
+field_init: identifier_ = any_identifier OP_COLON value_ = expr;
 
 constructor:
 	KW_CONST? KW_INIT (template_list_ = template_parameter_list)? OP_LPAREN (
@@ -321,7 +337,11 @@ constructor:
 	);
 
 destructor:
-	KW_CONST? KW_DROP OP_LPAREN OP_RPAREN (
+	KW_CONST? KW_DROP OP_LPAREN (
+		parameters_ += parameter (
+			OP_COMMA parameters_ += parameter
+		)*
+	)? OP_RPAREN (
 		OP_LBRACE body_ += statement* OP_RBRACE
 		| semi_ = OP_SEMICOLON
 	);

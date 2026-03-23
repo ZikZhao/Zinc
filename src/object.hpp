@@ -897,18 +897,6 @@ public:
           implements_(interfaces),
           attrs_(std::move(attrs)) {}
 
-    InstanceType(
-        Scope* scope,
-        strview identifier,
-        const void* primary_template,
-        std::span<const Object*> template_args
-    ) noexcept
-        : Type(kind),
-          scope_(scope),
-          identifier_(identifier),
-          primary_template_(primary_template),
-          template_args_(template_args) {}
-
     GlobalMemory::String repr() const override { return GlobalMemory::format("{}", identifier_); }
 
     auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }

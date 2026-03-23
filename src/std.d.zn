@@ -277,6 +277,58 @@ class vector<T: type> {
     operator>=(self: &Self, other: &Self) -> bool;
 }
 
+class unordered_set<Key: type> {
+    type key_type = Key;
+    type value_type = Key;
+    type size_type = usize;
+    type difference_type = isize;
+
+    type reference = &mut value_type;
+    type const_reference = &value_type;
+    type pointer = *mut value_type;
+    type const_pointer = *value_type;
+
+    type iterator = pointer;
+    type const_iterator = const_pointer;
+
+    init();
+    init(other: &Self);
+    init(count: size_type);
+    init(first: const_iterator, last: const_iterator);
+
+    fn size(self: &Self) -> size_type;
+    fn empty(self: &Self) -> bool;
+    fn bucket_count(self: &Self) -> size_type;
+    fn load_factor(self: &Self) -> f32;
+
+    fn begin(self: &Self) -> const_iterator;
+    fn begin(self: &mut Self) -> iterator;
+    fn end(self: &Self) -> const_iterator;
+    fn end(self: &mut Self) -> iterator;
+    fn cbegin(self: &Self) -> const_iterator;
+    fn cend(self: &Self) -> const_iterator;
+
+    fn find(self: &Self, key: const_reference) -> const_iterator;
+    fn find(self: &mut Self, key: const_reference) -> iterator;
+    fn contains(self: &Self, key: const_reference) -> bool;
+    fn count(self: &Self, key: const_reference) -> size_type;
+
+    fn clear(self: &mut Self);
+    fn insert(self: &mut Self, value: const_reference) -> bool;
+    fn insert(self: &mut Self, value: value_type) -> bool;
+    fn erase(self: &mut Self, key: const_reference) -> size_type;
+    fn erase(self: &mut Self, pos: const_iterator) -> iterator;
+    fn erase(self: &mut Self, first: const_iterator, last: const_iterator) -> iterator;
+
+    fn reserve(self: &mut Self, count: size_type);
+    fn rehash(self: &mut Self, count: size_type);
+    fn swap(self: &mut Self, other: &mut Self);
+
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
+    operator==(self: &Self, other: &Self) -> bool;
+    operator!=(self: &Self, other: &Self) -> bool;
+}
+
 class span<T: type> {
     type element_type = T;
     type value_type = T;
@@ -492,6 +544,11 @@ namespace chrono {
         operator>=(self: &Self, other: &Self) -> bool;
     }
 
+    type microseconds = duration;
+    type seconds = duration;
+
+    fn duration_cast<ToDuration: type>(d: duration) -> ToDuration;
+
     class time_point {
         type duration_type = duration;
 
@@ -631,8 +688,8 @@ class unique_ptr<T: type> {
 
     fn get(self: &Self) -> pointer;
     fn release(self: &mut Self) -> pointer;
-    fn reset(self: &mut Self) -> void;
-    fn reset(self: &mut Self, ptr: pointer) -> void;
+    fn reset(self: &mut Self);
+    fn reset(self: &mut Self, ptr: pointer);
 
     operator*(self: &Self) -> &T;
     operator->(self: &Self) -> pointer;
@@ -651,8 +708,8 @@ class shared_ptr<T: type> {
     init<U: type>(other: unique_ptr<U>);
 
     fn get(self: &Self) -> pointer;
-    fn reset(self: &mut Self) -> void;
-    fn reset(self: &mut Self, ptr: pointer) -> void;
+    fn reset(self: &mut Self);
+    fn reset(self: &mut Self, ptr: pointer);
     fn use_count(self: &Self) -> i64;
 
     operator*(self: &Self) -> &T;
@@ -663,6 +720,35 @@ class shared_ptr<T: type> {
 
 fn make_unique<T: type, Args...: type>(args: Args...) -> unique_ptr<T>;
 fn make_shared<T: type, Args...: type>(args: Args...) -> shared_ptr<T>;
+
+class optional<T: type> {
+    type value_type = T;
+
+    init();
+    init(value: T);
+    init(other: optional<T>);
+    init<U: type>(other: optional<U>);
+
+    fn has_value(self: &Self) -> bool;
+    fn value(self: &Self) -> &T;
+    fn value(self: &mut Self) -> &mut T;
+    fn value_or(self: &Self, default_value: T) -> T;
+
+    fn reset(self: &mut Self);
+    fn emplace<Args...: type>(self: &mut Self, args: Args...);
+
+    operator*(self: &Self) -> &T;
+    operator*(self: &mut Self) -> &mut T;
+    operator->(self: &Self) -> *T;
+    operator->(self: &mut Self) -> *mut T;
+    operator=(self: &mut Self, other: optional<T>) -> &mut Self;
+    operator=<U: type>(self: &mut Self, other: optional<U>) -> &mut Self;
+
+    operator==(self: &Self, other: &Self) -> bool;
+    operator!=(self: &Self, other: &Self) -> bool;
+}
+
+fn make_optional<T: type, Args...: type>(args: Args...) -> optional<T>;
 
 fn stoi(text: &string) -> i32;
 fn stoi(text: &string, pos: *usize, base: i32) -> i32;

@@ -136,7 +136,6 @@ private:
     ) {
         const SourceFile& file = sources[location.id];
         strview content = file.content_;
-        std::filesystem::path relative = std::filesystem::proximate(file.path_);
 
         std::size_t context_start = content.rfind('\n', location.begin);
         context_start = (context_start == GlobalMemory::String::npos) ? 0 : context_start + 1;
@@ -156,7 +155,8 @@ private:
             indent,
             ColourEscape::DIM,
             ColourEscape::UNDERLINE,
-            relative.string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>(),
+            file.relative_path_
+                .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>(),
             start_line_num,
             col_num,
             ColourEscape::RESET

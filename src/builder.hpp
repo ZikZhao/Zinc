@@ -12,14 +12,12 @@
 class ErrorTracker : public antlr4::BaseErrorListener {
 private:
     bool& has_error_;
-    GlobalMemory::String file_path_;
+    GlobalMemory::String path_string_;
 
 public:
-    explicit ErrorTracker(bool& has_error, std::filesystem::path file_path)
-        : has_error_(has_error) {
-        std::filesystem::path relative = std::filesystem::proximate(file_path);
-        file_path_ =
-            relative.string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
+    explicit ErrorTracker(bool& has_error, std::filesystem::path path) : has_error_(has_error) {
+        path_string_ =
+            path.string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
     }
 
     void syntaxError(
@@ -31,7 +29,7 @@ public:
         std::exception_ptr e
     ) override {
         has_error_ = true;
-        std::cerr << file_path_ << ": line " << line << ":" << charPositionInLine << " " << msg
+        std::cerr << path_string_ << ": line " << line << ":" << charPositionInLine << " " << msg
                   << "\n";
     }
 };
@@ -49,7 +47,9 @@ private:
 
 private:
     auto loc(const antlr4::ParserRuleContext* ctx) noexcept -> Location {
-        assert(ctx != nullptr);
+        if (ctx == nullptr) {
+            return Location{.id = file_id_, .begin = 0, .end = 0};
+        }
         const SourceFile& file = sources_[file_id_];
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
@@ -62,7 +62,9 @@ private:
     }
 
     auto text(antlr4::ParserRuleContext* ctx) noexcept -> strview {
-        assert(ctx != nullptr);
+        if (ctx == nullptr) {
+            return strview{};
+        }
         const SourceFile& file = sources_[file_id_];
         auto start = ctx->getStart();
         auto stop = ctx->getStop();
@@ -72,7 +74,9 @@ private:
     }
 
     auto text(const antlr4::Token* token) noexcept -> strview {
-        assert(token != nullptr);
+        if (token == nullptr) {
+            return strview{};
+        }
         const SourceFile& file = sources_[file_id_];
         std::size_t begin_offset = file.to_byte_index(token->getStartIndex());
         std::size_t end_offset = file.to_byte_index(token->getStopIndex() + 1);
@@ -84,7 +88,7 @@ private:
         if constexpr (std::is_default_constructible_v<R>) {
             return ctx ? std::any_cast<R>(ZincBaseVisitor::visit(ctx)) : R{};
         } else {
-            assert(ctx);
+            assert(ctx != nullptr);
             return std::any_cast<R>(ZincBaseVisitor::visit(ctx));
         }
     }
@@ -140,7 +144,7 @@ public:
         ZincLexer lexer(&input);
         antlr4::CommonTokenStream tokens(&lexer);
         ZincParser parser(&tokens);
-        ErrorTracker tracker{has_error_, sources_[file_id_].path_};
+        ErrorTracker tracker{has_error_, sources_[file_id_].relative_path_};
         lexer.removeErrorListeners();
         parser.removeErrorListeners();
         lexer.addErrorListener(&tracker);
@@ -212,6 +216,24 @@ private:
                 std::get<const ASTLocalBlock*>(visit(ctx->if_)),
                 visit(ctx->elseif_),
             });
+        }
+    }
+
+    auto visitSwitch_statement(ZincParser::Switch_statementContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTSwitchStatement{
+            loc(ctx),
+            visit_expr(ctx->condition_),
+            visit_list<ASTSwitchCase>(ctx->cases_),
+        });
+    }
+
+    auto visitSwitch_case(ZincParser::Switch_caseContext* ctx) noexcept
+        -> Any<ASTSwitchCase> final {
+        if (ctx->KW_DEFAULT()) {
+            return ASTSwitchCase{loc(ctx), std::monostate{}, visit(ctx->body_)};
+        } else {
+            return ASTSwitchCase{loc(ctx), visit_expr(ctx->value_), visit(ctx->body_)};
         }
     }
 
@@ -590,7 +612,7 @@ private:
 
     auto visitIdentifierExpr(ZincParser::IdentifierExprContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
-        return visit_expr(ctx->identifier_);
+        return as_variant(new ASTIdentifier{loc(ctx), text(ctx->identifier_)});
     }
 
     auto visitMemberAccessExpr(ZincParser::MemberAccessExprContext* ctx) noexcept
@@ -929,7 +951,9 @@ private:
     }
 
     auto visitArrayType(ZincParser::ArrayTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        return as_variant(new ASTArrayType{loc(ctx), visit_expr(ctx->element_type_)});
+        return as_variant(
+            new ASTArrayType{loc(ctx), visit_expr(ctx->element_type_), visit_expr(ctx->length_)}
+        );
     }
 
     auto visitFunctionType(ZincParser::FunctionTypeContext* ctx) noexcept
@@ -967,8 +991,8 @@ private:
         });
     }
 
-    auto visitIdentifier(ZincParser::IdentifierContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        return as_variant(new ASTIdentifier{loc(ctx), text(ctx)});
+    auto visitAny_identifier(ZincParser::Any_identifierContext* ctx) noexcept -> Any<void> final {
+        UNREACHABLE();
     }
 
     auto visitConstant(ZincParser::ConstantContext* ctx) noexcept -> Any<ASTExprVariant> final {

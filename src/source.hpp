@@ -11,7 +11,7 @@ struct Location {
 
 class SourceFile {
 public:
-    std::filesystem::path path_;
+    std::filesystem::path relative_path_;
     GlobalMemory::String content_;
 
 private:
@@ -20,7 +20,7 @@ private:
 
 public:
     SourceFile(std::filesystem::path path, GlobalMemory::String content) noexcept
-        : path_(std::move(path)), content_(std::move(content)) {
+        : relative_path_(std::move(path)), content_(std::move(content)) {
         compute_offsets();
     }
 
@@ -75,7 +75,7 @@ public:
         GlobalMemory::String content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
         );
-        files.emplace_back(path, std::move(content));
+        files.emplace_back(std::filesystem::proximate(path), std::move(content));
         file_id_map_.insert({std::move(path), static_cast<std::uint32_t>(files.size()) - 1});
         return static_cast<std::uint32_t>(files.size()) - 1;
     }
@@ -83,7 +83,7 @@ public:
     auto load(strview module_path, std::uint32_t relative_to) noexcept -> std::uint32_t {
         assert(relative_to < files.size());
         std::filesystem::path base_path =
-            std::filesystem::path(files[relative_to].path_.c_str()).parent_path();
+            std::filesystem::path(files[relative_to].relative_path_.c_str()).parent_path();
         std::filesystem::path full_path = base_path / module_path;
         auto [it, inserted] = file_id_map_.insert({full_path, 0});
         if (!inserted) {
@@ -96,7 +96,7 @@ public:
         GlobalMemory::String content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
         );
-        files.emplace_back(full_path, std::move(content));
+        files.emplace_back(std::filesystem::proximate(full_path), std::move(content));
         it->second = static_cast<std::uint32_t>(files.size()) - 1;
         return it->second;
     }
@@ -104,7 +104,7 @@ public:
     auto load_std() noexcept -> std::uint32_t {
         GlobalMemory::String content(std_d_zn_str());
         assert(files.empty());
-        files.emplace_back("", std::move(content));
+        files.emplace_back("<zinc.std>", std::move(content));
         return 0;
     }
 

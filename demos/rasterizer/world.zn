@@ -189,9 +189,9 @@ class Camera {
 }
 
 type Face = {
-    v_indices: [std.uint32_t; 3],
-    vt_indices: [std.uint32_t; 3],
-    vn_indices: [std.uint32_t; 3],
+    v_indices: [u32; 3],
+    vt_indices: [u32; 3],
+    vn_indices: [u32; 3],
     material: Material,
     face_normal: glm.vec3,
 };
@@ -568,10 +568,10 @@ class World {
                 let tok: [std.string; 3];
                 iss >> tok[0] >> tok[1] >> tok[2];
                 let vpos: [glm.vec3; 3];
-                let vt_out: [std.uint32_t; 3] = [
-                    std.numeric_limits<std.uint32_t>.max(),
-                    std.numeric_limits<std.uint32_t>.max(),
-                    std.numeric_limits<std.uint32_t>.max()
+                let vt_out: [u32; 3] = [
+                    std.numeric_limits<u32>.max(),
+                    std.numeric_limits<u32>.max(),
+                    std.numeric_limits<u32>.max()
                 ];
                 let vi_out: [i32; 3] = [0, 0, 0];
                 let vn_out: [i32; 3] = [-1, -1, -1];
@@ -588,7 +588,7 @@ class World {
                     vi_out[i] = v_global;
                     if (vt_i >= 0) {
                         let vt_global = tex_offset + vt_i;
-                        vt_out[i] = static_cast<std.uint32_t>(vt_global);
+                        vt_out[i] = static_cast<u32>(vt_global);
                     }
                     if (vn_i >= 0) {
                         let vn_global = normal_offset + vn_i;
@@ -621,11 +621,11 @@ class World {
                     vt_indices: [vt_out[0], vt_out[1], vt_out[2]],
                     vn_indices:
                         [vn_out[0] >= 0 ? vn_out[0] as u32
-                                        : std.numeric_limits<std.uint32_t>.max(),
+                                        : std.numeric_limits<u32>.max(),
                          vn_out[1] >= 0 ? vn_out[1] as u32
-                                        : std.numeric_limits<std.uint32_t>.max(),
+                                        : std.numeric_limits<u32>.max(),
                          vn_out[2] >= 0 ? vn_out[2] as u32
-                                        : std.numeric_limits<std.uint32_t>.max()],
+                                        : std.numeric_limits<u32>.max()],
                     material: current_obj->material,
                     face_normal: glm.vec3(0.0f)
                 };
@@ -751,10 +751,10 @@ class World {
 
             for (let k = 0; k < 3; ++k) {
                 global_face.v_indices[k] += v_offset;
-                if (global_face.vt_indices[k] != std.numeric_limits<std.uint32_t>.max()) {
+                if (global_face.vt_indices[k] != std.numeric_limits<u32>.max()) {
                     global_face.vt_indices[k] += vt_offset;
                 }
-                if (global_face.vn_indices[k] != std.numeric_limits<std.uint32_t>.max()) {
+                if (global_face.vn_indices[k] != std.numeric_limits<u32>.max()) {
                     global_face.vn_indices[k] += vn_offset;
                 }
             }

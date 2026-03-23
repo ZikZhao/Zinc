@@ -1,5 +1,7 @@
+import "sdl.d.zn" as sdl;
 import "constants.zn" as Constant;
 import "world.zn" as World;
+import "window.zn" as Window;
 
 fn main(args: [strview]) {
     if (args.size() < 2) {
@@ -24,17 +26,17 @@ fn main(args: [strview]) {
     let mut last_print = std.chrono.steady_clock.now();
 
     // Centralized input callbacks: movement and UI toggles
-    let translate_keys: [usize; 6] = [SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_A, SDL_SCANCODE_D, SDL_SCANCODE_SPACE, SDL_SCANCODE_C];
+    let translate_keys: [usize; 6] = [sdl.SDL_SCANCODE_W, sdl.SDL_SCANCODE_S, sdl.SDL_SCANCODE_A, sdl.SDL_SCANCODE_D, sdl.SDL_SCANCODE_SPACE, sdl.SDL_SCANCODE_C];
     window.register_key(
         translate_keys,
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let video_fixed_dt = 1.0 / Constant.TargetFPS;
-            let fwd = (ks[SDL_SCANCODE_W] ? 1.0 : 0.0) - (ks[SDL_SCANCODE_S] ? 1.0 : 0.0);
+            let fwd = (ks[sdl.SDL_SCANCODE_W] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_S] ? 1.0 : 0.0);
             let right =
-                (ks[SDL_SCANCODE_D] ? 1.0 : 0.0) - (ks[SDL_SCANCODE_A] ? 1.0 : 0.0);
+                (ks[sdl.SDL_SCANCODE_D] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_A] ? 1.0 : 0.0);
             let up =
-                (ks[SDL_SCANCODE_SPACE] ? 1.0 : 0.0) - (ks[SDL_SCANCODE_C] ? 1.0 : 0.0);
+                (ks[sdl.SDL_SCANCODE_SPACE] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_C] ? 1.0 : 0.0);
             if (fwd != 0.0 || right != 0.0 || up != 0.0) {
                 let effective_dt = video_recorder.is_recording() ? video_fixed_dt : dt;
                 world.camera_.translate(
@@ -48,13 +50,13 @@ fn main(args: [strview]) {
         }
     );
 
-    let roll_keys: [usize; 2] = [SDL_SCANCODE_Q, SDL_SCANCODE_E];
+    let roll_keys: [usize; 2] = [sdl.SDL_SCANCODE_Q, sdl.SDL_SCANCODE_E];
     window.register_key(
         roll_keys,
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let video_fixed_dt = 1.0 / Constant.TargetFPS;
-            let r = (ks[SDL_SCANCODE_E] ? 1.0 : 0.0) - (ks[SDL_SCANCODE_Q] ? 1.0 : 0.0);
+            let r = (ks[sdl.SDL_SCANCODE_E] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_Q] ? 1.0 : 0.0);
             if (r != 0.0) {
                 let effective_dt = video_recorder.is_recording() ? video_fixed_dt : dt;
                 world.camera_.roll(r * Constant.RollSpeed * effective_dt);
@@ -63,7 +65,7 @@ fn main(args: [strview]) {
         }
     );
 
-    let orbit_keys: [usize; 1] = [SDL_SCANCODE_O];
+    let orbit_keys: [usize; 1] = [sdl.SDL_SCANCODE_O];
     window.register_key(
         orbit_keys,
         Window.Trigger.ANY_JUST_PRESSED,
@@ -78,7 +80,7 @@ fn main(args: [strview]) {
     );
 
     let mode_keys: [usize; 5] = [
-        SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_0
+        sdl.SDL_SCANCODE_1, sdl.SDL_SCANCODE_2, sdl.SDL_SCANCODE_3, sdl.SDL_SCANCODE_4, sdl.SDL_SCANCODE_0
     ];
     window.register_key(
         mode_keys,
@@ -86,19 +88,19 @@ fn main(args: [strview]) {
         (ks: &Window.KeyState, dt: f32) => {
             let mode_name: strview;
             let switched = false;
-            if (ks[SDL_SCANCODE_1]) {
+            if (ks[sdl.SDL_SCANCODE_1]) {
                 switched = Renderer.Mode.WIREFRAME != std.exchange(renderer.mode_, Renderer.Mode.WIREFRAME);
                 mode_name = "WIREFRAME";
-            } else if (ks[SDL_SCANCODE_2]) {
+            } else if (ks[sdl.SDL_SCANCODE_2]) {
                 switched = Renderer.Mode.RASTERIZED != std.exchange(renderer.mode_, Renderer.Mode.RASTERIZED);
                 mode_name = "RASTERIZED";
-            } else if (ks[SDL_SCANCODE_3]) {
+            } else if (ks[sdl.SDL_SCANCODE_3]) {
                 switched = Renderer.Mode.RAYTRACED != std.exchange(renderer.mode_, Renderer.Mode.RAYTRACED);
                 mode_name = "RAYTRACED";
-            } else if (ks[SDL_SCANCODE_4]) {
+            } else if (ks[sdl.SDL_SCANCODE_4]) {
                 switched = Renderer.Mode.DEPTH_OF_FIELD != std.exchange(renderer.mode_, Renderer.Mode.DEPTH_OF_FIELD);
                 mode_name = "DEPTH_OF_FIELD";
-            } else if (ks[SDL_SCANCODE_0]) {
+            } else if (ks[sdl.SDL_SCANCODE_0]) {
                 switched =
                     Renderer.Mode.PHOTON_VISUALIZATION != std.exchange(renderer.mode_, Renderer.Mode.PHOTON_VISUALIZATION);
                 mode_name = "PHOTON_VISUALIZATION";
@@ -111,7 +113,7 @@ fn main(args: [strview]) {
         }
     );
 
-    let gamma_keys: [usize; 1] = [SDL_SCANCODE_G];
+    let gamma_keys: [usize; 1] = [sdl.SDL_SCANCODE_G];
     window.register_key(
         gamma_keys,
         Window.Trigger.ANY_JUST_PRESSED,
@@ -120,7 +122,7 @@ fn main(args: [strview]) {
         }
     );
 
-    let caustics_keys: [usize; 1] = [SDL_SCANCODE_P];
+    let caustics_keys: [usize; 1] = [sdl.SDL_SCANCODE_P];
     window.register_key(
         caustics_keys,
         Window.Trigger.ANY_JUST_PRESSED,
@@ -138,16 +140,16 @@ fn main(args: [strview]) {
     );
 
     // Aperture control (+/-)
-    let aperture_keys: [usize; 2] = [SDL_SCANCODE_EQUALS, SDL_SCANCODE_MINUS];
+    let aperture_keys: [usize; 2] = [sdl.SDL_SCANCODE_EQUALS, sdl.SDL_SCANCODE_MINUS];
     window.register_key(
         aperture_keys,
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let aperture: &mut f32 = mut renderer.aperture_size_;
-            if (ks[SDL_SCANCODE_EQUALS]) {
+            if (ks[sdl.SDL_SCANCODE_EQUALS]) {
                 aperture += Constant.GammaStep;
             }
-            if (ks[SDL_SCANCODE_MINUS]) {
+            if (ks[sdl.SDL_SCANCODE_MINUS]) {
                 aperture -= Constant.GammaStep;
             }
             aperture = std.clamp(aperture, 0.0, 2.0);
@@ -157,7 +159,7 @@ fn main(args: [strview]) {
     );
 
     // Screenshot save (Ctrl+S)
-    let screenshot_keys: [usize; 2] = [SDL_SCANCODE_LCTRL, SDL_SCANCODE_S];
+    let screenshot_keys: [usize; 2] = [sdl.SDL_SCANCODE_LCTRL, sdl.SDL_SCANCODE_S];
     window.register_key(
         screenshot_keys,
         Window.Trigger.ALL_JUST_PRESSED,
@@ -169,7 +171,7 @@ fn main(args: [strview]) {
     );
 
     // Video recording toggle (Ctrl+R)
-    let video_keys: [usize; 2] = [SDL_SCANCODE_LCTRL, SDL_SCANCODE_R];
+    let video_keys: [usize; 2] = [sdl.SDL_SCANCODE_LCTRL, sdl.SDL_SCANCODE_R];
     window.register_key(
         video_keys,
         Window.Trigger.ALL_JUST_PRESSED,
@@ -177,7 +179,7 @@ fn main(args: [strview]) {
     );
 
     // Offline/Realtime render mode toggle (V)
-    let capture_keys: [usize; 1] = [SDL_SCANCODE_V];
+    let capture_keys: [usize; 1] = [sdl.SDL_SCANCODE_V];
     window.register_key(
         capture_keys,
         Window.Trigger.ANY_JUST_PRESSED,
@@ -193,7 +195,7 @@ fn main(args: [strview]) {
     );
 
     // Normal debug mode toggle (N) - only for raytracing modes
-    let normal_debug_keys: [usize; 1] = [SDL_SCANCODE_N];
+    let normal_debug_keys: [usize; 1] = [sdl.SDL_SCANCODE_N];
     window.register_key(
         normal_debug_keys,
         Window.Trigger.ANY_JUST_PRESSED,
@@ -208,7 +210,7 @@ fn main(args: [strview]) {
 
     // Mouse look (left button drag)
     window.register_mouse(
-        SDL_BUTTON_LEFT,
+        sdl.SDL_BUTTON_LEFT,
         Window.Trigger.ANY_PRESSED,
         (xrel: i32, yrel: i32, dt: f32) => {
             if (xrel == 0 && yrel == 0) { return; }
@@ -226,7 +228,7 @@ fn main(args: [strview]) {
 
     // Keyboard look (arrow keys)
     let look_keys: [usize; 4] = [
-        SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT
+        sdl.SDL_SCANCODE_UP, sdl.SDL_SCANCODE_DOWN, sdl.SDL_SCANCODE_LEFT, sdl.SDL_SCANCODE_RIGHT
     ];
     window.register_key(
         look_keys,
@@ -234,9 +236,9 @@ fn main(args: [strview]) {
         (ks: &Window.KeyState, dt: f32) => {
             let video_fixed_dt = 1.0 / Constant.TargetFPS;
             let dx0 =
-                (ks[SDL_SCANCODE_RIGHT] ? 1.0 : 0.0) - (ks[SDL_SCANCODE_LEFT] ? 1.0 : 0.0);
+                (ks[sdl.SDL_SCANCODE_RIGHT] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_LEFT] ? 1.0 : 0.0);
             let dy0 =
-                (ks[SDL_SCANCODE_UP] ? 1.0 : 0.0) - (ks[SDL_SCANCODE_DOWN] ? 1.0 : 0.0);
+                (ks[sdl.SDL_SCANCODE_UP] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_DOWN] ? 1.0 : 0.0);
             if (dx0 != 0.0 || dy0 != 0.0) {
                 let roll = world.camera_.roll_;
                 let c = std.cos(roll);
@@ -299,27 +301,3 @@ fn main(args: [strview]) {
 
 const EXIT_SUCCESS: i32 = 0;
 const EXIT_FAILURE: i32 = 1;
-
-const SDL_SCANCODE_W: usize = 26;
-const SDL_SCANCODE_S: usize = 22;
-const SDL_SCANCODE_A: usize = 4;
-const SDL_SCANCODE_D: usize = 7;
-const SDL_SCANCODE_SPACE: usize = 44;
-const SDL_SCANCODE_C: usize = 6;
-const SDL_SCANCODE_Q: usize = 16;
-const SDL_SCANCODE_E: usize = 8;
-const SDL_SCANCODE_O: usize = 24;
-const SDL_SCANCODE_1: usize = 30;
-const SDL_SCANCODE_2: usize = 31;
-const SDL_SCANCODE_3: usize = 32;
-const SDL_SCANCODE_4: usize = 33;
-const SDL_SCANCODE_0: usize = 39;
-const SDL_SCANCODE_G: usize = 34;
-const SDL_SCANCODE_P: usize = 25;
-const SDL_SCANCODE_EQUALS: usize = 46;
-const SDL_SCANCODE_MINUS: usize = 47;
-const SDL_SCANCODE_LCTRL: usize = 225;
-const SDL_SCANCODE_S: usize = 27;
-const SDL_SCANCODE_R: usize = 19;
-const SDL_SCANCODE_V: usize = 47;
-const SDL_SCANCODE_N: usize = 49;

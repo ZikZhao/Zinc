@@ -634,7 +634,7 @@ public:
         Symbol result = sema_.lookup_symbol(family.primary->identifier);
         if (const Type* type = std::get<static_cast<size_t>(SymbolKind::Type)>(result)) {
             if (auto instance_type = type->dyn_cast<InstanceType>()) {
-                instance_type->primary_template_ = &family.primary;
+                instance_type->primary_template_ = family.primary;
                 instance_type->template_args_ = args;
             }
         }
@@ -667,7 +667,7 @@ public:
         Symbol result = sema_.lookup_symbol(primary->identifier);
         if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
             if (auto instance_type = (*type)->dyn_cast<InstanceType>()) {
-                instance_type->primary_template_ = &primary;
+                instance_type->primary_template_ = primary;
                 instance_type->template_args_ = args;
             }
         }
@@ -819,11 +819,9 @@ public:
         };
         GlobalMemory::Vector transformed_args =
             args | std::views::transform(transform) | GlobalMemory::collect<GlobalMemory::Vector>();
+        assert(!std::ranges::contains(transformed_args, nullptr));
         if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
             transformed_args.insert(transformed_args.begin(), transform(method->object));
-        }
-        if (std::ranges::contains(transformed_args, nullptr)) {
-            return {};
         }
 
         FunctionObject overload = resolve_overload(callee, transformed_args);
@@ -1408,15 +1406,15 @@ public:
         const Type* source_type = decayed.effective_type();
         if (source_type == target_type) {
             return operand;
-        } else if (operand->kind_ == Kind::Integer || operand->kind_ == Kind::Float) {
+        } else if (decayed->kind_ == Kind::Integer || decayed->kind_ == Kind::Float) {
             if (target_type->kind_ == Kind::Integer || target_type->kind_ == Kind::Float) {
                 convertible = true;
             }
-        } else if (operand->kind_ == Kind::Nullptr) {
+        } else if (decayed->kind_ == Kind::Nullptr) {
             if (target_type->kind_ == Kind::Pointer) {
                 convertible = true;
             }
-        } else if (operand->kind_ == Kind::Pointer) {
+        } else if (decayed->kind_ == Kind::Pointer) {
             if (target_type->kind_ == Kind::Pointer) {
                 if (TypeRegistry::is_reachable(source_type, target_type)) {
                     convertible = true;
@@ -1480,6 +1478,7 @@ public:
     }
 
     void operator()(const ASTMemberAccess* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         Symbol result = sema_.access_handler_->eval_access(node);
         if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
             out_ = *type;
@@ -1487,6 +1486,7 @@ public:
     }
 
     void operator()(const ASTPointerAccess* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
         Symbol result = sema_.access_handler_->eval_pointer(node);
         if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
             out_ = *type;
@@ -1748,14 +1748,17 @@ public:
     }
 
     auto operator()(const ASTMemberAccess* node) noexcept -> Symbol {
+        Diagnostic::ErrorTrap trap{node->location};
         return sema_.access_handler_->eval_access(node);
     }
 
     auto operator()(const ASTIndexAccess* node) noexcept -> Symbol {
+        Diagnostic::ErrorTrap trap{node->location};
         return sema_.access_handler_->eval_index(node);
     }
 
     auto operator()(const ASTAddressOfExpr* node) noexcept -> Symbol {
+        Diagnostic::ErrorTrap trap{node->location};
         Symbol operand_symbol = ValueContextEvaluator{*this, nullptr}(node->operand);
         if (!Sema::expect(operand_symbol, SymbolKind::Term)) {
             return {};
@@ -1765,6 +1768,7 @@ public:
     }
 
     auto operator()(const ASTDereference* node) noexcept -> Symbol {
+        Diagnostic::ErrorTrap trap{node->location};
         Symbol operand_symbol = ValueContextEvaluator{*this, nullptr}(node->operand);
         if (!Sema::expect(operand_symbol, SymbolKind::Term)) {
             return {};
@@ -1780,6 +1784,7 @@ public:
     }
 
     auto operator()(const ASTUnaryOp* node) noexcept -> Symbol {
+        Diagnostic::ErrorTrap trap{node->location};
         Symbol expr_symbol = ValueContextEvaluator{*this, nullptr}(node->expr);
         if (!Sema::expect(expr_symbol, SymbolKind::Term)) {
             return {};
@@ -1901,14 +1906,21 @@ public:
         args_terms.reserve(node->arguments.size());
         for (const ASTExprVariant& arg : node->arguments) {
             Symbol arg_symbol = ValueContextEvaluator{*this, nullptr}(arg);
-            if (!Sema::expect(arg_symbol, SymbolKind::Term)) {
-                return {};
+            if (Sema::expect(arg_symbol, SymbolKind::Term)) {
+                args_terms.push_back(Sema::get<SymbolKind::Term>(arg_symbol));
+            } else {
+                args_terms.push_back(Term{});
             }
-            args_terms.push_back(Sema::get<SymbolKind::Term>(arg_symbol));
+        }
+        if (std::ranges::any_of(args_terms, [](Term term) -> bool {
+                return term.get() == nullptr;
+            })) {
+            return {};
         }
         Symbol func_symbol = ValueContextEvaluator{*this, nullptr}(node->function);
         if (holds_monostate(func_symbol)) return {};
-        return sema_.call_handler_->eval_call(node, func_symbol, args_terms);
+        Term result = sema_.call_handler_->eval_call(node, func_symbol, args_terms);
+        return result.get() ? Symbol{result} : Symbol{};
     }
 
     auto operator()(const ASTTemplateInstantiation* node) noexcept -> Symbol {
@@ -1927,20 +1939,25 @@ public:
     }
 
     auto operator()(const ASTLambda* node) noexcept -> Symbol {
-        std::span<const Type*> param_types =
-            node->parameters | std::views::transform([&](const ASTFunctionParameter& param) {
-                TypeResolution param_type;
-                TypeContextEvaluator{sema_, param_type}(param.type);
-                return param_type.get();
-            }) |
-            GlobalMemory::collect<std::span>();
+        GlobalMemory::Vector<const Type*> param_types;
+        param_types.reserve(node->parameters.size());
+        for (const ASTFunctionParameter& param : node->parameters) {
+            TypeResolution param_type;
+            TypeContextEvaluator{sema_, param_type}(param.type);
+            param_types.push_back(param_type);
+        }
         TypeResolution return_type;
         if (!holds_monostate(node->return_type)) {
             TypeContextEvaluator{sema_, return_type}(node->return_type);
         } else {
             return_type = &VoidType::instance;
         }
-        const Type* func_type = TypeRegistry::get<FunctionType>(param_types, return_type);
+        if (std::ranges::contains(param_types, nullptr) || return_type.get() == nullptr) {
+            return {};
+        }
+        const Type* func_type = TypeRegistry::get<FunctionType>(
+            param_types | GlobalMemory::collect<std::span>(), return_type
+        );
         sema_.codegen_env_.map_type(sema_.current_scope_, node, func_type);
         return Term::prvalue(func_type);
     }
@@ -2008,6 +2025,17 @@ public:
         (*this)(node->if_block);
         if (!holds_monostate(node->else_block)) {
             (*this)(node->else_block);
+        }
+    }
+
+    void operator()(const ASTSwitchStatement* node) noexcept {
+        Sema::Guard guard(sema_, node);
+        ValueContextEvaluator{sema_, nullptr, false}(node->condition);
+        for (const ASTSwitchCase& switch_case : node->cases) {
+            if (!holds_monostate(switch_case.value)) {
+                ValueContextEvaluator{sema_, nullptr, false}(switch_case.value);
+            }
+            (*this)(switch_case.body);
         }
     }
 

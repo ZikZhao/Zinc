@@ -1,0 +1,398 @@
+import "sdl.d.zn" as sdl;
+import "utils.zn" as Utils;
+
+/// Event trigger types.
+enum Trigger {
+    ANY_PRESSED,       ///< Non-modifier keys: blocked when modifiers pressed
+    ANY_JUST_PRESSED,  ///< Non-modifier keys: blocked when modifiers pressed
+    ALL_JUST_PRESSED   ///< Modifier combo: triggers on just-pressed when ALL keys held
+}
+
+class Window {
+    type KeyState = [bool; sdl.SDL_NUM_SCANCODES];
+    type KeyHandler = std.function<(&Keystate, f32) -> void>;
+    type MouseHandler = std.function<(i32, i32, f32) -> void>;
+    type ScrollHandler = std.function<(i32) -> void>;
+
+    type KeyBinding = {
+        keys: std.unordered_set<sdl.SDL_Scancode>,
+        trigger: Trigger,
+        handler: KeyHandler,
+        id: usize,
+        last_time: std.optional<std.chrono.steady_clock.time_point>,
+    };
+
+    type MouseBinding = {
+        button: u8,
+        trigger: Trigger,
+        handler: MouseHandler,
+        first_motion: bool,
+        last_time: std.optional<std.chrono.steady_clock.time_point>,
+    };
+
+    // Window properties
+    let width_: usize;
+    let height_: usize;
+
+    // SDL components
+    let window_: *mut SDL_Window;
+    let renderer_: *mut SDL_Renderer;
+    let texture_: *mut SDL_Texture;
+
+    // Backbuffer
+    let pixel_buffer_: std.vector<u32>;
+
+    // Input management
+    let mut keys_this_frame_: KeyState;
+    let mut keys_pressed_this_frame_: std.unordered_set<sdl.SDL_Scancode>;
+    let mut mouse_buttons_this_frame_: std.unordered_set<sdl.SDL_Scancode>;
+    let mut mouse_buttons_last_frame_: std.unordered_set<sdl.SDL_Scancode>;
+    let mut mouse_buttons_updated_this_frame_: std.unordered_set<sdl.SDL_Scancode>;
+    let mut mouse_xrel_: i32;
+    let mut mouse_yrel_: i32;
+    let mut mouse_scroll_: i32;
+
+    // Event handling
+    let mut key_bindings_: std.vector<KeyBinding>;
+    let mut mouse_bindings_: std.vector<MouseBinding>;
+    let mut scroll_handlers_: std.vector<ScrollHandler>;
+    let mut next_event_id_: std.size_t;
+
+    init(width: i32, height: i32) {
+        // Initialize SDL video subsystem
+        if (sdl.SDL_Init(sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_TIMER) != 0) {
+            throw std.runtime_error(std.format("[SDL] Could not initialise SDL: {}\n", sdl.SDL_GetError()));
+        }
+
+        // Create window surface
+        let flags = sdl.SDL_WINDOW_OPENGL;
+
+        let anywhere = sdl.SDL_WINDOWPOS_UNDEFINED;
+        let window = sdl.SDL_CreateWindow("COMS30020", anywhere, anywhere, width_, height_, flags);
+        if (!window) {
+            throw std.runtime_error(std.format("[SDL] Could not set video mode: {}\n", sdl.SDL_GetError()));
+        }
+
+        // Renderer bound to window (software for portability)
+        flags = sdl.SDL_RENDERER_SOFTWARE;
+        let renderer = sdl.SDL_CreateRenderer(window, -1, flags);
+        if (!renderer) {
+            throw std.runtime_error(
+                std.format("[SDL] Could not create renderer: {}\n", sdl.SDL_GetError())
+            );
+        }
+        sdl.SDL_SetHint(sdl.SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+        sdl.SDL_RenderSetLogicalSize(renderer, width_, height_);
+
+        // Backbuffer texture receiving ARGB pixels
+        let pixel_format = sdl.SDL_PIXELFORMAT_ARGB8888;
+        let texture =
+            sdl.SDL_CreateTexture(renderer, pixel_format, sdl.SDL_TEXTUREACCESS_STATIC, width_, height_);
+        if (!texture) {
+            throw std.runtime_error(
+                std.format("[SDL] Could not allocate texture: {}\n", sdl.SDL_GetError())
+            );
+        }
+
+        let pixel_buffer = std.vector<u32>(width_ * height_);
+
+        return Self{
+            width_ : width,
+            height_ : height,
+            window_ : window,
+            renderer_ : renderer,
+            texture_ : texture,
+            pixel_buffer_ : move pixel_buffer,
+        };
+    }
+
+    drop(self: &mut Self) {
+        if (self.texture_) { sdl.SDL_DestroyTexture(self.texture_); }
+        if (self.renderer_) { sdl.SDL_DestroyRenderer(self.renderer_); }
+        if (self.window_) { sdl.SDL_DestroyWindow(self.window_); }
+        sdl.SDL_Quit();
+    }
+
+    operator[](self: &mut Self, xy: std.pair<int, int>) -> &mut u32 {
+        let x = xy.first as usize;
+        let y = xy.second as usize;
+        return self.pixel_buffer_[y * width_ + x];
+    }
+
+    operator[](self: &Self, xy: std.pair<int, int>) -> u32 {
+        let x = xy.first as usize;
+        let y = xy.second as usize;
+        return self.pixel_buffer_[y * width_ + x];
+    }
+
+    fn get_pixel_buffer(self: &Self) -> &std.vector<u32> {
+        return self.pixel_buffer_;
+    }
+
+    /// Registers a key binding with a trigger policy.
+    /// @param keys Set of scancodes to monitor.
+    /// @param trigger Trigger mode (pressed/down/released/etc.).
+    /// @param handler Callback receiving key state and dt.
+    fn register_key(
+        self: &mut Self, keys: std.unordered_set<sdl.SDL_Scancode>, trigger: Trigger, handler: KeyHandler
+    ) {
+        self.key_bindings_.push_back(KeyBinding{
+            keys: keys,
+            trigger: trigger,
+            handler: handler,
+            id: self.next_event_id_++,
+            last_time: std.nullopt
+        });
+    }
+
+    /// Registers a mouse binding.
+    /// @param button SDL mouse button.
+    /// @param trigger Trigger mode.
+    /// @param handler Callback receiving xrel, yrel, dt.
+    fn register_mouse(self: &mut Self, button: std.uint8_t, trigger: Trigger, handler: MouseHandler) {
+        self.mouse_bindings_.push_back(MouseBinding{
+            button: button,
+            trigger: trigger,
+            handler: handler,
+            first_motion: true,
+            last_time: std.nullopt
+        });
+    }
+
+    /// Registers a scroll handler.
+    /// @param handler Callback receiving y_offset.
+    fn register_scroll(self: &mut Self, handler: ScrollHandler) {
+        self.scroll_handlers_.push_back(handler);
+    }
+
+    /// Polls SDL events and dispatches registered handlers.
+    fn process_events(self: &mut Self) -> bool {
+        let mut event: SDL_Event;
+        self.keys_pressed_this_frame_.clear();
+        self.mouse_buttons_last_frame_ = self.mouse_buttons_this_frame_;
+        self.mouse_buttons_updated_this_frame_.clear();
+        self.mouse_xrel_ = 0;
+        self.mouse_yrel_ = 0;
+        self.mouse_scroll_ = 0;
+        for (sdl.SDL_PollEvent(&mut event)) {
+            if (event.type == sdl.SDL_QUIT ||
+                (event.type == sdl.SDL_WINDOWEVENT && event.window.event == sdl.SDL_WINDOWEVENT_CLOSE) ||
+                (event.type == sdl.SDL_KEYDOWN && event.key.keysym.sym == sdl.SDLK_ESCAPE)) {
+                return false;
+            }
+
+            // Keyboard transitions
+            if (event.type == sdl.SDL_KEYDOWN && !event.key.repeat) {
+                let sc = event.key.keysym.scancode;
+                if (sc >= 0 && sc < sdl.SDL_NUM_SCANCODES) {
+                    self.keys_this_frame_[sc] = 1;
+                    self.keys_pressed_this_frame_.insert(sc);
+                }
+            }
+            if (event.type == sdl.SDL_KEYUP) {
+                let sc = event.key.keysym.scancode;
+                if (sc >= 0 && sc < sdl.SDL_NUM_SCANCODES) {
+                    self.keys_this_frame_[sc] = 0;
+                }
+            }
+
+            // Mouse button transitions
+            if (event.type == sdl.SDL_MOUSEBUTTONDOWN) {
+                let b = event.button.button;
+                self.mouse_buttons_this_frame_.insert(b);
+                self.mouse_buttons_updated_this_frame_.insert(b);
+                for (mb : self.mouse_bindings_) {
+                    if (mb.button == b) { mb.first_motion = true; }
+                }
+            }
+            if (event.type == sdl.SDL_MOUSEBUTTONUP) {
+                let b = event.button.button;
+                self.mouse_buttons_this_frame_.erase(b);
+                self.mouse_buttons_updated_this_frame_.insert(b);
+            }
+
+            // Accumulate relative motion for bound handlers
+            if (event.type == sdl.SDL_MOUSEMOTION) {
+                self.mouse_xrel_ += event.motion.xrel;
+                self.mouse_yrel_ += event.motion.yrel;
+            }
+
+            // Mouse wheel scrolling
+            if (event.type == sdl.SDL_MOUSEWHEEL) {
+                self.mouse_scroll_ = (event.wheel.y > 0) ? 1 : -1;
+            }
+        }
+
+        // Dispatch registered input handlers
+        self.process_key_bindings();
+        self.process_mouse_bindings();
+
+        if (self.mouse_scroll_ != 0) {
+            for (handler : self.scroll_handlers_) {
+                handler(self.mouse_scroll_);
+            }
+        }
+
+        return true;
+    }
+
+    /// Uploads backbuffer to SDL texture, presents and clears buffer.
+    fn update(self: &mut Self) {
+        sdl.SDL_UpdateTexture(self.texture_, nullptr, self.pixel_buffer_.data(), self.width_ * sizeof(std.uint32_t));
+        sdl.SDL_RenderClear(self.renderer_);
+        sdl.SDL_RenderCopy(self.renderer_, self.texture_, nullptr, nullptr);
+        sdl.SDL_RenderPresent(self.renderer_);
+        self.clear();
+    }
+
+    /// Clears the ARGB backbuffer to black.
+    fn clear(self: &mut Self) {
+        std.fill(self.pixel_buffer_.begin(), self.pixel_buffer_.end(), 0);
+    }
+
+    fn save_ppm(self: &Self, filename: &std.string) {
+        Utils.WritePPM(filename, self.width_, self.height_, 255, self.pixel_buffer_);
+    }
+
+    fn save_bmp(self: &Self, filename: &std.string) {
+        let surface = sdl.SDL_CreateRGBSurfaceFrom(
+            self.pixel_buffer_.data() as *void,
+            self.width_,
+            self.height_,
+            32,
+            self.width_ * sizeof(std.uint32_t),
+            0xFF << 16,
+            0xFF << 8,
+            0xFF << 0,
+            0xFF << 24
+        );
+        sdl.SDL_SaveBMP(surface, filename.c_str());
+        sdl.SDL_FreeSurface(surface);
+    }
+
+    /// Processes registered key bindings based on current state.
+    fn process_key_bindings(self: &mut Self) {
+        let now = std.chrono.steady_clock.now();
+        for (binding : key_bindings_) {
+            // Continuous trigger (ANY_PRESSED) needs delta time tracking
+            if (binding.trigger == Trigger.ANY_PRESSED) {
+                if (!self.check_key_trigger(binding)) { continue; }
+
+                // Check if any key was just pressed this frame
+                let mut just_pressed = false;
+                for (k : binding.keys) {
+                    if (self.keys_pressed_this_frame_.count(k)) {
+                        just_pressed = true;
+                        break;
+                    }
+                }
+
+                if (just_pressed) {
+                    binding.last_time = now;
+                    continue;  // do not call handler on initial press, no dt yet
+                }
+
+                if (!binding.last_time) {
+                    binding.last_time = now;
+                }
+
+                let dt = std.chrono.duration<float>(now - *binding.last_time).count();
+                binding.handler(self.keys_this_frame_, dt);
+                binding.last_time = now;
+            } else {
+                // One-shot triggers (ANY_JUST_PRESSED, ALL_JUST_PRESSED)
+                if (!self.check_key_trigger(binding)) { continue; }
+
+                // Ensure handler sees keys pressed this frame even if already released
+                let mut effective_keys = self.keys_this_frame_;
+                for (k : self.keys_pressed_this_frame_) {
+                    if (k >= 0 && k < sdl.SDL_NUM_SCANCODES) {
+                        effective_keys[k] = true;
+                    }
+                }
+                binding.handler(effective_keys, 0.0f);
+            }
+        }
+    }
+
+    /// Processes registered mouse bindings based on current state.
+    fn process_mouse_bindings(self: &mut Self) {
+        let now = std.chrono.steady_clock.now();
+        for (binding : mouse_bindings_) {
+            let down = self.mouse_buttons_this_frame_.count(binding.button) > 0;
+            let just_pressed = self.mouse_buttons_updated_this_frame_.count(binding.button) > 0 && down;
+            switch (binding.trigger) {
+            case Trigger.ANY_JUST_PRESSED: {
+                if (just_pressed) { binding.handler(0, 0, 0.0f); }
+                break;
+            }
+            case Trigger.ANY_PRESSED: {
+                if (down) {
+                    if (just_pressed) {
+                        binding.last_time = now;
+                        binding.first_motion = false;
+                    } else if (self.mouse_xrel_ != 0 || self.mouse_yrel_ != 0) {
+                        if (!binding.last_time) {
+                            binding.last_time = now;
+                        }
+                        let dt = std.chrono.duration<float>(now - *binding.last_time).count();
+                        binding.handler(self.mouse_xrel_, self.mouse_yrel_, dt);
+                        binding.last_time = now;
+                    }
+                }
+                break;
+            }
+            default: {
+                break;
+            }
+            }
+        }
+        self.mouse_xrel_ = 0;
+        self.mouse_yrel_ = 0;
+    }
+
+    /// Checks if any modifier key is currently pressed.
+    /// @return `true` if Shift, Ctrl, or Alt is pressed.
+    fn is_modifier_key_pressed(self: &Self) -> bool {
+        return self.keys_this_frame_[sdl.SDL_SCANCODE_LSHIFT] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_RSHIFT] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_LCTRL] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_RCTRL] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_LALT] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_RALT];
+    }
+
+    /// Checks if a key binding's trigger condition is met.
+    /// @param binding Key binding to check.
+    /// @return `true` if the binding should trigger.
+    fn check_key_trigger(self: &Self, binding: &KeyBinding) -> bool {
+        switch (binding.trigger) {
+        case Trigger.ANY_PRESSED: {
+            if (is_modifier_key_pressed()) { return false; }
+            for (key : binding.keys) {
+                if (keys_this_frame_[key]) { return true; }
+            }
+            return false;
+        }
+
+        case Trigger.ANY_JUST_PRESSED: {
+            if (is_modifier_key_pressed()) { return false; }
+            for (key : binding.keys) {
+                if (keys_pressed_this_frame_.count(key)) { return true; }
+            }
+            return false;
+        }
+
+        case Trigger.ALL_JUST_PRESSED: {
+            let mut exists_pressed_this_frame = false;  // at least one key must be just pressed
+            for (key : binding.keys) {
+                if (!(keys_this_frame_[key] || keys_pressed_this_frame_.count(key))) { return false; }
+                if (keys_pressed_this_frame_.count(key)) { exists_pressed_this_frame = true; }
+            }
+            return exists_pressed_this_frame;
+        }
+        }
+
+        return false;
+    }
+}

@@ -1009,7 +1009,7 @@ private:
 };
 
 auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env) -> int {
-    std::filesystem::path out_path = sources.files[0].path_.concat(".cpp");
+    std::filesystem::path out_path = sources.files[0].relative_path_.concat(".cpp");
     std::ofstream out(out_path);
     if (!out) {
         std::cerr << "Failed to open output file: " << out_path << "\n";
