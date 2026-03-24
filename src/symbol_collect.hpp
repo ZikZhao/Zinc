@@ -192,10 +192,12 @@ public:
 
 class SymbolCollector {
 private:
-    Scope& current_scope_;
+    Scope* std_scope_;
+    Scope* current_scope_;
 
 public:
-    SymbolCollector(Scope& scope) noexcept : current_scope_(scope) {}
+    SymbolCollector(Scope* std_scope, Scope* current_scope) noexcept
+        : std_scope_(std_scope), current_scope_(current_scope) {}
 
     void operator()(const ASTNodeVariant& variant) noexcept { std::visit(*this, variant); }
 
@@ -210,14 +212,24 @@ public:
 
     // Root and blocks
     void operator()(const ASTRoot* node) noexcept {
+        if (!node->scope) {
+            if (std_scope_) {
+                // module root
+                node->scope = &Scope::root(*std_scope_);
+            } else {
+                // standard library root
+                node->scope = current_scope_;
+            }
+        }
+        SymbolCollector root_visitor{std_scope_, node->scope};
         for (auto& child : node->statements) {
-            (*this)(child);
+            root_visitor(child);
         }
     }
 
     void operator()(const ASTLocalBlock* node) noexcept {
-        Scope& local_scope = Scope::make(current_scope_, node);
-        SymbolCollector local_visitor(local_scope);
+        Scope& local_scope = Scope::make(*current_scope_, node);
+        SymbolCollector local_visitor(std_scope_, &local_scope);
         for (auto& stmt : node->statements) {
             local_visitor(stmt);
         }
@@ -242,7 +254,7 @@ public:
     // Declarations
     void operator()(const ASTDeclaration* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_.add_variable(
+        current_scope_->add_variable(
             node->identifier,
             new VariableInitialization{
                 .is_comptime = node->is_constant,
@@ -255,13 +267,13 @@ public:
 
     void operator()(const ASTTypeAlias* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_.add_alias(node->identifier, &node->type);
+        current_scope_->add_alias(node->identifier, &node->type);
     }
 
     // Statements
     void operator()(const ASTIfStatement* node) noexcept {
-        Scope& condition_scope = Scope::make(current_scope_, node);
-        SymbolCollector condition_visitor(condition_scope);
+        Scope& condition_scope = Scope::make(*current_scope_, node);
+        SymbolCollector condition_visitor(std_scope_, &condition_scope);
         condition_visitor(node->condition);
         condition_visitor(node->if_block);
         if (!holds_monostate(node->else_block)) {
@@ -270,8 +282,8 @@ public:
     }
 
     void operator()(const ASTForStatement* node) noexcept {
-        Scope& local_scope = Scope::make(current_scope_, node);
-        SymbolCollector local_visitor(local_scope);
+        Scope& local_scope = Scope::make(*current_scope_, node);
+        SymbolCollector local_visitor(std_scope_, &local_scope);
         if (auto* decl = std::get_if<const ASTDeclaration*>(&node->initializer)) {
             local_visitor(*decl);
         } else if (
@@ -286,8 +298,8 @@ public:
     // Functions
     void operator()(const ASTFunctionDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_.add_function(node->identifier, node);
-        Scope& local_scope = Scope::make(current_scope_, node);
+        current_scope_->add_function(node->identifier, node);
+        Scope& local_scope = Scope::make(*current_scope_, node);
         for (auto& param : node->parameters) {
             Diagnostic::ErrorTrap param_trap{param.location};
             local_scope.add_variable(
@@ -300,7 +312,7 @@ public:
                 }
             );
         }
-        SymbolCollector local_visitor(local_scope);
+        SymbolCollector local_visitor(std_scope_, &local_scope);
         for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
@@ -308,10 +320,10 @@ public:
 
     void operator()(const ASTCtorDtorDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_.add_function(
+        current_scope_->add_function(
             node->is_constructor ? constructor_symbol : destructor_symbol, node
         );
-        Scope& local_scope = Scope::make(current_scope_, node);
+        Scope& local_scope = Scope::make(*current_scope_, node);
         for (auto& param : node->parameters) {
             Diagnostic::ErrorTrap param_trap{param.location};
             local_scope.add_variable(
@@ -324,7 +336,7 @@ public:
                 }
             );
         }
-        SymbolCollector local_visitor(local_scope);
+        SymbolCollector local_visitor(std_scope_, &local_scope);
         for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
@@ -332,8 +344,8 @@ public:
 
     void operator()(const ASTOperatorDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_.add_function(GetOperatorString(node->opcode), node);
-        Scope& local_scope = Scope::make(current_scope_, node);
+        current_scope_->add_function(GetOperatorString(node->opcode), node);
+        Scope& local_scope = Scope::make(*current_scope_, node);
         local_scope.add_variable(
             node->left.identifier,
             new VariableInitialization{
@@ -355,7 +367,7 @@ public:
                 }
             );
         }
-        SymbolCollector local_visitor(local_scope);
+        SymbolCollector local_visitor(std_scope_, &local_scope);
         for (auto& stmt : node->body) {
             local_visitor(stmt);
         }
@@ -364,21 +376,28 @@ public:
     // Classes
     void operator()(const ASTClassDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_.add_class(node->identifier, node);
-        Scope& class_scope = Scope::make(current_scope_, node, node->identifier);
+        current_scope_->add_class(node->identifier, node);
+        Scope& class_scope = Scope::make(*current_scope_, node, node->identifier);
         class_scope.self_id_ = node->identifier;
-        SymbolCollector class_visitor(class_scope);
+        SymbolCollector class_visitor(std_scope_, &class_scope);
         for (auto& item : node->scope_items) {
             class_visitor(item);
+        }
+        for (ASTNodeVariant decl_variant : node->fields) {
+            const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
+            TypeResolution field_type;
+            if (holds_monostate(decl->declared_type)) {
+                throw;
+            }
         }
     }
 
     // Enums
     void operator()(const ASTEnumDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_.set_template_argument(node->identifier, &IntegerType::i32_instance);
-        Scope& enum_scope = Scope::make(current_scope_, node, node->identifier);
-        SymbolCollector enum_visitor(enum_scope);
+        current_scope_->set_template_argument(node->identifier, &IntegerType::i32_instance);
+        Scope& enum_scope = Scope::make(*current_scope_, node, node->identifier);
+        SymbolCollector enum_visitor(std_scope_, &enum_scope);
         for (size_t i = 0; i < node->enumerators.size(); ++i) {
             enum_scope.add_variable(
                 node->enumerators[i],
@@ -397,32 +416,31 @@ public:
     // Namespaces
     void operator()(const ASTNamespaceDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        Scope& namespace_scope = Scope::make(current_scope_, node, node->identifier);
-        SymbolCollector namespace_visitor(namespace_scope);
+        Scope& namespace_scope = Scope::make(*current_scope_, node, node->identifier);
+        SymbolCollector namespace_visitor{std_scope_, &namespace_scope};
         for (auto& item : node->items) {
             namespace_visitor(item);
         }
-        current_scope_.add_namespace(node->identifier, namespace_scope);
+        current_scope_->add_namespace(node->identifier, namespace_scope);
     }
 
     // Templates
     void operator()(const ASTTemplateDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_.add_template(node->identifier, node);
+        current_scope_->add_template(node->identifier, node);
     }
 
     void operator()(const ASTTemplateSpecialization* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_.add_template(node->identifier, node);
+        current_scope_->add_template(node->identifier, node);
     }
 
     void operator()(const ASTImportStatement* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        if (!node->module_scope) {
-            node->module_scope = &Scope::make(current_scope_, node, node->alias);
+        if (node->module_root->scope == nullptr) {
+            SymbolCollector module_visitor{std_scope_, nullptr};
+            module_visitor(node->module_root);
         }
-        current_scope_.add_namespace(node->alias, *node->module_scope);
-        SymbolCollector module_visitor(*node->module_scope);
-        module_visitor(node->module_root);
+        current_scope_->add_namespace(node->alias, *node->module_root->scope);
     }
 };

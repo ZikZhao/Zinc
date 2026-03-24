@@ -293,6 +293,7 @@ private:
     GlobalMemory::Map<std::pair<const Scope*, const ScopeValue*>, TypeResolution> type_cache_;
 
 public:
+    Scope& std_scope_;
     Scope* current_scope_;
     CodeGenEnvironment& codegen_env_;
     std::unique_ptr<TemplateHandler> template_handler_;
@@ -301,7 +302,7 @@ public:
     std::unique_ptr<CallHandler> call_handler_;
 
 public:
-    Sema(Scope& root, CodeGenEnvironment& codegen_env) noexcept;
+    Sema(Scope& std_scope, Scope& root, CodeGenEnvironment& codegen_env) noexcept;
 
     auto deferred_analysis(Scope& scope, auto variant) noexcept -> void;
 
@@ -633,6 +634,7 @@ public:
             }
             args_repr += ")";
             Diagnostic::error_no_matching_overload(node->location, args_repr);
+            resolve_overload(callee, transformed_args);  // for debugging
             return {};
         }
 
@@ -1635,6 +1637,9 @@ public:
         for (ASTNodeVariant decl_variant : node->fields) {
             const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
             TypeResolution field_type;
+            if (holds_monostate(decl->declared_type)) {
+                throw;
+            }
             TypeContextEvaluator{sema_, field_type}(decl->declared_type);
             has_error |= !field_type.get();
             attrs.insert({decl->identifier, field_type.get()});
@@ -1846,10 +1851,9 @@ public:
 
     auto operator()(const ASTArrayInitialization* node) noexcept -> Symbol {
         /// TODO: array element type inference and constexpr
+        Symbol array_type_symbol = sema_.get_std_symbol("array"sv);
+        const void* array_template = Sema::get<SymbolKind::Template>(array_type_symbol)->primary;
         if (expected_) {
-            Symbol array_type_symbol = sema_.get_std_symbol("array"sv);
-            const void* array_template =
-                Sema::get<SymbolKind::Template>(array_type_symbol)->primary;
             auto* instance_type = expected_->dyn_cast<InstanceType>();
             if (!instance_type || instance_type->primary_template_ != array_template) {
                 Diagnostic::error_symbol_category_mismatch(
@@ -1869,19 +1873,30 @@ public:
             elements.reserve(node->elements.size());
             for (const ASTExprVariant& element : node->elements) {
                 Symbol element_symbol = ValueContextEvaluator{*this, element_type}(element);
-                if (!Sema::expect(element_symbol, SymbolKind::Term)) {
-                    return {};
-                }
-                if (holds_monostate(element_symbol)) {
-                    elements.push_back(Term{});
-                } else {
+                if (Sema::expect(element_symbol, SymbolKind::Term)) {
                     Term element_term = Sema::get<SymbolKind::Term>(element_symbol);
                     elements.push_back(element_term);
+                } else {
+                    elements.push_back(Term{});
                 }
             }
             return Term::prvalue(expected_);
         } else {
-            assert(false);
+            const Type* element_type = nullptr;
+            Symbol first_element_symbol =
+                ValueContextEvaluator{*this, nullptr}(node->elements.front());
+            if (Sema::expect(first_element_symbol, SymbolKind::Term)) {
+                element_type = Sema::get<SymbolKind::Term>(first_element_symbol).effective_type();
+            } else {
+                return {};
+            }
+            std::array<const Object*, 2> template_args = {
+                element_type, new IntegerValue(&IntegerType::u64_instance, node->elements.size())
+            };
+            Symbol result_type_symbol = sema_.template_handler_->instantiate(
+                *Sema::get<SymbolKind::Template>(array_type_symbol), template_args
+            );
+            return Term::prvalue(Sema::get<SymbolKind::Type>(result_type_symbol));
         }
     }
 
@@ -1988,18 +2003,31 @@ public:
     }
 
     void operator()(const ASTDeclaration* node) noexcept {
+        TypeResolution type;
         if (!holds_monostate(node->declared_type)) {
             TypeResolution declared_type;
             TypeContextEvaluator{sema_, declared_type}(node->declared_type);
             sema_.codegen_env_.map_type(sema_.current_scope_, node, declared_type);
-        } else if (!std::holds_alternative<std::monostate>(node->expr)) {
+        }
+        if (!holds_monostate(node->expr)) {
             Symbol init = ValueContextEvaluator{sema_, nullptr, false}(node->expr);
             if (!Sema::expect(init, SymbolKind::Term)) {
                 return;
             }
-            sema_.codegen_env_.map_type(
-                sema_.current_scope_, node, std::get<Term>(init).effective_type()
-            );
+            Term init_term = Sema::get<SymbolKind::Term>(init);
+            if (type.get()) {
+                AutoBindings auto_bindings;
+                if (!type.get()->assignable_from(init_term.effective_type(), auto_bindings)) {
+                    Diagnostic::error_type_mismatch(
+                        type.get()->repr(), init_term.effective_type()->repr()
+                    );
+                }
+            } else {
+                type = Sema::decay(init_term.effective_type());
+            }
+        }
+        if (type.get()) {
+            sema_.codegen_env_.map_type(sema_.current_scope_, node, type);
         }
     }
 
@@ -2123,8 +2151,9 @@ public:
 
 // ========== Implementation ==========
 
-inline Sema::Sema(Scope& root, CodeGenEnvironment& codegen_env) noexcept
-    : current_scope_(&root),
+inline Sema::Sema(Scope& std_scope, Scope& root, CodeGenEnvironment& codegen_env) noexcept
+    : std_scope_(std_scope),
+      current_scope_(&root),
       codegen_env_(codegen_env),
       template_handler_(std::make_unique<TemplateHandler>(*this)),
       operation_handler_(std::make_unique<OperationHandler>(*this)),
@@ -2151,7 +2180,8 @@ inline auto Sema::eval_type(Scope& scope, const ScopeValue& value) noexcept -> T
     } else if (auto class_def = value.get<const ASTClassDefinition*>()) {
         TypeContextEvaluator{*this, it_id_cache->second}(class_def);
     } else {
-        Diagnostic::error_symbol_category_mismatch("type", "value");
+        Symbol symbol = eval_symbol(scope, value);
+        Sema::expect(symbol, SymbolKind::Type);
         return nullptr;
     }
     // Ignore incomplete types in cache to prevent type interning bypassed
@@ -2195,7 +2225,6 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
             if (type.get()) {
                 AutoBindings auto_bindings;
                 if (!type->assignable_from(init.effective_type(), auto_bindings)) {
-                    Diagnostic::error_type_mismatch(type->repr(), init.effective_type()->repr());
                     return {};
                 }
                 if (var_init->is_comptime) return init;
@@ -2217,7 +2246,7 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
 
 inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void {
     scope.is_instantiating_template_ = true;
-    SymbolCollector{scope}(variant);
+    SymbolCollector{&std_scope_, &scope}(variant);
     Guard guard(*this, scope);
     TypeCheckVisitor{*this}(variant);
 }

@@ -241,6 +241,19 @@ private:
     }
 
 public:
+    static auto error_module_not_found(strview module_path, strview relative_to = {}) noexcept
+        -> void {
+        if (relative_to.empty()) {
+            print_error_msg(GlobalMemory::format("Module not found: '{}'", module_path));
+        } else {
+            print_error_msg(
+                GlobalMemory::format(
+                    "Module not found: '{}' (imported from '{}')", module_path, relative_to
+                )
+            );
+        }
+    }
+
     static auto error_undeclared_identifier(strview identifier) noexcept -> void {
         unlocated_error(GlobalMemory::format("Undeclared identifier: '{}'", identifier));
     }

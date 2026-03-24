@@ -199,6 +199,7 @@ struct ASTLocalBlock final : public ASTNode {
 
 struct ASTRoot final : public ASTNode {
     std::span<ASTNodeVariant> statements;
+    mutable Scope* scope = nullptr;
 };
 
 struct ASTExpression : public ASTNode {};
@@ -490,7 +491,6 @@ struct ASTImportStatement final : public ASTNode {
     strview path;
     strview alias;
     const ASTRoot* module_root;
-    mutable Scope* module_scope = nullptr;
 };
 
 enum class OperatorGroup : std::uint8_t {

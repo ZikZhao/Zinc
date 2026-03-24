@@ -779,7 +779,7 @@ class unique_ptr<T: type> {
 
     operator*(self: &Self) -> &T;
     operator->(self: &Self) -> pointer;
-    operator=(self: &mut Self, other: unique_ptr<T>) -> &mut Self;
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
     operator=<U: type>(self: &mut Self, other: unique_ptr<U>) -> &mut Self;
 }
 

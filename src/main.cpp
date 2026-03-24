@@ -34,7 +34,7 @@ auto get_std_scope(SourceManager& sources) -> Scope& {
         static Scope scope;
         scope.scope_id_ = "std";
         scope.is_extern_ = true;
-        SymbolCollector{scope}(std_root);
+        SymbolCollector{nullptr, &scope}(std_root);
         for (const auto& [identifier, meta_fn] : Meta::get_metas()) {
             scope.add_meta(identifier, meta_fn);
         }
@@ -53,18 +53,22 @@ auto main(int argc, char* argv[]) -> int {
 
     SourceManager sources;
     Scope& std_scope = get_std_scope(sources);
-    const ASTRoot* root = ASTBuilder{sources, sources.load(argv[1])}();
+    uint32_t file_id = sources.load(argv[1]);
+    if (file_id == std::numeric_limits<uint32_t>::max()) {
+        Diagnostic::error_module_not_found(argv[1]);
+        return EXIT_FAILURE;
+    }
+    const ASTRoot* root = ASTBuilder{sources, file_id}();
 
     if (root == nullptr) {
         Diagnostic::print_error_msg("Failed to parse input");
         return EXIT_FAILURE;
     }
 
-    Scope& scope = Scope::root(std_scope);
-    SymbolCollector{scope}(root);
+    SymbolCollector{&std_scope, nullptr}(root);
 
     CodeGenEnvironment codegen_env;
-    Sema sema{scope, codegen_env};
+    Sema sema{std_scope, *root->scope, codegen_env};
     TypeCheckVisitor{sema}(root);
 
     bool has_error = Diagnostic::print(sources);

@@ -10,10 +10,14 @@ enum Mode {
 class Renderer {
     let world_: &World.World;
     let rasterizer_: std.unique_ptr<Rasterizer.Rasterizer>;
-    let mode_ = Mode.RASTERIZED;
+    let mode_: Mode;
 
     init(world: &World.World, window: &Window.Window) {
-        return Self{world: world, rasterizer: std.make_unique<Rasterizer.Rasterizer>(window)};
+        return Self{
+            world: world,
+            rasterizer: std.make_unique<Rasterizer.Rasterizer>(window),
+            mode: Mode.RASTERIZED
+        };
     }
 
     fn set_mode(self: &mut Self, mode: Mode) { self.mode_ = mode; }

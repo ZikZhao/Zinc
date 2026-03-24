@@ -116,8 +116,12 @@ private:
     }
 
     auto import_module(strview path) -> const ASTRoot* {
-        std::uint32_t module_file_id =
-            sources_.load(strview(path).substr(1, path.size() - 2), file_id_);
+        std::uint32_t module_file_id = sources_.load(path, file_id_);
+        if (module_file_id == std::numeric_limits<std::uint32_t>::max()) {
+            Diagnostic::error_module_not_found(path, sources_[file_id_].relative_path_.string());
+            has_error_ = true;
+            return nullptr;
+        }
         if (const void* cached = sources_.get_cache(module_file_id)) {
             return static_cast<const ASTRoot*>(cached);
         } else {
@@ -597,9 +601,11 @@ private:
 
     auto visitImport_statement(ZincParser::Import_statementContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
-        return as_variant(new ASTImportStatement{
-            loc(ctx), text(ctx->path_), text(ctx->identifier_), import_module(text(ctx->path_))
-        });
+        strview path = text(ctx->path_);
+        path = path.substr(1, path.size() - 2);  // remove quotes
+        return as_variant(
+            new ASTImportStatement{loc(ctx), path, text(ctx->identifier_), import_module(path)}
+        );
     }
 
     auto visitSelfExpr(ZincParser::SelfExprContext* ctx) noexcept -> Any<ASTExprVariant> final {

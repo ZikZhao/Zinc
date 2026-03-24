@@ -1,12 +1,7 @@
-fn main(args: [strview]) {
-    std.cerr << 1 << 2;
-}
+import "module.zn" as World;
+import "module2.zn" as Renderer;
 
-class A<T: type> {
-    init() {
-        return Self{};
-    }
-    operator+(self: &Self, other: i32) -> A<T> {
-        
-    }
+fn main(args: [strview]) {
+    let mut a = Renderer.Renderer();
+    let mut b = World.World(mut a);
 }

@@ -1,5 +1,6 @@
 import "utils.zn" as Utils;
 import "world.zn" as World;
+import "window.zn" as Window;
 
 /// Rasterizer for wireframe and textured triangle rendering.
 ///
@@ -165,10 +166,10 @@ class Rasterizer {
         };
     }
 
-    let window_: &Window;
+    let window_: &Window.Window;
     let z_buffer_: std.vector<f32>;
 
-    init(window: &Window) {
+    init(window: &Window.Window) {
         return Self{
             window: window,
             z_buffer: std.vector<f32>(window.width_ * window.height_, 0.0f)
