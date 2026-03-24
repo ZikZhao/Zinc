@@ -2,6 +2,7 @@ import "sdl.d.zn" as sdl;
 import "constants.zn" as Constant;
 import "world.zn" as World;
 import "window.zn" as Window;
+import "renderer.zn" as Renderer;
 
 fn main(args: [strview]) {
     if (args.size() < 2) {
@@ -17,7 +18,7 @@ fn main(args: [strview]) {
     world.camera_.set_aspect_ratio(
         Constant.WindowWidth as f32 / Constant.WindowHeight as f32
     );
-    let mut renderer = Renderer(world, window);
+    let mut renderer = Renderer.Renderer(world, window);
 
     let mut fps = 0;
     let mut last_print = std.chrono.steady_clock.now();

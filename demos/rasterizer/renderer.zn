@@ -1,0 +1,48 @@
+import "world.zn" as World;
+import "window.zn" as Window;
+import "rasterizer.zn" as Rasterizer;
+
+enum Mode {
+    WIREFRAME,
+    RASTERIZED,
+}
+
+class Renderer {
+    let world_: &World.World;
+    let rasterizer_: std.unique_ptr<Rasterizer.Rasterizer>;
+    let mode_ = Mode.RASTERIZED;
+
+    init(world: &World.World, window: &Window.Window) {
+        return Self{world: world, rasterizer: std.make_unique<Rasterizer.Rasterizer>(window)};
+    }
+
+    fn set_mode(self: &mut Self, mode: Mode) { self.mode_ = mode; }
+
+    fn render(self: &Self) {
+        self.clear();
+        switch (self.mode_) {
+            case Mode.WIREFRAME: {
+                self.render_wireframe();
+                break;
+            }
+            case Mode.RASTERIZED: {
+                self.render_rasterized();
+                break;
+            }
+        }
+    }
+
+    fn clear(self: &Self) {
+        self.rasterizer_.clear();
+    }
+
+    fn render_wireframe(self: &Self) {
+        self.rasterizer_.wireframe(self.world_.camera_, self.world_.all_faces_, self.world_.all_vertices_);
+    }
+
+    fn render_rasterized(self: &Self) {
+        self.rasterizer_.rasterized(
+            self.world_.camera_, self.world_.all_faces_, self.world_.all_vertices_, self.world_.all_texcoords_
+        );
+    }
+}

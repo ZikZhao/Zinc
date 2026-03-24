@@ -188,12 +188,13 @@ import_statement:
 	KW_IMPORT path_ = T_STRING KW_AS identifier_ = T_IDENTIFIER OP_SEMICOLON;
 
 expr:
-	KW_SELF													# SelfExpr
-	| constant_ = constant									# ConstExpr
-	| identifier_ = T_IDENTIFIER							# IdentifierExpr
-	| base_ = expr OP_DOT member_ = any_identifier			# MemberAccessExpr
-	| base_ = expr OP_ARROW member_ = any_identifier		# PointerAccessExpr
-	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET	# IndexAccessExpr
+	KW_SELF														# SelfExpr
+	| constant_ = constant										# ConstExpr
+	| identifier_ = T_IDENTIFIER								# IdentifierExpr
+	| template_ = expr instantiation_list_ = instantiation_list	# InstantiationExpr
+	| base_ = expr OP_DOT member_ = any_identifier				# MemberAccessExpr
+	| base_ = expr OP_ARROW member_ = any_identifier			# PointerAccessExpr
+	| base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET		# IndexAccessExpr
 	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN # CallExpr
@@ -208,7 +209,6 @@ expr:
 	| KW_MOVE inner_expr_ = expr													# MoveExpr
 	| KW_FORWARD inner_expr_ = expr													# ForwardExpr
 	| OP_LPAREN inner_expr_ = expr OP_RPAREN										# ParenExpr
-	| template_ = expr instantiation_list_ = instantiation_list						# InstantiationExpr
 	| condition_ = expr OP_QUESTION true_expr_ = expr OP_COLON false_expr_ = expr	# TernaryExpr
 	| expr_ = expr KW_AS OP_QUESTION? type_ = type									# AsExpr
 	| OP_LPAREN (

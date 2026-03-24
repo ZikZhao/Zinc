@@ -1,0 +1,466 @@
+import "utils.zn" as Utils;
+import "world.zn" as World;
+
+/// Rasterizer for wireframe and textured triangle rendering.
+///
+/// This class handles the CPU-based rendering pipeline, including:
+/// - Sutherland-Hodgman clipping against the view frustum
+/// - Perspective projection and division
+/// - Conversion to screen coordinates
+/// - Wireframe rendering using DDA
+/// - Textured triangle rendering with scanline fill and perspective-correct interpolation
+/// - Z-buffering for depth testing
+class Rasterizer {
+    /// Clip-space half-space test: inside test for a homogeneous vertex versus a frustum plane.
+    static fn InsidePlane(v: &glm.vec4, plane: World.ClipPlane) -> bool {
+        switch (plane) {
+            case World.ClipPlane.LEFT: {
+                return v.x >= -v.w;
+            }
+            case World.ClipPlane.RIGHT: {
+                return v.x <= v.w;
+            }
+            case World.ClipPlane.BOTTOM: {
+                return v.y >= -v.w;
+            }
+            case World.ClipPlane.TOP: {
+                return v.y <= v.w;
+            }
+            case World.ClipPlane.NEAR: {
+                return v.z >= 0.0f;
+            }
+            case World.ClipPlane.FAR: {
+                return v.z <= v.w;
+            }
+        }
+        return false;
+    }
+
+    /// Edge-plane intersection parameter `t` in clip space (homogeneous distances).
+    static fn ComputeIntersectionT(v0: &glm.vec4, v1: &glm.vec4, plane: World.ClipPlane) -> f32 {
+        let d0: f32;
+        let d1: f32;
+        switch (plane) {
+            case World.ClipPlane.LEFT: {
+                d0 = v0.x + v0.w;
+                d1 = v1.x + v1.w;
+                break;
+            }
+            case World.ClipPlane.RIGHT: {
+                d0 = v0.w - v0.x;
+                d1 = v1.w - v1.x;
+                break;
+            }
+            case World.ClipPlane.BOTTOM: {
+                d0 = v0.y + v0.w;
+                d1 = v1.y + v1.w;
+                break;
+            }
+            case World.ClipPlane.TOP: {
+                d0 = v0.w - v0.y;
+                d1 = v1.w - v1.y;
+                break;
+            }
+            case World.ClipPlane.NEAR: {
+                d0 = v0.z;
+                d1 = v1.z;
+                break;
+            }
+            case World.ClipPlane.FAR: {
+                d0 = v0.w - v0.z;
+                d1 = v1.w - v1.z;
+                break;
+            }
+            default: {
+                return 0.0f;
+            }
+        }
+        if (std.abs(d1 - d0) < 1e-6f) {
+            return 0.0f;
+        }
+        return d0 / (d0 - d1);
+    }
+
+    /// Attribute interpolation at plane intersection (colour, UV linear in clip space).
+    static fn IntersectPlane(
+        v0: &ClipVertex, v1: &ClipVertex, plane: World.ClipPlane
+    ) -> ClipVertex {
+        let t = ComputeIntersectionT(v0.position_clip, v1.position_clip, plane);
+        return ClipVertex{
+            position_clip: v0.position_clip * (1.0f - t) + v1.position_clip * t,
+            colour:
+                Colour{
+                    red: (v0.colour.red * (1.0f - t) + v1.colour.red * t) as u8,
+                    green: (v0.colour.green * (1.0f - t) + v1.colour.green * t) as u8,
+                    blue: (v0.colour.blue * (1.0f - t) + v1.colour.blue * t) as u8,
+                },
+            uv: v0.uv * (1.0f - t) + v1.uv * t,
+        };
+    }
+
+    /// Sutherland–Hodgman polygon clipping against a single frustum plane (clip space).
+    static fn ClipAgainstPlane(
+        input: &InplaceVector<ClipVertex, 9>, plane: World.ClipPlane
+    ) -> InplaceVector<ClipVertex, 9> {
+        let output: InplaceVector<ClipVertex, 9>;
+
+        if (input.size() == 0) { return output; }
+
+        for (let i: usize = 0; i < input.size(); i++) {
+            let current: &ClipVertex = input[i];
+            let next: &ClipVertex = input[(i + 1) % input.size()];
+
+            let current_inside = InsidePlane(current.position_clip, plane);
+            let next_inside = InsidePlane(next.position_clip, plane);
+
+            if (current_inside && next_inside) {
+                output.push_back(next);
+            } else if (current_inside && !next_inside) {
+                output.push_back(IntersectPlane(current, next, plane));
+            } else if (!current_inside && next_inside) {
+                output.push_back(IntersectPlane(current, next, plane));
+                output.push_back(next);
+            }
+        }
+
+        return output;
+    }
+
+    /// Fragment shading: perspective-correct UV interpolation and base color modulation.
+    static fn SampleTexture(
+        face: &Face,
+        bary: &glm.vec3,
+        v0: &ScreenNdcCoord,
+        v1: &ScreenNdcCoord,
+        v2: &ScreenNdcCoord
+    ) -> Colour {
+        let base_color: glm.vec3;
+
+        // If textured, reconstruct UV with 1/w weighting to avoid affine distortion
+        if (face.material.texture) {
+            let inv_w = bary.x * v0.inv_w + bary.y * v1.inv_w + bary.z * v2.inv_w;
+            let u = (bary.x * v0.uv.x * v0.inv_w + bary.y * v1.uv.x * v1.inv_w +
+                           bary.z * v2.uv.x * v2.inv_w) /
+                          inv_w;
+            let v = (bary.x * v0.uv.y * v0.inv_w + bary.y * v1.uv.y * v1.inv_w +
+                           bary.z * v2.uv.y * v2.inv_w) /
+                          inv_w;
+
+            // Sample texture and modulate by material albedo
+            let tex_sample = face.material.texture->sample(u, v);
+            base_color = glm.vec3(
+                (tex_sample.red / 255.0f) * face.material.base_color.r,
+                (tex_sample.green / 255.0f) * face.material.base_color.g,
+                (tex_sample.blue / 255.0f) * face.material.base_color.b
+            );
+        } else {
+            // No texture: use flat material base color
+            base_color = face.material.base_color;
+        }
+
+        return Colour{
+            red: (std.clamp(base_color.r * 255.0f, 0.0f, 255.0f)) as u8,
+            green: (std.clamp(base_color.g * 255.0f, 0.0f, 255.0f)) as u8,
+            blue: (std.clamp(base_color.b * 255.0f, 0.0f, 255.0f)) as u8,
+        };
+    }
+
+    let window_: &Window;
+    let z_buffer_: std.vector<f32>;
+
+    init(window: &Window) {
+        return Self{
+            window: window,
+            z_buffer: std.vector<f32>(window.width_ * window.height_, 0.0f)
+        };
+    }
+
+    fn get_depth(self: &Self, x: i32, y: i32) -> f32 {
+        if (x < 0 || x as usize >= self.window_.width_ || y < 0 || y as usize >= self.window_.height_) {
+            return 0.0f;
+        }
+        return self.z_buffer_[y as usize * self.window_.width_ + x as usize];
+    }
+
+    fn clear(self: &mut Self) {
+        self.z_buffer_.assign(self.window_.width_ * self.window_.height_, 0.0f);
+    }
+
+    fn wireframe(self: &Self, camera: &World.Camera, faces: &std.vector<Face>, vertices: &std.vector<glm.vec3>) {
+        for (face : faces) {
+            self.face_wireframe(camera, face, vertices, std.vector<glm.vec2>());
+        }
+    }
+
+    fn rasterized(
+        self: &Self,
+        camera: &World.Camera,
+        faces: &std.vector<Face>,
+        vertices: &std.vector<glm.vec3>,
+        texcoords: &std.vector<glm.vec2>
+    ) {
+        for (face : faces) {
+            self.face_rasterized(camera, face, vertices, texcoords);
+        }
+    }
+
+    fn face_wireframe(
+        self: &Self,
+        camera: &World.Camera,
+        face: &Face,
+        vertices: &std.vector<glm.vec3>,
+        texcoords: &std.vector<glm.vec2>
+    ) {
+        // Clip triangle to the frustum (Sutherland–Hodgman in clip space)
+        let clipped = self.clip_triangle(camera, face, vertices, texcoords);
+        if (clipped.size() < 3) { return; }
+
+        // Project clipped polygon to NDC and convert to screen; carry 1/w for depth
+        let screen_verts: std.vector<ScreenNdcCoord>;
+        for (let i: usize = 0; i < clipped.size(); i++) {
+            let ndc = camera.clip_to_ndc(clipped[i].position_clip);
+            screen_verts.push_back(self.ndc_to_screen(ndc, clipped[i].uv, clipped[i].position_clip.w));
+        }
+
+        // Edge rasterization using DDA with inverse-Z depth testing
+        let colour = clipped[0].colour;
+        let width = self.window_.width_;
+        let height = self.window_.height_;
+
+        for (let i: usize = 0; i < screen_verts.size(); i++) {
+            let from = screen_verts[i];
+            let to = screen_verts[(i + 1) % screen_verts.size()];
+            if (std.abs(to.x - from.x) >= std.abs(to.y - from.y)) {
+                // Iterate over x
+                let from_x =
+                    std.max<usize>(std.min(from.x, to.x) as usize, 0 as usize);
+                let to_x =
+                    std.min<usize>(std.max(from.x, to.x) as usize, (width - 1) as usize);
+                for (let x: usize = from_x; x <= to_x; x++) {
+                    let y = std.round(from.y + (to.y - from.y) * (x - from.x) / (to.x - from.x)) as isize;
+                    if (x >= width as usize || y < 0 || y >= height as isize) {
+                        continue;
+                    }
+                    let progress = (to.x == from.x) ? 0.0f : (x - from.x) as f32 / (to.x - from.x) as f32;
+                    let inv_z = Utils.InvZndc(progress, [from.z_ndc, to.z_ndc]);
+                    let depth: &mut f32 = self.z_buffer_[y * width + x];
+                    if (inv_z >= depth) {
+                        depth = inv_z;
+                        self.window_[std.pair<i32, i32>(x as i32, y as i32)] = colour;
+                    }
+                }
+            } else {
+                // Iterate over y
+                let from_y = std.max<usize>(std.min(from.y, to.y) as usize, 0 as usize);
+                let to_y = std.min<usize>(std.max(from.y, to.y) as usize, (height - 1) as usize);
+                for (let y: usize = from_y; y <= to_y; y++) {
+                    let x = (std.round(from.x + (to.x - from.x) * (y - from.y) / (to.y - from.y))) as isize;
+                    if (x < 0 || x >= width as isize || y >= height as usize) {
+                        continue;
+                    }
+                    let progress = (to.y == from.y) ? 0.0f : (y - from.y) as f32 / (to.y - from.y) as f32;
+                    let inv_z = Utils.InvZndc(progress, [from.z_ndc, to.z_ndc]);
+                    let depth: &f32 = self.z_buffer_[y * width + x];
+                    if (inv_z >= depth) {
+                        depth = inv_z;
+                        self.window_[std.pair<i32, i32>(x as i32, y as i32)] = colour;
+                    }
+                }
+            }
+        }
+    }
+
+    fn face_rasterized(
+        camera: &Camera,
+        face: &Face,
+        vertices: &std.vector<glm.vec3>,
+        texcoords: &std.vector<glm.vec2>
+    ) {
+        // Clip triangle against all frustum planes; early out if culled
+        let clipped = self.clip_triangle(camera, face, vertices, texcoords);
+        if (clipped.size() < 3) {
+            return;
+        }
+    
+        // Project to NDC and convert to screen space, tracking 1/w for perspective-correct
+        // interpolation
+        let screen_verts: InplaceVector<ScreenNdcCoord, 9>;
+        for (let i: usize = 0; i < clipped.size(); i++) {
+            let ndc = camera.clip_to_ndc(clipped[i].position_clip);
+            screen_verts.push_back(ndc_to_screen(ndc, clipped[i].uv, clipped[i].position_clip.w));
+        }
+    
+        // Triangulate convex polygon fan-wise and perform two-pass scanline fill (top/bottom)
+        let width = window_.width_;
+        let height = window_.height_;
+        for (let i: usize = 1; i + 1 < clipped.size(); i++) {
+            let mut v0 = screen_verts[0];
+            let mut v1 = screen_verts[i];
+            let mut v2 = screen_verts[i + 1];
+            if (v0.y > v1.y) { std.swap(mut v0, mut v1); }
+            if (v0.y > v2.y) { std.swap(mut v0, mut v2); }
+            if (v1.y > v2.y) { std.swap(mut v1, mut v2); }
+
+            // Compute inverse slopes for edge stepping and derive scan ranges
+            let from_y = std.max<isize>(std.ceil(v0.y) as isize, 0);
+            let mid_y = std.min<isize>(std.ceil(v1.y) as isize, height as isize - 1);
+            let to_y = std.min<isize>(std.ceil(v2.y) as isize, height as isize - 1);
+            let inv_slope_v0v1 = (v1.y - v0.y) == 0.0f ? 0.0f : (v1.x - v0.x) / (v1.y - v0.y);
+            let inv_slope_v0v2 = (v2.y - v0.y) == 0.0f ? 0.0f : (v2.x - v0.x) / (v2.y - v0.y);
+            let inv_slope_v1v2 = (v2.y - v1.y) == 0.0f ? 0.0f : (v2.x - v1.x) / (v2.y - v1.y);
+
+            // Upper half scanlines: barycentrics, perspective-correct texture, depth test
+            for (let y: isize = from_y; y < mid_y; y++) {
+                let y_center = y as f32 + 0.5f;
+                let x01 = inv_slope_v0v1 * (y_center - v0.y) + v0.x;
+                let x02 = inv_slope_v0v2 * (y_center - v0.y) + v0.x;
+                let start_x = std.max<isize>(std.floor(std.min(x01, x02)) as isize, 0 as isize);
+                let end_x = std.min<isize>(std.ceil(std.max(x01, x02)) as isize, width as isize - 1);
+                for (let x: isize = start_x; x <= end_x; x++) {
+                    let x_center = x as f32 + 0.5f;
+                    let bary = Utils.Barycentric(
+                        glm.vec2(v0.x, v0.y), glm.vec2(v1.x, v1.y), glm.vec2(v2.x, v2.y), glm.vec2(x_center, y_center)
+                    );
+                    if (bary.x >= 0.0f && bary.y >= 0.0f && bary.z >= 0.0f) {
+                        let colour = SampleTexture(face, bary, v0, v1, v2);
+                        let inv_z = Utils.InvZndc(
+                            [bary.x, bary.y, bary.z],
+                            [v0.z_ndc, v1.z_ndc, v2.z_ndc]
+                        );
+                        let depth: &f32 = self.z_buffer_[y * width + x];
+                        if (inv_z > depth) {
+                            depth = inv_z;
+                            self.window_[std.pair::<i32, i32>(x as i32, y as i32)] = colour;
+                        }
+                    }
+                }
+            }
+
+            // Lower half scanlines: same process with bottom edges
+            for (let y: isize = mid_y; y <= to_y; y++) {
+                let y_center = y as f32 + 0.5f;
+                let x12 = inv_slope_v1v2 * (y_center - v1.y) + v1.x;
+                let x02 = inv_slope_v0v2 * (y_center - v0.y) + v0.x;
+                let start_x = std.max<isize>(std.floor(std.min(x12, x02)) as isize, 0 as isize);
+                let end_x = std.min<isize>(
+                    std.ceil(std.max(x12, x02)) as isize,
+                    width as isize - 1
+                );
+                for (let x: isize = start_x; x <= end_x; x++) {
+                    let x_center = x as f32 + 0.5f;
+                    let bary = Utils.Barycentric(
+                        glm.vec2(v0.x, v0.y), glm.vec2(v1.x, v1.y), glm.vec2(v2.x, v2.y), glm.vec2(x_center, y_center)
+                    );
+                    if (bary.x >= 0.0f && bary.y >= 0.0f && bary.z >= 0.0f) {
+                        let colour = SampleTexture(face, bary, v0, v1, v2);
+                        let inv_z = Utils.InvZndc(
+                            [bary.x, bary.y, bary.z],
+                            [v0.z_ndc, v1.z_ndc, v2.z_ndc]
+                        );
+                        let depth: &f32 = self.z_buffer_[y * width + x];
+                        if (inv_z > depth) {
+                            depth = inv_z;
+                            self.window_[std.pair::<i32, i32>(x as i32, y as i32)] = colour;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Clips a triangle to the view frustum using Sutherland-Hodgman algorithm.
+    /// @param camera The camera for transforming to clip space.
+    /// @param face The face defining the triangle.
+    /// @param vertices The list of vertex positions.
+    /// @param texcoords The list of texture coordinates.
+    /// @return The resulting clipped polygon vertices.
+    fn clip_triangle(
+        self: &Self,
+        camera: &Camera,
+        face: &Face,
+        vertices: &std.vector<glm.vec3>,
+        texcoords: &std.vector<glm.vec2>
+    ) -> InplaceVector<ClipVertex, 9> {
+        let vertex_color = Colour{
+            red: std.clamp(face.material.base_color.r * 255.0f, 0.0f, 255.0f) as u8,
+            green: std.clamp(face.material.base_color.g * 255.0f, 0.0f, 255.0f) as u8,
+            blue: std.clamp(face.material.base_color.b * 255.0f, 0.0f, 255.0f) as u8
+        };
+
+        // Gather vertex positions and optional UVs
+        let v0: &glm.vec3 = vertices[face.v_indices[0]];
+        let v1: &glm.vec3 = vertices[face.v_indices[1]];
+        let v2: &glm.vec3 = vertices[face.v_indices[2]];
+        let uv0 = glm.vec2(0.0f, 0.0f);
+        let uv1 = glm.vec2(0.0f, 0.0f);
+        let uv2 = glm.vec2(0.0f, 0.0f);
+        if (!texcoords.empty()) {
+            if (face.vt_indices[0] < texcoords.size()) {
+                uv0 = texcoords[face.vt_indices[0]];
+            }
+            if (face.vt_indices[1] < texcoords.size()) {
+                uv1 = texcoords[face.vt_indices[1]];
+            }
+            if (face.vt_indices[2] < texcoords.size()) {
+                uv2 = texcoords[face.vt_indices[2]];
+            }
+        }
+
+        // Transform to clip space (homogeneous); attributes travel with the polygon
+        let mut polygon: InplaceVector<ClipVertex, 9>;
+        polygon.push_back(
+            ClipVertex{
+                position_clip: camera.world_to_clip(v0),
+                colour: vertex_color,
+                uv: uv0
+            }
+        );
+        polygon.push_back(
+            ClipVertex{
+                position_clip: camera.world_to_clip(v1),
+                colour: vertex_color,
+                uv: uv1
+            }
+        );
+        polygon.push_back(
+            ClipVertex{
+                position_clip: camera.world_to_clip(v2),
+                colour: vertex_color,
+                uv: uv2
+            }
+        );
+
+        // Sequentially clip against each frustum plane; bail out if polygon fully disappears
+        polygon = ClipAgainstPlane(polygon, World.ClipPlane.LEFT);
+        if (polygon.size() < 3) { return InplaceVector<ClipVertex, 9>(); }
+
+        polygon = ClipAgainstPlane(polygon, World.ClipPlane.RIGHT);
+        if (polygon.size() < 3) { return InplaceVector<ClipVertex, 9>(); }
+
+        polygon = ClipAgainstPlane(polygon, World.ClipPlane.BOTTOM);
+        if (polygon.size() < 3) { return InplaceVector<ClipVertex, 9>(); }
+
+        polygon = ClipAgainstPlane(polygon, World.ClipPlane.TOP);
+        if (polygon.size() < 3) { return InplaceVector<ClipVertex, 9>(); }
+
+        polygon = ClipAgainstPlane(polygon, World.ClipPlane.NEAR);
+        if (polygon.size() < 3) { return InplaceVector<ClipVertex, 9>(); }
+
+        polygon = ClipAgainstPlane(polygon, World.ClipPlane.FAR);
+        if (polygon.size() < 3) { return InplaceVector<ClipVertex, 9>(); }
+
+        // Return final clipped polygon (may have 3–9 vertices)
+        return polygon;
+    }
+
+    /// NDC `[-1,1]` to pixel coordinates; store `1/w` for downstream perspective correction.
+    fn ndc_to_screen(self: &Self, ndc: &glm.vec3, uv: &glm.vec2, w: FloatType) -> ScreenNdcCoord {
+        return ScreenNdcCoord{
+            x: (ndc.x + 1.0f) * 0.5f * self.window_.width_,
+            y: (1.0f - ndc.y) * 0.5f * self.window_.height_,
+            z_ndc: ndc.z,
+            uv: uv,
+            inv_w: 1.0f / w
+        };
+    }
+}
