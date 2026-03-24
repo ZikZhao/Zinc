@@ -55,7 +55,7 @@ type Material = {
     base_color: glm.vec3,  // Color multiplier for texture (or base color if no texture)
     shininess: f32,
     metallic: f32,
-    shading: Shading,
+    shading: i32,
     ior: f32,  // Index of refraction (1.0 = no refraction, 1.5 = glass)
     td: f32,   // Transmission Depth: The distance at which the base_color is reached
     tw: f32,   // Transparency weight (0 = opaque, 1 = fully transparent)

@@ -386,6 +386,16 @@ public:
         case Kind::Boolean:
             out += "b"sv;
             break;
+        case Kind::Function: {
+            out += "F"sv;
+            const FunctionType* func_type = type->cast<FunctionType>();
+            std::format_to(std::back_inserter(out), "{}", func_type->parameters_.size() + 1);
+            (*this)(out, func_type->return_type_);
+            for (const Type* param_type : func_type->parameters_) {
+                (*this)(out, param_type);
+            }
+            break;
+        }
         case Kind::Mutable:
             out += "m"sv;
             (*this)(out, type->cast<MutableType>()->target_type_);

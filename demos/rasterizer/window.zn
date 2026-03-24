@@ -17,7 +17,7 @@ class Window {
 
     type KeyBinding = {
         keys: std.unordered_set<sdl.SDL_Scancode>,
-        trigger: Trigger,
+        trigger: i32,
         handler: KeyHandler,
         id: usize,
         last_time: std.optional<std.chrono.steady_clock.time_point>,
@@ -25,7 +25,7 @@ class Window {
 
     type MouseBinding = {
         button: u8,
-        trigger: Trigger,
+        trigger: i32,
         handler: MouseHandler,
         first_motion: bool,
         last_time: std.optional<std.chrono.steady_clock.time_point>,
@@ -135,7 +135,7 @@ class Window {
     /// @param trigger Trigger mode (pressed/down/released/etc.).
     /// @param handler Callback receiving key state and dt.
     fn register_key(
-        self: &mut Self, keys: std.unordered_set<sdl.SDL_Scancode>, trigger: Trigger, handler: KeyHandler
+        self: &mut Self, keys: std.unordered_set<sdl.SDL_Scancode>, trigger: i32, handler: KeyHandler
     ) {
         self.key_bindings_.push_back(KeyBinding{
             keys: keys,
@@ -150,7 +150,7 @@ class Window {
     /// @param button SDL mouse button.
     /// @param trigger Trigger mode.
     /// @param handler Callback receiving xrel, yrel, dt.
-    fn register_mouse(self: &mut Self, button: std.uint8_t, trigger: Trigger, handler: MouseHandler) {
+    fn register_mouse(self: &mut Self, button: u8, trigger: i32, handler: MouseHandler) {
         self.mouse_bindings_.push_back(MouseBinding{
             button: button,
             trigger: trigger,

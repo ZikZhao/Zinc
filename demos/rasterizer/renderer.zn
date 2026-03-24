@@ -10,7 +10,7 @@ enum Mode {
 class Renderer {
     let world_: &World.World;
     let rasterizer_: std.unique_ptr<Rasterizer.Rasterizer>;
-    let mode_: Mode;
+    let mode_: i32;
 
     init(world: &World.World, window: &Window.Window) {
         return Self{

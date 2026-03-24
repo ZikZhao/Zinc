@@ -24,9 +24,11 @@ fn main(args: [strview]) {
     let mut last_print = std.chrono.steady_clock.now();
 
     // Centralized input callbacks: movement and UI toggles
-    let translate_keys: [usize; 6] = [sdl.SDL_SCANCODE_W, sdl.SDL_SCANCODE_S, sdl.SDL_SCANCODE_A, sdl.SDL_SCANCODE_D, sdl.SDL_SCANCODE_SPACE, sdl.SDL_SCANCODE_C];
+    let translate_keys: [sdl.SDL_Scancode; 6] =
+        [sdl.SDL_SCANCODE_W, sdl.SDL_SCANCODE_S, sdl.SDL_SCANCODE_A,
+         sdl.SDL_SCANCODE_D, sdl.SDL_SCANCODE_SPACE, sdl.SDL_SCANCODE_C];
     window.register_key(
-        std.unordered_set<usize>(translate_keys.begin(), translate_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(translate_keys.begin(), translate_keys.end()),
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let fwd = (ks[sdl.SDL_SCANCODE_W] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_S] ? 1.0 : 0.0);
@@ -46,9 +48,9 @@ fn main(args: [strview]) {
         }
     );
 
-    let roll_keys: [usize; 2] = [sdl.SDL_SCANCODE_Q, sdl.SDL_SCANCODE_E];
+    let roll_keys: [sdl.SDL_Scancode; 2] = [sdl.SDL_SCANCODE_Q, sdl.SDL_SCANCODE_E];
     window.register_key(
-        std.unordered_set<usize>(roll_keys.begin(), roll_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(roll_keys.begin(), roll_keys.end()),
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let r = (ks[sdl.SDL_SCANCODE_E] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_Q] ? 1.0 : 0.0);
@@ -59,9 +61,9 @@ fn main(args: [strview]) {
         }
     );
 
-    let orbit_keys: [usize; 1] = [sdl.SDL_SCANCODE_O];
+    let orbit_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_O];
     window.register_key(
-        std.unordered_set<usize>(orbit_keys.begin(), orbit_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(orbit_keys.begin(), orbit_keys.end()),
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             if (!world.camera_.is_orbiting_) {
@@ -73,11 +75,11 @@ fn main(args: [strview]) {
         }
     );
 
-    let mode_keys: [usize; 5] = [
+    let mode_keys: [sdl.SDL_Scancode; 5] = [
         sdl.SDL_SCANCODE_1, sdl.SDL_SCANCODE_2, sdl.SDL_SCANCODE_3, sdl.SDL_SCANCODE_4, sdl.SDL_SCANCODE_0
     ];
     window.register_key(
-        std.unordered_set<usize>(mode_keys.begin(), mode_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(mode_keys.begin(), mode_keys.end()),
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let mode_name: strview;
@@ -107,18 +109,18 @@ fn main(args: [strview]) {
         }
     );
 
-    let gamma_keys: [usize; 1] = [sdl.SDL_SCANCODE_G];
+    let gamma_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_G];
     window.register_key(
-        std.unordered_set<usize>(gamma_keys.begin(), gamma_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(gamma_keys.begin(), gamma_keys.end()),
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             renderer.gamma_ = (renderer.gamma_ == 2.2) ? 1.0 : 2.2;
         }
     );
 
-    let caustics_keys: [usize; 1] = [sdl.SDL_SCANCODE_P];
+    let caustics_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_P];
     window.register_key(
-        std.unordered_set<usize>(caustics_keys.begin(), caustics_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(caustics_keys.begin(), caustics_keys.end()),
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             if (renderer.is_photon_map_ready()) {
@@ -134,9 +136,9 @@ fn main(args: [strview]) {
     );
 
     // Aperture control (+/-)
-    let aperture_keys: [usize; 2] = [sdl.SDL_SCANCODE_EQUALS, sdl.SDL_SCANCODE_MINUS];
+    let aperture_keys: [sdl.SDL_Scancode; 2] = [sdl.SDL_SCANCODE_EQUALS, sdl.SDL_SCANCODE_MINUS];
     window.register_key(
-        std.unordered_set<usize>(aperture_keys.begin(), aperture_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(aperture_keys.begin(), aperture_keys.end()),
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let aperture: &mut f32 = mut renderer.aperture_size_;
@@ -153,9 +155,9 @@ fn main(args: [strview]) {
     );
 
     // Screenshot save (Ctrl+S)
-    let screenshot_keys: [usize; 2] = [sdl.SDL_SCANCODE_LCTRL, sdl.SDL_SCANCODE_S];
+    let screenshot_keys: [sdl.SDL_Scancode; 2] = [sdl.SDL_SCANCODE_LCTRL, sdl.SDL_SCANCODE_S];
     window.register_key(
-        std.unordered_set<usize>(screenshot_keys.begin(), screenshot_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(screenshot_keys.begin(), screenshot_keys.end()),
         Window.Trigger.ALL_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             window.save_ppm("screenshot.ppm");
@@ -165,9 +167,9 @@ fn main(args: [strview]) {
     );
 
     // Offline/Realtime render mode toggle (V)
-    let capture_keys: [usize; 1] = [sdl.SDL_SCANCODE_V];
+    let capture_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_V];
     window.register_key(
-        std.unordered_set<usize>(capture_keys.begin(), capture_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(capture_keys.begin(), capture_keys.end()),
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             renderer.offline_render_mode_ = !renderer.offline_render_mode_;
@@ -181,9 +183,9 @@ fn main(args: [strview]) {
     );
 
     // Normal debug mode toggle (N) - only for raytracing modes
-    let normal_debug_keys: [usize; 1] = [sdl.SDL_SCANCODE_N];
+    let normal_debug_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_N];
     window.register_key(
-        std.unordered_set<usize>(normal_debug_keys.begin(), normal_debug_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(normal_debug_keys.begin(), normal_debug_keys.end()),
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             renderer.normal_debug_mode_ = !renderer.normal_debug_mode_;
@@ -213,11 +215,11 @@ fn main(args: [strview]) {
     );
 
     // Keyboard look (arrow keys)
-    let look_keys: [usize; 4] = [
+    let look_keys: [sdl.SDL_Scancode; 4] = [
         sdl.SDL_SCANCODE_UP, sdl.SDL_SCANCODE_DOWN, sdl.SDL_SCANCODE_LEFT, sdl.SDL_SCANCODE_RIGHT
     ];
     window.register_key(
-        std.unordered_set<usize>(look_keys.begin(), look_keys.end()),
+        std.unordered_set<sdl.SDL_Scancode>(look_keys.begin(), look_keys.end()),
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let dx0 =

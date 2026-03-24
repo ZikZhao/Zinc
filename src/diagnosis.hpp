@@ -442,6 +442,10 @@ public:
             }
         );
     }
+
+    static auto error_invalid_member_access(strview member_name) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Invalid member access: '{}'", member_name));
+    }
 };
 
 inline thread_local std::optional<Diagnostic> Diagnostic::instance;

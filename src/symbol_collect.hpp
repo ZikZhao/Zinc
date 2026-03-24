@@ -8,6 +8,22 @@
 inline constexpr strview constructor_symbol = "!";
 inline constexpr strview destructor_symbol = "~";
 
+struct TypeProvider final : public GlobalMemory::MonotonicAllocated {
+    enum class Kind {
+        Alias,
+        Class,
+        Enum,
+    } kind;
+    const ASTNode* node;
+};
+
+struct VariableInitialization : public GlobalMemory::MonotonicAllocated {
+    bool is_comptime;
+    bool is_mutable;
+    ASTExprVariant type;
+    ASTExprVariant value;
+};
+
 using FunctionOverloadDef = PointerVariant<
     const ASTFunctionDefinition*,
     const ASTCtorDtorDefinition*,
@@ -21,18 +37,10 @@ struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
     GlobalMemory::Vector<const ASTTemplateSpecialization*> specializations;
 };
 
-struct VariableInitialization : public GlobalMemory::MonotonicAllocated {
-    bool is_comptime;
-    bool is_mutable;
-    ASTExprVariant type;
-    ASTExprVariant value;
-};
-
 using ScopeValue = PointerVariant<
     const Object*,                               // type/comptime (from template)
     std::span<const Object*>*,                   // parameter pack (from template)
-    const ASTExprVariant*,                       // type alias
-    const ASTClassDefinition*,                   // class definition
+    TypeProvider*,                               // type provider
     const VariableInitialization*,               // comptime/variable declaration
     GlobalMemory::Vector<FunctionOverloadDef>*,  // function overloads
     TemplateFamily*,                             // template definition
@@ -86,15 +94,19 @@ public:
         identifiers_[identifier] = ptr;
     }
 
-    void add_alias(strview identifier, const ASTExprVariant* expr) noexcept {
-        auto [_, inserted] = identifiers_.insert({identifier, expr});
-        if (!inserted) {
-            Diagnostic::error_redeclared_identifier(identifier);
+    template <typename T>
+    void add_type(strview identifier, const T* node) noexcept {
+        TypeProvider::Kind kind;
+        if constexpr (std::is_same_v<T, ASTTypeAlias>) {
+            kind = TypeProvider::Kind::Alias;
+        } else if constexpr (std::is_same_v<T, ASTClassDefinition>) {
+            kind = TypeProvider::Kind::Class;
+        } else {
+            /// TODO: support enum definitions as types
+            static_assert(false);
         }
-    }
-
-    void add_class(strview identifier, const ASTClassDefinition* class_def) noexcept {
-        auto [_, inserted] = identifiers_.insert({identifier, class_def});
+        auto [_, inserted] =
+            identifiers_.insert({identifier, new TypeProvider{.kind = kind, .node = node}});
         if (!inserted) {
             Diagnostic::error_redeclared_identifier(identifier);
         }
@@ -267,7 +279,7 @@ public:
 
     void operator()(const ASTTypeAlias* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_->add_alias(node->identifier, &node->type);
+        current_scope_->add_type(node->identifier, node);
     }
 
     // Statements
@@ -376,7 +388,7 @@ public:
     // Classes
     void operator()(const ASTClassDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_->add_class(node->identifier, node);
+        current_scope_->add_type(node->identifier, node);
         Scope& class_scope = Scope::make(*current_scope_, node, node->identifier);
         class_scope.self_id_ = node->identifier;
         SymbolCollector class_visitor(std_scope_, &class_scope);
@@ -395,8 +407,8 @@ public:
     // Enums
     void operator()(const ASTEnumDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_->set_template_argument(node->identifier, &IntegerType::i32_instance);
         Scope& enum_scope = Scope::make(*current_scope_, node, node->identifier);
+        current_scope_->add_namespace(node->identifier, enum_scope);
         SymbolCollector enum_visitor(std_scope_, &enum_scope);
         for (size_t i = 0; i < node->enumerators.size(); ++i) {
             enum_scope.add_variable(

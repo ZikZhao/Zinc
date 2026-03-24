@@ -408,7 +408,7 @@ private:
                         return false;
                     }
                 } else {
-                    if (left_arg->cast<Value>()->less_compare(right_arg->cast<Value>())) {
+                    if (left_arg->cast<Value>()->equal_to(right_arg->cast<Value>())) {
                         return false;
                     }
                 }
@@ -1448,8 +1448,8 @@ private:
     bool require_sized_;
 
 public:
-    TypeContextEvaluator(Sema& sema, TypeResolution& out, bool require_sized_ = true) noexcept
-        : sema_(sema), out_(out), require_sized_(require_sized_) {}
+    TypeContextEvaluator(Sema& sema, TypeResolution& out, bool require_sized = true) noexcept
+        : sema_(sema), out_(out), require_sized_(require_sized) {}
 
     void operator()(const ASTExprVariant& expr_variant) noexcept {
         Diagnostic::ErrorTrap trap{ASTNodePtrGetter{}(expr_variant)->location};
@@ -1458,6 +1458,8 @@ public:
             Diagnostic::error_circular_type_dependency(ASTNodePtrGetter{}(expr_variant)->location);
         }
     }
+
+    void operator()(const ASTTypeAlias* node) noexcept { (*this)(node->type); }
 
     void operator()(const ASTSelfExpr* node) noexcept {
         if (!node->is_type) {
@@ -1640,6 +1642,8 @@ public:
             out_, sema_.current_scope_, node->identifier, base, interfaces, std::move(attrs)
         );
     }
+
+    void operator()(const ASTEnumDefinition* node) noexcept { out_ = &IntegerType::i32_instance; }
 
     void operator()(const ASTTemplateInstantiation* node) noexcept {
         Symbol result = sema_.template_handler_->instantiate(node);
@@ -2166,10 +2170,19 @@ inline auto Sema::eval_type(Scope& scope, const ScopeValue& value) noexcept -> T
     }
     // Cache miss; resolve
     Guard guard(*this, scope);
-    if (auto type_alias = value.get<const ASTExprVariant*>()) {
-        TypeContextEvaluator{*this, it_id_cache->second}(*type_alias);
-    } else if (auto class_def = value.get<const ASTClassDefinition*>()) {
-        TypeContextEvaluator{*this, it_id_cache->second}(class_def);
+    if (auto type_provider = value.get<TypeProvider*>()) {
+        TypeContextEvaluator evaluator{*this, it_id_cache->second};
+        switch (type_provider->kind) {
+        case TypeProvider::Kind::Alias:
+            evaluator(static_cast<const ASTTypeAlias*>(type_provider->node));
+            break;
+        case TypeProvider::Kind::Class:
+            evaluator(static_cast<const ASTClassDefinition*>(type_provider->node));
+            break;
+        case TypeProvider::Kind::Enum:
+            evaluator(static_cast<const ASTEnumDefinition*>(type_provider->node));
+            break;
+        }
     } else {
         Symbol symbol = eval_symbol(scope, value);
         Sema::expect(symbol, SymbolKind::Type);
@@ -2194,7 +2207,7 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
         }
     } else if (auto* pack = value.get<std::span<const Object*>*>()) {
         return *pack;
-    } else if (value.get<const ASTExprVariant*>() || value.get<const ASTClassDefinition*>()) {
+    } else if (value.get<TypeProvider*>()) {
         TypeResolution out = eval_type(scope, value);
         return out.get() ? Symbol{out.get()} : Symbol{};
     } else if (auto var_init = value.get<const VariableInitialization*>()) {
@@ -2579,7 +2592,7 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
     Sema::Guard guard{sema_, *scope};
     GlobalMemory::Vector<const Type*> params;
     TypeResolution return_type;
-    if (auto func_def = overload.get<const ASTFunctionDefinition*>()) {
+    if (auto* func_def = overload.get<const ASTFunctionDefinition*>()) {
         for (const ASTFunctionParameter& param : func_def->parameters) {
             if (param.is_variadic) {
                 Symbol pack =
@@ -2596,7 +2609,7 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
         } else {
             return_type = &VoidType::instance;
         }
-    } else if (auto ctor_def = overload.get<const ASTCtorDtorDefinition*>()) {
+    } else if (auto* ctor_def = overload.get<const ASTCtorDtorDefinition*>()) {
         for (const ASTFunctionParameter& param : ctor_def->parameters) {
             if (param.is_variadic) {
                 Symbol pack =
@@ -2633,6 +2646,9 @@ inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload
 
 inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> Symbol {
     Symbol base_symbol = ValueContextEvaluator{sema_, nullptr, false}(node->base);
+    if (!Sema::expect(base_symbol, SymbolKind::Type, SymbolKind::Term, SymbolKind::Namespace)) {
+        return {};
+    }
     if (auto* type = Sema::get_if<SymbolKind::Type>(base_symbol)) {
         if (auto* instance_type = (*type)->dyn_cast<InstanceType>()) {
             Symbol result = eval_static_access(instance_type->scope_, node->member);
@@ -2651,6 +2667,7 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
         sema_.codegen_env_.map_member_access(sema_.current_scope_, node, *namespace_scope);
         return result;
     }
+    Diagnostic::error_invalid_member_access(node->member);
     return {};
 }
 

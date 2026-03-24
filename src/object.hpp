@@ -971,7 +971,7 @@ protected:
 class Value : public Object {
 protected:
     Value(Kind kind, bool is_pattern = false) noexcept : Object(kind, false, is_pattern) {}
-    virtual auto do_less_compare(const Value* other) const noexcept -> bool = 0;
+    virtual auto do_equal_compare(const Value* other) const noexcept -> bool = 0;
 
 public:
     Type* dyn_type() = delete;
@@ -981,14 +981,11 @@ public:
     virtual auto resolve_to(const Type* target) const noexcept -> Value* = 0;
     virtual void assign_from(Value* source) noexcept = 0;
     virtual auto hash_code() const noexcept -> std::size_t = 0;
-    bool less_compare(const Value* other) const noexcept {
-        if (this == other) {
+    bool equal_to(const Value* other) const noexcept {
+        if (kind_ != other->kind_) {
             return false;
         }
-        if (kind_ != other->kind_) {
-            return kind_ < other->kind_;
-        }
-        return do_less_compare(other);
+        return do_equal_compare(other);
     }
 };
 
@@ -1013,7 +1010,7 @@ public:
         const NullptrValue* other_nullptr = target->dyn_cast<NullptrValue>();
         return other_nullptr != nullptr;
     }
-    bool do_less_compare(const Value* other) const noexcept final { return false; }
+    bool do_equal_compare(const Value* other) const noexcept final { return true; }
     std::size_t hash_code() const noexcept final { return std::bit_cast<std::size_t>(this); }
 };
 
@@ -1117,9 +1114,9 @@ public:
         const IntegerValue* other_int = target->dyn_cast<IntegerValue>();
         return other_int && value_ == other_int->value_;
     }
-    bool do_less_compare(const Value* other) const noexcept final {
+    bool do_equal_compare(const Value* other) const noexcept final {
         const IntegerValue* other_int = other->cast<IntegerValue>();
-        return value_ < other_int->value_;
+        return value_ == other_int->value_;
     }
     std::size_t hash_code() const noexcept final { return std::hash<BigInt>{}(value_); }
 };
@@ -1173,8 +1170,8 @@ public:
         /// float-point number is not allowed as NTTP
         return false;
     }
-    bool do_less_compare(const Value* other) const noexcept final {
-        return value_ < other->cast<FloatValue>()->value_;
+    bool do_equal_compare(const Value* other) const noexcept final {
+        return value_ == other->cast<FloatValue>()->value_;
     }
     std::size_t hash_code() const noexcept final { return std::hash<double>{}(value_); }
 };
@@ -1205,8 +1202,8 @@ public:
         const BooleanValue* other_bool = target->dyn_cast<BooleanValue>();
         return other_bool && value_ == other_bool->value_;
     }
-    bool do_less_compare(const Value* other) const noexcept final {
-        return !value_ && other->cast<BooleanValue>()->value_;
+    bool do_equal_compare(const Value* other) const noexcept final {
+        return value_ == other->cast<BooleanValue>()->value_;
     }
     std::size_t hash_code() const noexcept final { return std::hash<bool>{}(value_); }
 };
@@ -1233,7 +1230,7 @@ public:
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         UNREACHABLE();
     }
-    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
+    bool do_equal_compare(const Value* other) const noexcept final { UNREACHABLE(); }
     auto hash_code() const noexcept -> std::size_t final { UNREACHABLE(); }
 
     auto invoke(std::span<Term> args) const -> Term { return callback_(args); }
@@ -1291,17 +1288,18 @@ public:
         }
         return hash;
     }
-    bool do_less_compare(const Value* other) const noexcept final {
+    bool do_equal_compare(const Value* other) const noexcept final {
         const StructValue* other_struct = other->cast<StructValue>();
+        if (type_ != other_struct->type_) {
+            return false;
+        }
         for (const auto& [name, value] : fields_) {
             const Value* other_value = other_struct->fields_.at(name);
-            if (value->less_compare(other_value)) {
-                return true;
-            } else if (other_value->less_compare(value)) {
+            if (!value->equal_to(other_value)) {
                 return false;
             }
         }
-        return false;
+        return true;
     }
 };
 
@@ -1358,17 +1356,18 @@ public:
         }
         return hash;
     }
-    auto do_less_compare(const Value* other) const noexcept -> bool final {
+    auto do_equal_compare(const Value* other) const noexcept -> bool final {
         const InstanceValue* other_instance = other->cast<InstanceValue>();
+        if (type_ != other_instance->type_) {
+            return false;
+        }
         for (const auto& [name, value] : attrs_) {
             const Value* other_value = other_instance->attrs_.at(name);
-            if (value->less_compare(other_value)) {
-                return true;
-            } else if (other_value->less_compare(value)) {
+            if (!value->equal_to(other_value)) {
                 return false;
             }
         }
-        return false;
+        return true;
     }
     auto get_attr(strview attr) noexcept -> Value* { return attrs_.at(attr); }
 };
@@ -1402,8 +1401,8 @@ public:
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         UNREACHABLE();
     }
-    bool do_less_compare(const Value* other) const noexcept final {
-        return value_->less_compare(other->cast<MutableValue>()->value_);
+    bool do_equal_compare(const Value* other) const noexcept final {
+        return value_->equal_to(other->cast<MutableValue>()->value_);
     }
     auto hash_code() const noexcept -> std::size_t final {
         return hash_combine(std::bit_cast<std::size_t>(type_), value_->hash_code());
@@ -1440,9 +1439,9 @@ public:
         const ReferenceValue* other_ref = target->dyn_cast<ReferenceValue>();
         return other_ref && referenced_value_ == other_ref->referenced_value_;
     }
-    bool do_less_compare(const Value* other) const noexcept final {
+    bool do_equal_compare(const Value* other) const noexcept final {
         const ReferenceValue* other_ref = other->cast<ReferenceValue>();
-        return referenced_value_->less_compare(other_ref->referenced_value_);
+        return referenced_value_->equal_to(other_ref->referenced_value_);
     }
     auto hash_code() const noexcept -> std::size_t final {
         return hash_combine(std::bit_cast<std::size_t>(type_), referenced_value_->hash_code());
@@ -1486,8 +1485,8 @@ public:
         return other_ptr && pointed_value_ == other_ptr->pointed_value_;
     }
 
-    bool do_less_compare(const Value* other) const noexcept final {
-        return pointed_value_->less_compare(other->cast<PointerValue>()->pointed_value_);
+    bool do_equal_compare(const Value* other) const noexcept final {
+        return pointed_value_->equal_to(other->cast<PointerValue>()->pointed_value_);
     }
 
     auto hash_code() const noexcept -> std::size_t final {
@@ -1531,7 +1530,7 @@ private:
     Value* clone() const noexcept final { UNREACHABLE(); }
     AutoObject* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
     void assign_from(Value* source) noexcept final { UNREACHABLE(); }
-    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
+    bool do_equal_compare(const Value* other) const noexcept final { UNREACHABLE(); }
     auto hash_code() const noexcept -> std::size_t final { UNREACHABLE(); }
     auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
     auto default_construct() const noexcept -> Term final { UNREACHABLE(); }
@@ -1580,7 +1579,7 @@ private:
     Value* clone() const noexcept final { UNREACHABLE(); }
     AutoObject* resolve_to(const Type* target) const noexcept final { UNREACHABLE(); }
     void assign_from(Value* source) noexcept final { UNREACHABLE(); }
-    bool do_less_compare(const Value* other) const noexcept final { UNREACHABLE(); }
+    bool do_equal_compare(const Value* other) const noexcept final { UNREACHABLE(); }
     auto hash_code() const noexcept -> std::size_t final { UNREACHABLE(); }
     auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
     auto default_construct() const noexcept -> Term final { UNREACHABLE(); }
