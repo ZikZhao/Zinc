@@ -56,7 +56,7 @@ auto main(int argc, char* argv[]) -> int {
     const ASTRoot* root = ASTBuilder{sources, sources.load(argv[1])}();
 
     if (root == nullptr) {
-        Diagnostic::error_msg("Failed to parse input");
+        Diagnostic::print_error_msg("Failed to parse input");
         return EXIT_FAILURE;
     }
 

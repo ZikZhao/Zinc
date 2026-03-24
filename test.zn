@@ -1,6 +1,5 @@
 fn main(args: [strview]) {
-    let a = Window();
-    a.get_pixel_buffer();
+    std.cerr << 1 << 2;
 }
 
 class Window {

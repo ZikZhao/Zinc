@@ -33,11 +33,23 @@ public:
             : location_(location), prev_(std::exchange(instance->current_trap_, this)) {}
 
         ~ErrorTrap() noexcept {
+            GlobalMemory::Vector<Problem>& target =
+                (prev_) ? prev_->problems_ : instance->problems_;
             for (Problem& problem : problems_) {
-                problem.location = location_;
-                instance->problems_.push_back(std::move(problem));
+                if (problem.location.begin == problem.location.end) {
+                    problem.location = location_;
+                }
+                target.push_back(std::move(problem));
             }
             instance->current_trap_ = prev_;
+        }
+
+        auto conclude() noexcept -> void {
+            Problem main_problem = std::move(problems_.back());
+            problems_.pop_back();
+            main_problem.subproblems = std::move(problems_);
+            problems_.clear();
+            problems_.push_back(std::move(main_problem));
         }
     };
 
@@ -72,12 +84,13 @@ public:
             case Severity::Info:
                 break;
             }
+            std::cout << "\n";
         }
 
         if (error_count == 0 && warning_count == 0) return false;
         std::print(
             std::cerr,
-            "\n{}{} error(s){}, {}{} warning(s){} generated.\n",
+            "{}{} error(s){}, {}{} warning(s){} generated.\n",
             ColourEscape::RED,
             error_count,
             ColourEscape::RESET,
@@ -90,13 +103,13 @@ public:
         return true;
     }
 
-    static void info_msg(strview msg) {
+    static void print_info_msg(strview msg) {
         std::lock_guard lock(print_mutex_);
         std::print(std::cout, "{}[INFO]{} {}\n", ColourEscape::CYAN, ColourEscape::RESET, msg);
         std::cout.flush();
     }
 
-    static void error_msg(strview msg) {
+    static void print_error_msg(strview msg) {
         std::lock_guard lock(print_mutex_);
         std::print(std::cerr, "{}[ERROR]{} {}\n", ColourEscape::RED, ColourEscape::RESET, msg);
         std::cerr.flush();
@@ -216,7 +229,7 @@ private:
     }
 
 private:
-    std::vector<Problem> problems_;
+    GlobalMemory::Vector<Problem> problems_;
     ErrorTrap* current_trap_ = nullptr;
 
 public:
@@ -324,12 +337,12 @@ public:
         }
     }
 
-    static auto error_no_matching_overload(Location location) noexcept -> void {
+    static auto error_no_matching_overload(Location location, strview args) noexcept -> void {
         Diagnostic::report(
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("No matching overload found"sv)
+                .message = GlobalMemory::format("No matching overload found, arguments: {}"sv, args)
             }
         );
     }

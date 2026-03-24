@@ -6,6 +6,17 @@
 #include "object.hpp"
 #include "symbol_collect.hpp"
 
+enum class SymbolKind : std::uint8_t {
+    Type = 1,
+    Term = 2,
+    Function = 3,
+    Method = 4,
+    Template = 5,
+    ParameterPack = 6,
+    Namespace = 7,
+    Operator = 8,
+};
+
 struct BoundMethod {
     Term object;
     Scope* scope;
@@ -22,17 +33,6 @@ using Symbol = std::variant<
     std::span<const Object*>,
     Scope*,
     std::tuple<OperatorCode, const Type*, const Type*>>;
-
-enum class SymbolKind : std::uint8_t {
-    Type = 1,
-    Term = 2,
-    Function = 3,
-    Method = 4,
-    Template = 5,
-    ParameterPack = 6,
-    Namespace = 7,
-    Operator = 8,
-};
 
 class CodeGenEnvironment {
 public:
@@ -144,222 +144,6 @@ public:
     }
 };
 
-namespace PrimitiveOperations {
-template <OperatorGroup G>
-auto apply_op(OperatorCode opcode, const auto& left, const auto& right) {
-    if constexpr (G == OperatorGroup::Arithmetic) {
-        switch (opcode) {
-        case OperatorCode::Add:
-            return left + right;
-        case OperatorCode::Subtract:
-            return left - right;
-        case OperatorCode::Multiply:
-            return left * right;
-        case OperatorCode::Divide:
-            return left / right;
-        case OperatorCode::Remainder:
-            if constexpr (std::is_same_v<std::decay_t<decltype(left)>, BigInt>) {
-                return left % right;
-            } else {
-                return std::fmod(left, right);
-            }
-        default:
-            UNREACHABLE();
-        }
-    } else if constexpr (G == OperatorGroup::Comparison) {
-        switch (opcode) {
-        case OperatorCode::Equal:
-            return left == right;
-        case OperatorCode::NotEqual:
-            return left != right;
-        case OperatorCode::LessThan:
-            return left < right;
-        case OperatorCode::LessEqual:
-            return left <= right;
-        case OperatorCode::GreaterThan:
-            return left > right;
-        case OperatorCode::GreaterEqual:
-            return left >= right;
-        default:
-            UNREACHABLE();
-        }
-    } else if constexpr (G == OperatorGroup::Logical) {
-        switch (opcode) {
-        case OperatorCode::LogicalAnd:
-            return left && right;
-        case OperatorCode::LogicalOr:
-            return left || right;
-        default:
-            UNREACHABLE();
-        }
-    } else if constexpr (G == OperatorGroup::Bitwise) {
-        switch (opcode) {
-        case OperatorCode::BitwiseAnd:
-            return left & right;
-        case OperatorCode::BitwiseOr:
-            return left | right;
-        case OperatorCode::BitwiseXor:
-            return left ^ right;
-        default:
-            UNREACHABLE();
-        }
-    } else {
-        static_assert(false);
-    }
-}
-
-template <OperatorGroup G>
-auto apply_op(OperatorCode opcode, const auto& value) {
-    if constexpr (G == OperatorGroup::UnaryArithmetic) {
-        switch (opcode) {
-        case OperatorCode::Negate:
-            return -value;
-        case OperatorCode::Increment:
-            return value + decltype(value)(1ul);
-        case OperatorCode::Decrement:
-            return value - decltype(value)(1ul);
-        default:
-            UNREACHABLE();
-        }
-    } else if constexpr (G == OperatorGroup::UnaryLogical) {
-        assert(opcode == OperatorCode::LogicalNot);
-        return !value;
-    } else if constexpr (G == OperatorGroup::UnaryBitwise) {
-        assert(opcode == OperatorCode::BitwiseNot);
-        return ~value;
-    } else {
-        static_assert(false);
-    }
-}
-
-inline auto integer_op(OperatorCode opcode, Value* left, Value* right) -> Value* {
-    IntegerValue* left_int = left->cast<IntegerValue>();
-    IntegerValue* right_int = right->cast<IntegerValue>();
-    bool extended = left_int->type_->bits_ > 32 || right_int->type_->bits_ > 32;
-    switch (GetOperatorGroup(opcode)) {
-    case OperatorGroup::Arithmetic:
-        return new IntegerValue(
-            extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
-            apply_op<OperatorGroup::Arithmetic>(opcode, left_int->value_, right_int->value_)
-        );
-    case OperatorGroup::Comparison:
-        return new BooleanValue(
-            apply_op<OperatorGroup::Comparison>(opcode, left_int->value_, right_int->value_)
-        );
-    case OperatorGroup::Bitwise:
-        return new IntegerValue(
-            extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
-            apply_op<OperatorGroup::Bitwise>(opcode, left_int->value_, right_int->value_)
-        );
-    default:
-        UNREACHABLE();
-    }
-}
-
-inline auto integer_op(OperatorCode opcode, Value* left) -> Value* {
-    IntegerValue* left_int = left->cast<IntegerValue>();
-    bool extended = left_int->type_->bits_ > 32;
-    switch (GetOperatorGroup(opcode)) {
-    case OperatorGroup::UnaryArithmetic:
-        return new IntegerValue(
-            extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
-            apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_int->value_)
-        );
-    case OperatorGroup::UnaryBitwise:
-        return new IntegerValue(
-            extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
-            apply_op<OperatorGroup::UnaryBitwise>(opcode, left_int->value_)
-        );
-    default:
-        UNREACHABLE();
-    }
-}
-
-inline auto float_op(OperatorCode opcode, Value* left, Value* right) -> Value* {
-    FloatValue* left_float = left->cast<FloatValue>();
-    FloatValue* right_float = right->cast<FloatValue>();
-    switch (GetOperatorGroup(opcode)) {
-    case OperatorGroup::Arithmetic:
-        return new FloatValue(
-            left_float->type_->bits_ > 32 ? &FloatType::f64_instance : &FloatType::f32_instance,
-            apply_op<OperatorGroup::Arithmetic>(opcode, left_float->value_, right_float->value_)
-        );
-    case OperatorGroup::Comparison:
-        return new BooleanValue(
-            apply_op<OperatorGroup::Comparison>(opcode, left_float->value_, right_float->value_)
-        );
-    default:
-        UNREACHABLE();
-    }
-}
-
-inline auto float_op(OperatorCode opcode, Value* left) -> Value* {
-    FloatValue* left_float = left->cast<FloatValue>();
-    switch (GetOperatorGroup(opcode)) {
-    case OperatorGroup::UnaryArithmetic:
-        return new FloatValue(
-            left_float->type_->bits_ > 32 ? &FloatType::f64_instance : &FloatType::f32_instance,
-            apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_float->value_)
-        );
-    default:
-        UNREACHABLE();
-    }
-}
-
-inline auto boolean_op(OperatorCode opcode, Value* left, Value* right) -> BooleanValue* {
-    /// TODO: support equality comparison between booleans
-    BooleanValue* left_bool = left->cast<BooleanValue>();
-    BooleanValue* right_bool = right->cast<BooleanValue>();
-    switch (GetOperatorGroup(opcode)) {
-    case OperatorGroup::Logical:
-        return new BooleanValue(
-            apply_op<OperatorGroup::Logical>(opcode, left_bool->value_, right_bool->value_)
-        );
-    default:
-        UNREACHABLE();
-    }
-}
-
-inline auto boolean_op(OperatorCode opcode, Value* left) -> BooleanValue* {
-    BooleanValue* left_bool = left->cast<BooleanValue>();
-    switch (GetOperatorGroup(opcode)) {
-    case OperatorGroup::UnaryLogical:
-        return new BooleanValue(apply_op<OperatorGroup::UnaryLogical>(opcode, left_bool->value_));
-    default:
-        UNREACHABLE();
-    }
-}
-
-inline auto assignment_op(OperatorCode opcode, Value* left, Value* right) -> Value* {
-    if (opcode == OperatorCode::Assign) {
-        left->assign_from(right);
-    } else {
-        OperatorCode inner_opcode = GetAssignmentEquivalent(opcode);
-        Value* result = nullptr;
-        if (left->kind_ == Kind::Integer && right->kind_ == Kind::Integer) {
-            IntegerValue* left_int = left->cast<IntegerValue>();
-            IntegerValue* right_int = right->cast<IntegerValue>();
-            result = integer_op(inner_opcode, left_int, right_int);
-        } else if (left->kind_ == Kind::Float && right->kind_ == Kind::Float) {
-            FloatValue* left_float = left->cast<FloatValue>();
-            FloatValue* right_float = right->cast<FloatValue>();
-            result = float_op(inner_opcode, left_float, right_float);
-        } else if (left->kind_ == Kind::Boolean && right->kind_ == Kind::Boolean) {
-            BooleanValue* left_bool = left->cast<BooleanValue>();
-            BooleanValue* right_bool = right->cast<BooleanValue>();
-            result = boolean_op(inner_opcode, left_bool, right_bool);
-        } else {
-            Diagnostic::error_operation_not_defined(
-                GetOperatorString(opcode), left->repr(), right->repr()
-            );
-            return nullptr;
-        }
-        left->assign_from(result);
-    }
-    return left;
-}
-}  // namespace PrimitiveOperations
-
 class TemplateHandler;
 class OperationHandler;
 class AccessHandler;
@@ -421,6 +205,21 @@ public:
         return std::get_if<static_cast<std::uint8_t>(kind)>(&symbol);
     }
 
+    static auto apply_value_category(Term obj) -> const Type* {
+        if (!obj) return nullptr;
+        const Type* type = obj.effective_type();
+        if (obj.value_category() == ValueCategory::Left) {
+            if (auto* ref_type = type->dyn_cast<ReferenceType>()) {
+                return ref_type;
+            }
+            return TypeRegistry::get<ReferenceType>(type, false);
+        } else if (obj.value_category() == ValueCategory::Expiring) {
+            return TypeRegistry::get<ReferenceType>(type, true);
+        } else {
+            return type;
+        }
+    }
+
     static auto decay(Term term) -> Term {
         if (!term) return term;
         if (auto ref_type = term->dyn_cast<ReferenceType>()) {
@@ -435,13 +234,24 @@ public:
         return term;
     }
 
-    static auto decay(const Type* type) -> const Type* {
+    static auto decay(const Type* type) noexcept -> const Type* {
+        if (!type) return nullptr;
         if (auto ref_type = type->dyn_cast<ReferenceType>()) {
             return decay(ref_type->referenced_type_);
         } else if (auto mut_type = type->dyn_cast<MutableType>()) {
             return decay(mut_type->target_type_);
         }
         return type;
+    }
+
+    static auto is_mutable(const Type* type) -> bool {
+        if (!type) return false;
+        if (type->dyn_cast<MutableType>()) {
+            return true;
+        } else if (auto ref_type = type->dyn_cast<ReferenceType>()) {
+            return is_mutable(ref_type->referenced_type_);
+        }
+        return false;
     }
 
     static auto is_mutable(Term term) -> bool {
@@ -464,20 +274,6 @@ public:
             );
         } else {
             return Term::forward_like(term, TypeRegistry::get<MutableType>(term.effective_type()));
-        }
-    }
-
-    static auto apply_value_category(Term obj) -> const Type* {
-        const Type* type = obj.effective_type();
-        if (obj.value_category() == ValueCategory::Left) {
-            if (auto* ref_type = type->dyn_cast<ReferenceType>()) {
-                return ref_type;
-            }
-            return TypeRegistry::get<ReferenceType>(type, false);
-        } else if (obj.value_category() == ValueCategory::Expiring) {
-            return TypeRegistry::get<ReferenceType>(type, true);
-        } else {
-            return type;
         }
     }
 
@@ -804,9 +600,15 @@ public:
 
         FunctionObject overload = resolve_overload(callee, transformed_args);
         if (!overload) {
-            /// TODO: throw no matching overload error
-            Diagnostic::error_no_matching_overload(node->location);
-            resolve_overload(callee, transformed_args);  // for debugging
+            GlobalMemory::String args_repr;
+            std::string_view sep = "("sv;
+            for (size_t i = 0; i < transformed_args.size(); i++) {
+                args_repr += sep;
+                args_repr += transformed_args[i]->repr();
+                sep = ", "sv;
+            }
+            args_repr += ")";
+            Diagnostic::error_no_matching_overload(node->location, args_repr);
             return {};
         }
 
@@ -858,8 +660,8 @@ private:
             }
             Scope* scope = (*callable_type)->cast<InstanceType>()->scope_;
             return reification(scope, scope->find(constructor_symbol));
-        } else if (auto* callable_value = Sema::get_if<SymbolKind::Term>(func)) {
-            Term decayed = Sema::decay(*callable_value);
+        } else if (auto* callable_term = Sema::get_if<SymbolKind::Term>(func)) {
+            Term decayed = Sema::decay(*callable_term);
             if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
                 return {func_type};
             } else if (auto func_value = decayed->dyn_cast<FunctionValue>()) {
@@ -1208,14 +1010,229 @@ private:
 };
 
 class OperationHandler final : public GlobalMemory::MonotonicAllocated {
+private:
+    template <OperatorGroup G>
+    static auto apply_op(OperatorCode opcode, const auto& left, const auto& right) noexcept {
+        if constexpr (G == OperatorGroup::Arithmetic) {
+            switch (opcode) {
+            case OperatorCode::Add:
+                return left + right;
+            case OperatorCode::Subtract:
+                return left - right;
+            case OperatorCode::Multiply:
+                return left * right;
+            case OperatorCode::Divide:
+                return left / right;
+            case OperatorCode::Remainder:
+                if constexpr (std::is_same_v<std::decay_t<decltype(left)>, BigInt>) {
+                    return left % right;
+                } else {
+                    return std::fmod(left, right);
+                }
+            default:
+                UNREACHABLE();
+            }
+        } else if constexpr (G == OperatorGroup::Comparison) {
+            switch (opcode) {
+            case OperatorCode::Equal:
+                return left == right;
+            case OperatorCode::NotEqual:
+                return left != right;
+            case OperatorCode::LessThan:
+                return left < right;
+            case OperatorCode::LessEqual:
+                return left <= right;
+            case OperatorCode::GreaterThan:
+                return left > right;
+            case OperatorCode::GreaterEqual:
+                return left >= right;
+            default:
+                UNREACHABLE();
+            }
+        } else if constexpr (G == OperatorGroup::Logical) {
+            switch (opcode) {
+            case OperatorCode::LogicalAnd:
+                return left && right;
+            case OperatorCode::LogicalOr:
+                return left || right;
+            default:
+                UNREACHABLE();
+            }
+        } else if constexpr (G == OperatorGroup::Bitwise) {
+            switch (opcode) {
+            case OperatorCode::BitwiseAnd:
+                return left & right;
+            case OperatorCode::BitwiseOr:
+                return left | right;
+            case OperatorCode::BitwiseXor:
+                return left ^ right;
+            default:
+                UNREACHABLE();
+            }
+        } else {
+            static_assert(false);
+        }
+    }
+
+    template <OperatorGroup G>
+    static auto apply_op(OperatorCode opcode, const auto& value) noexcept {
+        if constexpr (G == OperatorGroup::UnaryArithmetic) {
+            switch (opcode) {
+            case OperatorCode::Negate:
+                return -value;
+            case OperatorCode::Increment:
+                return value + decltype(value)(1ul);
+            case OperatorCode::Decrement:
+                return value - decltype(value)(1ul);
+            default:
+                UNREACHABLE();
+            }
+        } else if constexpr (G == OperatorGroup::UnaryLogical) {
+            assert(opcode == OperatorCode::LogicalNot);
+            return !value;
+        } else if constexpr (G == OperatorGroup::UnaryBitwise) {
+            assert(opcode == OperatorCode::BitwiseNot);
+            return ~value;
+        } else {
+            static_assert(false);
+        }
+    }
+
+    static auto integer_op(OperatorCode opcode, Value* left, Value* right) noexcept -> Value* {
+        IntegerValue* left_int = left->cast<IntegerValue>();
+        IntegerValue* right_int = right->cast<IntegerValue>();
+        bool extended = left_int->type_->bits_ > 32 || right_int->type_->bits_ > 32;
+        switch (GetOperatorGroup(opcode)) {
+        case OperatorGroup::Arithmetic:
+            return new IntegerValue(
+                extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
+                apply_op<OperatorGroup::Arithmetic>(opcode, left_int->value_, right_int->value_)
+            );
+        case OperatorGroup::Comparison:
+            return new BooleanValue(
+                apply_op<OperatorGroup::Comparison>(opcode, left_int->value_, right_int->value_)
+            );
+        case OperatorGroup::Bitwise:
+            return new IntegerValue(
+                extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
+                apply_op<OperatorGroup::Bitwise>(opcode, left_int->value_, right_int->value_)
+            );
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    static auto integer_op(OperatorCode opcode, Value* left) noexcept -> Value* {
+        IntegerValue* left_int = left->cast<IntegerValue>();
+        bool extended = left_int->type_->bits_ > 32;
+        switch (GetOperatorGroup(opcode)) {
+        case OperatorGroup::UnaryArithmetic:
+            return new IntegerValue(
+                extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
+                apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_int->value_)
+            );
+        case OperatorGroup::UnaryBitwise:
+            return new IntegerValue(
+                extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
+                apply_op<OperatorGroup::UnaryBitwise>(opcode, left_int->value_)
+            );
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    static auto float_op(OperatorCode opcode, Value* left, Value* right) noexcept -> Value* {
+        FloatValue* left_float = left->cast<FloatValue>();
+        FloatValue* right_float = right->cast<FloatValue>();
+        switch (GetOperatorGroup(opcode)) {
+        case OperatorGroup::Arithmetic:
+            return new FloatValue(
+                left_float->type_->bits_ > 32 ? &FloatType::f64_instance : &FloatType::f32_instance,
+                apply_op<OperatorGroup::Arithmetic>(opcode, left_float->value_, right_float->value_)
+            );
+        case OperatorGroup::Comparison:
+            return new BooleanValue(
+                apply_op<OperatorGroup::Comparison>(opcode, left_float->value_, right_float->value_)
+            );
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    static auto float_op(OperatorCode opcode, Value* left) noexcept -> Value* {
+        FloatValue* left_float = left->cast<FloatValue>();
+        switch (GetOperatorGroup(opcode)) {
+        case OperatorGroup::UnaryArithmetic:
+            return new FloatValue(
+                left_float->type_->bits_ > 32 ? &FloatType::f64_instance : &FloatType::f32_instance,
+                apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_float->value_)
+            );
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    static auto boolean_op(OperatorCode opcode, Value* left, Value* right) noexcept
+        -> BooleanValue* {
+        /// TODO: support equality comparison between booleans
+        BooleanValue* left_bool = left->cast<BooleanValue>();
+        BooleanValue* right_bool = right->cast<BooleanValue>();
+        switch (GetOperatorGroup(opcode)) {
+        case OperatorGroup::Logical:
+            return new BooleanValue(
+                apply_op<OperatorGroup::Logical>(opcode, left_bool->value_, right_bool->value_)
+            );
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    static auto boolean_op(OperatorCode opcode, Value* left) noexcept -> BooleanValue* {
+        BooleanValue* left_bool = left->cast<BooleanValue>();
+        switch (GetOperatorGroup(opcode)) {
+        case OperatorGroup::UnaryLogical:
+            return new BooleanValue(
+                apply_op<OperatorGroup::UnaryLogical>(opcode, left_bool->value_)
+            );
+        default:
+            UNREACHABLE();
+        }
+    }
+
+    static auto assignment_op(OperatorCode opcode, Value* left, Value* right) noexcept -> Value* {
+        if (opcode == OperatorCode::Assign) {
+            left->assign_from(right);
+        } else {
+            OperatorCode inner_opcode = GetAssignmentEquivalent(opcode);
+            Value* result = nullptr;
+            if (left->kind_ == Kind::Integer && right->kind_ == Kind::Integer) {
+                IntegerValue* left_int = left->cast<IntegerValue>();
+                IntegerValue* right_int = right->cast<IntegerValue>();
+                result = integer_op(inner_opcode, left_int, right_int);
+            } else if (left->kind_ == Kind::Float && right->kind_ == Kind::Float) {
+                FloatValue* left_float = left->cast<FloatValue>();
+                FloatValue* right_float = right->cast<FloatValue>();
+                result = float_op(inner_opcode, left_float, right_float);
+            } else if (left->kind_ == Kind::Boolean && right->kind_ == Kind::Boolean) {
+                BooleanValue* left_bool = left->cast<BooleanValue>();
+                BooleanValue* right_bool = right->cast<BooleanValue>();
+                result = boolean_op(inner_opcode, left_bool, right_bool);
+            } else {
+                Diagnostic::error_operation_not_defined(
+                    GetOperatorString(opcode), left->repr(), right->repr()
+                );
+                return nullptr;
+            }
+            left->assign_from(result);
+        }
+        return left;
+    }
+
 public:
     static auto is_primitive(Term operand) noexcept -> bool {
-        if (operand) {
-            Term decayed = Sema::decay(operand);
-            return decayed->kind_ == Kind::Integer || decayed->kind_ == Kind::Float ||
-                   decayed->kind_ == Kind::Boolean;
-        }
-        return true;
+        Term decayed = Sema::decay(operand);
+        return decayed->kind_ == Kind::Integer || decayed->kind_ == Kind::Float ||
+               decayed->kind_ == Kind::Boolean;
     }
 
 private:
@@ -1244,57 +1261,45 @@ public:
             switch (GetOperatorGroup(opcode)) {
             case OperatorGroup::Arithmetic:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(
-                        PrimitiveOperations::integer_op(opcode, left_value, right_value)
-                    );
+                    return Term::prvalue(integer_op(opcode, left_value, right_value));
                 } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
-                    return Term::prvalue(
-                        PrimitiveOperations::float_op(opcode, left_value, right_value)
-                    );
+                    return Term::prvalue(float_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::UnaryArithmetic:
                 assert(!right);
                 if (left_kind == Kind::Integer) {
-                    return Term::prvalue(PrimitiveOperations::integer_op(opcode, left_value));
+                    return Term::prvalue(integer_op(opcode, left_value));
                 } else if (left_kind == Kind::Float) {
-                    return Term::prvalue(PrimitiveOperations::float_op(opcode, left_value));
+                    return Term::prvalue(float_op(opcode, left_value));
                 }
                 break;
             case OperatorGroup::Comparison:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(
-                        PrimitiveOperations::integer_op(opcode, left_value, right_value)
-                    );
+                    return Term::prvalue(integer_op(opcode, left_value, right_value));
                 } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
-                    return Term::prvalue(
-                        PrimitiveOperations::float_op(opcode, left_value, right_value)
-                    );
+                    return Term::prvalue(float_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::Logical:
                 if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
-                    return Term::prvalue(
-                        PrimitiveOperations::boolean_op(opcode, left_value, right_value)
-                    );
+                    return Term::prvalue(boolean_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::UnaryLogical:
                 assert(!right);
                 if (left_kind == Kind::Boolean) {
-                    return Term::prvalue(PrimitiveOperations::boolean_op(opcode, left_value));
+                    return Term::prvalue(boolean_op(opcode, left_value));
                 }
                 break;
             case OperatorGroup::Bitwise:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(
-                        PrimitiveOperations::integer_op(opcode, left_value, right_value)
-                    );
+                    return Term::prvalue(integer_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::UnaryBitwise:
                 if (left_kind == Kind::Integer) {
-                    return Term::prvalue(PrimitiveOperations::integer_op(opcode, left_value));
+                    return Term::prvalue(integer_op(opcode, left_value));
                 }
                 break;
             case OperatorGroup::Assignment:
@@ -1364,11 +1369,21 @@ public:
     auto eval_overloaded_op(
         const ASTNode* node, OperatorCode opcode, Term left, Term right = {}
     ) const noexcept -> Term {
-        const Type* left_type = Sema::decay(left.effective_type());
-        const Type* right_type = right ? Sema::decay(right.effective_type()) : nullptr;
-        if (left_type->kind_ != Kind::Instance && right_type &&
-            right_type->kind_ != Kind::Instance) {
-            throw;
+        const Type* left_type = Sema::apply_value_category(left);
+        const Type* left_base_type = Sema::decay(left_type);
+        const Type* right_type = Sema::apply_value_category(right);
+        const Type* right_base_type = Sema::decay(right_type);
+        if (left_base_type->kind_ != Kind::Instance && right_base_type &&
+            right_base_type->kind_ != Kind::Instance) {
+            Diagnostic::error_operation_not_defined(
+                GetOperatorString(opcode), left_type->repr(), right_type->repr()
+            );
+            return {};
+        }
+        if (opcode == OperatorCode::Assign && left_base_type == right_base_type) {
+            if (Sema::is_mutable(left_type)) {
+                return Term::lvalue(left_type);
+            }
         }
         std::array<Term, 2> args = {left, right};
         if (opcode == OperatorCode::PostIncrement || opcode == OperatorCode::PostDecrement) {
@@ -1376,7 +1391,7 @@ public:
         }
         return sema_.call_handler_->eval_call(
             node,
-            std::tuple{opcode, left_type, right_type},
+            std::tuple{opcode, left_base_type, right_base_type},
             args[1] ? args : std::span(args).subspan(0, 1)
         );
     }
