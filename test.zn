@@ -2,11 +2,11 @@ fn main(args: [strview]) {
     std.cerr << 1 << 2;
 }
 
-class Window {
+class A<T: type> {
     init() {
         return Self{};
     }
-    fn get_pixel_buffer(self: &Self) -> &std.vector<u32> {
+    operator+(self: &Self, other: i32) -> A<T> {
         
     }
 }

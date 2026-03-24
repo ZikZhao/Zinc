@@ -63,8 +63,9 @@ private:
 public:
     Scope* parent_ = nullptr;
     strview scope_id_;
-    const Type* self_type_ = nullptr;
+    strview self_id_;  // only set for class scopes
     bool is_extern_ = false;
+    bool is_instantiating_template_ = false;
 
 private:
     Scope(Scope* parent, strview scope_id) noexcept : parent_(parent), scope_id_(scope_id) {
@@ -365,6 +366,7 @@ public:
         Diagnostic::ErrorTrap trap{node->location};
         current_scope_.add_class(node->identifier, node);
         Scope& class_scope = Scope::make(current_scope_, node, node->identifier);
+        class_scope.self_id_ = node->identifier;
         SymbolCollector class_visitor(class_scope);
         for (auto& item : node->scope_items) {
             class_visitor(item);

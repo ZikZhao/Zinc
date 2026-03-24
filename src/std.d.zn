@@ -605,8 +605,8 @@ fn prev<Iter: type>(it: Iter) -> Iter;
 fn prev<Iter: type>(it: Iter, n: isize) -> Iter;
 
 namespace chrono {
-    class duration {
-        type rep = i64;
+    class duration<Rep: type> {
+        type rep = Rep;
 
         init();
         init(count: rep);
@@ -629,14 +629,14 @@ namespace chrono {
         operator>=(self: &Self, other: &Self) -> bool;
     }
 
-    type microseconds = duration;
-    type milliseconds = duration;
-    type seconds = duration;
+    type microseconds = duration<i64>;
+    type milliseconds = duration<i64>;
+    type seconds = duration<i64>;
 
-    fn duration_cast<ToDuration: type>(d: duration) -> ToDuration;
+    fn duration_cast<ToDuration: type, Rep: type>(d: duration<Rep>) -> ToDuration;
 
     class time_point {
-        type duration_type = duration;
+        type duration_type = duration<i64>;
 
         init();
         init(d: duration_type);
@@ -656,14 +656,14 @@ namespace chrono {
     }
 
     class steady_clock {
-        type duration = chrono.duration;
+        type duration = chrono.duration<i64>;
         type time_point = chrono.time_point;
 
         static fn now() -> time_point;
     }
 
     class system_clock {
-        type duration = chrono.duration;
+        type duration = chrono.duration<i64>;
         type time_point = chrono.time_point;
 
         static fn now() -> time_point;
@@ -789,7 +789,7 @@ class shared_ptr<T: type> {
 
     init();
     init(ptr: pointer);
-    init(other: shared_ptr<T>);
+    init(other: &Self);
     init<U: type>(other: shared_ptr<U>);
     init<U: type>(other: unique_ptr<U>);
 
@@ -800,7 +800,7 @@ class shared_ptr<T: type> {
 
     operator*(self: &Self) -> &T;
     operator->(self: &Self) -> pointer;
-    operator=(self: &mut Self, other: shared_ptr<T>) -> &mut Self;
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
     operator=<U: type>(self: &mut Self, other: shared_ptr<U>) -> &mut Self;
 }
 
@@ -812,7 +812,7 @@ class optional<T: type> {
 
     init();
     init(value: T);
-    init(other: optional<T>);
+    init(other: Self);
     init<U: type>(other: optional<U>);
 
     fn has_value(self: &Self) -> bool;
@@ -827,7 +827,7 @@ class optional<T: type> {
     operator*(self: &mut Self) -> &mut T;
     operator->(self: &Self) -> *T;
     operator->(self: &mut Self) -> *mut T;
-    operator=(self: &mut Self, other: optional<T>) -> &mut Self;
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
     operator=<U: type>(self: &mut Self, other: optional<U>) -> &mut Self;
 
     operator==(self: &Self, other: &Self) -> bool;

@@ -5,7 +5,7 @@ import "window.zn" as Window;
 
 fn main(args: [strview]) {
     if (args.size() < 2) {
-        std.cerr << "Usage: " << args[0] << " <scene1.obj> [<scene2.obj> ...]" << std.endl;
+        std.cerr << "Usage: " << args[0] << " <scene1.obj> [<scene2.obj> ...]\n";
         return EXIT_FAILURE;
     }
 
@@ -259,7 +259,7 @@ fn main(args: [strview]) {
             std.cout << std.format(
                 "[Renderer] FPS: {:#.3g} | Avg Frame Time: {:#.4g} ms\n",
                 fps as f64 / elapsed.count(),
-                std.chrono.duration_cast<std.chrono.milliseconds>(elapsed).count() / fps as f64
+                std.chrono.duration_cast::<std.chrono.milliseconds>(elapsed).count() / fps as f64
             );
             fps = 0;
             last_print = now;

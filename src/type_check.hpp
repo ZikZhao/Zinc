@@ -172,26 +172,38 @@ public:
     static auto expect(const Symbol& symbol, Kinds... expected_kinds) noexcept -> bool {
         if (symbol.index() == 0) return false;
         if (((symbol.index() == static_cast<std::size_t>(expected_kinds)) || ...)) return true;
+
+        auto fmt = [](SymbolKind kind) -> strview {
+            switch (kind) {
+            case SymbolKind::Type:
+                return "'type'"sv;
+            case SymbolKind::Term:
+                return "'value'"sv;
+            case SymbolKind::Function:
+                return "'function'"sv;
+            case SymbolKind::Method:
+                return "'method'"sv;
+            case SymbolKind::Template:
+                return "'template'"sv;
+            case SymbolKind::ParameterPack:
+                return "'parameter pack'"sv;
+            case SymbolKind::Namespace:
+                return "'namespace'"sv;
+            case SymbolKind::Operator:
+                return "'operator'"sv;
+            default:
+                UNREACHABLE();
+            }
+        };
+        GlobalMemory::String expected_str;
+        {
+            const char* sep = "";
+            ((expected_str.append(sep).append(fmt(expected_kinds)), sep = " or "), ...);
+        }
+        Diagnostic::error_symbol_category_mismatch(
+            expected_str, fmt(static_cast<SymbolKind>(symbol.index()))
+        );
         return false;
-        // if constexpr (expected_kind == SymbolKind::Type) {
-        //     throw UnlocatedProblem::make<TypeExpectedError>();
-        // } else if constexpr (expected_kind == SymbolKind::Runtime) {
-        //     throw UnlocatedProblem::make<RuntimeValueExpectedError>();
-        // } else if constexpr (expected_kind == SymbolKind::Comptime) {
-        //     throw UnlocatedProblem::make<ComptimeValueExpectedError>();
-        // } else if constexpr (expected_kind == SymbolKind::Function) {
-        //     throw UnlocatedProblem::make<FunctionExpectedError>();
-        // } else if constexpr (expected_kind == SymbolKind::Method) {
-        //     throw UnlocatedProblem::make<MethodExpectedError>();
-        // } else if constexpr (expected_kind == SymbolKind::Template) {
-        //     throw UnlocatedProblem::make<TemplateExpectedError>();
-        // } else if constexpr (expected_kind == SymbolKind::ParameterPack) {
-        //     throw UnlocatedProblem::make<ParameterPackExpectedError>();
-        // } else if constexpr (expected_kind == SymbolKind::Namespace) {
-        //     throw UnlocatedProblem::make<NamespaceExpectedError>();
-        // } else {
-        //     static_assert(false);
-        // }
     }
 
     template <SymbolKind kind>
@@ -278,7 +290,7 @@ public:
     }
 
 private:
-    GlobalMemory::Map<std::pair<const Scope*, strview>, TypeResolution> type_cache_;
+    GlobalMemory::Map<std::pair<const Scope*, const ScopeValue*>, TypeResolution> type_cache_;
 
 public:
     Scope* current_scope_;
@@ -293,26 +305,36 @@ public:
 
     auto deferred_analysis(Scope& scope, auto variant) noexcept -> void;
 
-    auto get_self_type() const noexcept -> const Type* {
-        const Scope* scope = current_scope_;
-        while (!scope->self_type_ && scope->parent_) {
+    auto get_self_type() noexcept -> const Type* {
+        Scope* scope = current_scope_;
+        while (scope->self_id_.empty() && scope->parent_) {
             scope = scope->parent_;
         }
-        return scope->self_type_;
+        if (scope->self_id_.empty()) {
+            throw;  // not in class error
+        }
+        const ScopeValue* self_value = scope->parent_->find(scope->self_id_);
+        assert(self_value);
+        return eval_type(*scope->parent_, *self_value).get();
     }
 
     auto is_at_top_level() const noexcept -> bool { return current_scope_->parent_ == nullptr; }
 
-    auto eval_type(strview identifier, Scope& scope, const ScopeValue& value) noexcept
-        -> TypeResolution;
+    auto eval_type(Scope& scope, const ScopeValue& value) noexcept -> TypeResolution;
 
-    auto eval_symbol(strview identifier, Scope& scope, const ScopeValue& value) noexcept -> Symbol;
+    auto eval_symbol(Scope& scope, const ScopeValue& value) noexcept -> Symbol;
 
     auto lookup(strview identifier) -> std::pair<Scope*, const ScopeValue*> {
         Scope* scope = current_scope_;
         while (scope) {
             auto it = scope->identifiers_.find(identifier);
             if (it != scope->identifiers_.end()) {
+                if (scope->parent_ && scope->parent_->is_instantiating_template_ &&
+                    scope->self_id_ == identifier) {
+                    // accessing injected class name from template during template instantiation,
+                    // return the template instead of the class
+                    continue;
+                }
                 return {scope, &it->second};
             }
             scope = scope->parent_;
@@ -327,7 +349,7 @@ public:
             Diagnostic::error_undeclared_identifier(identifier);
             return {};
         }
-        return eval_type(identifier, *scope, *value);
+        return eval_type(*scope, *value);
     }
 
     auto lookup_symbol(strview identifier) -> Symbol {
@@ -336,13 +358,13 @@ public:
             Diagnostic::error_undeclared_identifier(identifier);
             return {};
         }
-        return eval_symbol(identifier, *scope, *value);
+        return eval_symbol(*scope, *value);
     }
 
     auto get_std_symbol(strview identifier) -> Symbol {
         auto [scope, value] = lookup("std");
         auto std_scope = value->get<Scope*>();
-        return eval_symbol(identifier, *std_scope, *std_scope->find(identifier));
+        return eval_symbol(*std_scope, *std_scope->find(identifier));
     }
 };
 
@@ -434,7 +456,8 @@ public:
         Sema::Guard inner_guard(sema_, *inst_scope);
         sema_.codegen_env_.map_instantiation(inst_scope, args);
         sema_.deferred_analysis(*inst_scope, target);
-        Symbol result = sema_.lookup_symbol(family.primary->identifier);
+        const ScopeValue* value = inst_scope->find(family.primary->identifier);
+        Symbol result = sema_.eval_symbol(*inst_scope, *value);
         if (const Type* type = std::get<static_cast<size_t>(SymbolKind::Type)>(result)) {
             if (auto instance_type = type->dyn_cast<InstanceType>()) {
                 instance_type->primary_template_ = family.primary;
@@ -467,7 +490,8 @@ public:
         Sema::Guard inner_guard(sema_, inst_scope);
         sema_.codegen_env_.map_instantiation(&inst_scope, args);
         sema_.deferred_analysis(inst_scope, primary->target_node);
-        Symbol result = sema_.lookup_symbol(primary->identifier);
+        const ScopeValue* value = inst_scope.find(primary->identifier);
+        Symbol result = sema_.eval_symbol(inst_scope, *value);
         /// TODO: class template argument deduction
         // if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
         //     if (auto instance_type = (*type)->dyn_cast<InstanceType>()) {
@@ -959,7 +983,7 @@ private:
         } else if (auto* family = next->get<TemplateFamily*>()) {
             return family;
         } else {
-            return sema_.eval_symbol(member, *static_scope, *next);
+            return sema_.eval_symbol(*static_scope, *next);
         }
     }
 
@@ -1448,13 +1472,9 @@ public:
     void operator()(const ASTSelfExpr* node) noexcept {
         if (!node->is_type) {
             Diagnostic::error_symbol_category_mismatch(node->location, "type", "value");
-        } else {
-            out_ = sema_.get_self_type();
-            if (!out_.get()) {
-                /// TODO: throw not in class error
-                throw;
-            }
+            return;
         }
+        out_ = sema_.get_self_type();
     }
 
     void operator()(const ASTParenExpr* node) noexcept { (*this)(node->inner); }
@@ -1596,7 +1616,6 @@ public:
     void operator()(const ASTClassDefinition* node) noexcept {
         out_ = new InstanceType(node->identifier);
         Sema::Guard guard(sema_, node);
-        sema_.current_scope_->self_type_ = out_;
         bool has_error = false;
         const Type* base = nullptr;
         if (!holds_monostate(node->extends)) {
@@ -2074,10 +2093,7 @@ public:
     }
 
     void operator()(const ASTClassDefinition* node) noexcept {
-        TypeResolution class_type =
-            sema_.lookup_type(node->identifier);  // trigger self type injection
         Sema::Guard guard(sema_, node);
-        sema_.current_scope_->self_type_ = class_type;
         for (auto& field : node->fields) {
             (*this)(field);
         }
@@ -2115,8 +2131,7 @@ inline Sema::Sema(Scope& root, CodeGenEnvironment& codegen_env) noexcept
       access_handler_(std::make_unique<AccessHandler>(*this)),
       call_handler_(std::make_unique<CallHandler>(*this)) {}
 
-inline auto Sema::eval_type(strview identifier, Scope& scope, const ScopeValue& value) noexcept
-    -> TypeResolution {
+inline auto Sema::eval_type(Scope& scope, const ScopeValue& value) noexcept -> TypeResolution {
     if (auto* object = value.get<const Object*>()) {
         if (auto* type = object->dyn_type()) {
             return type;
@@ -2125,7 +2140,7 @@ inline auto Sema::eval_type(strview identifier, Scope& scope, const ScopeValue& 
         return nullptr;
     }
     // Check cache
-    auto [it_id_cache, inserted] = type_cache_.insert({{&scope, identifier}, TypeResolution()});
+    auto [it_id_cache, inserted] = type_cache_.insert({{&scope, &value}, TypeResolution()});
     if (!inserted) {
         return it_id_cache->second;
     }
@@ -2149,8 +2164,7 @@ inline auto Sema::eval_type(strview identifier, Scope& scope, const ScopeValue& 
     }
 }
 
-inline auto Sema::eval_symbol(strview identifier, Scope& scope, const ScopeValue& value) noexcept
-    -> Symbol {
+inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept -> Symbol {
     if (auto* object = value.get<const Object*>()) {
         if (auto* type = object->dyn_type()) {
             return type;
@@ -2160,7 +2174,7 @@ inline auto Sema::eval_symbol(strview identifier, Scope& scope, const ScopeValue
     } else if (auto* pack = value.get<std::span<const Object*>*>()) {
         return *pack;
     } else if (value.get<const ASTExprVariant*>() || value.get<const ASTClassDefinition*>()) {
-        TypeResolution out = eval_type(identifier, scope, value);
+        TypeResolution out = eval_type(scope, value);
         return out.get() ? Symbol{out.get()} : Symbol{};
     } else if (auto var_init = value.get<const VariableInitialization*>()) {
         TypeResolution type{};
@@ -2168,11 +2182,11 @@ inline auto Sema::eval_symbol(strview identifier, Scope& scope, const ScopeValue
             Guard guard(*this, scope);
             TypeContextEvaluator{*this, type}(var_init->type);
             if (!type.get()) return {};
-            // std::cout << "Evaluating variable initialization for '" << identifier << "'\n";
-            // std::cout << "Type: " << type.get()->repr() << "\n";
         }
         if (holds_monostate(var_init->value)) {
-            return type.get() ? Symbol{Term::lvalue(type.get())} : Symbol{};
+            return type.get()
+                       ? Symbol{apply_mutable(Term::lvalue(type.get()), var_init->is_mutable)}
+                       : Symbol{};
         } else {
             Symbol init_symbol = ValueContextEvaluator{*this, type.get(), false}(var_init->value);
             if (!Sema::get_if<SymbolKind::Term>(init_symbol)) return {};
@@ -2202,6 +2216,7 @@ inline auto Sema::eval_symbol(strview identifier, Scope& scope, const ScopeValue
 }
 
 inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void {
+    scope.is_instantiating_template_ = true;
     SymbolCollector{scope}(variant);
     Guard guard(*this, scope);
     TypeCheckVisitor{*this}(variant);

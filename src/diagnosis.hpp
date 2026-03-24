@@ -251,7 +251,7 @@ public:
 
     static auto error_symbol_category_mismatch(strview expected, strview actual) noexcept -> void {
         unlocated_error(
-            GlobalMemory::format("Symbol kind mismatch: expected '{}', got '{}'", expected, actual)
+            GlobalMemory::format("Symbol kind mismatch: expected {}, got {}", expected, actual)
         );
     }
 
