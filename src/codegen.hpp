@@ -526,7 +526,19 @@ public:
         case OperatorCode::RightShiftAssign:
             out += "shr_assign"sv;
             break;
-        default:
+        case OperatorCode::Index:
+            out += "index"sv;
+            break;
+        case OperatorCode::Call:
+            out += "call"sv;
+            break;
+        case OperatorCode::Deref:
+            out += "deref"sv;
+            break;
+        case OperatorCode::Pointer:
+            out += "arrow"sv;
+            break;
+        case OperatorCode::SIZE:
             UNREACHABLE();
         }
     }
@@ -769,17 +781,25 @@ public:
     }
 
     auto operator()(const ASTIndexAccess* node) -> void {
-        if (auto* replacement = env_.find(current_scope_, node)) {
-            const Scope* index_scope = std::get<const Scope*>(*replacement);
-            if (!index_scope->is_extern_) {
-                mangler_(definitions_, index_scope);
-                return;
-            }
+        const auto& [func_type, self_type, is_constructor, do_not_mangle] =
+            std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
+        if (do_not_mangle) {
+            (*this)(node->base);
+            definitions_ += "["sv;
+            (*this)(node->index);
+            definitions_ += "]"sv;
+        } else {
+            definitions_ += "_op_"sv;
+            mangler_(definitions_, OperatorCode::Index);
+            definitions_ += "_0"sv;
+            mangler_(definitions_, func_type->parameters_[0]);
+            mangler_(definitions_, func_type->parameters_[1]);
+            definitions_ += "("sv;
+            (*this)(node->base);
+            definitions_ += ", "sv;
+            (*this)(node->index);
+            definitions_ += ")"sv;
         }
-        (*this)(node->base);
-        definitions_ += "["sv;
-        (*this)(node->index);
-        definitions_ += "]"sv;
     }
 
     auto operator()(const ASTUnaryOp* node) -> void {
@@ -795,9 +815,9 @@ public:
 
     auto operator()(const ASTBinaryOp* node) -> void {
         if (auto* replacement = env_.find(current_scope_, node)) {
-            auto [func_type, self_type, _, is_extern] =
+            auto [func_type, self_type, _, do_not_mangle] =
                 std::get<CodeGenEnvironment::FunctionCall>(*replacement);
-            if (!is_extern) {
+            if (!do_not_mangle) {
                 definitions_ += "_op_"sv;
                 mangler_(definitions_, node->opcode);
                 definitions_ += "_0"sv;
@@ -944,6 +964,7 @@ public:
     }
 
     auto operator()(const ASTIfStatement* node) -> void {
+        Guard guard{*this, node};
         definitions_ += "if ("sv;
         (*this)(node->condition);
         definitions_ += ") "sv;
@@ -954,7 +975,31 @@ public:
         }
     }
 
+    auto operator()(const ASTSwitchStatement* node) -> void {
+        Guard guard{*this, node};
+        definitions_ += "switch ("sv;
+        (*this)(node->condition);
+        definitions_ += ") {\n"sv;
+        for (const ASTSwitchCase& switch_case : node->cases) {
+            newline();
+            if (holds_monostate(switch_case.value)) {
+                definitions_ += "default:\n"sv;
+            } else {
+                definitions_ += "case "sv;
+                (*this)(switch_case.value);
+                definitions_ += ":\n"sv;
+            }
+            indent_level_++;
+            newline();
+            (*this)(switch_case.body);
+            indent_level_--;
+        }
+        newline();
+        definitions_ += "}"sv;
+    }
+
     auto operator()(const ASTForStatement* node) -> void {
+        Guard guard{*this, node};
         definitions_ += "for ("sv;
         if (auto* decl = std::get_if<const ASTDeclaration*>(&node->initializer)) {
             (*this)(decl);

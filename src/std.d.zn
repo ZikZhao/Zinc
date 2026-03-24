@@ -420,9 +420,9 @@ class span<T: type> {
     type size_type = usize;
     type difference_type = isize;
 
-    type pointer = *mut element_type;
+    type pointer = *element_type;
     type const_pointer = *element_type;
-    type reference = &mut element_type;
+    type reference = &element_type;
     type const_reference = &element_type;
 
     type iterator = pointer;

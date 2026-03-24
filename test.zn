@@ -1,7 +1,6 @@
-import "module.zn" as World;
-import "module2.zn" as Renderer;
-
 fn main(args: [strview]) {
-    let mut a = Renderer.Renderer();
-    let mut b = World.World(mut a);
+    if (args.size() < 2) {
+        std.cerr << "Usage: " << args[0] << " <scene1.obj> [<scene2.obj> ...]\n";
+        return 1;
+    }
 }

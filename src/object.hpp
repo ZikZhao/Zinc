@@ -1600,8 +1600,7 @@ public:
         edges_.insert({parent, child});
     }
 
-    auto is_reachable(const Type* from, const Type* to) const noexcept -> bool {
-        // search parent
+    auto is_base(const Type* from, const Type* to) const noexcept -> bool {
         GlobalMemory::FlatSet<const Type*> visited;
         std::vector<const Type*> stack{from};
         while (!stack.empty()) {
@@ -1621,9 +1620,12 @@ public:
                 }
             }
         }
-        // search children
-        visited.clear();
-        stack.push_back(from);
+        return false;
+    }
+
+    auto is_derived(const Type* from, const Type* to) const noexcept -> bool {
+        GlobalMemory::FlatSet<const Type*> visited;
+        std::vector<const Type*> stack{from};
         while (!stack.empty()) {
             const Type* current = stack.back();
             stack.pop_back();
@@ -1640,6 +1642,10 @@ public:
             }
         }
         return false;
+    }
+
+    auto is_reachable(const Type* from, const Type* to) const noexcept -> bool {
+        return is_base(from, to) || is_derived(from, to);
     }
 };
 
@@ -1738,6 +1744,10 @@ public:
 
     static auto is_type_incomplete(const Type* type) noexcept -> bool {
         return instance->graph_.is_parent(type);
+    }
+
+    static auto is_base(const Type* from, const Type* to) noexcept -> bool {
+        return instance->class_graph_.is_base(from, to);
     }
 
     static auto is_reachable(const Type* from, const Type* to) noexcept -> bool {

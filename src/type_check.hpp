@@ -455,17 +455,17 @@ public:
         }
         auto [inst_scope, target] = specialization_resolution(family, args);
         Sema::Guard inner_guard(sema_, *inst_scope);
-        sema_.codegen_env_.map_instantiation(inst_scope, args);
+        std::span persisted_args = args | GlobalMemory::collect<std::span>();
+        sema_.codegen_env_.map_instantiation(inst_scope, persisted_args);
         sema_.deferred_analysis(*inst_scope, target);
         const ScopeValue* value = inst_scope->find(family.primary->identifier);
         Symbol result = sema_.eval_symbol(*inst_scope, *value);
         if (const Type* type = std::get<static_cast<size_t>(SymbolKind::Type)>(result)) {
             if (auto instance_type = type->dyn_cast<InstanceType>()) {
                 instance_type->primary_template_ = family.primary;
-                instance_type->template_args_ = args;
+                instance_type->template_args_ = persisted_args;
             }
         }
-        std::span persisted_args = args | GlobalMemory::collect<std::span>();
         cache_[{family.primary, persisted_args}] =
             Sema::get_if<SymbolKind::Type>(result)
                 ? static_cast<const Object*>(Sema::get<SymbolKind::Type>(result))
@@ -489,7 +489,8 @@ public:
         }
         /// TODO: parameter pack
         Sema::Guard inner_guard(sema_, inst_scope);
-        sema_.codegen_env_.map_instantiation(&inst_scope, args);
+        std::span persisted_args = args | GlobalMemory::collect<std::span>();
+        sema_.codegen_env_.map_instantiation(&inst_scope, persisted_args);
         sema_.deferred_analysis(inst_scope, primary->target_node);
         const ScopeValue* value = inst_scope.find(primary->identifier);
         Symbol result = sema_.eval_symbol(inst_scope, *value);
@@ -852,62 +853,49 @@ private:
 
     static auto param_rank(const Type* param, const Type* arg) -> ConversionRank {
         using enum ConversionRank;
-        bool is_arg_mutable = false;
-        if (auto ref_type = arg->dyn_cast<ReferenceType>()) {
-            is_arg_mutable = ref_type->referenced_type_->kind_ == Kind::Mutable;
-        }
         auto decayed_param = Sema::decay(param);
         auto decayed_arg = Sema::decay(arg);
-        if (decayed_param == decayed_arg) {
+        auto tiebreaker_rank = [&]() -> ConversionRank {
             // the order of variants indicates the rank of conversion, e.g. T -> move &T is
             // better than T -> &T, variants not listed below means no match, e.g. T -> &mut T
-            if (arg == decayed_arg) {
+            auto* param_ref = param->dyn_cast<ReferenceType>();
+            auto* arg_ref = arg->dyn_cast<ReferenceType>();
+            if (arg_ref == nullptr) {
                 // (rvalue) T -> T / move &T / &T
-                if (arg == param) return Exact;
-                if (auto ref_type = param->dyn_cast<ReferenceType>()) {
-                    return ref_type->is_moved_ ? Referenced : QualifiedReferenced;
-                }
-                return NoMatch;
-            } else if (!arg->cast<ReferenceType>()->is_moved_) {
+                if (param_ref) return param_ref->is_moved_ ? Referenced : QualifiedReferenced;
+                return Exact;
+            } else if (!arg_ref->is_moved_) {
                 // (lvalue) &T -> &T / &mut T / T, &mut T -> &mut T / &T / T
-                if (auto ref_type = param->dyn_cast<ReferenceType>()) {
-                    if (ref_type->is_moved_) return NoMatch;
-                    return (is_arg_mutable ^ (ref_type->referenced_type_->kind_ == Kind::Mutable))
-                               ? Qualified
-                               : Exact;
-                } else {
-                    return Copy;
-                }
+                if (param_ref == nullptr) return Copy;
+                if (param_ref->is_moved_) return NoMatch;
+                return (arg_ref->referenced_type_->kind_ == Kind::Mutable) ^
+                               (param_ref->referenced_type_->kind_ == Kind::Mutable)
+                           ? Qualified
+                           : Exact;
             } else {
                 // (xvalue) move &T -> move &T / &mut T / &T / T
-                if (auto ref_type = param->dyn_cast<ReferenceType>()) {
-                    if (ref_type->referenced_type_->kind_ == Kind::Mutable) return Referenced;
-                    return ref_type->is_moved_ ? Exact : QualifiedReferenced;
-                } else {
-                    return Copy;
-                }
+                if (!param_ref) return Copy;
+                if (param_ref->referenced_type_->kind_ == Kind::Mutable) return Referenced;
+                return param_ref->is_moved_ ? Exact : QualifiedReferenced;
             }
+        };
+        if (decayed_param == decayed_arg) {
+            if (Sema::is_mutable(param) && !Sema::is_mutable(arg)) return NoMatch;
+            return tiebreaker_rank();
         } else {
-            /// TODO:
-            // upcast in class hierarchy, or to void pointer
             if (!decayed_arg->dyn_cast<PointerType>() || !decayed_param->dyn_cast<PointerType>())
                 return NoMatch;
-            auto param_class =
-                decayed_param->cast<PointerType>()->pointed_type_->dyn_cast<InstanceType>();
-            auto arg_class =
-                decayed_arg->cast<PointerType>()->pointed_type_->dyn_cast<InstanceType>();
-            if (!param_class || !arg_class) return NoMatch;
-            if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
-            const Type* current_base = arg_class;
-            while (current_base) {
-                if (current_base == param) {
-                    return Upcast;
-                }
-                if (auto current_instance = current_base->dyn_cast<InstanceType>()) {
-                    current_base = current_instance->extends_;
-                } else {
-                    break;
-                }
+            auto param_pointee = decayed_param->cast<PointerType>()->pointed_type_;
+            auto arg_pointee = decayed_arg->cast<PointerType>()->pointed_type_;
+            if (Sema::is_mutable(param_pointee) && !Sema::is_mutable(arg_pointee)) return NoMatch;
+            if (Sema::decay(param_pointee) == Sema::decay(arg_pointee)) {
+                return tiebreaker_rank();
+            }
+            auto param_class = Sema::decay(param_pointee)->dyn_cast<InstanceType>();
+            auto arg_class = Sema::decay(arg_pointee)->dyn_cast<InstanceType>();
+            if (param_class && arg_class) {
+                if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
+                if (!TypeRegistry::is_base(arg_class, param_class)) return NoMatch;
             }
             return NoMatch;
         }
@@ -2007,7 +1995,6 @@ public:
         if (!holds_monostate(node->declared_type)) {
             TypeResolution declared_type;
             TypeContextEvaluator{sema_, declared_type}(node->declared_type);
-            sema_.codegen_env_.map_type(sema_.current_scope_, node, declared_type);
         }
         if (!holds_monostate(node->expr)) {
             Symbol init = ValueContextEvaluator{sema_, nullptr, false}(node->expr);
@@ -2023,7 +2010,11 @@ public:
                     );
                 }
             } else {
-                type = Sema::decay(init_term.effective_type());
+                if (init_term.is_comptime()) {
+                    type = Sema::decay(init_term.get_comptime()->resolve_to(nullptr)->get_type());
+                } else {
+                    type = Sema::decay(init_term.effective_type());
+                }
             }
         }
         if (type.get()) {
