@@ -217,6 +217,8 @@ public:
         return std::get_if<static_cast<std::uint8_t>(kind)>(&symbol);
     }
 
+    static auto term_to_symbol(Term term) -> Symbol { return term ? Symbol(term) : Symbol{}; }
+
     static auto apply_value_category(Term obj) -> const Type* {
         if (!obj) return nullptr;
         const Type* type = obj.effective_type();
@@ -1258,7 +1260,7 @@ public:
     auto eval_type_op(OperatorCode opcode, const Type* left, const Type* right = nullptr) const
         -> const Type* {
         /// TODO: implement type-level operations
-        return nullptr;
+        UNREACHABLE();
     }
 
     auto eval_primitive_op(OperatorCode opcode, Term left, Term right = {}) const noexcept -> Term {
@@ -1266,7 +1268,11 @@ public:
         bool left_is_mutable = Sema::is_mutable(left);
         Term decayed_left = Sema::decay(left);
         Term decayed_right = Sema::decay(right);
-        const Type* left_type = decayed_left.effective_type();
+        const Type* result_type = decayed_left.effective_type();
+        if (result_type == &IntegerType::untyped_instance ||
+            result_type == &FloatType::untyped_instance) {
+            result_type = decayed_right.effective_type();
+        }
         Kind left_kind = decayed_left->kind_;
         Kind right_kind = decayed_right ? decayed_right->kind_ : Kind::None;
         if (comptime) {
@@ -1322,7 +1328,7 @@ public:
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
-                    return Term::lvalue(left_type);
+                    return Term::lvalue(result_type);
                 }
                 break;
             }
@@ -1331,12 +1337,12 @@ public:
             case OperatorGroup::Arithmetic:
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float)) {
-                    return Term::prvalue(left_type);
+                    return Term::prvalue(result_type);
                 }
                 break;
             case OperatorGroup::UnaryArithmetic:
                 if (left_kind == Kind::Integer || left_kind == Kind::Float) {
-                    return Term::prvalue(left_type);
+                    return Term::prvalue(result_type);
                 }
                 break;
             case OperatorGroup::Comparison:
@@ -1357,12 +1363,12 @@ public:
                 break;
             case OperatorGroup::Bitwise:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(left_type);
+                    return Term::prvalue(result_type);
                 }
                 break;
             case OperatorGroup::UnaryBitwise:
                 if (left_kind == Kind::Integer) {
-                    return Term::prvalue(left_type);
+                    return Term::prvalue(result_type);
                 }
                 break;
             case OperatorGroup::Assignment:
@@ -1371,12 +1377,17 @@ public:
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
-                    return Term::lvalue(left_type);
+                    return Term::lvalue(result_type);
                 }
                 break;
             }
         }
         /// TODO: throw error
+        Diagnostic::error_operation_not_defined(
+            GetOperatorString(opcode),
+            decayed_left->repr(),
+            decayed_right ? decayed_right->repr() : ""
+        );
         return {};
     }
 
@@ -1699,8 +1710,66 @@ public:
 
     auto operator()(const ASTConstant* node) noexcept -> Symbol {
         if (expected_) {
-            Value* typed_value = node->value->resolve_to(expected_);
-            return Term::prvalue(typed_value);
+            if (node->value->kind_ != expected_->kind_) {
+                if (node->value->kind_ == Kind::Nullptr && expected_->kind_ == Kind::Pointer) {
+                    return Term::prvalue(expected_);
+                }
+                Diagnostic::error_type_mismatch(expected_->repr(), node->value->repr());
+                return {};
+            } else if (auto* int_type = expected_->dyn_cast<IntegerType>()) {
+                const IntegerValue* int_value = node->value->cast<IntegerValue>();
+                bool valid = true;
+                if (int_type->is_signed_) {
+                    switch (int_type->bits_) {
+                    case 8:
+                        valid = int_value->value_.fits_in<std::int8_t>();
+                        break;
+                    case 16:
+                        valid = int_value->value_.fits_in<std::int16_t>();
+                        break;
+                    case 32:
+                        valid = int_value->value_.fits_in<std::int32_t>();
+                        break;
+                    case 64:
+                        valid = int_value->value_.fits_in<std::int64_t>();
+                        break;
+                    default:
+                        UNREACHABLE();
+                    }
+                } else {
+                    switch (int_type->bits_) {
+                    case 8:
+                        valid = int_value->value_.fits_in<std::uint8_t>();
+                        break;
+                    case 16:
+                        valid = int_value->value_.fits_in<std::uint16_t>();
+                        break;
+                    case 32:
+                        valid = int_value->value_.fits_in<std::uint32_t>();
+                        break;
+                    case 64:
+                        valid = int_value->value_.fits_in<std::uint64_t>();
+                        break;
+                    default:
+                        UNREACHABLE();
+                    }
+                }
+                if (valid) {
+                    return Term::prvalue(new IntegerValue(int_type, int_value->value_));
+                } else {
+                    Diagnostic::error_overflow(int_value->value_.to_string(), int_type->repr());
+                    return {};
+                }
+            } else if (auto* float_type = expected_->dyn_cast<FloatType>()) {
+                const FloatValue* float_value = node->value->cast<FloatValue>();
+                return Term::prvalue(new FloatValue(float_type, float_value->value_));
+            } else {
+                if (expected_ != node->value->get_type()) {
+                    Diagnostic::error_type_mismatch(expected_->repr(), node->value->repr());
+                    return {};
+                }
+                return Term::prvalue(node->value);
+            }
         } else {
             return Term::prvalue(node->value);
         }
@@ -1777,11 +1846,13 @@ public:
         }
         Term expr_term = Sema::get<SymbolKind::Term>(expr_symbol);
         if (OperationHandler::is_primitive(expr_term)) {
-            return sema_.operation_handler_->eval_primitive_op(
+            return Sema::term_to_symbol(sema_.operation_handler_->eval_primitive_op(
                 node->opcode, Sema::get<SymbolKind::Term>(expr_symbol)
-            );
+            ));
         } else {
-            return sema_.operation_handler_->eval_overloaded_op(node, node->opcode, expr_term);
+            return Sema::term_to_symbol(
+                sema_.operation_handler_->eval_overloaded_op(node, node->opcode, expr_term)
+            );
         }
     }
 
@@ -1797,14 +1868,16 @@ public:
         Term right_term = Sema::get<SymbolKind::Term>(right_symbol);
         if (OperationHandler::is_primitive(left_term) &&
             OperationHandler::is_primitive(right_term)) {
-            return sema_.operation_handler_->eval_primitive_op(node->opcode, left_term, right_term);
+            return Sema::term_to_symbol(
+                sema_.operation_handler_->eval_primitive_op(node->opcode, left_term, right_term)
+            );
         } else {
-            return sema_.operation_handler_->eval_overloaded_op(
+            return Sema::term_to_symbol(sema_.operation_handler_->eval_overloaded_op(
                 node,
                 node->opcode,
                 Sema::get<SymbolKind::Term>(left_symbol),
                 Sema::get<SymbolKind::Term>(right_symbol)
-            );
+            ));
         }
     }
 
@@ -1918,8 +1991,7 @@ public:
         }
         Symbol func_symbol = ValueContextEvaluator{*this, nullptr}(node->function);
         if (holds_monostate(func_symbol)) return {};
-        Term result = sema_.call_handler_->eval_call(node, func_symbol, args_terms);
-        return result.get() ? Symbol{result} : Symbol{};
+        return Sema::term_to_symbol(sema_.call_handler_->eval_call(node, func_symbol, args_terms));
     }
 
     auto operator()(const ASTTemplateInstantiation* node) noexcept -> Symbol {
@@ -1972,7 +2044,9 @@ public:
         Term expr_term = Sema::get<SymbolKind::Term>(expr_symbol);
         TypeResolution target_type;
         TypeContextEvaluator{sema_, target_type}(node->target_type);
-        return sema_.operation_handler_->eval_cast(node, expr_term, target_type);
+        return Sema::term_to_symbol(
+            sema_.operation_handler_->eval_cast(node, expr_term, target_type)
+        );
     }
 
     auto operator()(const ASTLambda* node) noexcept -> Symbol {
@@ -2063,11 +2137,8 @@ public:
                     );
                 }
             } else {
-                if (init_term.is_comptime()) {
-                    type = Sema::decay(init_term.get_comptime()->resolve_to(nullptr)->get_type());
-                } else {
-                    type = Sema::decay(init_term.effective_type());
-                }
+                init_term = init_term.resolve_to_default();
+                type = Sema::decay(init_term.effective_type());
             }
         }
         assert(type.get());
@@ -2362,14 +2433,10 @@ inline auto TemplateHandler::inference(
             Symbol pattern_symbol = ValueContextEvaluator{sema_, nullptr, false}(pattern.type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
         }
-        bool is_variadic_nttp =
-            (*func_def)->parameters.size() && (*func_def)->parameters.back().is_variadic;
         for (size_t i = param_count; i < args.size(); i++) {
             const AutoObject* auto_inst =
                 auto_instances[i - param_count + primary->parameters.size()];
-            pattern_scope.set_template_argument(
-                variadic_param, auto_inst->as_object(is_variadic_nttp)
-            );
+            pattern_scope.set_template_argument(variadic_param, auto_inst->as_object(false));
             Symbol pattern_symbol =
                 ValueContextEvaluator{sema_, nullptr, false}((*func_def)->parameters.back().type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
@@ -2379,14 +2446,10 @@ inline auto TemplateHandler::inference(
             Symbol pattern_symbol = ValueContextEvaluator{sema_, nullptr, false}(pattern.type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
         }
-        bool is_variadic_nttp =
-            (*ctor_def)->parameters.size() && (*ctor_def)->parameters.back().is_variadic;
         for (size_t i = param_count; i < args.size(); i++) {
             const AutoObject* auto_inst =
                 auto_instances[i - param_count + primary->parameters.size()];
-            pattern_scope.set_template_argument(
-                variadic_param, auto_inst->as_object(is_variadic_nttp)
-            );
+            pattern_scope.set_template_argument(variadic_param, auto_inst->as_object(false));
             Symbol pattern_symbol =
                 ValueContextEvaluator{sema_, nullptr, false}((*func_def)->parameters.back().type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
@@ -2411,6 +2474,7 @@ inline auto TemplateHandler::inference(
             // Diagnostic::report(TemplateArgumentTypeMismatchError(
             //     primary->parameters[i].identifier, args[i]->repr(), patterns[i]->repr()
             // ));
+            throw;
             return {};
         }
     }
@@ -2434,7 +2498,7 @@ inline auto TemplateHandler::inference(
             UNREACHABLE();
         }
     }
-    /// TODO: class initialization
+    throw;
     return {};
 }
 
@@ -2728,7 +2792,7 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
     } else if (auto* term = Sema::get_if<SymbolKind::Term>(base_symbol)) {
         Term decayed = Sema::decay(*term);
         if (decayed->kind_ == Kind::Struct) {
-            return eval_struct_access(*term, node->member);
+            return Sema::term_to_symbol(eval_struct_access(*term, node->member));
         } else if (decayed->kind_ == Kind::Instance) {
             return eval_instance_access(*term, node->member);
         }
@@ -2752,12 +2816,14 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
         Term dereferenced;
         dereferenced = Term::lvalue(pointer_type->target_type_);
         if (pointer_type->target_type_->dyn_cast<StructType>()) {
-            return eval_struct_access(dereferenced, node->member);
+            return Sema::term_to_symbol(eval_struct_access(dereferenced, node->member));
         } else if (pointer_type->target_type_->dyn_cast<InstanceType>()) {
             return eval_instance_access(dereferenced, node->member);
         }
     } else if (decayed.effective_type()->dyn_cast<InstanceType>()) {
-        return sema_.operation_handler_->eval_overloaded_op(node, OperatorCode::Pointer, base_term);
+        return Sema::term_to_symbol(
+            sema_.operation_handler_->eval_overloaded_op(node, OperatorCode::Pointer, base_term)
+        );
     }
     return {};
 }
@@ -2779,14 +2845,12 @@ inline auto AccessHandler::eval_index(const ASTIndexAccess* node) noexcept -> Sy
         instance_type && is_std_indexable_container(instance_type)) {
         // implicitly cast index to usize
         if (index_type == &IntegerType::untyped_instance) {
-            arg_terms[1] =
-                Term::prvalue(arg_terms[1].get_comptime()->resolve_to(&IntegerType::u64_instance));
+            arg_terms[1] = Term::prvalue(&IntegerType::u64_instance);
         }
     }
-    Term result = sema_.call_handler_->eval_call(
+    return Sema::term_to_symbol(sema_.call_handler_->eval_call(
         node, std::tuple{OperatorCode::Index, base_type, index_type}, arg_terms
-    );
-    return result.get() ? Symbol{result} : Symbol{};
+    ));
 }
 
 inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) noexcept -> void {

@@ -1012,15 +1012,19 @@ private:
             double value = 0.0;
             auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), value);
             if (ec == std::errc::result_out_of_range) {
-                throw;
+                Diagnostic::error_overflow(str, "float literal");
+                return as_variant(new ASTConstant{loc(ctx), new FloatValue(0)});
             } else if (ec != std::errc{}) {
-                throw;
+                Diagnostic::error_invalid_literal(str, "float literal");
+                return as_variant(new ASTConstant{loc(ctx), new FloatValue(0)});
             }
-            auto* float_value = new FloatValue(value);
             if (!str.empty() && (str.back() == 'f' || str.back() == 'F')) {
-                float_value = float_value->resolve_to(&FloatType::f32_instance);
+                return as_variant(
+                    new ASTConstant{loc(ctx), new FloatValue(&FloatType::f32_instance, value)}
+                );
+            } else {
+                return as_variant(new ASTConstant{loc(ctx), new FloatValue(value)});
             }
-            return as_variant(new ASTConstant{loc(ctx), float_value});
         }
         case ZincParser::T_STRING: {
             std::string str = ctx->value_->getText();

@@ -80,7 +80,7 @@ fn main(args: [strview]) {
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let mut mode_name: strview;
-            let switched = false;
+            let mut switched = false;
             if (ks[sdl.SDL_SCANCODE_1 as usize]) {
                 switched = Renderer.Mode.WIREFRAME != std.exchange(renderer.mode_, Renderer.Mode.WIREFRAME);
                 mode_name = "WIREFRAME";
@@ -167,8 +167,8 @@ fn main(args: [strview]) {
         if (elapsed >= std.chrono.seconds(1 as i64)) {
             std.cout << std.format(
                 "[Renderer] FPS: {:#.3g} | Avg Frame Time: {:#.4g} ms\n",
-                fps as f64 / elapsed.count(),
-                elapsed.count() * 1000 / fps as f64
+                fps as f64 / elapsed.count() as f64,
+                (elapsed.count() * 1000) as f64 / fps as f64
             );
             fps = 0;
             last_print = now;

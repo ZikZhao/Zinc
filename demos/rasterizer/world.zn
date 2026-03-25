@@ -31,11 +31,11 @@ class ImageBuffer<T: type> {
         };
     }
 
-    fn sample(self: &Self, u: f32, v: f32) -> T {
+    fn sample(self: &Self, mut u: f32, mut v: f32) -> T {
         u = u - std.floor(u);
         v = v - std.floor(v);
-        let ix = (u * (self.width_ - 1) as f32) as usize;
-        let iy = (v * (self.height_ - 1) as f32) as usize;
+        let mut ix = (u * (self.width_ - 1) as f32) as usize;
+        let mut iy = (v * (self.height_ - 1) as f32) as usize;
         if (ix >= self.width_) { ix = self.width_ - 1; }
         if (iy >= self.height_) { iy = self.height_ - 1; }
         return self.data_[iy * self.width_ + ix];

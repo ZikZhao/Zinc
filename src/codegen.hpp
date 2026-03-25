@@ -736,8 +736,9 @@ public:
     auto operator()(const ASTConstant* node) -> void { definitions_ += node->value->repr(); }
 
     auto operator()(const ASTStringConstant* node) -> void {
+        definitions_ += "\"";
         definitions_ += node->value;
-        definitions_ += "sv"sv;
+        definitions_ += "\"sv";
     }
 
     auto operator()(const ASTSelfExpr* node) -> void {
