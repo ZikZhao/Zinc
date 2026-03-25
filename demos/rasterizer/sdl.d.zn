@@ -117,41 +117,41 @@ const SDL_BUTTON_LEFT: u8 = 1;
 
 const SDL_NUM_SCANCODES: usize = 512;
 
-const SDL_SCANCODE_A: usize = 4;
-const SDL_SCANCODE_C: usize = 6;
-const SDL_SCANCODE_D: usize = 7;
-const SDL_SCANCODE_E: usize = 8;
-const SDL_SCANCODE_G: usize = 10;
-const SDL_SCANCODE_N: usize = 17;
-const SDL_SCANCODE_O: usize = 18;
-const SDL_SCANCODE_P: usize = 19;
-const SDL_SCANCODE_Q: usize = 20;
-const SDL_SCANCODE_R: usize = 21;
-const SDL_SCANCODE_S: usize = 22;
-const SDL_SCANCODE_V: usize = 25;
-const SDL_SCANCODE_W: usize = 26;
+const SDL_SCANCODE_A: SDL_Scancode = 4;
+const SDL_SCANCODE_C: SDL_Scancode = 6;
+const SDL_SCANCODE_D: SDL_Scancode = 7;
+const SDL_SCANCODE_E: SDL_Scancode = 8;
+const SDL_SCANCODE_G: SDL_Scancode = 10;
+const SDL_SCANCODE_N: SDL_Scancode = 17;
+const SDL_SCANCODE_O: SDL_Scancode = 18;
+const SDL_SCANCODE_P: SDL_Scancode = 19;
+const SDL_SCANCODE_Q: SDL_Scancode = 20;
+const SDL_SCANCODE_R: SDL_Scancode = 21;
+const SDL_SCANCODE_S: SDL_Scancode = 22;
+const SDL_SCANCODE_V: SDL_Scancode = 25;
+const SDL_SCANCODE_W: SDL_Scancode = 26;
 
-const SDL_SCANCODE_1: usize = 30;
-const SDL_SCANCODE_2: usize = 31;
-const SDL_SCANCODE_3: usize = 32;
-const SDL_SCANCODE_4: usize = 33;
-const SDL_SCANCODE_0: usize = 39;
+const SDL_SCANCODE_1: SDL_Scancode = 30;
+const SDL_SCANCODE_2: SDL_Scancode = 31;
+const SDL_SCANCODE_3: SDL_Scancode = 32;
+const SDL_SCANCODE_4: SDL_Scancode = 33;
+const SDL_SCANCODE_0: SDL_Scancode = 39;
 
-const SDL_SCANCODE_SPACE: usize = 44;
-const SDL_SCANCODE_MINUS: usize = 45;
-const SDL_SCANCODE_EQUALS: usize = 46;
+const SDL_SCANCODE_SPACE: SDL_Scancode = 44;
+const SDL_SCANCODE_MINUS: SDL_Scancode = 45;
+const SDL_SCANCODE_EQUALS: SDL_Scancode = 46;
 
-const SDL_SCANCODE_UP: usize = 82;
-const SDL_SCANCODE_DOWN: usize = 81;
-const SDL_SCANCODE_LEFT: usize = 80;
-const SDL_SCANCODE_RIGHT: usize = 79;
+const SDL_SCANCODE_UP: SDL_Scancode = 82;
+const SDL_SCANCODE_DOWN: SDL_Scancode = 81;
+const SDL_SCANCODE_LEFT: SDL_Scancode = 80;
+const SDL_SCANCODE_RIGHT: SDL_Scancode = 79;
 
-const SDL_SCANCODE_LCTRL: usize = 224;
-const SDL_SCANCODE_LSHIFT: usize = 225;
-const SDL_SCANCODE_LALT: usize = 226;
-const SDL_SCANCODE_RCTRL: usize = 228;
-const SDL_SCANCODE_RSHIFT: usize = 229;
-const SDL_SCANCODE_RALT: usize = 230;
+const SDL_SCANCODE_LCTRL: SDL_Scancode = 224;
+const SDL_SCANCODE_LSHIFT: SDL_Scancode = 225;
+const SDL_SCANCODE_LALT: SDL_Scancode = 226;
+const SDL_SCANCODE_RCTRL: SDL_Scancode = 228;
+const SDL_SCANCODE_RSHIFT: SDL_Scancode = 229;
+const SDL_SCANCODE_RALT: SDL_Scancode = 230;
 
 const SDL_HINT_RENDER_SCALE_QUALITY = "SDL_RENDER_SCALE_QUALITY";
 

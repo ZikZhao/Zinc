@@ -2,20 +2,5 @@ type KeyHandler = (i32, f32) -> void;
 type Trigger = i32;
 
 fn main(args: [strview]) {
-    let mut window = Window();
-    let keys: [usize; 3] = [1 as usize, 2 as usize, 3 as usize];
-    window.register_key(
-        std.unordered_set<usize>(keys.begin(), keys.end()),
-        1,
-        (ks: i32, dt: f32) => {}
-    );
-}
-
-class Window {
-    init() {
-        return Self{};
-    }
-    fn register_key(
-        self: &mut Self, keys: std.unordered_set<usize>, trigger: Trigger, handler: KeyHandler
-    ) {}
+    let a = true ? 1 : 2;
 }

@@ -948,6 +948,7 @@ public:
             definitions_ += " -> "sv;
             TypeCodeGen::output(definitions_, lambda_type->return_type_, types_);
         }
+        Guard guard{*this, node};
         if (auto* node_variant = std::get_if<ASTNodeVariant>(&node->body)) {
             (*this)(*node_variant);
         } else {

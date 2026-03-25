@@ -455,4 +455,27 @@ public:
         }
         current_scope_->add_namespace(node->alias, *node->module_root->scope);
     }
+
+    void operator()(const ASTLambda* node) noexcept {
+        Diagnostic::ErrorTrap trap{node->location};
+        Scope& lambda_scope = Scope::make(*current_scope_, node);
+        SymbolCollector lambda_visitor{std_scope_, &lambda_scope};
+        for (auto& param : node->parameters) {
+            Diagnostic::ErrorTrap param_trap{param.location};
+            lambda_scope.add_variable(
+                param.identifier,
+                new VariableInitialization{
+                    .is_comptime = false,
+                    .is_mutable = param.is_mutable,
+                    .type = param.type,
+                    .value = std::monostate{}
+                }
+            );
+        }
+        if (auto* expr = std::get_if<ASTExprVariant>(&node->body)) {
+            lambda_visitor(*expr);
+        } else {
+            lambda_visitor(std::get<ASTNodeVariant>(node->body));
+        }
+    }
 };

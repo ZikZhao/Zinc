@@ -301,6 +301,7 @@ struct ASTLambda final : public ASTExpression {
     std::span<ASTFunctionParameter> parameters;
     ASTExprVariant return_type;
     std::variant<ASTNodeVariant, ASTExprVariant> body;
+    mutable bool visited = false;
 };
 
 struct ASTPrimitiveType final : public ASTExplicitTypeExpr {

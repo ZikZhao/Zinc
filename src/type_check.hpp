@@ -408,7 +408,7 @@ private:
                         return false;
                     }
                 } else {
-                    if (left_arg->cast<Value>()->equal_to(right_arg->cast<Value>())) {
+                    if (!left_arg->cast<Value>()->equal_to(right_arg->cast<Value>())) {
                         return false;
                     }
                 }
@@ -1918,6 +1918,40 @@ public:
         return sema_.template_handler_->instantiate(node);
     }
 
+    auto operator()(const ASTTernaryOp* node) noexcept -> Symbol {
+        Symbol condition_symbol = ValueContextEvaluator{*this, nullptr}(node->condition);
+        if (!Sema::expect(condition_symbol, SymbolKind::Term)) {
+            return {};
+        }
+        Term condition_term = Sema::get<SymbolKind::Term>(condition_symbol);
+        if (condition_term.effective_type() != &BooleanType::instance) {
+            Diagnostic::error_type_mismatch("bool", condition_term.effective_type()->repr());
+            return {};
+        }
+        Symbol then_symbol = (*this)(node->true_expr);
+        Symbol else_symbol = (*this)(node->false_expr);
+        bool any_error = !Sema::expect(then_symbol, SymbolKind::Term);
+        any_error |= !Sema::expect(else_symbol, SymbolKind::Term);
+        if (any_error) {
+            return {};
+        }
+        Term then_term = Sema::get<SymbolKind::Term>(then_symbol);
+        Term else_term = Sema::get<SymbolKind::Term>(else_symbol);
+        if (then_term.is_comptime()) {
+            then_term = Term::prvalue(then_term.get_comptime()->resolve_to(nullptr));
+        }
+        if (else_term.is_comptime()) {
+            else_term = Term::prvalue(else_term.get_comptime()->resolve_to(nullptr));
+        }
+        if (then_term.effective_type() != else_term.effective_type()) {
+            Diagnostic::error_type_mismatch(
+                then_term.effective_type()->repr(), else_term.effective_type()->repr()
+            );
+            return {};
+        }
+        return Term::prvalue(then_term.effective_type());
+    }
+
     auto operator()(const ASTAs* node) noexcept -> Symbol {
         Symbol expr_symbol = ValueContextEvaluator{*this, nullptr}(node->expr);
         if (!Sema::expect(expr_symbol, SymbolKind::Term)) {
@@ -1930,6 +1964,10 @@ public:
     }
 
     auto operator()(const ASTLambda* node) noexcept -> Symbol {
+        if (!node->visited) {
+            node->visited = true;
+            sema_.deferred_analysis(*sema_.current_scope_, node);
+        }
         GlobalMemory::Vector<const Type*> param_types;
         param_types.reserve(node->parameters.size());
         for (const ASTFunctionParameter& param : node->parameters) {
@@ -1997,8 +2035,7 @@ public:
     void operator()(const ASTDeclaration* node) noexcept {
         TypeResolution type;
         if (!holds_monostate(node->declared_type)) {
-            TypeResolution declared_type;
-            TypeContextEvaluator{sema_, declared_type}(node->declared_type);
+            TypeContextEvaluator{sema_, type}(node->declared_type);
         }
         if (!holds_monostate(node->expr)) {
             Symbol init = ValueContextEvaluator{sema_, nullptr, false}(node->expr);
@@ -2021,6 +2058,7 @@ public:
                 }
             }
         }
+        assert(type.get());
         if (type.get()) {
             sema_.codegen_env_.map_type(sema_.current_scope_, node, type);
         }
@@ -2140,6 +2178,31 @@ public:
             !std::get<Term>(result).get_comptime()->cast<BooleanValue>()->value_) {
             // Diagnostic::report(StaticAssertFailedError(node->location, node->message));
             throw;
+        }
+    }
+
+    void operator()(const ASTLambda* node) noexcept {
+        GlobalMemory::Vector<const Type*> param_types;
+        param_types.reserve(node->parameters.size());
+        for (const ASTFunctionParameter& param : node->parameters) {
+            TypeResolution param_type;
+            TypeContextEvaluator{sema_, param_type}(param.type);
+            param_types.push_back(param_type);
+        }
+        TypeResolution return_type;
+        if (!holds_monostate(node->return_type)) {
+            TypeContextEvaluator{sema_, return_type}(node->return_type);
+        } else {
+            return_type = &VoidType::instance;
+        }
+        if (std::ranges::contains(param_types, nullptr) || return_type.get() == nullptr) {
+            return;
+        }
+        Sema::Guard guard{sema_, node};
+        if (auto* expr = std::get_if<ASTExprVariant>(&node->body)) {
+            ValueContextEvaluator{sema_, nullptr, false}(*expr);
+        } else {
+            TypeCheckVisitor{sema_}(std::get<ASTNodeVariant>(node->body));
         }
     }
 };
@@ -2754,9 +2817,9 @@ inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) noexcept 
             return;
         }
         Symbol array_symbol = sema_.get_std_symbol("array");
-        std::span array_args = GlobalMemory::pack_array<const Object*>(
+        std::array<const Object*, 2> array_args = {
             element_type.get(), static_cast<const Object*>(length_term.get_comptime())
-        );
+        };
         Symbol result = sema_.template_handler_->instantiate(
             *std::get<TemplateFamily*>(array_symbol), array_args
         );
