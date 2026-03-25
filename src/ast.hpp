@@ -601,8 +601,10 @@ constexpr auto GetOperatorString(OperatorCode opcode) -> strview {
     case OperatorCode::Remainder:
         return "%";
     case OperatorCode::Increment:
+    case OperatorCode::PostIncrement:
         return "++";
     case OperatorCode::Decrement:
+    case OperatorCode::PostDecrement:
         return "--";
     case OperatorCode::Equal:
         return "==";

@@ -523,8 +523,15 @@ public:
         : Type(kind, any_pattern(fields | std::views::values)), fields_(std::move(fields)) {}
 
     GlobalMemory::String repr() const final {
-        // TODO
-        return {};
+        GlobalMemory::String str;
+        strview sep = "{"sv;
+        for (const auto& [name, type] : fields_) {
+            str += sep;
+            str += GlobalMemory::format("{}: {}", name, type->repr());
+            sep = ", "sv;
+        }
+        str += "}"sv;
+        return str;
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -1606,7 +1613,7 @@ inline auto Term::effective_type() const noexcept -> const Type* {
 
 inline auto Term::resolve_to_default() const noexcept -> Term {
     if (is_comptime_) {
-        return Term::prvalue(value_->resolve_to(nullptr));
+        return Term::forward_like(*this, value_->resolve_to(nullptr));
     } else {
         return *this;
     }
@@ -1698,11 +1705,11 @@ inline auto StructType::validate(
                 valid = false;
             }
         } else {
-            inits.erase(init_it);
             if (!field_type->assignable_from(init_it->second, auto_bindings)) {
                 Diagnostic::error_type_mismatch(field_type->repr(), init_it->second->repr());
                 valid = false;
             }
+            inits.erase(init_it);
         }
     }
     if (!inits.empty()) {

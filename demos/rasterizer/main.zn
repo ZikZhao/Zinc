@@ -31,19 +31,18 @@ fn main(args: [strview]) {
         std.unordered_set<sdl.SDL_Scancode>(translate_keys.begin(), translate_keys.end()),
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
-            let fwd = (ks[sdl.SDL_SCANCODE_W] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_S] ? 1.0 : 0.0);
+            let fwd = (ks[sdl.SDL_SCANCODE_W as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_S as usize] ? 1.0f : 0.0f);
             let right =
-                (ks[sdl.SDL_SCANCODE_D] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_A] ? 1.0 : 0.0);
+                (ks[sdl.SDL_SCANCODE_D as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_A as usize] ? 1.0f : 0.0f);
             let up =
-                (ks[sdl.SDL_SCANCODE_SPACE] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_C] ? 1.0 : 0.0);
-            if (fwd != 0.0 || right != 0.0 || up != 0.0) {
+                (ks[sdl.SDL_SCANCODE_SPACE as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_C as usize] ? 1.0f : 0.0f);
+            if (fwd != 0.0f || right != 0.0f || up != 0.0f) {
                 world.camera_.translate(
                     fwd * Constant.MoveSpeed,
                     right * Constant.MoveSpeed,
                     up * Constant.MoveSpeed,
                     dt
                 );
-                renderer.reset_accumulation();
             }
         }
     );
@@ -53,10 +52,9 @@ fn main(args: [strview]) {
         std.unordered_set<sdl.SDL_Scancode>(roll_keys.begin(), roll_keys.end()),
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
-            let r = (ks[sdl.SDL_SCANCODE_E] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_Q] ? 1.0 : 0.0);
-            if (r != 0.0) {
+            let r = (ks[sdl.SDL_SCANCODE_E as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_Q as usize] ? 1.0f : 0.0f);
+            if (r != 0.0f) {
                 world.camera_.roll(r * Constant.RollSpeed * dt);
-                renderer.reset_accumulation();
             }
         }
     );
@@ -71,7 +69,6 @@ fn main(args: [strview]) {
             } else {
                 world.camera_.stop_orbiting();
             }
-            renderer.reset_accumulation();
         }
     );
 
@@ -82,75 +79,25 @@ fn main(args: [strview]) {
         std.unordered_set<sdl.SDL_Scancode>(mode_keys.begin(), mode_keys.end()),
         Window.Trigger.ANY_JUST_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
-            let mode_name: strview;
+            let mut mode_name: strview;
             let switched = false;
-            if (ks[sdl.SDL_SCANCODE_1]) {
+            if (ks[sdl.SDL_SCANCODE_1 as usize]) {
                 switched = Renderer.Mode.WIREFRAME != std.exchange(renderer.mode_, Renderer.Mode.WIREFRAME);
                 mode_name = "WIREFRAME";
-            } else if (ks[sdl.SDL_SCANCODE_2]) {
+            } else if (ks[sdl.SDL_SCANCODE_2 as usize]) {
                 switched = Renderer.Mode.RASTERIZED != std.exchange(renderer.mode_, Renderer.Mode.RASTERIZED);
                 mode_name = "RASTERIZED";
-            } else if (ks[sdl.SDL_SCANCODE_3]) {
-                switched = Renderer.Mode.RAYTRACED != std.exchange(renderer.mode_, Renderer.Mode.RAYTRACED);
-                mode_name = "RAYTRACED";
-            } else if (ks[sdl.SDL_SCANCODE_4]) {
-                switched = Renderer.Mode.DEPTH_OF_FIELD != std.exchange(renderer.mode_, Renderer.Mode.DEPTH_OF_FIELD);
-                mode_name = "DEPTH_OF_FIELD";
-            } else if (ks[sdl.SDL_SCANCODE_0]) {
-                switched =
-                    Renderer.Mode.PHOTON_VISUALIZATION != std.exchange(renderer.mode_, Renderer.Mode.PHOTON_VISUALIZATION);
-                mode_name = "PHOTON_VISUALIZATION";
+            } else if (ks[sdl.SDL_SCANCODE_3 as usize]) {
+                std.cout << "[Renderer] Raytraced mode is not supported in this demo.\n";
+            } else if (ks[sdl.SDL_SCANCODE_4 as usize]) {
+                std.cout << "[Renderer] Depth of Field mode is not supported in this demo.\n";
+            } else if (ks[sdl.SDL_SCANCODE_0 as usize]) {
+                std.cout << "[Renderer] Photon Visualization mode is not supported in this demo.\n";
             }
             if (!switched) { return; }
-            renderer.reset_accumulation();
             fps = 0;
             last_print = std.chrono.steady_clock.now();
             std.cout << std.format("[Renderer] Mode set to {}\n", mode_name);
-        }
-    );
-
-    let gamma_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_G];
-    window.register_key(
-        std.unordered_set<sdl.SDL_Scancode>(gamma_keys.begin(), gamma_keys.end()),
-        Window.Trigger.ANY_JUST_PRESSED,
-        (ks: &Window.KeyState, dt: f32) => {
-            renderer.gamma_ = (renderer.gamma_ == 2.2) ? 1.0 : 2.2;
-        }
-    );
-
-    let caustics_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_P];
-    window.register_key(
-        std.unordered_set<sdl.SDL_Scancode>(caustics_keys.begin(), caustics_keys.end()),
-        Window.Trigger.ANY_JUST_PRESSED,
-        (ks: &Window.KeyState, dt: f32) => {
-            if (renderer.is_photon_map_ready()) {
-                renderer.caustics_enabled_ = !renderer.caustics_enabled_;
-                std.cout << std.format(
-                    "[PhotonMap] Caustics Enabled: {}\n", renderer.caustics_enabled_
-                );
-                renderer.reset_accumulation();
-            } else {
-                std.cout << "[PhotonMap] Caustics photon map is not ready yet" << std.endl;
-            }
-        }
-    );
-
-    // Aperture control (+/-)
-    let aperture_keys: [sdl.SDL_Scancode; 2] = [sdl.SDL_SCANCODE_EQUALS, sdl.SDL_SCANCODE_MINUS];
-    window.register_key(
-        std.unordered_set<sdl.SDL_Scancode>(aperture_keys.begin(), aperture_keys.end()),
-        Window.Trigger.ANY_PRESSED,
-        (ks: &Window.KeyState, dt: f32) => {
-            let aperture: &mut f32 = mut renderer.aperture_size_;
-            if (ks[sdl.SDL_SCANCODE_EQUALS]) {
-                aperture += Constant.GammaStep;
-            }
-            if (ks[sdl.SDL_SCANCODE_MINUS]) {
-                aperture -= Constant.GammaStep;
-            }
-            aperture = std.clamp(aperture, 0.0, 2.0);
-            std.cout << std.format("[DepthOfField] Aperture Size: {:.2f}\n", aperture);
-            renderer.reset_accumulation();
         }
     );
 
@@ -163,36 +110,6 @@ fn main(args: [strview]) {
             window.save_ppm("screenshot.ppm");
             window.save_bmp("screenshot.bmp");
             std.cout << "[Screenshot] Saved as screenshot.ppm and screenshot.bmp\n";
-        }
-    );
-
-    // Offline/Realtime render mode toggle (V)
-    let capture_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_V];
-    window.register_key(
-        std.unordered_set<sdl.SDL_Scancode>(capture_keys.begin(), capture_keys.end()),
-        Window.Trigger.ANY_JUST_PRESSED,
-        (ks: &Window.KeyState, dt: f32) => {
-            renderer.offline_render_mode_ = !renderer.offline_render_mode_;
-            std.cout << std.format(
-                "[Renderer] Render mode: {}\n",
-                renderer.offline_render_mode_ ? "OFFLINE (64 samples/frame)"
-                                              : "REALTIME (progressive)"
-            );
-            renderer.reset_accumulation();
-        }
-    );
-
-    // Normal debug mode toggle (N) - only for raytracing modes
-    let normal_debug_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_N];
-    window.register_key(
-        std.unordered_set<sdl.SDL_Scancode>(normal_debug_keys.begin(), normal_debug_keys.end()),
-        Window.Trigger.ANY_JUST_PRESSED,
-        (ks: &Window.KeyState, dt: f32) => {
-            renderer.normal_debug_mode_ = !renderer.normal_debug_mode_;
-            std.cout << std.format(
-                "[Renderer] Normal debug mode: {}\n", renderer.normal_debug_mode_
-            );
-            renderer.reset_accumulation();
         }
     );
 
@@ -210,7 +127,6 @@ fn main(args: [strview]) {
             let d_yaw = dx0 * c + dy0 * s;
             let d_pitch = -dx0 * s + dy0 * c;
             world.camera_.rotate(d_yaw, d_pitch);
-            renderer.reset_accumulation();
         }
     );
 
@@ -223,29 +139,19 @@ fn main(args: [strview]) {
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let dx0 =
-                (ks[sdl.SDL_SCANCODE_RIGHT] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_LEFT] ? 1.0 : 0.0);
+                (ks[sdl.SDL_SCANCODE_RIGHT as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_LEFT as usize] ? 1.0f : 0.0f);
             let dy0 =
-                (ks[sdl.SDL_SCANCODE_UP] ? 1.0 : 0.0) - (ks[sdl.SDL_SCANCODE_DOWN] ? 1.0 : 0.0);
-            if (dx0 != 0.0 || dy0 != 0.0) {
+                (ks[sdl.SDL_SCANCODE_UP as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_DOWN as usize] ? 1.0f : 0.0f);
+            if (dx0 != 0.0f || dy0 != 0.0f) {
                 let roll = world.camera_.roll_;
                 let c = std.cos(roll);
                 let s = std.sin(roll);
                 let d_yaw = (dx0 * c + dy0 * s) * Constant.RotateSpeed * dt;
                 let d_pitch = (-dx0 * s + dy0 * c) * Constant.RotateSpeed * dt;
                 world.camera_.rotate(d_yaw, d_pitch);
-                renderer.reset_accumulation();
             }
         }
     );
-
-    // Focal distance control via scroll
-    window.register_scroll((y_offset: i32) => {
-        let fd: &mut f32 = mut renderer.focal_distance_;
-        fd *= std.pow(Constant.ZoomFactor, y_offset as f32);
-        fd = std.max(fd, 1.0);
-        std.cout << std.format("[DepthOfField] Focal Distance: {:.2f}\n", fd);
-        renderer.reset_accumulation();
-    });
 
     for (true) {
         world.camera_.orbiting();

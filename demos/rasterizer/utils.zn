@@ -88,13 +88,13 @@ fn ReadPPM(path: &std.filesystem.path) -> PPMData {
 /// @param height Image height in pixels.
 /// @param pixels Pixel data as ARGB 32-bit values.
 fn WritePPM(
-    filename: &std.string,
+    filename: strview,
     width: usize,
     height: usize,
     max: usize,
     pixels: &std.vector<u32>
 ) {
-    let output_stream = std.ofstream(filename, std.ofstream.out);
+    let output_stream = std.ofstream(filename.data(), std.ofstream.out);
     output_stream << "P6\n";
     output_stream << width << " " << height << "\n";
     output_stream << max << "\n";

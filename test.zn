@@ -1,6 +1,6 @@
-type KeyHandler = (i32, f32) -> void;
-type Trigger = i32;
+const a: i32 = 1;
 
 fn main(args: [strview]) {
-    let a = true ? 1 : 2;
+    let b: [bool; 1];
+    let c = b[a] ? 1 : 2;
 }

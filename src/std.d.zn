@@ -763,6 +763,7 @@ fn hypot(x: f64, y: f64) -> f64;
 
 fn min<T: type>(a: T, b: T) -> T;
 fn max<T: type>(a: T, b: T) -> T;
+fn exchange<T: type>(obj: &mut T, new_value: T) -> T;
 
 class unique_ptr<T: type> {
     type element_type = T;
@@ -860,4 +861,5 @@ fn stod(text: &string, pos: *usize) -> f64;
 fn stold(text: &string) -> f64;
 fn stold(text: &string, pos: *usize) -> f64;
 
+fn format<Args...: type>(fmt: string_view, args: Args...) -> string;
 fn print<Args...: type>(fmt: string_view, args: Args...);

@@ -68,8 +68,9 @@ public:
         instance->current_trap_->problems_.back().subproblems.push_back(std::move(problem));
     }
 
-    static auto print(SourceManager& sources) -> bool {
+    static auto flush(SourceManager& sources) -> bool {
         std::lock_guard lock(print_mutex_);
+        sort_and_unique();
         std::size_t error_count = 0;
         std::size_t warning_count = 0;
         for (const Problem& problem : instance->problems_) {
@@ -116,6 +117,21 @@ public:
     }
 
 private:
+    static void sort_and_unique() noexcept {
+        std::ranges::sort(instance->problems_, [](const Problem& lhs, const Problem& rhs) {
+            if (auto cmp = lhs.location <=> rhs.location; cmp != 0) {
+                return cmp < 0;
+            }
+            return lhs.message < rhs.message;
+        });
+        auto [begin, end] =
+            std::ranges::unique(instance->problems_, [](const Problem& lhs, const Problem& rhs) {
+                bool result = lhs.location == rhs.location && lhs.message == rhs.message;
+                return result;
+            });
+        instance->problems_.erase(begin, end);
+    }
+
     static void print_problem(
         SourceManager& sources, const Problem& problem, std::size_t indent = 0
     ) {

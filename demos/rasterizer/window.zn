@@ -251,11 +251,11 @@ class Window {
         std.fill(self.pixel_buffer_.begin(), self.pixel_buffer_.end(), 0);
     }
 
-    fn save_ppm(self: &Self, filename: &std.string) {
+    fn save_ppm(self: &Self, filename: strview) {
         Utils.WritePPM(filename, self.width_, self.height_, 255, self.pixel_buffer_);
     }
 
-    fn save_bmp(self: &Self, filename: &std.string) {
+    fn save_bmp(self: &Self, filename: strview) {
         let surface = sdl.SDL_CreateRGBSurfaceFrom(
             self.pixel_buffer_.data() as *void,
             self.width_,
@@ -267,7 +267,7 @@ class Window {
             0xFF << 0,
             0xFF << 24
         );
-        sdl.SDL_SaveBMP(surface, filename.c_str());
+        sdl.SDL_SaveBMP(surface, filename.data());
         sdl.SDL_FreeSurface(surface);
     }
 

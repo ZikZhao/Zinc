@@ -71,7 +71,7 @@ auto main(int argc, char* argv[]) -> int {
     Sema sema{std_scope, *root->scope, codegen_env};
     TypeCheckVisitor{sema}(root);
 
-    bool has_error = Diagnostic::print(sources);
+    bool has_error = Diagnostic::flush(sources);
     if (has_error) return EXIT_FAILURE;
 
     return codegen(sources, sema, codegen_env);

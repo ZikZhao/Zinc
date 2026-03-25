@@ -591,10 +591,7 @@ public:
     auto eval_call(const ASTNode* node, Symbol callee, std::span<Term> args) -> Term {
         if (holds_monostate(callee)) return {};
         auto transform = [](Term arg) -> const Type* {
-            if (auto value = arg.get_comptime()) {
-                arg = Term::forward_like(arg, value->resolve_to(nullptr));
-            }
-            return Sema::apply_value_category(arg);
+            return Sema::apply_value_category(arg.resolve_to_default());
         };
         GlobalMemory::Vector transformed_args =
             args | std::views::transform(transform) | GlobalMemory::collect<GlobalMemory::Vector>();
@@ -737,37 +734,46 @@ private:
                 return;
             }
             Scope* scope = (*callable_type)->cast<InstanceType>()->scope_;
-            reification(scope, scope->find(constructor_symbol));
+            return reification(scope, scope->find(constructor_symbol));
         } else if (auto* callable_value = Sema::get_if<SymbolKind::Term>(func)) {
             Term decayed = Sema::decay(*callable_value);
             if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
                 out.push_back(func_type);
                 return;
             }
-            Diagnostic::error_value_not_callable(decayed->repr());
-            return;
+            return Diagnostic::error_value_not_callable(decayed->repr());
         } else if (auto* function = Sema::get_if<SymbolKind::Function>(func)) {
             return reification(function->first, function->second);
         } else if (auto* method = Sema::get_if<SymbolKind::Method>(func)) {
             return reification(method->scope, method->value);
         } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(func)) {
-            GlobalMemory::Vector<const FunctionType*> result;
+            bool has_overloads = false;
             const Type* left_type = std::get<1>(*operator_fn);
             if (left_type->kind_ == Kind::Instance) {
                 Scope* scope = left_type->cast<InstanceType>()->scope_;
                 auto overloads = scope->find(GetOperatorString(std::get<0>(*operator_fn)));
                 if (overloads) {
+                    has_overloads = true;
                     reification(scope, overloads);
                 }
             }
-            if (const Type* right_type = std::get<2>(*operator_fn);
-                right_type->kind_ == Kind::Instance && left_type != right_type) {
+            const Type* right_type = std::get<2>(*operator_fn);
+            if (right_type && right_type->kind_ == Kind::Instance && left_type != right_type) {
                 Scope* scope = right_type->cast<InstanceType>()->scope_;
                 auto overloads = scope->find(GetOperatorString(std::get<0>(*operator_fn)));
                 if (overloads) {
+                    has_overloads = true;
                     reification(scope, overloads);
                 }
             }
+            if (!has_overloads) {
+                Diagnostic::error_operation_not_defined(
+                    GetOperatorString(std::get<0>(*operator_fn)),
+                    left_type->repr(),
+                    right_type ? right_type->repr() : ""
+                );
+            }
+            return;
         }
         UNREACHABLE();
     }
@@ -990,11 +996,30 @@ private:
             return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
         }
         const ScopeValue* value = instance_type->scope_->find(member);
-        if (value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+        if (value && value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
             return BoundMethod{object, instance_type->scope_, value};
         }
         Diagnostic::error_member_not_found(member);
         return {};
+    }
+
+    auto is_std_indexable_container(const InstanceType* instance_type) const noexcept -> bool {
+        if (!instance_type->scope_->is_extern_) {
+            return false;
+        }
+        if (instance_type->primary_template_ == nullptr) {
+            auto get = [&](strview name) -> const Type* {
+                return Sema::get<SymbolKind::Type>(sema_.get_std_symbol(name));
+            };
+            return instance_type == get("string") || instance_type == get("string_view");
+        } else {
+            auto get = [&](strview name) -> const ASTTemplateDefinition* {
+                return Sema::get<SymbolKind::Template>(sema_.get_std_symbol(name))->primary;
+            };
+            return instance_type->primary_template_ == get("vector") ||
+                   instance_type->primary_template_ == get("array") ||
+                   instance_type->primary_template_ == get("span");
+        }
     }
 };
 
@@ -1907,7 +1932,7 @@ public:
             return {};
         }
         Term condition_term = Sema::get<SymbolKind::Term>(condition_symbol);
-        if (condition_term.effective_type() != &BooleanType::instance) {
+        if (Sema::decay(condition_term.effective_type()) != &BooleanType::instance) {
             Diagnostic::error_type_mismatch("bool", condition_term.effective_type()->repr());
             return {};
         }
@@ -1918,19 +1943,23 @@ public:
         if (any_error) {
             return {};
         }
-        Term then_term = Sema::get<SymbolKind::Term>(then_symbol);
-        Term else_term = Sema::get<SymbolKind::Term>(else_symbol);
-        if (then_term.is_comptime()) {
-            then_term = Term::prvalue(then_term.get_comptime()->resolve_to(nullptr));
-        }
-        if (else_term.is_comptime()) {
-            else_term = Term::prvalue(else_term.get_comptime()->resolve_to(nullptr));
-        }
-        if (then_term.effective_type() != else_term.effective_type()) {
+        Term then_term = Sema::get<SymbolKind::Term>(then_symbol).resolve_to_default();
+        Term else_term = Sema::get<SymbolKind::Term>(else_symbol).resolve_to_default();
+        if (Sema::decay(then_term.effective_type()) != Sema::decay(else_term.effective_type())) {
             Diagnostic::error_type_mismatch(
                 then_term.effective_type()->repr(), else_term.effective_type()->repr()
             );
             return {};
+        }
+        if (expected_) {
+            AutoBindings auto_bindings;
+            if (!expected_->assignable_from(then_term.effective_type(), auto_bindings)) {
+                Diagnostic::error_type_mismatch(
+                    expected_->repr(), then_term.effective_type()->repr()
+                );
+                return {};
+            }
+            return Term::prvalue(expected_);
         }
         return Term::prvalue(then_term.effective_type());
     }
@@ -2747,20 +2776,17 @@ inline auto AccessHandler::eval_index(const ASTIndexAccess* node) noexcept -> Sy
     const Type* index_type = Sema::decay(index_term.effective_type());
     std::array<Term, 2> arg_terms{base_term, index_term};
     if (auto* instance_type = base_type->dyn_cast<InstanceType>();
-        instance_type && instance_type->scope_->is_extern_) {
-        if (instance_type->identifier_ == "array" || instance_type->identifier_ == "span" ||
-            instance_type->identifier_ == "string" || instance_type->identifier_ == "string_view") {
-            // implicitly cast index to usize
-            if (index_type == &IntegerType::untyped_instance) {
-                arg_terms[1] = Term::prvalue(
-                    arg_terms[1].get_comptime()->resolve_to(&IntegerType::u64_instance)
-                );
-            }
+        instance_type && is_std_indexable_container(instance_type)) {
+        // implicitly cast index to usize
+        if (index_type == &IntegerType::untyped_instance) {
+            arg_terms[1] =
+                Term::prvalue(arg_terms[1].get_comptime()->resolve_to(&IntegerType::u64_instance));
         }
     }
-    return sema_.call_handler_->eval_call(
+    Term result = sema_.call_handler_->eval_call(
         node, std::tuple{OperatorCode::Index, base_type, index_type}, arg_terms
     );
+    return result.get() ? Symbol{result} : Symbol{};
 }
 
 inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) noexcept -> void {

@@ -7,6 +7,7 @@ struct Location {
     std::uint32_t id = 0;
     std::uint32_t begin = 0;
     std::uint32_t end = 0;
+    auto operator<=>(const Location& other) const noexcept = default;
 };
 
 class SourceFile {
