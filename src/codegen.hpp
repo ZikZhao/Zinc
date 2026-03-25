@@ -114,14 +114,14 @@ public:
             output(out, type->cast<MutableType>()->target_type_, types);
             break;
         case Kind::Reference:
-            output(out, type->cast<ReferenceType>()->referenced_type_, types);
+            output(out, type->cast<ReferenceType>()->target_type_, types);
             if (!type->dyn_cast<MutableType>()) {
                 out += " const"sv;
             }
             out += "&"sv;
             break;
         case Kind::Pointer:
-            output(out, type->cast<PointerType>()->pointed_type_, types);
+            output(out, type->cast<PointerType>()->target_type_, types);
             out += "*"sv;
             break;
         default:
@@ -272,32 +272,6 @@ public:
         case Kind::Function:
             throw;
             break;
-        case Kind::Struct: {
-            std::format_to(
-                std::back_inserter(out), "{}{{"sv, index(types, value->cast<StructValue>()->type_)
-            );
-            strview sep = ""sv;
-            for (const auto& [field_name, field_value] : value->cast<StructValue>()->fields_) {
-                std::format_to(std::back_inserter(out), "{}.{} = "sv, sep, field_name);
-                (*this)(out, field_value, types);
-                sep = ", "sv;
-            }
-            out += "}"sv;
-            break;
-        }
-        case Kind::Instance: {
-            std::format_to(
-                std::back_inserter(out), "{}{{"sv, index(types, value->cast<InstanceValue>()->type_)
-            );
-            strview sep = ""sv;
-            for (const auto& [field_name, field_value] : value->cast<InstanceValue>()->attrs_) {
-                std::format_to(std::back_inserter(out), "{}.{} = "sv, sep, field_name);
-                (*this)(out, field_value, types);
-                sep = ", "sv;
-            }
-            out += "}"sv;
-            break;
-        }
         default:
             UNREACHABLE();
         }
@@ -402,11 +376,11 @@ public:
             break;
         case Kind::Reference:
             out += "r"sv;
-            (*this)(out, type->cast<ReferenceType>()->referenced_type_);
+            (*this)(out, type->cast<ReferenceType>()->target_type_);
             break;
         case Kind::Pointer:
             out += "p"sv;
-            (*this)(out, type->cast<PointerType>()->pointed_type_);
+            (*this)(out, type->cast<PointerType>()->target_type_);
             break;
         case Kind::Struct:
         case Kind::Instance: {

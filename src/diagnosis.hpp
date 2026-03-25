@@ -446,6 +446,28 @@ public:
     static auto error_invalid_member_access(strview member_name) noexcept -> void {
         unlocated_error(GlobalMemory::format("Invalid member access: '{}'", member_name));
     }
+
+    static auto error_member_not_found(strview member_name) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Member not found: '{}'", member_name));
+    }
+
+    static auto error_type_not_callable(strview callee) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Type '{}' is not callable", callee));
+    }
+
+    static auto error_value_not_callable(strview callee) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Value of type '{}' is not callable", callee));
+    }
+
+    static auto error_cannot_deduce_struct_type(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Cannot deduce struct type from initializer"sv)
+            }
+        );
+    }
 };
 
 inline thread_local std::optional<Diagnostic> Diagnostic::instance;

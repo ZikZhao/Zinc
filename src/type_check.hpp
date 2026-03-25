@@ -235,13 +235,9 @@ public:
     static auto decay(Term term) -> Term {
         if (!term) return term;
         if (auto ref_type = term->dyn_cast<ReferenceType>()) {
-            return decay(Term::lvalue(ref_type->referenced_type_));
-        } else if (auto ref_value = term->dyn_cast<ReferenceValue>()) {
-            return decay(Term::lvalue(ref_value->referenced_value_));
+            return decay(Term::lvalue(ref_type->target_type_));
         } else if (auto mut_type = term->dyn_cast<MutableType>()) {
             return decay(Term::forward_like(term, mut_type->target_type_));
-        } else if (auto mut_value = term->dyn_cast<MutableValue>()) {
-            return decay(Term::forward_like(term, mut_value->value_));
         }
         return term;
     }
@@ -249,7 +245,7 @@ public:
     static auto decay(const Type* type) noexcept -> const Type* {
         if (!type) return nullptr;
         if (auto ref_type = type->dyn_cast<ReferenceType>()) {
-            return decay(ref_type->referenced_type_);
+            return decay(ref_type->target_type_);
         } else if (auto mut_type = type->dyn_cast<MutableType>()) {
             return decay(mut_type->target_type_);
         }
@@ -261,7 +257,7 @@ public:
         if (type->dyn_cast<MutableType>()) {
             return true;
         } else if (auto ref_type = type->dyn_cast<ReferenceType>()) {
-            return is_mutable(ref_type->referenced_type_);
+            return is_mutable(ref_type->target_type_);
         }
         return false;
     }
@@ -269,10 +265,8 @@ public:
     static auto is_mutable(Term term) -> bool {
         if (!term) return false;
         if (auto ref_type = term->dyn_cast<ReferenceType>()) {
-            return is_mutable(Term::lvalue(ref_type->referenced_type_));
-        } else if (auto ref_value = term->dyn_cast<ReferenceValue>()) {
-            return is_mutable(Term::lvalue(ref_value->referenced_value_));
-        } else if (term->dyn_cast<MutableType>() || term->dyn_cast<MutableValue>()) {
+            return is_mutable(Term::lvalue(ref_type->target_type_));
+        } else if (term->dyn_cast<MutableType>()) {
             return true;
         }
         return false;
@@ -280,13 +274,7 @@ public:
 
     static auto apply_mutable(Term term, bool is_mutable) -> Term {
         if (!is_mutable) return term;
-        if (auto value = term.get_comptime()) {
-            return Term::forward_like(
-                term, new MutableValue(TypeRegistry::get<MutableType>(term.effective_type()), value)
-            );
-        } else {
-            return Term::forward_like(term, TypeRegistry::get<MutableType>(term.effective_type()));
-        }
+        return Term::forward_like(term, TypeRegistry::get<MutableType>(term.effective_type()));
     }
 
 private:
@@ -506,7 +494,7 @@ public:
 
     auto inference(
         Scope* scope, const ASTTemplateDefinition* primary, std::span<const Type*> args
-    ) noexcept -> FunctionObject;
+    ) noexcept -> const FunctionType*;
 
 private:
     static auto as_symbol(const Object* obj) -> Symbol {
@@ -592,22 +580,13 @@ private:
         NoMatch = 5,              // no viable conversion
     };
 
-public:
-    static auto get_func_type(FunctionObject func) -> const FunctionType* {
-        if (auto func_value = func->dyn_cast<FunctionValue>()) {
-            return func_value->get_type();
-        } else {
-            return func->cast<FunctionType>();
-        }
-    }
-
 private:
     Sema& sema_;
 
 public:
     CallHandler(Sema& sema) noexcept : sema_(sema) {}
 
-    auto get_func_obj(Scope* scope, FunctionOverloadDef overload) noexcept -> FunctionObject;
+    auto get_func_type(Scope* scope, FunctionOverloadDef overload) noexcept -> const FunctionType*;
 
     auto eval_call(const ASTNode* node, Symbol callee, std::span<Term> args) -> Term {
         if (holds_monostate(callee)) return {};
@@ -624,7 +603,7 @@ public:
             transformed_args.insert(transformed_args.begin(), transform(method->object));
         }
 
-        FunctionObject overload = resolve_overload(callee, transformed_args);
+        const FunctionType* overload = resolve_overload(callee, transformed_args);
         if (!overload) {
             GlobalMemory::String args_repr;
             std::string_view sep = "("sv;
@@ -652,37 +631,41 @@ public:
         sema_.codegen_env_.map_func_call(
             sema_.current_scope_,
             node,
-            get_func_type(overload),
+            overload,
             Sema::get_if<SymbolKind::Method>(callee)
                 ? Sema::get<SymbolKind::Method>(callee).object.effective_type()
                 : nullptr,
             Sema::get_if<SymbolKind::Type>(callee),
             do_not_mangle
         );
-        if (auto func_value = overload->dyn_cast<FunctionValue>()) {
-            // return func_value->invoke(args);
-            return {};
-        } else {
-            auto func_type = overload->cast<FunctionType>();
-            return Term::prvalue(func_type->return_type_);
-        }
+        return Term::prvalue(overload->return_type_);
     }
 
 private:
-    auto list_normal_overloads(Symbol func) -> GlobalMemory::Vector<FunctionObject> {
+    auto list_normal_overloads(Symbol func) -> GlobalMemory::Vector<const FunctionType*> {
         auto reification = [&](
                                Scope* scope, const ScopeValue* scope_value
-                           ) -> GlobalMemory::Vector<FunctionObject> {
+                           ) -> GlobalMemory::Vector<const FunctionType*> {
             auto* overloads = scope_value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
             return *overloads | std::views::filter([](FunctionOverloadDef overload) {
                 return !overload.get<const ASTTemplateDefinition*>();
             }) | std::views::transform([this, scope](FunctionOverloadDef overload) {
-                return get_func_obj(scope, overload);
+                return get_func_type(scope, overload);
             }) | GlobalMemory::collect<GlobalMemory::Vector>();
         };
+        if (!Sema::expect(
+                func,
+                SymbolKind::Type,
+                SymbolKind::Term,
+                SymbolKind::Function,
+                SymbolKind::Method,
+                SymbolKind::Operator
+            )) {
+            return {};
+        }
         if (auto* callable_type = Sema::get_if<SymbolKind::Type>(func)) {
             if ((*callable_type)->kind_ != Kind::Instance) {
-                throw;
+                Diagnostic::error_type_not_callable((*callable_type)->repr());
                 return {};
             }
             Scope* scope = (*callable_type)->cast<InstanceType>()->scope_;
@@ -691,15 +674,15 @@ private:
             Term decayed = Sema::decay(*callable_term);
             if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
                 return {func_type};
-            } else if (auto func_value = decayed->dyn_cast<FunctionValue>()) {
-                return {func_value};
             }
+            Diagnostic::error_value_not_callable(decayed->repr());
+            return {};
         } else if (auto* function = Sema::get_if<SymbolKind::Function>(func)) {
             return reification(function->first, function->second);
         } else if (auto* method = Sema::get_if<SymbolKind::Method>(func)) {
             return reification(method->scope, method->value);
         } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(func)) {
-            GlobalMemory::Vector<FunctionObject> result;
+            GlobalMemory::Vector<const FunctionType*> result;
             const Type* left_type = std::get<1>(*operator_fn);
             if (left_type->kind_ == Kind::Instance) {
                 Scope* scope = left_type->cast<InstanceType>()->scope_;
@@ -721,11 +704,11 @@ private:
             }
             return result;
         }
-        return {};
+        UNREACHABLE();
     }
 
     auto list_template_overloads(
-        GlobalMemory::Vector<FunctionObject>& out, Symbol func, std::span<const Type*> args
+        GlobalMemory::Vector<const FunctionType*>& out, Symbol func, std::span<const Type*> args
     ) -> void {
         auto reification = [&](Scope* scope, const ScopeValue* scope_value) -> void {
             auto* overloads = scope_value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
@@ -738,9 +721,19 @@ private:
                 }
             }
         };
+        if (!Sema::expect(
+                func,
+                SymbolKind::Type,
+                SymbolKind::Term,
+                SymbolKind::Function,
+                SymbolKind::Method,
+                SymbolKind::Operator
+            )) {
+            return;
+        }
         if (auto* callable_type = Sema::get_if<SymbolKind::Type>(func)) {
             if ((*callable_type)->kind_ != Kind::Instance) {
-                throw;
+                Diagnostic::error_type_not_callable((*callable_type)->repr());
                 return;
             }
             Scope* scope = (*callable_type)->cast<InstanceType>()->scope_;
@@ -749,15 +742,16 @@ private:
             Term decayed = Sema::decay(*callable_value);
             if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
                 out.push_back(func_type);
-            } else if (auto func_value = decayed->dyn_cast<FunctionValue>()) {
-                out.push_back(func_value);
+                return;
             }
+            Diagnostic::error_value_not_callable(decayed->repr());
+            return;
         } else if (auto* function = Sema::get_if<SymbolKind::Function>(func)) {
             return reification(function->first, function->second);
         } else if (auto* method = Sema::get_if<SymbolKind::Method>(func)) {
             return reification(method->scope, method->value);
         } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(func)) {
-            GlobalMemory::Vector<FunctionObject> result;
+            GlobalMemory::Vector<const FunctionType*> result;
             const Type* left_type = std::get<1>(*operator_fn);
             if (left_type->kind_ == Kind::Instance) {
                 Scope* scope = left_type->cast<InstanceType>()->scope_;
@@ -775,14 +769,15 @@ private:
                 }
             }
         }
+        UNREACHABLE();
     }
 
-    auto resolve_overload(Symbol func, std::span<const Type*> args) -> FunctionObject {
-        FunctionObject best_candidate = nullptr;
+    auto resolve_overload(Symbol func, std::span<const Type*> args) -> const FunctionType* {
+        const FunctionType* best_candidate = nullptr;
         ConversionRank best_rank = ConversionRank::NoMatch;
-        auto loop = [&](std::span<FunctionObject> candidates) -> std::size_t {
+        auto loop = [&](std::span<const FunctionType*> candidates) -> std::size_t {
             for (std::size_t i = 0; i < candidates.size(); ++i) {
-                FunctionObject candidate = candidates[i];
+                const FunctionType* candidate = candidates[i];
                 ConversionRank rank = ConversionRank::NoMatch;
                 if (candidate) {
                     rank = overload_rank(candidate, args);
@@ -809,7 +804,7 @@ private:
             return candidates.size();
         };
         // first, find the best non-template overload
-        GlobalMemory::Vector<FunctionObject> overloads = list_normal_overloads(func);
+        GlobalMemory::Vector<const FunctionType*> overloads = list_normal_overloads(func);
         std::size_t normal_count = loop(overloads);
         overloads.resize(normal_count);
         // second, if no exact match, try template overloads
@@ -821,10 +816,10 @@ private:
             );
         }
         // third, re-iterate through all candidates to check for ambiguity
-        GlobalMemory::Vector<FunctionObject> ambiguous_candidates;
+        GlobalMemory::Vector<const FunctionType*> ambiguous_candidates;
         bool incomparable = false;
         if (best_candidate) {
-            for (FunctionObject candidate : overloads) {
+            for (const FunctionType* candidate : overloads) {
                 if (candidate == best_candidate) continue;
                 std::partial_ordering order =
                     overload_partial_order(best_candidate, candidate, args);
@@ -868,14 +863,14 @@ private:
                 // (lvalue) &T -> &T / &mut T / T, &mut T -> &mut T / &T / T
                 if (param_ref == nullptr) return Copy;
                 if (param_ref->is_moved_) return NoMatch;
-                return (arg_ref->referenced_type_->kind_ == Kind::Mutable) ^
-                               (param_ref->referenced_type_->kind_ == Kind::Mutable)
+                return (arg_ref->target_type_->kind_ == Kind::Mutable) ^
+                               (param_ref->target_type_->kind_ == Kind::Mutable)
                            ? Qualified
                            : Exact;
             } else {
                 // (xvalue) move &T -> move &T / &mut T / &T / T
                 if (!param_ref) return Copy;
-                if (param_ref->referenced_type_->kind_ == Kind::Mutable) return Referenced;
+                if (param_ref->target_type_->kind_ == Kind::Mutable) return Referenced;
                 return param_ref->is_moved_ ? Exact : QualifiedReferenced;
             }
         };
@@ -885,8 +880,8 @@ private:
         } else {
             if (!decayed_arg->dyn_cast<PointerType>() || !decayed_param->dyn_cast<PointerType>())
                 return NoMatch;
-            auto param_pointee = decayed_param->cast<PointerType>()->pointed_type_;
-            auto arg_pointee = decayed_arg->cast<PointerType>()->pointed_type_;
+            auto param_pointee = decayed_param->cast<PointerType>()->target_type_;
+            auto arg_pointee = decayed_arg->cast<PointerType>()->target_type_;
             if (Sema::is_mutable(param_pointee) && !Sema::is_mutable(arg_pointee)) return NoMatch;
             if (Sema::decay(param_pointee) == Sema::decay(arg_pointee)) {
                 return tiebreaker_rank();
@@ -901,15 +896,14 @@ private:
         }
     }
 
-    static auto overload_rank(FunctionObject func, std::span<const Type*> arg_types)
+    static auto overload_rank(const FunctionType* func, std::span<const Type*> arg_types)
         -> ConversionRank {
-        const FunctionType* func_type = get_func_type(func);
-        if (func_type->parameters_.size() != arg_types.size()) {
+        if (func->parameters_.size() != arg_types.size()) {
             return ConversionRank::NoMatch;
         }
         ConversionRank worst_rank = ConversionRank::Exact;
         for (std::size_t i = 0; i < arg_types.size(); ++i) {
-            ConversionRank rank = param_rank(func_type->parameters_[i], arg_types[i]);
+            ConversionRank rank = param_rank(func->parameters_[i], arg_types[i]);
             if (rank > worst_rank) {
                 worst_rank = rank;
                 if (rank == ConversionRank::NoMatch) {
@@ -921,15 +915,13 @@ private:
     }
 
     static auto overload_partial_order(
-        FunctionObject left, FunctionObject right, std::span<const Type*> arg_types
+        const FunctionType* left, const FunctionType* right, std::span<const Type*> arg_types
     ) -> std::partial_ordering {
-        const FunctionType* left_type = get_func_type(left);
-        const FunctionType* right_type = get_func_type(right);
         bool left_ever_better = false;
         bool right_ever_better = false;
         for (std::size_t i = 0; i < arg_types.size(); ++i) {
-            ConversionRank left_rank = param_rank(left_type->parameters_[i], arg_types[i]);
-            ConversionRank right_rank = param_rank(right_type->parameters_[i], arg_types[i]);
+            ConversionRank left_rank = param_rank(left->parameters_[i], arg_types[i]);
+            ConversionRank right_rank = param_rank(right->parameters_[i], arg_types[i]);
             if (left_rank < right_rank) {
                 left_ever_better = true;
             } else if (right_rank < left_rank) {
@@ -980,46 +972,29 @@ private:
     auto eval_struct_access(Term object, strview member) -> Term {
         Term decayed = Sema::decay(object);
         bool is_mutable = Sema::is_mutable(object);
-        if (auto struct_type = decayed->dyn_cast<StructType>()) {
-            auto attr_it = struct_type->fields_.find(member);
-            if (attr_it != struct_type->fields_.end()) {
-                return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
-            }
-
-        } else {
-            auto struct_value = decayed.get_comptime()->cast<StructValue>();
-            auto attr_it = struct_value->type_->fields_.find(member);
-            if (attr_it != struct_value->type_->fields_.end()) {
-                return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
-            }
+        const StructType* struct_type = decayed->cast<StructType>();
+        auto attr_it = struct_type->fields_.find(member);
+        if (attr_it != struct_type->fields_.end()) {
+            return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
         }
+        Diagnostic::error_member_not_found(member);
         return {};
     }
 
     auto eval_instance_access(Term object, strview member) -> Symbol {
         Term decayed = Sema::decay(object);
         bool is_mutable = Sema::is_mutable(object);
-        auto find_method = [&](Scope* scope) -> Symbol {
-            const ScopeValue* value = scope->find(member);
-            if (value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
-                return BoundMethod{object, scope, value};
-            }
-            return {};
-        };
-        if (auto instance_type = decayed->cast<InstanceType>()) {
-            auto attr_it = instance_type->attrs_.find(member);
-            if (attr_it != instance_type->attrs_.end()) {
-                return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
-            }
-            return find_method(instance_type->scope_);
-        } else {
-            auto instance_value = decayed.get_comptime()->cast<InstanceValue>();
-            auto attr_it = instance_value->attrs_.find(member);
-            if (attr_it != instance_value->attrs_.end()) {
-                return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
-            }
-            return find_method(instance_value->type_->scope_);
+        const InstanceType* instance_type = decayed->cast<InstanceType>();
+        auto attr_it = instance_type->attrs_.find(member);
+        if (attr_it != instance_type->attrs_.end()) {
+            return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
         }
+        const ScopeValue* value = instance_type->scope_->find(member);
+        if (value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+            return BoundMethod{object, instance_type->scope_, value};
+        }
+        Diagnostic::error_member_not_found(member);
+        return {};
     }
 };
 
@@ -1762,7 +1737,7 @@ public:
         }
         Term operand_term = Sema::get<SymbolKind::Term>(operand_symbol);
         if (auto* pointer_type = operand_term.effective_type()->dyn_cast<PointerType>()) {
-            return Term::lvalue(pointer_type->pointed_type_);
+            return Term::lvalue(pointer_type->target_type_);
         }
         Diagnostic::error_operation_not_defined(
             GetOperatorString(OperatorCode::Deref), operand_term.effective_type()->repr()
@@ -1826,19 +1801,27 @@ public:
             sema_.codegen_env_.map_type(sema_.current_scope_, node, struct_type);
         } else if (auto* self = sema_.get_self_type()) {
             type = self;
+        } else {
+            Diagnostic::error_cannot_deduce_struct_type(node->location);
+            return {};
         }
         if (type->dyn_cast<InstanceType>() && sema_.get_self_type() != type) {
             Diagnostic::error_construct_instance_out_of_class(node->location, type->repr());
         }
-        GlobalMemory::FlatMap<strview, Term> inits;
+        bool any_error = false;
+        GlobalMemory::FlatMap<strview, const Type*> inits;
         for (const ASTFieldInitialization& init : node->field_inits) {
-            Symbol value_symbol = ValueContextEvaluator{*this, nullptr}(init.value);
-            if (!Sema::expect(value_symbol, SymbolKind::Term)) {
-                return Term::prvalue(type);
+            Symbol symbol = ValueContextEvaluator{*this, nullptr}(init.value);
+            if (!Sema::expect(symbol, SymbolKind::Term)) {
+                any_error = true;
+                continue;
             }
-            inits.emplace(init.identifier, Sema::get<SymbolKind::Term>(value_symbol));
+            inits.emplace(init.identifier, Sema::get<SymbolKind::Term>(symbol).effective_type());
         }
-        return StructType::construct(type, inits);
+        if (any_error || !StructType::validate(type, inits)) {
+            return {};
+        }
+        return Term::prvalue(type);
     }
 
     auto operator()(const ASTArrayInitialization* node) noexcept -> Symbol {
@@ -2113,12 +2096,10 @@ public:
 
     // Functions and classes
     void operator()(const ASTFunctionDefinition* node) noexcept {
-        FunctionObject func_obj = sema_.call_handler_->get_func_obj(sema_.current_scope_, node);
+        const FunctionType* func = sema_.call_handler_->get_func_type(sema_.current_scope_, node);
         Sema::Guard guard(sema_, node);
-        if (func_obj) {
-            sema_.codegen_env_.add_function_output(
-                sema_.current_scope_, node, CallHandler::get_func_type(func_obj)
-            );
+        if (func) {
+            sema_.codegen_env_.add_function_output(sema_.current_scope_, node, func);
         }
         for (auto& stmt : node->body) {
             (*this)(stmt);
@@ -2128,11 +2109,10 @@ public:
     void operator()(const ASTCtorDtorDefinition* node) noexcept {
         Sema::Guard guard(sema_, node);
         if (node->is_constructor) {
-            FunctionObject func_obj = sema_.call_handler_->get_func_obj(sema_.current_scope_, node);
-            if (func_obj) {
-                sema_.codegen_env_.add_function_output(
-                    sema_.current_scope_, node, CallHandler::get_func_type(func_obj)
-                );
+            const FunctionType* func =
+                sema_.call_handler_->get_func_type(sema_.current_scope_, node);
+            if (func) {
+                sema_.codegen_env_.add_function_output(sema_.current_scope_, node, func);
             }
         }
         for (auto& stmt : node->body) {
@@ -2141,12 +2121,10 @@ public:
     }
 
     void operator()(const ASTOperatorDefinition* node) noexcept {
-        FunctionObject func_obj = sema_.call_handler_->get_func_obj(sema_.current_scope_, node);
+        const FunctionType* func = sema_.call_handler_->get_func_type(sema_.current_scope_, node);
         Sema::Guard guard(sema_, node);
-        if (func_obj) {
-            sema_.codegen_env_.add_function_output(
-                sema_.current_scope_, node, CallHandler::get_func_type(func_obj)
-            );
+        if (func) {
+            sema_.codegen_env_.add_function_output(sema_.current_scope_, node, func);
         }
         for (auto& stmt : node->body) {
             (*this)(stmt);
@@ -2320,7 +2298,7 @@ inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void
 
 inline auto TemplateHandler::inference(
     Scope* scope, const ASTTemplateDefinition* primary, std::span<const Type*> args
-) noexcept -> FunctionObject {
+) noexcept -> const FunctionType* {
     // check if variadic argument count matches
     std::size_t param_count = 0;
     strview variadic_param =
@@ -2418,11 +2396,11 @@ inline auto TemplateHandler::inference(
         FunctionOverloadDef overload_def =
             (*value->get<GlobalMemory::Vector<FunctionOverloadDef>*>())[0];
         if (auto* func_def = overload_def.get<const ASTFunctionDefinition*>()) {
-            return sema_.call_handler_->get_func_obj(inst_scope, func_def);
+            return sema_.call_handler_->get_func_type(inst_scope, func_def);
         } else if (auto* ctor_def = overload_def.get<const ASTCtorDtorDefinition*>()) {
-            return sema_.call_handler_->get_func_obj(inst_scope, ctor_def);
+            return sema_.call_handler_->get_func_type(inst_scope, ctor_def);
         } else if (auto* op_def = overload_def.get<const ASTOperatorDefinition*>()) {
-            return sema_.call_handler_->get_func_obj(inst_scope, op_def);
+            return sema_.call_handler_->get_func_type(inst_scope, op_def);
         } else {
             UNREACHABLE();
         }
@@ -2645,8 +2623,8 @@ inline auto TemplateHandler::get_prototype(
     return it->second;
 }
 
-inline auto CallHandler::get_func_obj(Scope* scope, FunctionOverloadDef overload) noexcept
-    -> FunctionObject {
+inline auto CallHandler::get_func_type(Scope* scope, FunctionOverloadDef overload) noexcept
+    -> const FunctionType* {
     auto get_param_type = [&](const ASTFunctionParameter& param) -> const Type* {
         TypeResolution type;
         TypeContextEvaluator{sema_, type}(param.type);
@@ -2743,14 +2721,10 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
     Term decayed = Sema::decay(base_term);
     if (auto* pointer_type = decayed.effective_type()->dyn_cast<PointerType>()) {
         Term dereferenced;
-        if (auto* value = decayed.get_comptime()) {
-            dereferenced = Term::lvalue(value->cast<PointerValue>()->pointed_value_);
-        } else {
-            dereferenced = Term::lvalue(pointer_type->pointed_type_);
-        }
-        if (pointer_type->pointed_type_->dyn_cast<StructType>()) {
+        dereferenced = Term::lvalue(pointer_type->target_type_);
+        if (pointer_type->target_type_->dyn_cast<StructType>()) {
             return eval_struct_access(dereferenced, node->member);
-        } else if (pointer_type->pointed_type_->dyn_cast<InstanceType>()) {
+        } else if (pointer_type->target_type_->dyn_cast<InstanceType>()) {
             return eval_instance_access(dereferenced, node->member);
         }
     } else if (decayed.effective_type()->dyn_cast<InstanceType>()) {
