@@ -182,7 +182,7 @@ public:
     TypeCodeGen(std::ofstream& stream, GlobalMemory::Vector<const Type*>& generated_types)
         : stream_(stream), generated_types_(generated_types) {}
 
-    void operator()() {
+    void order_types() {
         TypeSorter sorter;
         for (const StructType* type :
              std::get<TypeRegistry::TypeSet<StructType>>(TypeRegistry::instance->types_)) {
@@ -198,6 +198,9 @@ public:
         auto it = std::back_inserter(generated_types_);
         std::ranges::copy(std::move(sorter).iterate(), it);
         std::ranges::sort(generated_types_);
+    }
+
+    void generate_types() {
         for (const Type* type : generated_types_) {
             switch (type->kind_) {
             case Kind::Struct:
@@ -236,10 +239,19 @@ public:
 
     void generate_class(const InstanceType* type) {
         std::size_t type_index = index(generated_types_, type);
-        auto it_fwd = std::back_inserter(forward_declarations_);
-        auto it_def = std::back_inserter(definitions_);
-        std::format_to(it_fwd, "struct t{};\n"sv, type_index);
-        std::format_to(it_def, "struct t{} {{\n"sv, type_index);
+        if (type->scope_->is_extern_) {
+            std::format_to(std::back_inserter(definitions_), "using t{} = "sv, type_index);
+            [&](this auto&& self, const Scope* current) -> void {
+                if (current->parent_) self(current->parent_);
+                if (!current->scope_id_.empty()) {
+                    std::format_to(std::back_inserter(definitions_), "{}::"sv, current->scope_id_);
+                }
+            }(type->scope_);
+            definitions_.erase(definitions_.size() - 2);  // Remove trailing "::"
+            return;
+        }
+        std::format_to(std::back_inserter(forward_declarations_), "struct t{};\n"sv, type_index);
+        std::format_to(std::back_inserter(definitions_), "struct t{} {{\n"sv, type_index);
         for (const auto& [attr_name, attr_type] : type->attrs_) {
             definitions_ += "    "sv;
             output(definitions_, attr_type, generated_types_);
@@ -520,7 +532,7 @@ public:
             out += "deref"sv;
             break;
         case OperatorCode::Pointer:
-            out += "arrow"sv;
+            out += "ptr"sv;
             break;
         case OperatorCode::SIZE:
             UNREACHABLE();
@@ -633,9 +645,9 @@ public:
         indent_level_++;
         if (mangled_path == "main"sv) {
             newline();
-            definitions_ += "const std::vector<strview> $args_vec{$argv, $argv + $argc};";
+            definitions_ += "const std::vector<std::string_view> $args_vec{$argv, $argv + $argc};";
             newline();
-            definitions_ += "const std::span<const strview> args{$args_vec};"sv;
+            definitions_ += "const std::span<const std::string_view> args{$args_vec};"sv;
         }
         for (const ASTNodeVariant& child : node->body) {
             newline();
@@ -733,11 +745,30 @@ public:
         definitions_ += ")"sv;
     }
 
-    auto operator()(const ASTConstant* node) -> void { definitions_ += node->value->repr(); }
+    auto operator()(const ASTConstant* node) -> void {
+        switch (node->value->kind_) {
+        case Kind::Nullptr:
+            definitions_ += "nullptr"sv;
+            break;
+        case Kind::Integer:
+            definitions_ += node->value->cast<IntegerValue>()->value_.to_string();
+            break;
+        case Kind::Float:
+            std::format_to(
+                std::back_inserter(definitions_), "{:a}"sv, node->value->cast<FloatValue>()->value_
+            );
+            break;
+        case Kind::Boolean:
+            definitions_ += node->value->cast<BooleanValue>()->value_ ? "true"sv : "false"sv;
+            break;
+        default:
+            UNREACHABLE();
+        }
+    }
 
     auto operator()(const ASTStringConstant* node) -> void {
         definitions_ += "\"";
-        definitions_ += node->value;
+        definitions_ += escape_string(node->value);
         definitions_ += "\"sv";
     }
 
@@ -1069,9 +1100,11 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
            "using namespace std::literals;\n\n";
 
     GlobalMemory::Vector<const Type*> types;
-    TypeCodeGen{out, types}();
+    TypeCodeGen type_codegen{out, types};
+    type_codegen.order_types();
     NameMangler mangler(types);
     mangler.mangle_all_instantiations(codegen_env);
+    type_codegen.generate_types();
     CodeGen{out, codegen_env, mangler, types}();
     return EXIT_SUCCESS;
 }

@@ -32,9 +32,10 @@ auto get_std_scope(SourceManager& sources) -> Scope& {
         ASTBuilder builder(sources, sources.load_std());
         const ASTRoot* std_root = builder();
         static Scope scope;
+        std_root->scope = &scope;
         scope.scope_id_ = "std";
         scope.is_extern_ = true;
-        SymbolCollector{nullptr, &scope}(std_root);
+        SymbolCollector{nullptr, nullptr}(std_root);
         for (const auto& [identifier, meta_fn] : Meta::get_metas()) {
             scope.add_meta(identifier, meta_fn);
         }
@@ -65,6 +66,7 @@ auto main(int argc, char* argv[]) -> int {
         return EXIT_FAILURE;
     }
 
+    root->scope = &Scope::root(std_scope);
     SymbolCollector{&std_scope, nullptr}(root);
 
     CodeGenEnvironment codegen_env;

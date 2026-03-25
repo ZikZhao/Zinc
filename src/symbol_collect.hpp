@@ -224,16 +224,7 @@ public:
 
     // Root and blocks
     void operator()(const ASTRoot* node) noexcept {
-        if (!node->scope) {
-            if (std_scope_) {
-                // module root
-                node->scope = &Scope::root(*std_scope_);
-            } else {
-                // standard library root
-                node->scope = current_scope_;
-            }
-        }
-        SymbolCollector root_visitor{std_scope_, node->scope};
+        SymbolCollector root_visitor(std_scope_, node->scope);
         for (auto& child : node->statements) {
             root_visitor(child);
         }
@@ -449,11 +440,16 @@ public:
 
     void operator()(const ASTImportStatement* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        if (node->module_root->scope == nullptr) {
+        Scope*& module_scope = node->module_root->scope;
+        if (module_scope == nullptr) {
             SymbolCollector module_visitor{std_scope_, nullptr};
+            module_scope = &Scope::root(*std_scope_);
+            if (node->path.ends_with(".d.zn"sv)) {
+                module_scope->is_extern_ = true;
+            }
             module_visitor(node->module_root);
         }
-        current_scope_->add_namespace(node->alias, *node->module_root->scope);
+        current_scope_->add_namespace(node->alias, *module_scope);
     }
 
     void operator()(const ASTLambda* node) noexcept {

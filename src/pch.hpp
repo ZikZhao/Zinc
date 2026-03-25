@@ -852,6 +852,46 @@ auto unescape_string(auto& input) -> void {
     input.resize(write_index);
 }
 
+auto escape_string(strview input) -> GlobalMemory::String {
+    GlobalMemory::String result;
+    result.resize(input.size() + 24);  // Reserve extra space for escape sequences
+    std::size_t write_index = 0;
+    for (std::size_t read_index = 0; read_index < input.size(); ++read_index) {
+        char c = input[read_index];
+        switch (c) {
+        case '\n':
+            result[write_index++] = '\\';
+            result[write_index++] = 'n';
+            break;
+        case '\t':
+            result[write_index++] = '\\';
+            result[write_index++] = 't';
+            break;
+        case '\r':
+            result[write_index++] = '\\';
+            result[write_index++] = 'r';
+            break;
+        case '\\':
+            result[write_index++] = '\\';
+            result[write_index++] = '\\';
+            break;
+        case '\'':
+            result[write_index++] = '\\';
+            result[write_index++] = '\'';
+            break;
+        case '\"':
+            result[write_index++] = '\\';
+            result[write_index++] = '\"';
+            break;
+        default:
+            result[write_index++] = c;
+            break;
+        }
+    }
+    result.resize(write_index);
+    return result;
+}
+
 class BigInt {
     friend struct std::hash<BigInt>;
 

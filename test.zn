@@ -2,10 +2,10 @@ const a: i32 = 1;
 
 fn main(args: [strview]) {
     let fps = 60;
-    let elapsed = std.chrono.duration<f64>(1.0 / fps as f64);
+    let elapsed = std.chrono.duration<i64>(1000 as isize / fps as isize);
             std.cout << std.format(
                 "[Renderer] FPS: {:#.3g} | Avg Frame Time: {:#.4g} ms\n",
-                fps as f64 / elapsed.count(),
-                elapsed.count() * 1000 / fps as f64
+                fps / elapsed.count(),
+                (elapsed.count() * 1000) / fps
             );
 }

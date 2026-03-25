@@ -617,16 +617,6 @@ public:
             return {};
         }
 
-        bool do_not_mangle = false;
-        if (auto* callee_term = Sema::get_if<SymbolKind::Term>(callee);
-            callee_term && (*callee_term)->kind_ == Kind::Function) {
-            do_not_mangle = true;
-        } else if (
-            auto* callee_func = Sema::get_if<SymbolKind::Function>(callee);
-            callee_func && callee_func->first->is_extern_
-        ) {
-            do_not_mangle = true;
-        }
         sema_.codegen_env_.map_func_call(
             sema_.current_scope_,
             node,
@@ -635,7 +625,7 @@ public:
                 ? Sema::get<SymbolKind::Method>(callee).object.effective_type()
                 : nullptr,
             Sema::get_if<SymbolKind::Type>(callee),
-            do_not_mangle
+            should_not_mangle(callee)
         );
         return Term::prvalue(overload->return_type_);
     }
@@ -945,6 +935,34 @@ private:
         } else {
             return std::partial_ordering::equivalent;
         }
+    }
+
+    auto should_not_mangle(Symbol callee) const noexcept -> bool {
+        if (auto* term = Sema::get_if<SymbolKind::Term>(callee)) {
+            return (*term)->kind_ == Kind::Function;
+        } else if (auto* function = Sema::get_if<SymbolKind::Function>(callee)) {
+            return function->first->is_extern_;
+        } else if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
+            return method->scope->is_extern_;
+        } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(callee)) {
+            const Type* left_type = std::get<1>(*operator_fn);
+            const Type* right_type = std::get<2>(*operator_fn);
+            bool both_extern = true;
+            if (auto* left_inst_type = left_type->dyn_cast<InstanceType>()) {
+                Scope* scope = left_inst_type->scope_;
+                if (scope->find(GetOperatorString(std::get<0>(*operator_fn)))) {
+                    both_extern &= scope->is_extern_;
+                }
+            }
+            if (right_type && right_type->kind_ == Kind::Instance) {
+                Scope* scope = right_type->cast<InstanceType>()->scope_;
+                if (scope->find(GetOperatorString(std::get<0>(*operator_fn)))) {
+                    both_extern &= scope->is_extern_;
+                }
+            }
+            return both_extern;
+        }
+        return false;
     }
 };
 
@@ -2364,9 +2382,8 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
                        : Symbol{};
         } else {
             Symbol init_symbol = ValueContextEvaluator{*this, type.get(), false}(var_init->value);
-            if (!Sema::get_if<SymbolKind::Term>(init_symbol)) return {};
-            Term init = Term::lvalue(std::get<Term>(init_symbol));
-            assert(init.get());
+            if (!Sema::expect(init_symbol, SymbolKind::Term)) return {};
+            Term init = Term::lvalue(std::get<Term>(init_symbol).resolve_to_default());
             if (type.get()) {
                 AutoBindings auto_bindings;
                 if (!type->assignable_from(init.effective_type(), auto_bindings)) {

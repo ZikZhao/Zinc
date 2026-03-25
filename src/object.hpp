@@ -1086,7 +1086,7 @@ public:
         default:
             UNREACHABLE();
         }
-        return GlobalMemory::format("{}({})", prefix, value_);
+        return GlobalMemory::format("{}({:#})", prefix, value_);
     }
     const FloatType* get_type() const noexcept final { return type_; }
     FloatValue* clone() const noexcept final { return new FloatValue(*this); }
