@@ -200,6 +200,7 @@ struct ASTLocalBlock final : public ASTNode {
 struct ASTRoot final : public ASTNode {
     std::span<ASTNodeVariant> statements;
     mutable Scope* scope = nullptr;
+    mutable bool type_checked = false;
 };
 
 struct ASTExpression : public ASTNode {};
@@ -534,6 +535,8 @@ constexpr auto GetOperatorGroup(OperatorCode opcode) -> OperatorGroup {
     case OperatorCode::BitwiseAnd:
     case OperatorCode::BitwiseOr:
     case OperatorCode::BitwiseXor:
+    case OperatorCode::LeftShift:
+    case OperatorCode::RightShift:
         return OperatorGroup::Bitwise;
     case OperatorCode::BitwiseNot:
         return OperatorGroup::UnaryBitwise;

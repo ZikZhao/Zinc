@@ -1,11 +1,6 @@
-const a: i32 = 1;
+import "module.zn" as A;
 
 fn main(args: [strview]) {
-    let fps = 60;
-    let elapsed = std.chrono.duration<i64>(1000 as isize / fps as isize);
-            std.cout << std.format(
-                "[Renderer] FPS: {:#.3g} | Avg Frame Time: {:#.4g} ms\n",
-                fps / elapsed.count(),
-                (elapsed.count() * 1000) / fps
-            );
+    let a = A.A();
+    std.cout << (a + 5) << "\n";
 }

@@ -86,28 +86,28 @@ class Camera {
     let orbit_radius_: f32;
     let aspect_ratio_: f32;
 
-    fn set_aspect_ratio(self: &mut Self, aspect_ratio: f32) { aspect_ratio_ = aspect_ratio; }
-    fn aspect_ratio(self: &Self) -> f32 { return aspect_ratio_; }
+    fn set_aspect_ratio(self: &mut Self, aspect_ratio: f32) { self.aspect_ratio_ = aspect_ratio; }
+    fn aspect_ratio(self: &Self) -> f32 { return self.aspect_ratio_; }
 
     fn orientation(self: &Self) -> glm.mat3 {
         // Derive camera basis (right, up, forward) from yaw/pitch;
         // then apply roll about forward
-        let cos_pitch = std.cos(pitch_);
-        let sin_pitch = std.sin(pitch_);
-        let cos_yaw = std.cos(yaw_);
-        let sin_yaw = std.sin(yaw_);
+        let cos_pitch = std.cos(self.pitch_);
+        let sin_pitch = std.sin(self.pitch_);
+        let cos_yaw = std.cos(self.yaw_);
+        let sin_yaw = std.sin(self.yaw_);
         let f = glm.vec3(sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch);
         let world_up = glm.vec3(0.0f, 1.0f, 0.0f);
         let r = glm.normalize(glm.cross(f, world_up));
         let u = glm.normalize(glm.cross(r, f));
-        let c = std.cos(roll_);
-        let s = std.sin(roll_);
+        let c = std.cos(self.roll_);
+        let s = std.sin(self.roll_);
         let rotate_axis = (v: &glm.vec3): glm.vec3 => {
             return v * c + glm.cross(f, v) * s + f * glm.dot(f, v) * (1.0f - c);
         };
         r = rotate_axis(r);
         u = rotate_axis(u);
-        let o = glm.mat3();
+        let mut o = glm.mat3();
         o[0] = r;
         o[1] = u;
         o[2] = f;
@@ -115,32 +115,32 @@ class Camera {
     }
 
     fn go_forward(self: &Self) -> glm.vec3 {
-        let cos_pitch = std.cos(pitch_);
-        let sin_pitch = std.sin(pitch_);
-        let cos_yaw = std.cos(yaw_);
-        let sin_yaw = std.sin(yaw_);
+        let cos_pitch = std.cos(self.pitch_);
+        let sin_pitch = std.sin(self.pitch_);
+        let cos_yaw = std.cos(self.yaw_);
+        let sin_yaw = std.sin(self.yaw_);
         return glm.vec3(sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch);
     }
 
     fn go_right(self: &Self) -> glm.vec3 {  
-        let o = orientation();
+        let o = self.orientation();
         return glm.normalize(o[0]);
     }
 
     fn go_up(self: &Self) -> glm.vec3 {
-        let o = orientation();
+        let o = self.orientation();
         return glm.normalize(o[1]);
     }
 
     /// Projects a world-space vertex to homogeneous clip space.
     fn world_to_clip(self: &Self, vertex: &glm.vec3) -> glm.vec4 {
-        let view_vector = vertex - position_;
-        let view_rotation = glm.transpose(orientation());
+        let view_vector = vertex - self.position_;
+        let view_rotation = glm.transpose(self.orientation());
         let view_space = view_rotation * view_vector;
         let w = view_space.z;
         let fov_rad = glm.radians(Constant.FOV);
         let tan_half_fov = std.tan(fov_rad / 2.0f);
-        let x_ndc = view_space.x / (view_space.z * tan_half_fov * aspect_ratio_);
+        let x_ndc = view_space.x / (view_space.z * tan_half_fov * self.aspect_ratio_);
         let y_ndc = view_space.y / (view_space.z * tan_half_fov);
         let z_ndc = (Constant.FarPlane * (view_space.z - Constant.NearPlane)) /
                     ((view_space.z) * (Constant.FarPlane - Constant.NearPlane));
@@ -250,7 +250,7 @@ class World {
                 throw std.runtime_error("Unsupported file format: " + std.string(filename));
             }
         }
-        merge_models();
+        self.merge_models();
     }
 
     static fn parse_index_token(token: &std.string) -> [i32; 3] {
@@ -261,29 +261,29 @@ class World {
         if (first_slash == std.string.npos) {
             // Format: v
             if (!token.empty()) {
-                idx.v = std.stoi(token);
+                idx[0] = std.stoi(token);
             }
             return idx;
         }
 
         // Parse vertex index (before first slash)
         if (first_slash > 0) {
-            idx.v = std.stoi(token.substr(0, first_slash));
+            idx[0] = std.stoi(token.substr(0, first_slash));
         }
 
         let second_slash = token.find('/', first_slash + 1);
         if (second_slash == std.string.npos) {
             // Format: v/vt
             if (first_slash + 1 < token.size()) {
-                idx.vt = std.stoi(token.substr(first_slash + 1));
+                idx[1] = std.stoi(token.substr(first_slash + 1));
             }
         } else {
             // Format: v/vt/vn or v//vn
             if (second_slash > first_slash + 1) {
-                idx.vt = std.stoi(token.substr(first_slash + 1, second_slash - first_slash - 1));
+                idx[1] = std.stoi(token.substr(first_slash + 1, second_slash - first_slash - 1));
             }
             if (second_slash + 1 < token.size()) {
-                idx.vn = std.stoi(token.substr(second_slash + 1));
+                idx[2] = std.stoi(token.substr(second_slash + 1));
             }
         }
 

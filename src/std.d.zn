@@ -618,8 +618,11 @@ namespace chrono {
 
         operator+(self: &Self, other: &Self) -> Self;
         operator-(self: &Self, other: &Self) -> Self;
+        operator/(self: &Self, value: rep) -> Self;
+        operator/(self: &Self, other: &Self) -> rep;
         operator+=(self: &mut Self, other: &Self) -> &mut Self;
         operator-=(self: &mut Self, other: &Self) -> &mut Self;
+        operator/=(self: &mut Self, value: rep) -> &mut Self;
 
         operator==(self: &Self, other: &Self) -> bool;
         operator!=(self: &Self, other: &Self) -> bool;
@@ -763,6 +766,7 @@ fn hypot(x: f64, y: f64) -> f64;
 
 fn min<T: type>(a: T, b: T) -> T;
 fn max<T: type>(a: T, b: T) -> T;
+fn clamp<T: type>(value: T, low: T, high: T) -> T;
 fn exchange<T: type>(obj: &mut T, new_value: T) -> T;
 
 class unique_ptr<T: type> {

@@ -50,9 +50,10 @@ public:
     };
 
     using TableValue = std::variant<
-        const Type*,    // type expression
-        const Scope*,   // member access
-        FunctionCall>;  // function call
+        const Type*,                // type expression
+        const Scope*,               // member access
+        FunctionCall,               // function call
+        std::span<const Object*>>;  // template instantiation
 
     using Table = GlobalMemory::FlatMap<const ASTNode*, TableValue>;
 
@@ -101,6 +102,10 @@ public:
         functions_.push_back({current_scope, node, func_obj});
     }
 
+    auto add_instantiation(const Scope* inst_scope, std::span<const Object*> args) -> void {
+        instantiations_.push_back({const_cast<Scope*>(inst_scope), args});
+    }
+
     auto map_type(const Scope* current_scope, const ASTNode* node, const Type* type) -> void {
         scope_map_[current_scope][node] = type;
     }
@@ -126,8 +131,10 @@ public:
         };
     }
 
-    auto map_instantiation(const Scope* inst_scope, std::span<const Object*> args) -> void {
-        instantiations_.push_back({const_cast<Scope*>(inst_scope), args});
+    auto map_instantiation(
+        const Scope* current_scope, const ASTNode* node, std::span<const Object*> args
+    ) -> void {
+        scope_map_[current_scope][node] = args;
     }
 
     TableValue* find(const Scope* current_scope, const ASTNode* node) {
@@ -446,7 +453,7 @@ public:
         auto [inst_scope, target] = specialization_resolution(family, args);
         Sema::Guard inner_guard(sema_, *inst_scope);
         std::span persisted_args = args | GlobalMemory::collect<std::span>();
-        sema_.codegen_env_.map_instantiation(inst_scope, persisted_args);
+        sema_.codegen_env_.add_instantiation(inst_scope, persisted_args);
         sema_.deferred_analysis(*inst_scope, target);
         const ScopeValue* value = inst_scope->find(family.primary->identifier);
         Symbol result = sema_.eval_symbol(*inst_scope, *value);
@@ -480,7 +487,7 @@ public:
         /// TODO: parameter pack
         Sema::Guard inner_guard(sema_, inst_scope);
         std::span persisted_args = args | GlobalMemory::collect<std::span>();
-        sema_.codegen_env_.map_instantiation(&inst_scope, persisted_args);
+        sema_.codegen_env_.add_instantiation(&inst_scope, persisted_args);
         sema_.deferred_analysis(inst_scope, primary->target_node);
         const ScopeValue* value = inst_scope.find(primary->identifier);
         Symbol result = sema_.eval_symbol(inst_scope, *value);
@@ -605,7 +612,8 @@ public:
         const FunctionType* overload = resolve_overload(callee, transformed_args);
         if (!overload) {
             GlobalMemory::String args_repr;
-            std::string_view sep = "("sv;
+            args_repr += "("sv;
+            std::string_view sep = ""sv;
             for (size_t i = 0; i < transformed_args.size(); i++) {
                 args_repr += sep;
                 args_repr += transformed_args[i]->repr();
@@ -938,7 +946,9 @@ private:
     }
 
     auto should_not_mangle(Symbol callee) const noexcept -> bool {
-        if (auto* term = Sema::get_if<SymbolKind::Term>(callee)) {
+        if (auto* type = Sema::get_if<SymbolKind::Type>(callee)) {
+            return (*type)->cast<InstanceType>()->scope_->is_extern_;
+        } else if (auto* term = Sema::get_if<SymbolKind::Term>(callee)) {
             return (*term)->kind_ == Kind::Function;
         } else if (auto* function = Sema::get_if<SymbolKind::Function>(callee)) {
             return function->first->is_extern_;
@@ -1100,6 +1110,10 @@ private:
                 return left | right;
             case OperatorCode::BitwiseXor:
                 return left ^ right;
+            case OperatorCode::LeftShift:
+                return left << right;
+            case OperatorCode::RightShift:
+                return left >> right;
             default:
                 UNREACHABLE();
             }
@@ -1515,13 +1529,6 @@ public:
         }
     }
 
-    void operator()(const ASTPointerAccess* node) noexcept {
-        Symbol result = sema_.access_handler_->eval_pointer(node);
-        if (auto* type = Sema::get_if<SymbolKind::Type>(result)) {
-            out_ = *type;
-        }
-    }
-
     void operator()(const ASTUnaryOp* node) noexcept {
         TypeResolution expr_result;
         TypeContextEvaluator{sema_, expr_result, false}(node->expr);
@@ -1804,7 +1811,9 @@ public:
             return sema_.get_self_type();
         } else {
             Symbol result = sema_.lookup_symbol("self");
-            assert(Sema::get_if<SymbolKind::Term>(result));
+            if (!holds_monostate(result)) {
+                assert(Sema::get_if<SymbolKind::Term>(result));
+            }
             return result;
         }
     }
@@ -1831,6 +1840,10 @@ public:
 
     auto operator()(const ASTIndexAccess* node) noexcept -> Symbol {
         return sema_.access_handler_->eval_index(node);
+    }
+
+    auto operator()(const ASTPointerAccess* node) noexcept -> Symbol {
+        return sema_.access_handler_->eval_pointer(node);
     }
 
     auto operator()(const ASTAddressOfExpr* node) noexcept -> Symbol {
@@ -1913,6 +1926,9 @@ public:
         if (!holds_monostate(node->struct_type)) {
             TypeResolution struct_type;
             TypeContextEvaluator{sema_, struct_type}(node->struct_type);
+            if (!struct_type.get()) {
+                return {};
+            }
             type = struct_type;
             sema_.codegen_env_.map_type(sema_.current_scope_, node, struct_type);
         } else if (auto* self = sema_.get_self_type()) {
@@ -2116,6 +2132,8 @@ public:
 
     // Root and blocks
     void operator()(const ASTRoot* node) noexcept {
+        if (node->type_checked) return;
+        node->type_checked = true;
         for (auto stmt : node->statements) {
             (*this)(stmt);
         }
@@ -2159,7 +2177,6 @@ public:
                 type = Sema::decay(init_term.effective_type());
             }
         }
-        assert(type.get());
         if (type.get()) {
             sema_.codegen_env_.map_type(sema_.current_scope_, node, type);
         }
@@ -2177,7 +2194,6 @@ public:
     }
 
     void operator()(const ASTSwitchStatement* node) noexcept {
-        Sema::Guard guard(sema_, node);
         ValueContextEvaluator{sema_, nullptr, false}(node->condition);
         for (const ASTSwitchCase& switch_case : node->cases) {
             if (!holds_monostate(switch_case.value)) {
@@ -2190,7 +2206,7 @@ public:
     void operator()(const ASTForStatement* node) noexcept {
         Sema::Guard guard(sema_, node);
         if (auto* decl = std::get_if<const ASTDeclaration*>(&node->initializer)) {
-            ValueContextEvaluator{sema_, nullptr, false}(*decl);
+            TypeCheckVisitor{sema_}(*decl);
         } else if (
             auto* expr = std::get_if<ASTExprVariant>(&node->initializer);
             expr && !holds_monostate(*expr)
@@ -2214,6 +2230,9 @@ public:
 
     // Functions and classes
     void operator()(const ASTFunctionDefinition* node) noexcept {
+        if (node->location.id != 0) {
+            int a = 0;
+        }
         const FunctionType* func = sema_.call_handler_->get_func_type(sema_.current_scope_, node);
         Sema::Guard guard(sema_, node);
         if (func) {
@@ -2300,6 +2319,11 @@ public:
         } else {
             TypeCheckVisitor{sema_}(std::get<ASTNodeVariant>(node->body));
         }
+    }
+
+    void operator()(const ASTImportStatement* node) noexcept {
+        Sema::Guard guard{sema_, *node->module_root->scope};
+        (*this)(node->module_root);
     }
 };
 
@@ -2524,25 +2548,28 @@ inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) n
     if (!Sema::expect(template_symbol, SymbolKind::Template, SymbolKind::Function)) {
         return {};
     }
-    GlobalMemory::Vector<const Object*> arg_terms;
+    GlobalMemory::Vector<const Object*> args;
     for (const ASTExprVariant& arg : node->arguments) {
         Diagnostic::ErrorTrap trap{ASTNodePtrGetter{}(arg)->location};
         Symbol result = ValueContextEvaluator{sema_, nullptr, true}(arg);
         if (Sema::expect(result, SymbolKind::Type, SymbolKind::Term)) {
-            arg_terms.push_back(
+            args.push_back(
                 Sema::get_if<SymbolKind::Type>(result)
                     ? static_cast<const Object*>(Sema::get<SymbolKind::Type>(result))
                     : Sema::get<SymbolKind::Term>(result).get_comptime()
             );
         } else {
-            arg_terms.push_back(nullptr);
+            args.push_back(nullptr);
         }
     }
-    if (std::ranges::contains(arg_terms, nullptr)) {
+    if (std::ranges::contains(args, nullptr)) {
         return {};
     }
     if (auto* family = Sema::get_if<SymbolKind::Template>(template_symbol)) {
-        return instantiate(**family, arg_terms);
+        sema_.codegen_env_.map_instantiation(
+            sema_.current_scope_, node, args | GlobalMemory::collect<std::span>()
+        );
+        return instantiate(**family, args);
     } else {
         // explicit template function instantiation is not supported
         throw;

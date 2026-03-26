@@ -1279,7 +1279,7 @@ public:
         std::size_t bit_shift = shift % 32;
 
         if (digit_shift >= digits_.size()) {
-            return is_negative_ ? BigInt(-1ul) : BigInt(0ul);
+            return is_negative_ ? BigInt(static_cast<std::int64_t>(-1)) : BigInt(0ul);
         }
 
         BigInt result;
@@ -1304,7 +1304,7 @@ public:
                 if (digits_[i] != 0) has_remainder = true;
             }
             if (!has_remainder && bit_shift > 0 && digit_shift < digits_.size()) {
-                if ((digits_[digit_shift] & ((1 << bit_shift) - 1)) != 0) {
+                if ((digits_[digit_shift] & ((1u << bit_shift) - 1u)) != 0) {
                     has_remainder = true;
                 }
             }
@@ -1315,8 +1315,43 @@ public:
         return result;
     }
 
+    BigInt operator<<(const BigInt& shift) const {
+        if (shift.is_negative_) {
+            throw std::domain_error("Negative shift count");
+        }
+        if (shift.is_zero()) {
+            return *this;
+        }
+
+        std::size_t shift_count = 0;
+        if (!shift.fits_in(shift_count)) {
+            if (is_zero()) {
+                return BigInt(0ul);
+            }
+            throw std::overflow_error("Shift count too large");
+        }
+        return *this << shift_count;
+    }
+
+    BigInt operator>>(const BigInt& shift) const {
+        if (shift.is_negative_) {
+            throw std::domain_error("Negative shift count");
+        }
+        if (shift.is_zero()) {
+            return *this;
+        }
+
+        std::size_t shift_count = 0;
+        if (!shift.fits_in(shift_count)) {
+            return is_negative_ ? BigInt(static_cast<std::int64_t>(-1)) : BigInt(0ul);
+        }
+        return *this >> shift_count;
+    }
+
     BigInt& operator<<=(std::size_t shift) { return *this = *this << shift; }
     BigInt& operator>>=(std::size_t shift) { return *this = *this >> shift; }
+    BigInt& operator<<=(const BigInt& shift) { return *this = *this << shift; }
+    BigInt& operator>>=(const BigInt& shift) { return *this = *this >> shift; }
 
     // Bitwise AND (for non-negative numbers)
     BigInt operator&(const BigInt& other) const {

@@ -693,8 +693,7 @@ public:
 
     auto default_construct() const noexcept -> bool final {
         /// TODO:
-        assert(false);
-        return false;
+        return true;
     }
 
 protected:
@@ -1333,7 +1332,7 @@ private:
 
 class TypeRegistry {
     friend class ThreadGuard;
-    friend class TypeCodeGen;
+    friend class ObjectCodeGen;
 
 private:
     struct TypeComparator {

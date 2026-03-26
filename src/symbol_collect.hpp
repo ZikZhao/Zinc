@@ -284,6 +284,16 @@ public:
         }
     }
 
+    void operator()(const ASTSwitchStatement* node) noexcept {
+        (*this)(node->condition);
+        for (const ASTSwitchCase& switch_case : node->cases) {
+            if (!holds_monostate(switch_case.value)) {
+                (*this)(switch_case.value);
+            }
+            (*this)(switch_case.body);
+        }
+    }
+
     void operator()(const ASTForStatement* node) noexcept {
         Scope& local_scope = Scope::make(*current_scope_, node);
         SymbolCollector local_visitor(std_scope_, &local_scope);
