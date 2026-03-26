@@ -231,10 +231,13 @@ public:
         const Type* type = obj.effective_type();
         if (obj.value_category() == ValueCategory::Left) {
             if (auto* ref_type = type->dyn_cast<ReferenceType>()) {
-                return ref_type;
+                return TypeRegistry::get<ReferenceType>(ref_type->target_type_, false);
             }
             return TypeRegistry::get<ReferenceType>(type, false);
         } else if (obj.value_category() == ValueCategory::Expiring) {
+            if (auto* ref_type = type->dyn_cast<ReferenceType>()) {
+                return TypeRegistry::get<ReferenceType>(ref_type->target_type_, true);
+            }
             return TypeRegistry::get<ReferenceType>(type, true);
         } else {
             return type;
@@ -457,6 +460,7 @@ public:
         sema_.deferred_analysis(*inst_scope, target);
         const ScopeValue* value = inst_scope->find(family.primary->identifier);
         Symbol result = sema_.eval_symbol(*inst_scope, *value);
+        if (holds_monostate(result)) return {};
         if (const Type* type = std::get<static_cast<size_t>(SymbolKind::Type)>(result)) {
             if (auto instance_type = type->dyn_cast<InstanceType>()) {
                 instance_type->primary_template_ = family.primary;
@@ -935,9 +939,9 @@ private:
             }
         }
         if (left_ever_better && !right_ever_better) {
-            return std::partial_ordering::less;
-        } else if (!left_ever_better && right_ever_better) {
             return std::partial_ordering::greater;
+        } else if (!left_ever_better && right_ever_better) {
+            return std::partial_ordering::less;
         } else if (left_ever_better && right_ever_better) {
             return std::partial_ordering::unordered;
         } else {
@@ -1280,7 +1284,7 @@ public:
     static auto is_primitive(Term operand) noexcept -> bool {
         Term decayed = Sema::decay(operand);
         return decayed->kind_ == Kind::Integer || decayed->kind_ == Kind::Float ||
-               decayed->kind_ == Kind::Boolean;
+               decayed->kind_ == Kind::Boolean || decayed->kind_ == Kind::Pointer;
     }
 
 private:
@@ -1379,7 +1383,8 @@ public:
                 break;
             case OperatorGroup::Comparison:
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
-                    (left_kind == Kind::Float && right_kind == Kind::Float)) {
+                    (left_kind == Kind::Float && right_kind == Kind::Float) ||
+                    (left_kind == Kind::Pointer && right_kind == Kind::Pointer)) {
                     return Term::prvalue(&BooleanType::instance);
                 }
                 break;
@@ -1455,20 +1460,34 @@ public:
 
     auto eval_cast(const ASTAs* node, Term operand, const Type* target_type) const noexcept
         -> Term {
-        Term decayed = Sema::decay(operand);
         bool convertible = false;
-        const Type* source_type = decayed.effective_type();
+        const Type* source_type = Sema::apply_value_category(operand);
+        const Type* decayed_source_type = Sema::decay(source_type);
+        const Type* decayed_target_type = Sema::decay(target_type);
         if (source_type == target_type) {
             return operand;
-        } else if (decayed->kind_ == Kind::Integer || decayed->kind_ == Kind::Float) {
-            if (target_type->kind_ == Kind::Integer || target_type->kind_ == Kind::Float) {
+        }
+        if (decayed_source_type == decayed_target_type) {
+            if (auto* source_ref = source_type->dyn_cast<ReferenceType>()) {
+                if (auto* target_ref = target_type->dyn_cast<ReferenceType>()) {
+                    convertible = source_ref->is_moved_ == target_ref->is_moved_ &&
+                                  (!Sema::is_mutable(target_type) || Sema::is_mutable(source_type));
+                } else if (Meta::is_fundamental(target_type)) {
+                    convertible = true;
+                }
+            }
+        }
+        if (decayed_source_type->kind_ == Kind::Integer ||
+            decayed_source_type->kind_ == Kind::Float) {
+            if (decayed_target_type->kind_ == Kind::Integer ||
+                decayed_target_type->kind_ == Kind::Float) {
                 convertible = true;
             }
-        } else if (decayed->kind_ == Kind::Nullptr) {
+        } else if (decayed_source_type->kind_ == Kind::Nullptr) {
             if (target_type->kind_ == Kind::Pointer) {
                 convertible = true;
             }
-        } else if (decayed->kind_ == Kind::Pointer) {
+        } else if (decayed_source_type->kind_ == Kind::Pointer) {
             if (target_type->kind_ == Kind::Pointer) {
                 if (TypeRegistry::is_reachable(source_type, target_type)) {
                     convertible = true;
@@ -1662,6 +1681,7 @@ public:
         GlobalMemory::FlatMap<strview, const Type*> attrs;
         for (ASTNodeVariant decl_variant : node->fields) {
             const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
+            if (decl->declared_static) continue;
             TypeResolution field_type;
             if (holds_monostate(decl->declared_type)) {
                 throw;
@@ -1742,52 +1762,11 @@ public:
                 Diagnostic::error_type_mismatch(expected_->repr(), node->value->repr());
                 return {};
             } else if (auto* int_type = expected_->dyn_cast<IntegerType>()) {
-                const IntegerValue* int_value = node->value->cast<IntegerValue>();
-                bool valid = true;
-                if (int_type->is_signed_) {
-                    switch (int_type->bits_) {
-                    case 8:
-                        valid = int_value->value_.fits_in<std::int8_t>();
-                        break;
-                    case 16:
-                        valid = int_value->value_.fits_in<std::int16_t>();
-                        break;
-                    case 32:
-                        valid = int_value->value_.fits_in<std::int32_t>();
-                        break;
-                    case 64:
-                        valid = int_value->value_.fits_in<std::int64_t>();
-                        break;
-                    default:
-                        UNREACHABLE();
-                    }
-                } else {
-                    switch (int_type->bits_) {
-                    case 8:
-                        valid = int_value->value_.fits_in<std::uint8_t>();
-                        break;
-                    case 16:
-                        valid = int_value->value_.fits_in<std::uint16_t>();
-                        break;
-                    case 32:
-                        valid = int_value->value_.fits_in<std::uint32_t>();
-                        break;
-                    case 64:
-                        valid = int_value->value_.fits_in<std::uint64_t>();
-                        break;
-                    default:
-                        UNREACHABLE();
-                    }
-                }
-                if (valid) {
-                    return Term::prvalue(new IntegerValue(int_type, int_value->value_));
-                } else {
-                    Diagnostic::error_overflow(int_value->value_.to_string(), int_type->repr());
-                    return {};
-                }
+                IntegerValue* int_value = node->value->cast<IntegerValue>()->resolve_to(int_type);
+                return Sema::term_to_symbol(Term::prvalue(int_value));
             } else if (auto* float_type = expected_->dyn_cast<FloatType>()) {
-                const FloatValue* float_value = node->value->cast<FloatValue>();
-                return Term::prvalue(new FloatValue(float_type, float_value->value_));
+                FloatValue* float_value = node->value->cast<FloatValue>()->resolve_to(float_type);
+                return Sema::term_to_symbol(Term::prvalue(float_value));
             } else {
                 if (expected_ != node->value->get_type()) {
                     Diagnostic::error_type_mismatch(expected_->repr(), node->value->repr());
@@ -2468,8 +2447,10 @@ inline auto TemplateHandler::inference(
     }
     // make patterns
     Sema::Guard guard(sema_, pattern_scope);
+    const ASTNode* func_node;
     GlobalMemory::Vector<const Type*> patterns;
     if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&primary->target_node)) {
+        func_node = *func_def;
         for (const auto& pattern : (*func_def)->parameters) {
             Symbol pattern_symbol = ValueContextEvaluator{sema_, nullptr, false}(pattern.type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
@@ -2483,6 +2464,7 @@ inline auto TemplateHandler::inference(
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
         }
     } else if (auto* ctor_def = std::get_if<const ASTCtorDtorDefinition*>(&primary->target_node)) {
+        func_node = *ctor_def;
         for (const auto& pattern : (*ctor_def)->parameters) {
             Symbol pattern_symbol = ValueContextEvaluator{sema_, nullptr, false}(pattern.type);
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
@@ -2496,6 +2478,7 @@ inline auto TemplateHandler::inference(
             patterns.push_back(Sema::get<SymbolKind::Type>(pattern_symbol));
         }
     } else if (auto* op_def = std::get_if<const ASTOperatorDefinition*>(&primary->target_node)) {
+        func_node = *op_def;
         Symbol left_pattern_symbol =
             ValueContextEvaluator{sema_, nullptr, false}((*op_def)->left.type);
         patterns.push_back(Sema::get<SymbolKind::Type>(left_pattern_symbol));
@@ -2512,10 +2495,9 @@ inline auto TemplateHandler::inference(
     AutoBindings auto_bindings;
     for (std::size_t i = 0; i < patterns.size(); i++) {
         if (!patterns[i]->assignable_from(args[i], auto_bindings)) {
-            // Diagnostic::report(TemplateArgumentTypeMismatchError(
-            //     primary->parameters[i].identifier, args[i]->repr(), patterns[i]->repr()
-            // ));
-            throw;
+            Diagnostic::error_candidate_type_mismatch(
+                func_node->location, i, patterns[i]->repr(), args[i]->repr()
+            );
             return {};
         }
     }
@@ -2539,8 +2521,7 @@ inline auto TemplateHandler::inference(
             UNREACHABLE();
         }
     }
-    throw;
-    return {};
+    UNREACHABLE();
 }
 
 inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) noexcept -> Symbol {
@@ -2571,8 +2552,8 @@ inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) n
         );
         return instantiate(**family, args);
     } else {
-        // explicit template function instantiation is not supported
-        throw;
+        Diagnostic::error_explicit_function_instantiation(node->location);
+        return {};
     }
 }
 

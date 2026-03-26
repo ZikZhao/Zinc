@@ -189,7 +189,8 @@ private:
             visit_expr(ctx->type_),
             visit_expr(ctx->value_),
             ctx->KW_MUT() != nullptr,
-            false
+            false,
+            ctx->KW_STATIC() != nullptr
         });
     }
 
@@ -200,7 +201,8 @@ private:
             visit_expr(ctx->type_),
             visit_expr(ctx->value_),
             false,
-            true
+            true,
+            ctx->KW_STATIC() != nullptr
         });
     }
 
@@ -612,6 +614,11 @@ private:
         return as_variant(new ASTSelfExpr{loc(ctx), false});
     }
 
+    auto visitSelfTypeExpr(ZincParser::SelfTypeExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(new ASTSelfExpr{loc(ctx), true});
+    }
+
     auto visitConstExpr(ZincParser::ConstExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
         return visit_expr(ctx->constant_);
     }
@@ -672,16 +679,6 @@ private:
             loc(ctx),
             visit_expr(ctx->template_),
             visit<std::span<ASTExprVariant>>(ctx->instantiation_list_)
-        });
-    }
-
-    auto visitTernaryExpr(ZincParser::TernaryExprContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return as_variant(new ASTTernaryOp{
-            loc(ctx),
-            visit_expr(ctx->condition_),
-            visit_expr(ctx->true_expr_),
-            visit_expr(ctx->false_expr_)
         });
     }
 
@@ -847,6 +844,16 @@ private:
         ASTExprVariant left = visit_expr(ctx->left_);
         ASTExprVariant right = visit_expr(ctx->right_);
         return as_variant(new ASTBinaryOp{loc(ctx), OperatorCode::LogicalOr, left, right});
+    }
+
+    auto visitTernaryExpr(ZincParser::TernaryExprContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(new ASTTernaryOp{
+            loc(ctx),
+            visit_expr(ctx->condition_),
+            visit_expr(ctx->true_expr_),
+            visit_expr(ctx->false_expr_)
+        });
     }
 
     auto visitAssignExpr(ZincParser::AssignExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
@@ -1037,7 +1044,7 @@ private:
             unescape_string(str);
             return as_variant(new ASTConstant{
                 loc(ctx),
-                new IntegerValue(&IntegerType::i8_instance, static_cast<std::size_t>(str[1]))
+                new IntegerValue(&IntegerType::u8_instance, static_cast<std::size_t>(str[1]))
             });
         }
         case ZincParser::KW_TRUE:

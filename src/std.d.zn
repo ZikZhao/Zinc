@@ -44,6 +44,8 @@ class string_view {
     fn find(self: &Self, needle: const_pointer) -> size_type;
     fn find(self: &Self, needle: const_pointer, pos: size_type) -> size_type;
 
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
+
     operator==(self: &Self, other: &Self) -> bool;
     operator==(other: const_pointer, self: &Self) -> bool;
     operator==(self: &Self, other: const_pointer) -> bool;
@@ -68,6 +70,8 @@ class string {
     type value_type = u8;
     type size_type = usize;
     type difference_type = isize;
+
+    static let npos: size_type;
 
     type pointer = *mut value_type;
     type const_pointer = *value_type;
@@ -119,6 +123,7 @@ class string {
     fn crend(self: &Self) -> const_reverse_iterator;
 
     fn clear(self: &mut Self);
+    fn swap(self: &mut Self, other: &mut Self);
     fn reserve(self: &mut Self, new_capacity: size_type);
     fn resize(self: &mut Self, count: size_type);
     fn resize(self: &mut Self, count: size_type, value: value_type);
@@ -141,6 +146,8 @@ class string {
 
     fn find(self: &Self, needle: Self) -> size_type;
     fn find(self: &Self, needle: Self, pos: size_type) -> size_type;
+    fn find(self: &Self, ch: value_type) -> size_type;
+    fn find(self: &Self, ch: value_type, pos: size_type) -> size_type;
     fn find(self: &Self, needle: string_view) -> size_type;
     fn find(self: &Self, needle: string_view, pos: size_type) -> size_type;
     fn find(self: &Self, needle: const_pointer) -> size_type;
@@ -470,6 +477,8 @@ class span<T: type> {
     fn subspan(self: &Self, offset: size_type) -> Self;
     fn subspan(self: &Self, offset: size_type, count: size_type) -> Self;
 
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
+
     operator==(self: &Self, other: &Self) -> bool;
     operator!=(self: &Self, other: &Self) -> bool;
     operator<(self: &Self, other: &Self) -> bool;
@@ -524,6 +533,8 @@ class array<T: type, N: usize> {
 
     fn fill(self: &mut Self, value: const_reference);
     fn swap(self: &mut Self, other: &mut Self);
+
+    operator=(self: &mut Self, other: &Self) -> &mut Self;
 
     operator==(self: &Self, other: &Self) -> bool;
     operator!=(self: &Self, other: &Self) -> bool;
@@ -588,6 +599,179 @@ class istream {
     operator>>(self: &mut Self, value: &mut string) -> &mut Self;
 }
 
+class istringstream {
+    type char_type = u8;
+
+    init();
+    init(text: &string);
+    init(text: string_view);
+    init(text: *u8);
+
+    fn str(self: &Self) -> string;
+    fn str(self: &mut Self, text: &string);
+    fn good(self: &Self) -> bool;
+    fn fail(self: &Self) -> bool;
+    fn eof(self: &Self) -> bool;
+    fn clear(self: &mut Self);
+
+    operator!(self: &Self) -> bool;
+
+    operator>>(self: &mut Self, value: &mut bool) -> &mut Self;
+
+    operator>>(self: &mut Self, value: &mut i8) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut i16) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut i32) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut i64) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut isize) -> &mut Self;
+
+    operator>>(self: &mut Self, value: &mut u8) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut u16) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut u32) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut u64) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut usize) -> &mut Self;
+
+    operator>>(self: &mut Self, value: &mut f32) -> &mut Self;
+    operator>>(self: &mut Self, value: &mut f64) -> &mut Self;
+
+    operator>>(self: &mut Self, value: &mut string) -> &mut Self;
+}
+
+class ifstream {
+    type char_type = u8;
+    type openmode = u32;
+
+    static let in: openmode;
+    static let binary: openmode;
+
+    init();
+    init(path: &filesystem.path);
+    init(path: &filesystem.path, mode: openmode);
+    init(filename: *u8);
+    init(filename: *u8, mode: openmode);
+
+    fn is_open(self: &Self) -> bool;
+    fn good(self: &Self) -> bool;
+    fn fail(self: &Self) -> bool;
+    fn eof(self: &Self) -> bool;
+    fn clear(self: &mut Self);
+
+    fn open(self: &mut Self, path: &filesystem.path);
+    fn open(self: &mut Self, path: &filesystem.path, mode: openmode);
+    fn open(self: &mut Self, filename: *u8);
+    fn open(self: &mut Self, filename: *u8, mode: openmode);
+    fn close(self: &mut Self);
+
+    fn read(self: &mut Self, buffer: *mut u8, count: usize) -> &mut Self;
+
+    operator!(self: &Self) -> bool;
+}
+
+class ofstream {
+    type char_type = u8;
+    type openmode = u32;
+
+    static let out: openmode;
+    static let binary: openmode;
+
+    init();
+    init(path: &filesystem.path);
+    init(path: &filesystem.path, mode: openmode);
+    init(filename: *u8);
+    init(filename: *u8, mode: openmode);
+
+    fn is_open(self: &Self) -> bool;
+    fn good(self: &Self) -> bool;
+    fn fail(self: &Self) -> bool;
+    fn clear(self: &mut Self);
+    fn flush(self: &mut Self) -> &mut Self;
+
+    fn open(self: &mut Self, path: &filesystem.path);
+    fn open(self: &mut Self, path: &filesystem.path, mode: openmode);
+    fn open(self: &mut Self, filename: *u8);
+    fn open(self: &mut Self, filename: *u8, mode: openmode);
+    fn close(self: &mut Self);
+
+    fn write(self: &mut Self, buffer: *u8, count: usize) -> &mut Self;
+
+    operator<<(self: &mut Self, value: bool) -> &mut Self;
+
+    operator<<(self: &mut Self, value: i8) -> &mut Self;
+    operator<<(self: &mut Self, value: i16) -> &mut Self;
+    operator<<(self: &mut Self, value: i32) -> &mut Self;
+    operator<<(self: &mut Self, value: i64) -> &mut Self;
+    operator<<(self: &mut Self, value: isize) -> &mut Self;
+
+    operator<<(self: &mut Self, value: u8) -> &mut Self;
+    operator<<(self: &mut Self, value: u16) -> &mut Self;
+    operator<<(self: &mut Self, value: u32) -> &mut Self;
+    operator<<(self: &mut Self, value: u64) -> &mut Self;
+    operator<<(self: &mut Self, value: usize) -> &mut Self;
+
+    operator<<(self: &mut Self, value: f32) -> &mut Self;
+    operator<<(self: &mut Self, value: f64) -> &mut Self;
+
+    operator<<(self: &mut Self, value: string_view) -> &mut Self;
+    operator<<(self: &mut Self, value: &string) -> &mut Self;
+    operator<<(self: &mut Self, value: *u8) -> &mut Self;
+
+    operator!(self: &Self) -> bool;
+}
+
+fn getline(stream: &mut ifstream, out: &mut string) -> bool;
+fn getline(stream: &mut istringstream, out: &mut string) -> bool;
+
+namespace filesystem {
+    type _std_string = string;
+
+    class path {
+        type value_type = u8;
+
+        init();
+        init(other: &Self);
+        init(source: &_std_string);
+        init(source: string_view);
+        init(source: *u8);
+
+        fn string(self: &Self) -> _std_string;
+
+        fn empty(self: &Self) -> bool;
+        fn has_parent_path(self: &Self) -> bool;
+        fn has_filename(self: &Self) -> bool;
+        fn has_extension(self: &Self) -> bool;
+
+        fn parent_path(self: &Self) -> Self;
+        fn filename(self: &Self) -> Self;
+        fn stem(self: &Self) -> Self;
+        fn extension(self: &Self) -> Self;
+
+        fn is_absolute(self: &Self) -> bool;
+        fn is_relative(self: &Self) -> bool;
+
+        fn clear(self: &mut Self);
+
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator/=(self: &mut Self, other: &Self) -> &mut Self;
+        operator/=(self: &mut Self, other: &_std_string) -> &mut Self;
+        operator/=(self: &mut Self, other: string_view) -> &mut Self;
+        operator/=(self: &mut Self, other: *u8) -> &mut Self;
+
+        operator/(self: &Self, other: &Self) -> Self;
+        operator/(self: &Self, other: &_std_string) -> Self;
+        operator/(self: &Self, other: string_view) -> Self;
+        operator/(self: &Self, other: *u8) -> Self;
+
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+    }
+
+    fn exists(p: &path) -> bool;
+    fn is_directory(p: &path) -> bool;
+    fn is_regular_file(p: &path) -> bool;
+    fn absolute(p: &path) -> path;
+    fn canonical(p: &path) -> path;
+    fn current_path() -> path;
+}
+
 let mut cin: istream;
 let mut cout: ostream;
 let mut cerr: ostream;
@@ -616,6 +800,8 @@ namespace chrono {
         fn min() -> Self;
         fn max() -> Self;
 
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+
         operator+(self: &Self, other: &Self) -> Self;
         operator-(self: &Self, other: &Self) -> Self;
         operator/(self: &Self, value: rep) -> Self;
@@ -643,6 +829,8 @@ namespace chrono {
 
         init();
         init(d: duration_type);
+
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
 
         fn time_since_epoch(self: &Self) -> duration_type;
 

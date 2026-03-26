@@ -398,9 +398,19 @@ public:
         }
         for (ASTNodeVariant decl_variant : node->fields) {
             const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
-            TypeResolution field_type;
             if (holds_monostate(decl->declared_type)) {
                 throw;
+            }
+            if (decl->declared_static) {
+                class_scope.add_variable(
+                    decl->identifier,
+                    new VariableInitialization{
+                        .is_comptime = decl->is_constant,
+                        .is_mutable = decl->is_mutable,
+                        .type = decl->declared_type,
+                        .value = std::monostate{}
+                    }
+                );
             }
         }
     }

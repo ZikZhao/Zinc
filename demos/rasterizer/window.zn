@@ -69,7 +69,7 @@ class Window {
         let flags = sdl.SDL_WINDOW_OPENGL;
 
         let anywhere = sdl.SDL_WINDOWPOS_UNDEFINED;
-        let window = sdl.SDL_CreateWindow("COMS30020", anywhere, anywhere, width_, height_, flags);
+        let window = sdl.SDL_CreateWindow("COMS30020", anywhere, anywhere, width, height, flags);
         if (!window) {
             throw std.runtime_error(std.format("[SDL] Could not set video mode: {}\n", sdl.SDL_GetError()));
         }
@@ -83,19 +83,19 @@ class Window {
             );
         }
         sdl.SDL_SetHint(sdl.SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-        sdl.SDL_RenderSetLogicalSize(renderer, width_, height_);
+        sdl.SDL_RenderSetLogicalSize(renderer, width, height);
 
         // Backbuffer texture receiving ARGB pixels
         let pixel_format = sdl.SDL_PIXELFORMAT_ARGB8888;
         let texture =
-            sdl.SDL_CreateTexture(renderer, pixel_format, sdl.SDL_TEXTUREACCESS_STATIC, width_, height_);
+            sdl.SDL_CreateTexture(renderer, pixel_format, sdl.SDL_TEXTUREACCESS_STATIC, width, height);
         if (!texture) {
             throw std.runtime_error(
                 std.format("[SDL] Could not allocate texture: {}\n", sdl.SDL_GetError())
             );
         }
 
-        let pixel_buffer = std.vector<u32>(width_ * height_);
+        let pixel_buffer = std.vector<u32>(width * height);
 
         return Self{
             width_ : width,
@@ -117,13 +117,13 @@ class Window {
     operator[](self: &mut Self, xy: std.pair<int, int>) -> &mut u32 {
         let x = xy.first as usize;
         let y = xy.second as usize;
-        return self.pixel_buffer_[y * width_ + x];
+        return self.pixel_buffer_[y * self.width_ + x];
     }
 
     operator[](self: &Self, xy: std.pair<int, int>) -> u32 {
         let x = xy.first as usize;
         let y = xy.second as usize;
-        return self.pixel_buffer_[y * width_ + x];
+        return self.pixel_buffer_[y * self.width_ + x];
     }
 
     fn get_pixel_buffer(self: &Self) -> &std.vector<u32> {
@@ -168,7 +168,7 @@ class Window {
 
     /// Polls SDL events and dispatches registered handlers.
     fn process_events(self: &mut Self) -> bool {
-        let mut event: SDL_Event;
+        let mut event: sdl.SDL_Event;
         self.keys_pressed_this_frame_.clear();
         self.mouse_buttons_last_frame_ = self.mouse_buttons_this_frame_;
         self.mouse_buttons_updated_this_frame_.clear();
@@ -274,7 +274,7 @@ class Window {
     /// Processes registered key bindings based on current state.
     fn process_key_bindings(self: &mut Self) {
         let now = std.chrono.steady_clock.now();
-        for (binding : key_bindings_) {
+        for (binding : self.key_bindings_) {
             // Continuous trigger (ANY_PRESSED) needs delta time tracking
             if (binding.trigger == Trigger.ANY_PRESSED) {
                 if (!self.check_key_trigger(binding)) { continue; }
@@ -319,7 +319,7 @@ class Window {
     /// Processes registered mouse bindings based on current state.
     fn process_mouse_bindings(self: &mut Self) {
         let now = std.chrono.steady_clock.now();
-        for (binding : mouse_bindings_) {
+        for (binding : self.mouse_bindings_) {
             let down = self.mouse_buttons_this_frame_.count(binding.button) > 0;
             let just_pressed = self.mouse_buttons_updated_this_frame_.count(binding.button) > 0 && down;
             switch (binding.trigger) {
@@ -369,17 +369,17 @@ class Window {
     fn check_key_trigger(self: &Self, binding: &KeyBinding) -> bool {
         switch (binding.trigger) {
         case Trigger.ANY_PRESSED: {
-            if (is_modifier_key_pressed()) { return false; }
+            if (self.is_modifier_key_pressed()) { return false; }
             for (key : binding.keys) {
-                if (keys_this_frame_[key]) { return true; }
+                if (self.keys_this_frame_[key]) { return true; }
             }
             return false;
         }
 
         case Trigger.ANY_JUST_PRESSED: {
-            if (is_modifier_key_pressed()) { return false; }
+            if (self.is_modifier_key_pressed()) { return false; }
             for (key : binding.keys) {
-                if (keys_pressed_this_frame_.count(key)) { return true; }
+                if (self.keys_pressed_this_frame_.count(key)) { return true; }
             }
             return false;
         }
@@ -387,8 +387,8 @@ class Window {
         case Trigger.ALL_JUST_PRESSED: {
             let mut exists_pressed_this_frame = false;  // at least one key must be just pressed
             for (key : binding.keys) {
-                if (!(keys_this_frame_[key] || keys_pressed_this_frame_.count(key))) { return false; }
-                if (keys_pressed_this_frame_.count(key)) { exists_pressed_this_frame = true; }
+                if (!(self.keys_this_frame_[key] || self.keys_pressed_this_frame_.count(key))) { return false; }
+                if (self.keys_pressed_this_frame_.count(key)) { exists_pressed_this_frame = true; }
             }
             return exists_pressed_this_frame;
         }

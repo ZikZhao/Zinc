@@ -10,6 +10,8 @@ class vec2 {
 	init(scalar: f32);
 	init(x: f32, y: f32);
 
+	operator=(self: &mut Self, rhs: &Self) -> &mut Self;
+
 	operator[](self: &Self, index: usize) -> &f32;
 	operator[](self: &mut Self, index: usize) -> &mut f32;
 
@@ -49,6 +51,9 @@ class vec3 {
 	let x: f32;
 	let y: f32;
 	let z: f32;
+    let r: f32;  // Alias for x
+    let g: f32;  // Alias for y
+    let b: f32;  // Alias for z
 
 	init();
 	init(scalar: f32);
@@ -56,51 +61,7 @@ class vec3 {
 	init(xy: vec2, z: f32);
 	init(v: vec4);
 
-	operator[](self: &Self, index: usize) -> &f32;
-	operator[](self: &mut Self, index: usize) -> &mut f32;
-
-	operator+(self: &Self, rhs: &Self) -> Self;
-	operator-(self: &Self, rhs: &Self) -> Self;
-	operator*(self: &Self, rhs: &Self) -> Self;
-	operator/(self: &Self, rhs: &Self) -> Self;
-
-	operator+(self: &Self, rhs: f32) -> Self;
-	operator-(self: &Self, rhs: f32) -> Self;
-	operator*(self: &Self, rhs: f32) -> Self;
-	operator/(self: &Self, rhs: f32) -> Self;
-
-	operator+(lhs: f32, self: &Self) -> Self;
-	operator-(lhs: f32, self: &Self) -> Self;
-	operator*(lhs: f32, self: &Self) -> Self;
-	operator/(lhs: f32, self: &Self) -> Self;
-
-	operator+=(self: &mut Self, rhs: &Self) -> &mut Self;
-	operator-=(self: &mut Self, rhs: &Self) -> &mut Self;
-	operator*=(self: &mut Self, rhs: &Self) -> &mut Self;
-	operator/=(self: &mut Self, rhs: &Self) -> &mut Self;
-
-	operator+=(self: &mut Self, rhs: f32) -> &mut Self;
-	operator-=(self: &mut Self, rhs: f32) -> &mut Self;
-	operator*=(self: &mut Self, rhs: f32) -> &mut Self;
-	operator/=(self: &mut Self, rhs: f32) -> &mut Self;
-
-	operator==(self: &Self, rhs: &Self) -> bool;
-	operator!=(self: &Self, rhs: &Self) -> bool;
-
-	operator-(self: &Self) -> Self;
-	operator+(self: &Self) -> Self;
-}
-
-class vec4 {
-	let x: f32;
-	let y: f32;
-	let z: f32;
-	let w: f32;
-
-	init();
-	init(scalar: f32);
-	init(x: f32, y: f32, z: f32, w: f32);
-	init(xyz: vec3, w: f32);
+	operator=(self: &mut Self, rhs: &Self) -> &mut Self;
 
 	operator[](self: &Self, index: usize) -> &f32;
 	operator[](self: &mut Self, index: usize) -> &mut f32;
@@ -142,6 +103,76 @@ class mat3 {
 	init(diagonal: f32);
 	init(col0: vec3, col1: vec3, col2: vec3);
 
+	operator=(self: &mut Self, rhs: &Self) -> &mut Self;
+
+	operator[](self: &Self, index: usize) -> &vec3;
+	operator[](self: &mut Self, index: usize) -> &mut vec3;
+
+	operator*(self: &Self, rhs: &Self) -> Self;
+	operator*(self: &Self, rhs: &vec3) -> vec3;
+	operator*(self: &Self, rhs: f32) -> Self;
+	operator*(lhs: f32, self: &Self) -> Self;
+	operator/(self: &Self, rhs: f32) -> Self;
+
+	operator==(self: &Self, rhs: &Self) -> bool;
+	operator!=(self: &Self, rhs: &Self) -> bool;
+}
+
+class vec4 {
+	let x: f32;
+	let y: f32;
+	let z: f32;
+	let w: f32;
+
+	init();
+	init(scalar: f32);
+	init(x: f32, y: f32, z: f32, w: f32);
+	init(xyz: vec3, w: f32);
+
+	operator=(self: &mut Self, rhs: &Self) -> &mut Self;
+
+	operator[](self: &Self, index: usize) -> &f32;
+	operator[](self: &mut Self, index: usize) -> &mut f32;
+
+	operator+(self: &Self, rhs: &Self) -> Self;
+	operator-(self: &Self, rhs: &Self) -> Self;
+	operator*(self: &Self, rhs: &Self) -> Self;
+	operator/(self: &Self, rhs: &Self) -> Self;
+
+	operator+(self: &Self, rhs: f32) -> Self;
+	operator-(self: &Self, rhs: f32) -> Self;
+	operator*(self: &Self, rhs: f32) -> Self;
+	operator/(self: &Self, rhs: f32) -> Self;
+
+	operator+(lhs: f32, self: &Self) -> Self;
+	operator-(lhs: f32, self: &Self) -> Self;
+	operator*(lhs: f32, self: &Self) -> Self;
+	operator/(lhs: f32, self: &Self) -> Self;
+
+	operator+=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator-=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator*=(self: &mut Self, rhs: &Self) -> &mut Self;
+	operator/=(self: &mut Self, rhs: &Self) -> &mut Self;
+
+	operator+=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator-=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator*=(self: &mut Self, rhs: f32) -> &mut Self;
+	operator/=(self: &mut Self, rhs: f32) -> &mut Self;
+
+	operator==(self: &Self, rhs: &Self) -> bool;
+	operator!=(self: &Self, rhs: &Self) -> bool;
+
+	operator-(self: &Self) -> Self;
+	operator+(self: &Self) -> Self;
+}
+
+class mat3 {
+	init();
+	init(diagonal: f32);
+	init(col0: vec3, col1: vec3, col2: vec3);
+
+	operator=(self: &mut Self, rhs: &Self) -> &mut Self;
+
 	operator[](self: &Self, index: usize) -> &vec3;
 	operator[](self: &mut Self, index: usize) -> &mut vec3;
 
@@ -158,6 +189,8 @@ class mat3 {
 class mat4 {
 	init();
 	init(diagonal: f32);
+
+	operator=(self: &mut Self, rhs: &Self) -> &mut Self;
 
 	operator[](self: &Self, index: usize) -> &vec4;
 	operator[](self: &mut Self, index: usize) -> &mut vec4;

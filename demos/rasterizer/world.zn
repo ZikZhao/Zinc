@@ -98,8 +98,8 @@ class Camera {
         let sin_yaw = std.sin(self.yaw_);
         let f = glm.vec3(sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch);
         let world_up = glm.vec3(0.0f, 1.0f, 0.0f);
-        let r = glm.normalize(glm.cross(f, world_up));
-        let u = glm.normalize(glm.cross(r, f));
+        let mut r = glm.normalize(glm.cross(f, world_up));
+        let mut u = glm.normalize(glm.cross(r, f));
         let c = std.cos(self.roll_);
         let s = std.sin(self.roll_);
         let rotate_axis = (v: &glm.vec3): glm.vec3 => {
@@ -108,9 +108,9 @@ class Camera {
         r = rotate_axis(r);
         u = rotate_axis(u);
         let mut o = glm.mat3();
-        o[0] = r;
-        o[1] = u;
-        o[2] = f;
+        o[0 as usize] = r;
+        o[1 as usize] = u;
+        o[2 as usize] = f;
         return o;
     }
 
@@ -124,12 +124,12 @@ class Camera {
 
     fn go_right(self: &Self) -> glm.vec3 {  
         let o = self.orientation();
-        return glm.normalize(o[0]);
+        return glm.normalize(o[0 as usize]);
     }
 
     fn go_up(self: &Self) -> glm.vec3 {
         let o = self.orientation();
-        return glm.normalize(o[1]);
+        return glm.normalize(o[1 as usize]);
     }
 
     /// Projects a world-space vertex to homogeneous clip space.
@@ -173,7 +173,7 @@ class Camera {
     fn rotate(self: &mut Self, delta_yaw: f32, delta_pitch: f32) {
         self.yaw_ += delta_yaw;
         self.pitch_ += delta_pitch;
-        self.pitch_ = std.clamp(self.pitch_, -Constant.MaxPitch, Constant.MaxPitch);
+        self.pitch_ = std.clamp(self.pitch_ as f32, -Constant.MaxPitch, Constant.MaxPitch);
     }
 
     fn roll(self: &mut Self, delta_roll: f32) { self.roll_ += delta_roll; }
@@ -237,7 +237,7 @@ class World {
             } else if (ext == ".txt") {
                 // Text scene
                 let mut model: Model;
-                parse_txt(mut model, path);
+                Self.parse_txt(mut model, path);
                 models_.emplace_back(move model);
             } else if (ext == ".obj") {
                 // Standard OBJ model
@@ -250,12 +250,14 @@ class World {
                 throw std.runtime_error("Unsupported file format: " + std.string(filename));
             }
         }
-        self.merge_models();
+        let mut world = Self{};
+        world.merge_models();
+        return move world;
     }
 
     static fn parse_index_token(token: &std.string) -> [i32; 3] {
         // Parses an OBJ index token of the form "v", "v/vt", "v//vn", or "v/vt/vn"
-        let idx: [i32; 3] = [0, 0, 0];
+        let mut idx: [i32; 3] = [0, 0, 0];
 
         let first_slash = token.find('/');
         if (first_slash == std.string.npos) {
@@ -268,7 +270,7 @@ class World {
 
         // Parse vertex index (before first slash)
         if (first_slash > 0) {
-            idx[0] = std.stoi(token.substr(0, first_slash));
+            idx[0] = std.stoi(token.substr(0 as usize, first_slash));
         }
 
         let second_slash = token.find('/', first_slash + 1);
@@ -292,83 +294,81 @@ class World {
 
     fn parse_mtl(model: &mut Model, path: &std.filesystem.path) {
         let current_material = model.materials.end();
-        let file = std.ifstream(path);
+        let mut file = std.ifstream(path);
         if (!file.is_open()) {
             throw std.runtime_error("Could not open material file: " + path.string());
         }
 
-        let line: std.string;
+        let mut line: std.string;
         for (std.getline(file, line)) {
-            let iss = std.istringstream(line);
-            let keyword: std.string;
+            let mut iss = std.istringstream(line);
+            let mut keyword: std.string;
             iss >> keyword;
             if (keyword == "newmtl") {
-                let name: std.string;
+                let mut name: std.string;
                 iss >> name;
-                assert(model.materials.find(name) == model.materials.end());
                 current_material = model.materials.emplace(name, Material{}).first;
             } else if (keyword == "Kd") {
-                assert(current_material != model.materials.end());
-                let r: f32;
-                let g: f32;
-                let b: f32;
+                let mut r: f32;
+                let mut g: f32;
+                let mut b: f32;
                 iss >> r >> g >> b;
                 current_material->second.base_color = glm.vec3(r, g, b);
             } else if (keyword == "Ns") {
                 assert(current_material != model.materials.end());
-                let ns: f32;
+                let mut ns: f32;
                 iss >> ns;
                 current_material->second.shininess = ns;
             } else if (keyword == "Mt") {
                 assert(current_material != model.materials.end());
-                let metallic_value: f32;
+                let mut metallic_value: f32;
                 iss >> metallic_value;
                 current_material->second.metallic = std.clamp(metallic_value, 0.0f, 1.0f);
             } else if (keyword == "ior") {
                 assert(current_material != model.materials.end());
-                let ior_value: f32;
+                let mut ior_value: f32;
                 iss >> ior_value;
                 current_material->second.ior = std.max(1.0f, ior_value);
             } else if (keyword == "td") {
                 assert(current_material != model.materials.end());
-                let td_value: f32;
+                let mut td_value: f32;
                 iss >> td_value;
                 current_material->second.td = std.max(0.0f, td_value);
             } else if (keyword == "tw") {
                 assert(current_material != model.materials.end());
-                let tw_value: f32;
+                let mut tw_value: f32;
                 iss >> tw_value;
                 current_material->second.tw = std.clamp(tw_value, 0.0f, 1.0f);
             } else if (keyword == "Ke") {
                 assert(current_material != model.materials.end());
-                let r: f32;
-                let g: f32;
-                let b: f32;
+                let mut r: f32;
+                let mut g: f32;
+                let mut b: f32;
                 iss >> r >> g >> b;
                 current_material->second.emission =
                     glm.vec3(std.max(0.0f, r), std.max(0.0f, g), std.max(0.0f, b));
             } else if (keyword == "sigma_a") {
                 assert(current_material != model.materials.end());
-                let r: f32;
-                let g: f32;
-                let b: f32;
+                let mut r: f32;
+                let mut g: f32;
+                let mut b: f32;
                 iss >> r >> g >> b;
                 current_material->second.sigma_a =
                     glm.vec3(std.max(0.0f, r), std.max(0.0f, g), std.max(0.0f, b));
             } else if (keyword == "map_Kd") {
                 assert(current_material != model.materials.end());
-                let texture_filename: std.string;
+                let mut texture_filename: std.string;
                 iss >> texture_filename;
                 texture_filename = (path.parent_path() / texture_filename).string();
                 current_material->second.texture =
-                    std.make_shared<Texture>(load_texture(texture_filename));
+                    std.make_shared::<Texture>(Self.load_texture(texture_filename));
             } else if (keyword == "map_Bump") {
                 assert(current_material != model.materials.end());
-                let normal_filename: std.string;
+                let mut normal_filename: std.string;
                 iss >> normal_filename;
                 normal_filename = (path.parent_path() / normal_filename).string();
                 current_material->second.normal_map =
-                    std.make_shared<NormalMap>(load_normal_map(normal_filename));
+                    std.make_shared::<NormalMap>(load_normal_map(normal_filename));
             }
         }
     }
@@ -385,49 +385,49 @@ class World {
             throw std.runtime_error("Could not open file: " + path.string());
         }
 
-        let line: std.string;
+        let mut line: std.string;
         let current_material = model.materials.end();
-        let vertex_offset = 0;
-        let tex_offset = 0;
-        let normal_offset = 0;
+        let mut vertex_offset = 0;
+        let mut tex_offset = 0;
+        let mut normal_offset = 0;
         for (std.getline(file, line)) {
             let iss = std.istringstream(line);
-            let keyword: std.string;
+            let mut keyword: std.string;
             iss >> keyword;
             if (keyword == "Environ") {
                 // Environment map HDR file
                 /*
-                let hdr: std.string;
+                let mut hdr: std.string;
                 iss >> hdr;
                 let hdr_path = (std.filesystem.path(path).parent_path() / hdr).string();
                 load_hdr_env_map(hdr_path);
                 */
             } else if (keyword == "Include") {
                 // Include another scene file
-                let rel: std.string;
+                let mut rel: std.string;
                 iss >> rel;
                 if (!rel.empty()) {
                     let inc_path = (std.filesystem.path(path).parent_path() / rel).string();
-                    parse_txt(model, inc_path);
+                    Self.parse_txt(model, inc_path);
                 }
             } else if (keyword == "Material") {
                 // Begin a new material block
-                let name: std.string;
+                let mut name: std.string;
                 iss >> name;
                 current_material = model.materials.emplace(name, Material{}).first;
             } else if (keyword == "Colour") {
                 // Albedo (diffuse base color)
                 if (current_material != model.materials.end()) {
-                    let r: f32;
-                    let g: f32;
-                    let b: f32;
+                    let mut r: f32;
+                    let mut g: f32;
+                    let mut b: f32;
                     iss >> r >> g >> b;
                     current_material->second.base_color = glm.vec3(r, g, b);
                 }
             } else if (keyword == "Metallic") {
                 // Metallic factor for specular reflection weighting [0,1]
                 if (current_material != model.materials.end()) {
-                    let m: f32;
+                    let mut m: f32;
                     iss >> m;
                     current_material->second.metallic = std.clamp(m, 0.0f, 1.0f);
                 }
@@ -470,7 +470,7 @@ class World {
                     let texture_filename =
                         (std.filesystem.path(path).parent_path() / tex_name).string();
                     current_material->second.texture =
-                        std.make_shared<Texture>(load_texture(texture_filename));
+                        std.make_shared<Texture>(Self.load_texture(texture_filename));
                 }
             } else if (keyword == "NormalMap") {
                 // Bind a PPM normal map to the material
@@ -577,7 +577,7 @@ class World {
                 let has_vn = false;
                 for (let i = 0; i < 3; ++i) {
                     let t: &std.string = tok[i];
-                    let indice = parse_index_token(t);
+                    let indice = Self.parse_index_token(t);
                     let v_i = indice[0];
                     let vt_i = indice[1];
                     let vn_i = indice[2];
@@ -632,8 +632,8 @@ class World {
             }
         }
 
-        compute_all_face_normals(model);
-        flatten_model_faces(model);
+        Self.compute_all_face_normals(model);
+        Self.flatten_model_faces(model);
     }
 
     fn load_texture(path: &std.filesystem.path) -> Texture {

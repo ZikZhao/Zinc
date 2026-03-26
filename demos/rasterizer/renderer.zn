@@ -14,9 +14,9 @@ class Renderer {
 
     init(world: &World.World, window: &Window.Window) {
         return Self{
-            world: world,
-            rasterizer: std.make_unique<Rasterizer.Rasterizer>(window),
-            mode: Mode.RASTERIZED
+            world_: world,
+            rasterizer_: std.make_unique<Rasterizer.Rasterizer>(window),
+            mode_: Mode.RASTERIZED
         };
     }
 

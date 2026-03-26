@@ -364,6 +364,7 @@ struct ASTDeclaration final : public ASTNode {
     ASTExprVariant expr;
     bool is_mutable;
     bool is_constant;
+    bool declared_static;
 };
 
 struct ASTTypeAlias final : public ASTNode {

@@ -390,16 +390,20 @@ public:
     }
 
     static auto error_candidate_type_mismatch(
-        strview signature, std::size_t index, strview expected, strview actual
+        Location location, std::size_t index, strview expected, strview actual
     ) noexcept -> void {
-        unlocated_error(
-            GlobalMemory::format(
-                "Candidate with mismatching argument types at index {}: expected '{}', got '{}'",
-                signature,
-                index,
-                expected,
-                actual
-            )
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format(
+                    "Candidate with mismatching argument types at index {}: expected '{}', got "
+                    "'{}'",
+                    index,
+                    expected,
+                    actual
+                )
+            }
         );
     }
 
@@ -482,6 +486,32 @@ public:
                 .location = location,
                 .message = GlobalMemory::String("Cannot deduce struct type from initializer"sv)
             }
+        );
+    }
+
+    static auto error_explicit_function_instantiation(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String(
+                    "Explicit instantiation of function templates is not supported"sv
+                )
+            }
+        );
+    }
+
+    static auto error_auto_binding_mismatch(
+        strview auto_rep, strview prev, strview current
+    ) noexcept -> void {
+        unlocated_error(
+            GlobalMemory::format(
+                "Auto type deduction mismatch for '{}': previously deduced '{}', now deduced "
+                "'{}'",
+                auto_rep,
+                prev,
+                current
+            )
         );
     }
 };

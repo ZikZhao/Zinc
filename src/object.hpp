@@ -1017,24 +1017,42 @@ public:
         : Value(kind), type_(type), value_(std::move(value)) {}
     auto repr() const -> GlobalMemory::String final {
         strview prefix;
-        switch (type_->bits_) {
-        case 0:
+        if (type_ == &IntegerType::untyped_instance) {
             prefix = "untyped";
-            break;
-        case 8:
-            prefix = "i8";
-            break;
-        case 16:
-            prefix = "i16";
-            break;
-        case 32:
-            prefix = "i32";
-            break;
-        case 64:
-            prefix = "i64";
-            break;
-        default:
-            UNREACHABLE();
+        } else if (type_->is_signed_) {
+            switch (type_->bits_) {
+            case 8:
+                prefix = "i8";
+                break;
+            case 16:
+                prefix = "i16";
+                break;
+            case 32:
+                prefix = "i32";
+                break;
+            case 64:
+                prefix = "i64";
+                break;
+            default:
+                UNREACHABLE();
+            }
+        } else {
+            switch (type_->bits_) {
+            case 8:
+                prefix = "u8";
+                break;
+            case 16:
+                prefix = "u16";
+                break;
+            case 32:
+                prefix = "u32";
+                break;
+            case 64:
+                prefix = "u64";
+                break;
+            default:
+                UNREACHABLE();
+            }
         }
         return GlobalMemory::format("{}({})", prefix, value_.to_string());
     }
@@ -1053,6 +1071,63 @@ public:
         return value_ == other_int->value_;
     }
     std::size_t hash_code() const noexcept final { return std::hash<BigInt>{}(value_); }
+    IntegerValue* resolve_to(const IntegerType* target) const noexcept {
+        assert(type_ == &IntegerType::untyped_instance);
+        assert(target ? target->dyn_cast<IntegerType>() != nullptr : true);
+        if (target == nullptr) {
+            // most suitable type inference
+            if (value_.fits_in<std::int32_t>()) {
+                return new IntegerValue(&IntegerType::i32_instance, value_);
+            } else {
+                Diagnostic::error_overflow(value_.to_string(), target->repr());
+                return nullptr;
+            }
+        } else {
+            assert(target != &IntegerType::untyped_instance);
+            // convert to the specified target type
+            strview error_type;
+            if (target->is_signed_) {
+                switch (target->bits_) {
+                case 8:
+                    error_type = value_.fits_in<std::int8_t>() ? "" : "i8";
+                    break;
+                case 16:
+                    error_type = value_.fits_in<std::int16_t>() ? "" : "i16";
+                    break;
+                case 32:
+                    error_type = value_.fits_in<std::int32_t>() ? "" : "i32";
+                    break;
+                case 64:
+                    error_type = value_.fits_in<std::int64_t>() ? "" : "i64";
+                    break;
+                default:
+                    UNREACHABLE();
+                }
+            } else {
+                switch (target->bits_) {
+                case 8:
+                    error_type = value_.fits_in<std::uint8_t>() ? "" : "u8";
+                    break;
+                case 16:
+                    error_type = value_.fits_in<std::uint16_t>() ? "" : "u16";
+                    break;
+                case 32:
+                    error_type = value_.fits_in<std::uint32_t>() ? "" : "u32";
+                    break;
+                case 64:
+                    error_type = value_.fits_in<std::uint64_t>() ? "" : "u64";
+                    break;
+                default:
+                    UNREACHABLE();
+                }
+            }
+            if (!error_type.empty()) {
+                Diagnostic::error_overflow(value_.to_string(), error_type);
+                return nullptr;
+            }
+            return new IntegerValue(target, value_);
+        }
+    }
 };
 
 class FloatValue final : public Value {
@@ -1101,6 +1176,20 @@ public:
         return value_ == other->cast<FloatValue>()->value_;
     }
     std::size_t hash_code() const noexcept final { return std::hash<double>{}(value_); }
+    FloatValue* resolve_to(const FloatType* target) const noexcept {
+        assert(type_ == &FloatType::untyped_instance);
+        if (target == nullptr) {
+            return new FloatValue(&FloatType::f64_instance, value_);
+        } else {
+            assert(target != &FloatType::untyped_instance);
+            if (std::abs(value_) <= std::numeric_limits<float>::max()) {
+                return new FloatValue(&FloatType::f32_instance, static_cast<float>(value_));
+            } else {
+                Diagnostic::error_overflow(GlobalMemory::format("{:#}", value_), "f32");
+                return nullptr;
+            }
+        }
+    }
 };
 
 class BooleanValue final : public Value {
@@ -1134,7 +1223,10 @@ public:
     static constexpr Kind kind = Kind::Auto;
 
 public:
-    AutoObject() noexcept : Type(kind, true), Value(kind, true) {}
+    std::size_t index_;
+
+public:
+    AutoObject(std::size_t index) noexcept : Type(kind, true), Value(kind, true), index_(index) {}
     auto as_object(bool is_nttp) const noexcept -> const Object* {
         if (is_nttp) {
             return static_cast<const Value*>(this);
@@ -1145,7 +1237,10 @@ public:
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         auto [it, inserted] = auto_bindings.insert({this, target});
         if (!inserted) {
-            return it->second == target;
+            if (it->second != target) {
+                Diagnostic::error_auto_binding_mismatch(repr(), it->second->repr(), target->repr());
+                return false;
+            }
         }
         return true;
     }
@@ -1154,13 +1249,16 @@ public:
     ) const noexcept override {
         auto [it, inserted] = auto_bindings.insert({this, source});
         if (!inserted) {
-            return it->second == source;
+            if (it->second != source) {
+                Diagnostic::error_auto_binding_mismatch(repr(), it->second->repr(), source->repr());
+                return false;
+            }
         }
         return true;
     }
 
 private:
-    GlobalMemory::String repr() const final { UNREACHABLE(); }
+    GlobalMemory::String repr() const final { return GlobalMemory::format("auto#{}", index_); }
     const Type* get_type() const noexcept final { UNREACHABLE(); }
     Value* clone() const noexcept final { UNREACHABLE(); }
     void assign_from(Value* source) noexcept final { UNREACHABLE(); }
@@ -1388,7 +1486,7 @@ public:
 
     static auto get_auto_instances(std::size_t count) noexcept -> std::span<const AutoObject*> {
         while (instance->auto_objects_.size() < count) {
-            instance->auto_objects_.push_back(new AutoObject());
+            instance->auto_objects_.push_back(new AutoObject(instance->auto_objects_.size()));
         }
         return {instance->auto_objects_.data(), count};
     }
@@ -1538,17 +1636,13 @@ inline auto Term::effective_type() const noexcept -> const Type* {
 inline auto Term::resolve_to_default() const noexcept -> Term {
     if (is_comptime_) {
         if (auto* integer_value = value_->dyn_cast<IntegerValue>()) {
-            if (integer_value->type_ != &IntegerType::untyped_instance) return *this;
-            if (!integer_value->value_.fits_in<std::int32_t>()) {
-                Diagnostic::error_overflow(integer_value->value_.to_string(), "i32");
-                return *this;
+            if (integer_value->type_ == &IntegerType::untyped_instance) {
+                return Term::prvalue(integer_value->resolve_to(nullptr));
             }
-            return Term::prvalue(
-                new IntegerValue(&IntegerType::i32_instance, integer_value->value_)
-            );
         } else if (auto* float_value = value_->dyn_cast<FloatValue>()) {
-            if (float_value->type_ != &FloatType::untyped_instance) return *this;
-            return Term::prvalue(new FloatValue(&FloatType::f64_instance, float_value->value_));
+            if (float_value->type_ == &FloatType::untyped_instance) {
+                return Term::prvalue(float_value->resolve_to(nullptr));
+            }
         }
     }
     return *this;

@@ -38,10 +38,11 @@ local_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 expr_statement: expr_ = expr OP_SEMICOLON;
 
 declaration_statement:
-	KW_LET KW_MUT? identifier_ = T_IDENTIFIER (
+	KW_STATIC? KW_LET KW_MUT? identifier_ = T_IDENTIFIER (
 		OP_COLON type_ = type
 	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON # LetDecl
-	| (specialize_list_ = specialize_parameter_list)? KW_CONST identifier_ = T_IDENTIFIER (
+	| (specialize_list_ = specialize_parameter_list)? KW_STATIC? KW_CONST identifier_ = T_IDENTIFIER
+		(
 		template_list_ = template_parameter_list
 		| instantiation_list_ = instantiation_list
 	)? (OP_COLON type_ = type)? OP_ASSIGN value_ = expr OP_SEMICOLON # ConstDecl;
@@ -189,6 +190,7 @@ import_statement:
 
 expr:
 	KW_SELF														# SelfExpr
+	| KW_SELF_TYPE												# SelfTypeExpr
 	| constant_ = constant										# ConstExpr
 	| identifier_ = T_IDENTIFIER								# IdentifierExpr
 	| template_ = expr instantiation_list_ = instantiation_list	# InstantiationExpr
@@ -203,14 +205,13 @@ expr:
 	)? OP_RBRACE # StructInitExpr
 	| OP_LBRACKET (
 		elements_ += expr (OP_COMMA elements_ += expr)*
-	)? OP_RBRACKET																	# ArrayInitExpr
-	| base_ = expr OP_LBRACKET start_ = expr OP_COLON end_ = expr OP_RBRACKET		# SliceExpr
-	| KW_MUT inner_expr_ = expr														# MutExpr
-	| KW_MOVE inner_expr_ = expr													# MoveExpr
-	| KW_FORWARD inner_expr_ = expr													# ForwardExpr
-	| OP_LPAREN inner_expr_ = expr OP_RPAREN										# ParenExpr
-	| condition_ = expr OP_QUESTION true_expr_ = expr OP_COLON false_expr_ = expr	# TernaryExpr
-	| expr_ = expr KW_AS OP_QUESTION? type_ = type									# AsExpr
+	)? OP_RBRACKET																# ArrayInitExpr
+	| base_ = expr OP_LBRACKET start_ = expr OP_COLON end_ = expr OP_RBRACKET	# SliceExpr
+	| KW_MUT inner_expr_ = expr													# MutExpr
+	| KW_MOVE inner_expr_ = expr												# MoveExpr
+	| KW_FORWARD inner_expr_ = expr												# ForwardExpr
+	| OP_LPAREN inner_expr_ = expr OP_RPAREN									# ParenExpr
+	| expr_ = expr KW_AS OP_QUESTION? type_ = type								# AsExpr
 	| OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
@@ -244,13 +245,15 @@ expr:
 		| OP_LTE
 		| OP_GT
 		| OP_GTE
-	) right_ = expr														# RelationalExpr
-	| <assoc = left> left_ = expr op_ = (OP_EQ | OP_NEQ) right_ = expr	# EqualityExpr
-	| <assoc = left> left_ = expr op_ = OP_BITAND right_ = expr			# BitAndExpr
-	| <assoc = left> left_ = expr op_ = OP_BITXOR right_ = expr			# BitXorExpr
-	| <assoc = left> left_ = expr op_ = OP_BITOR right_ = expr			# BitOrExpr
-	| <assoc = left> left_ = expr op_ = OP_AND right_ = expr			# AndExpr
-	| <assoc = left> left_ = expr op_ = OP_OR right_ = expr				# OrExpr
+	) right_ = expr																					# RelationalExpr
+	| <assoc = left> left_ = expr op_ = (OP_EQ | OP_NEQ) right_ = expr								# EqualityExpr
+	| <assoc = left> left_ = expr op_ = OP_BITAND right_ = expr										# BitAndExpr
+	| <assoc = left> left_ = expr op_ = OP_BITXOR right_ = expr										# BitXorExpr
+	| <assoc = left> left_ = expr op_ = OP_BITOR right_ = expr										# BitOrExpr
+	| <assoc = left> left_ = expr op_ = OP_AND right_ = expr										# AndExpr
+	| <assoc = left> left_ = expr op_ = OP_OR right_ = expr											# OrExpr
+	| <assoc = right> condition_ = expr OP_QUESTION true_expr_ = expr OP_COLON false_expr_ = expr	#
+		TernaryExpr
 	| <assoc = right> left_ = expr (
 		op_ = OP_ASSIGN
 		| op_ = OP_ADD_ASSIGN
