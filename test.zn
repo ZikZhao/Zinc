@@ -9,6 +9,6 @@ class A{
 }
 
 fn main(args: [strview]) {
-    let mut a: std.vector<i32>;
-    a.emplace_back(1);
+    let mut a = A(1, 2);
+    a.foo();
 }

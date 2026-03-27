@@ -136,55 +136,6 @@ private:
     }
 };
 
-class Term : public GlobalMemory::MonotonicAllocated {
-public:
-    enum class Category : std::uint8_t {
-        Runtime,   // a runtime value -> const Type*
-        Comptime,  // a compile-time value -> Value*
-    };
-
-public:
-    static auto prvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Right); }
-    static auto lvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Left); }
-    static auto lvalue(Term term) noexcept -> Term {
-        return Term(term.get(), ValueCategory::Left, term.is_comptime_);
-    }
-    static auto xvalue(auto* ptr) noexcept -> Term { return Term(ptr, ValueCategory::Expiring); }
-    static auto forward_like(const Term& source, auto* ptr) noexcept -> Term {
-        return Term(ptr, source.value_category(), source.is_comptime_);
-    }
-
-private:
-    union {
-        const Object* ptr_;
-        const Type* type_;
-        Value* value_;
-    };
-    ValueCategory value_category_;
-    bool is_comptime_;
-
-private:
-    Term(const Type* type, ValueCategory value_category) noexcept
-        : type_(type), value_category_(value_category), is_comptime_(false) {}
-    Term(Value* value, ValueCategory value_category) noexcept
-        : value_(value), value_category_(value_category), is_comptime_(true) {}
-    Term(const Object* ptr, ValueCategory value_category, bool is_comptime) noexcept
-        : ptr_(ptr), value_category_(value_category), is_comptime_(is_comptime) {}
-
-public:
-    Term() noexcept = default;
-
-    auto get() const noexcept -> const Object* { return ptr_; }
-    operator bool() const noexcept { return ptr_ != nullptr; }
-    auto operator->() const noexcept -> const Object* { return ptr_; }
-    auto effective_type() const noexcept -> const Type*;
-    auto value_category() const noexcept -> ValueCategory { return value_category_; }
-
-    auto is_comptime() const noexcept -> bool { return is_comptime_; }
-    auto get_comptime() const noexcept -> Value* { return is_comptime() ? value_ : nullptr; }
-    auto resolve_to_default() const noexcept -> Term;
-};
-
 class Object : public GlobalMemory::MonotonicAllocated {
 public:
     static auto any_pattern(auto&& elements) noexcept -> bool {
@@ -284,6 +235,13 @@ private:
 };
 
 class Type : public Object {
+public:
+    static auto decay(const Type* type) noexcept -> const Type*;
+    static auto is_mutable(const Type* type) noexcept -> bool;
+    static auto set_mutable(const Type* type, bool is_mutable) noexcept -> const Type*;
+    static auto forward_like(const Type* source, const Type* target) noexcept -> const Type*;
+    static auto category(const Type* type) noexcept -> ValueCategory;
+
 protected:
     Type(Kind kind, bool is_pattern) noexcept : Object(kind, true, is_pattern) {}
 
@@ -1624,27 +1582,134 @@ public:
     TypeRegistry() noexcept = default;
 };
 
-// ===== Implementation =====
-
-inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
-
-inline auto Term::effective_type() const noexcept -> const Type* {
-    return is_comptime_ ? value_->get_type() : type_;
-}
-
-inline auto Term::resolve_to_default() const noexcept -> Term {
-    if (is_comptime_) {
-        if (auto* integer_value = value_->dyn_cast<IntegerValue>()) {
-            if (integer_value->type_ == &IntegerType::untyped_instance) {
-                return Term::prvalue(integer_value->resolve_to(nullptr));
-            }
-        } else if (auto* float_value = value_->dyn_cast<FloatValue>()) {
-            if (float_value->type_ == &FloatType::untyped_instance) {
-                return Term::prvalue(float_value->resolve_to(nullptr));
-            }
+class Term : public GlobalMemory::MonotonicAllocated {
+public:
+    static auto of(const Type* type) noexcept -> Term { return Term(type); }
+    static auto of(const Value* value) noexcept -> Term { return Term(value); }
+    static auto lvalue(const Type* type) noexcept -> Term {
+        if (auto* ref = type->dyn_cast<ReferenceType>()) {
+            return Term(TypeRegistry::get<ReferenceType>(ref->target_type_, false));
+        } else {
+            return Term(TypeRegistry::get<ReferenceType>(type, false));
         }
     }
-    return *this;
+    static auto xvalue(const Type* type) noexcept -> Term {
+        if (auto* ref = type->dyn_cast<ReferenceType>()) {
+            return Term(TypeRegistry::get<ReferenceType>(ref->target_type_, true));
+        } else {
+            return Term(TypeRegistry::get<ReferenceType>(Type::decay(type), true));
+        }
+    }
+    static auto forward_like(Term term, const Type* type) noexcept -> Term {
+        const Type* decayed = term.decay();
+        switch (Type::category(term.effective_type())) {
+        case ValueCategory::Right:
+            return of(decayed);
+        case ValueCategory::Left:
+            return lvalue(decayed);
+        case ValueCategory::Expiring:
+            return xvalue(decayed);
+        }
+    }
+
+private:
+    const Object* ptr_;
+
+private:
+    Term(const Type* type) noexcept : ptr_(type) {}
+    Term(Value* value) noexcept : ptr_(value) {}
+    Term(const Object* ptr) noexcept : ptr_(ptr) {}
+
+public:
+    Term() noexcept = default;
+
+    auto get() const noexcept -> const Object* { return ptr_; }
+    operator bool() const noexcept { return ptr_ != nullptr; }
+    auto operator->() const noexcept -> const Object* { return ptr_; }
+    auto effective_type() const noexcept -> const Type* {
+        if (ptr_ == nullptr) {
+            return nullptr;
+        } else if (auto* value = ptr_->dyn_value()) {
+            return value->get_type();
+        } else {
+            return ptr_->cast<Type>();
+        }
+    }
+    auto decay() const noexcept -> const Type* { return Type::decay(effective_type()); }
+    auto is_comptime() const noexcept -> bool { return ptr_ && ptr_->dyn_value(); }
+    auto get_comptime() const noexcept -> const Value* {
+        if (ptr_ == nullptr) {
+            return nullptr;
+        }
+        return ptr_->dyn_value();
+    }
+    auto resolve_to_default() const noexcept -> Term {
+        if (ptr_ == nullptr) {
+            return *this;
+        }
+        if (auto* value = ptr_->dyn_value()) {
+            if (auto* integer_value = value->dyn_cast<IntegerValue>()) {
+                if (integer_value->type_ == &IntegerType::untyped_instance) {
+                    return of(integer_value->resolve_to(nullptr));
+                }
+            } else if (auto* float_value = value->dyn_cast<FloatValue>()) {
+                if (float_value->type_ == &FloatType::untyped_instance) {
+                    return of(float_value->resolve_to(nullptr));
+                }
+            }
+        }
+        return *this;
+    }
+};
+
+// ===== Implementation =====
+
+inline auto Type::decay(const Type* type) noexcept -> const Type* {
+    if (type == nullptr) return nullptr;
+    if (auto mut = type->dyn_cast<MutableType>()) {
+        assert(mut->target_type_ == Type::decay(mut->target_type_));
+        return mut->target_type_;
+    } else if (auto ref = type->dyn_cast<ReferenceType>()) {
+        return decay(ref->target_type_);
+    } else {
+        return type;
+    }
+}
+
+inline auto Type::is_mutable(const Type* type) noexcept -> bool {
+    if (type->kind_ == Kind::Mutable) {
+        return true;
+    } else if (auto ref = type->dyn_cast<ReferenceType>()) {
+        return is_mutable(ref->target_type_);
+    } else {
+        return false;
+    }
+}
+
+inline auto Type::forward_like(const Type* source, const Type* target) noexcept -> const Type* {
+    const Type* decayed_target = decay(target);
+    if (auto ref = source->dyn_cast<ReferenceType>()) {
+        if (ref->target_type_->dyn_cast<MutableType>()) {
+            return TypeRegistry::get<ReferenceType>(
+                TypeRegistry::get<MutableType>(decayed_target), ref->is_moved_
+            );
+        } else {
+            return TypeRegistry::get<ReferenceType>(decayed_target, ref->is_moved_);
+        }
+    } else if (source->dyn_cast<MutableType>()) {
+        return TypeRegistry::get<MutableType>(decayed_target);
+    } else {
+        return TypeRegistry::get<ReferenceType>(decayed_target, true);
+    }
+}
+
+inline auto Type::category(const Type* type) noexcept -> ValueCategory {
+    if (type->kind_ == Kind::Reference) {
+        return type->cast<ReferenceType>()->is_moved_ ? ValueCategory::Expiring
+                                                      : ValueCategory::Left;
+    } else {
+        return ValueCategory::Right;
+    }
 }
 
 inline auto Type::assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept
@@ -1750,3 +1815,5 @@ inline auto StructType::validate(
 }
 
 inline NullptrValue NullptrValue::instance;
+
+inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;

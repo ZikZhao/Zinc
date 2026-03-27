@@ -252,70 +252,6 @@ public:
         return str;
     }
 
-    static auto apply_value_category(Term obj) -> const Type* {
-        if (!obj) return nullptr;
-        const Type* type = obj.effective_type();
-        if (obj.value_category() == ValueCategory::Left) {
-            if (auto* ref_type = type->dyn_cast<ReferenceType>()) {
-                return TypeRegistry::get<ReferenceType>(ref_type->target_type_, false);
-            }
-            return TypeRegistry::get<ReferenceType>(type, false);
-        } else if (obj.value_category() == ValueCategory::Expiring) {
-            if (auto* ref_type = type->dyn_cast<ReferenceType>()) {
-                return TypeRegistry::get<ReferenceType>(ref_type->target_type_, true);
-            }
-            return TypeRegistry::get<ReferenceType>(type, true);
-        } else {
-            return type;
-        }
-    }
-
-    static auto decay(Term term) -> Term {
-        if (!term) return term;
-        if (auto ref_type = term->dyn_cast<ReferenceType>()) {
-            return decay(Term::lvalue(ref_type->target_type_));
-        } else if (auto mut_type = term->dyn_cast<MutableType>()) {
-            return decay(Term::forward_like(term, mut_type->target_type_));
-        }
-        return term;
-    }
-
-    static auto decay(const Type* type) noexcept -> const Type* {
-        if (!type) return nullptr;
-        if (auto ref_type = type->dyn_cast<ReferenceType>()) {
-            return decay(ref_type->target_type_);
-        } else if (auto mut_type = type->dyn_cast<MutableType>()) {
-            return decay(mut_type->target_type_);
-        }
-        return type;
-    }
-
-    static auto is_mutable(const Type* type) -> bool {
-        if (!type) return false;
-        if (type->dyn_cast<MutableType>()) {
-            return true;
-        } else if (auto ref_type = type->dyn_cast<ReferenceType>()) {
-            return is_mutable(ref_type->target_type_);
-        }
-        return false;
-    }
-
-    static auto is_mutable(Term term) -> bool {
-        if (!term) return false;
-        if (auto ref_type = term->dyn_cast<ReferenceType>()) {
-            return is_mutable(Term::lvalue(ref_type->target_type_));
-        } else if (term->dyn_cast<MutableType>()) {
-            return true;
-        }
-        return false;
-    }
-
-    static auto apply_mutable(Term term, bool is_mutable) -> Term {
-        if (!is_mutable) return term;
-        if (term->kind_ == Kind::Reference || term->kind_ == Kind::Mutable) return term;
-        return Term::forward_like(term, TypeRegistry::get<MutableType>(term.effective_type()));
-    }
-
     static auto ref_to_value_category(Term term) -> Term {
         if (!term) return term;
         if (auto ref_type = term->dyn_cast<ReferenceType>()) {
@@ -551,8 +487,7 @@ private:
         if (auto type = obj->dyn_type()) {
             return Symbol(type);
         } else {
-            /// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-            return Symbol(Term::prvalue(const_cast<Value*>(obj->cast<Value>())));
+            return Symbol(Term::of(obj->cast<Value>()));
         }
     }
 
@@ -643,7 +578,7 @@ public:
         assert(!std::ranges::contains(args_type, nullptr));
         GlobalMemory::Vector<const Type*> combined_args{args_type.begin(), args_type.end()};
         if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
-            combined_args.insert(combined_args.begin(), Sema::apply_value_category(method->object));
+            combined_args.insert(combined_args.begin(), method->object.effective_type());
         }
 
         Diagnostic::ErrorTrap error_trap{node->location};
@@ -667,7 +602,7 @@ public:
             Sema::get_if<SymbolKind::Type>(callee),
             should_not_mangle(callee)
         );
-        return Term::prvalue(overload->return_type_);
+        return Term::of(overload->return_type_);
     }
 
 private:
@@ -700,7 +635,7 @@ private:
             Scope* scope = (*callable_type)->cast<InstanceType>()->scope_;
             return reification(scope, scope->find(constructor_symbol));
         } else if (auto* callable_term = Sema::get_if<SymbolKind::Term>(func)) {
-            Term decayed = Sema::decay(*callable_term);
+            const Type* decayed = callable_term->decay();
             if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
                 return {func_type};
             }
@@ -767,8 +702,8 @@ private:
             }
             Scope* scope = (*callable_type)->cast<InstanceType>()->scope_;
             return reification(scope, scope->find(constructor_symbol));
-        } else if (auto* callable_value = Sema::get_if<SymbolKind::Term>(func)) {
-            Term decayed = Sema::decay(*callable_value);
+        } else if (auto* callable_term = Sema::get_if<SymbolKind::Term>(func)) {
+            const Type* decayed = callable_term->decay();
             if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
                 out.push_back(func_type);
                 return;
@@ -888,8 +823,8 @@ private:
 
     static auto param_rank(const Type* param, const Type* arg) -> ConversionRank {
         using enum ConversionRank;
-        auto decayed_param = Sema::decay(param);
-        auto decayed_arg = Sema::decay(arg);
+        const Type* decayed_param = Type::decay(param);
+        const Type* decayed_arg = Type::decay(arg);
         auto tiebreaker_rank = [&]() -> ConversionRank {
             // the order of variants indicates the rank of conversion, e.g. T -> move &T is
             // better than T -> &T, variants not listed below means no match, e.g. T -> &mut T
@@ -915,7 +850,7 @@ private:
             }
         };
         if (decayed_param == decayed_arg) {
-            if (Sema::is_mutable(param) && !Sema::is_mutable(arg)) return NoMatch;
+            if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
             return tiebreaker_rank();
         } else {
             if (decayed_param->kind_ == Kind::Pointer && decayed_arg->kind_ == Kind::Nullptr) {
@@ -925,17 +860,17 @@ private:
                 return NoMatch;
             auto param_pointee = decayed_param->cast<PointerType>()->target_type_;
             auto arg_pointee = decayed_arg->cast<PointerType>()->target_type_;
-            if (Sema::is_mutable(param_pointee) && !Sema::is_mutable(arg_pointee)) return NoMatch;
-            auto decayed_param_pointee = Sema::decay(param_pointee);
-            auto decayed_arg_pointee = Sema::decay(arg_pointee);
+            if (Type::is_mutable(param_pointee) && !Type::is_mutable(arg_pointee)) return NoMatch;
+            const Type* decayed_param_pointee = Type::decay(param_pointee);
+            const Type* decayed_arg_pointee = Type::decay(arg_pointee);
             if (decayed_param_pointee == decayed_arg_pointee) {
                 return tiebreaker_rank();
             }
             if (decayed_param_pointee->kind_ == Kind::Void) {
                 return Upcast;
             }
-            auto param_class = Sema::decay(param_pointee)->dyn_cast<InstanceType>();
-            auto arg_class = Sema::decay(arg_pointee)->dyn_cast<InstanceType>();
+            const InstanceType* param_class = Type::decay(param_pointee)->dyn_cast<InstanceType>();
+            const InstanceType* arg_class = Type::decay(arg_pointee)->dyn_cast<InstanceType>();
             if (param_class && arg_class) {
                 if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
                 if (!TypeRegistry::is_base(arg_class, param_class)) return NoMatch;
@@ -1048,24 +983,20 @@ private:
     }
 
     auto eval_struct_access(Term object, strview member) -> Term {
-        Term decayed = Sema::decay(object);
-        bool is_mutable = Sema::is_mutable(object);
-        const StructType* struct_type = decayed->cast<StructType>();
+        const StructType* struct_type = object.decay()->cast<StructType>();
         auto attr_it = struct_type->fields_.find(member);
         if (attr_it != struct_type->fields_.end()) {
-            return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
+            return Term::of(Type::forward_like(object.effective_type(), attr_it->second));
         }
         Diagnostic::error_member_not_found(member);
         return {};
     }
 
     auto eval_instance_access(Term object, strview member) -> Symbol {
-        Term decayed = Sema::decay(object);
-        bool is_mutable = Sema::is_mutable(object);
-        const InstanceType* instance_type = decayed->cast<InstanceType>();
+        const InstanceType* instance_type = object.decay()->cast<InstanceType>();
         auto attr_it = instance_type->attrs_.find(member);
         if (attr_it != instance_type->attrs_.end()) {
-            return Sema::apply_mutable(Term::forward_like(object, attr_it->second), is_mutable);
+            return Term::of(Type::forward_like(object.effective_type(), attr_it->second));
         }
         const ScopeValue* value = instance_type->scope_->find(member);
         if (value && value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
@@ -1188,9 +1119,10 @@ private:
         }
     }
 
-    static auto integer_op(OperatorCode opcode, Value* left, Value* right) noexcept -> Value* {
-        IntegerValue* left_int = left->cast<IntegerValue>();
-        IntegerValue* right_int = right->cast<IntegerValue>();
+    static auto integer_op(OperatorCode opcode, const Value* left, const Value* right) noexcept
+        -> const Value* {
+        const IntegerValue* left_int = left->cast<IntegerValue>();
+        const IntegerValue* right_int = right->cast<IntegerValue>();
         bool extended = left_int->type_->bits_ > 32 || right_int->type_->bits_ > 32;
         switch (GetOperatorGroup(opcode)) {
         case OperatorGroup::Arithmetic:
@@ -1212,8 +1144,8 @@ private:
         }
     }
 
-    static auto integer_op(OperatorCode opcode, Value* left) noexcept -> Value* {
-        IntegerValue* left_int = left->cast<IntegerValue>();
+    static auto integer_op(OperatorCode opcode, const Value* left) noexcept -> const Value* {
+        const IntegerValue* left_int = left->cast<IntegerValue>();
         bool extended = left_int->type_->bits_ > 32;
         switch (GetOperatorGroup(opcode)) {
         case OperatorGroup::UnaryArithmetic:
@@ -1231,9 +1163,10 @@ private:
         }
     }
 
-    static auto float_op(OperatorCode opcode, Value* left, Value* right) noexcept -> Value* {
-        FloatValue* left_float = left->cast<FloatValue>();
-        FloatValue* right_float = right->cast<FloatValue>();
+    static auto float_op(OperatorCode opcode, const Value* left, const Value* right) noexcept
+        -> const Value* {
+        const FloatValue* left_float = left->cast<FloatValue>();
+        const FloatValue* right_float = right->cast<FloatValue>();
         switch (GetOperatorGroup(opcode)) {
         case OperatorGroup::Arithmetic:
             return new FloatValue(
@@ -1249,8 +1182,8 @@ private:
         }
     }
 
-    static auto float_op(OperatorCode opcode, Value* left) noexcept -> Value* {
-        FloatValue* left_float = left->cast<FloatValue>();
+    static auto float_op(OperatorCode opcode, const Value* left) noexcept -> const Value* {
+        const FloatValue* left_float = left->cast<FloatValue>();
         switch (GetOperatorGroup(opcode)) {
         case OperatorGroup::UnaryArithmetic:
             return new FloatValue(
@@ -1262,11 +1195,11 @@ private:
         }
     }
 
-    static auto boolean_op(OperatorCode opcode, Value* left, Value* right) noexcept
-        -> BooleanValue* {
+    static auto boolean_op(OperatorCode opcode, const Value* left, const Value* right) noexcept
+        -> const Value* {
         /// TODO: support equality comparison between booleans
-        BooleanValue* left_bool = left->cast<BooleanValue>();
-        BooleanValue* right_bool = right->cast<BooleanValue>();
+        const BooleanValue* left_bool = left->cast<BooleanValue>();
+        const BooleanValue* right_bool = right->cast<BooleanValue>();
         switch (GetOperatorGroup(opcode)) {
         case OperatorGroup::Logical:
             return new BooleanValue(
@@ -1277,8 +1210,8 @@ private:
         }
     }
 
-    static auto boolean_op(OperatorCode opcode, Value* left) noexcept -> BooleanValue* {
-        BooleanValue* left_bool = left->cast<BooleanValue>();
+    static auto boolean_op(OperatorCode opcode, const Value* left) noexcept -> const Value* {
+        const BooleanValue* left_bool = left->cast<BooleanValue>();
         switch (GetOperatorGroup(opcode)) {
         case OperatorGroup::UnaryLogical:
             return new BooleanValue(
@@ -1289,38 +1222,9 @@ private:
         }
     }
 
-    static auto assignment_op(OperatorCode opcode, Value* left, Value* right) noexcept -> Value* {
-        if (opcode == OperatorCode::Assign) {
-            left->assign_from(right);
-        } else {
-            OperatorCode inner_opcode = GetAssignmentEquivalent(opcode);
-            Value* result = nullptr;
-            if (left->kind_ == Kind::Integer && right->kind_ == Kind::Integer) {
-                IntegerValue* left_int = left->cast<IntegerValue>();
-                IntegerValue* right_int = right->cast<IntegerValue>();
-                result = integer_op(inner_opcode, left_int, right_int);
-            } else if (left->kind_ == Kind::Float && right->kind_ == Kind::Float) {
-                FloatValue* left_float = left->cast<FloatValue>();
-                FloatValue* right_float = right->cast<FloatValue>();
-                result = float_op(inner_opcode, left_float, right_float);
-            } else if (left->kind_ == Kind::Boolean && right->kind_ == Kind::Boolean) {
-                BooleanValue* left_bool = left->cast<BooleanValue>();
-                BooleanValue* right_bool = right->cast<BooleanValue>();
-                result = boolean_op(inner_opcode, left_bool, right_bool);
-            } else {
-                Diagnostic::error_operation_not_defined(
-                    GetOperatorString(opcode), left->repr(), right->repr()
-                );
-                return nullptr;
-            }
-            left->assign_from(result);
-        }
-        return left;
-    }
-
 public:
     static auto is_primitive(Term operand) noexcept -> bool {
-        Term decayed = Sema::decay(operand);
+        const Type* decayed = operand.decay();
         return decayed->kind_ == Kind::Nullptr || decayed->kind_ == Kind::Integer ||
                decayed->kind_ == Kind::Float || decayed->kind_ == Kind::Boolean ||
                decayed->kind_ == Kind::Pointer;
@@ -1340,71 +1244,69 @@ public:
 
     auto eval_primitive_op(OperatorCode opcode, Term left, Term right = {}) const noexcept -> Term {
         bool comptime = left.is_comptime() && (right ? right.is_comptime() : true);
-        bool left_is_mutable = Sema::is_mutable(left);
-        Term decayed_left = Sema::decay(left);
-        Term decayed_right = Sema::decay(right);
-        const Type* result_type = decayed_left.effective_type();
+        const Type* decayed_left = left.decay();
+        const Type* decayed_right = right.decay();
+        const Type* result_type = decayed_left;
         if (result_type == &IntegerType::untyped_instance ||
             result_type == &FloatType::untyped_instance) {
-            result_type = decayed_right.effective_type();
+            result_type = decayed_right;
         }
         Kind left_kind = decayed_left->kind_;
         Kind right_kind = decayed_right ? decayed_right->kind_ : Kind::None;
         if (comptime) {
-            Value* left_value = decayed_left.get_comptime();
-            Value* right_value = decayed_right ? decayed_right.get_comptime() : nullptr;
+            const Value* left_value = left.get_comptime();
+            const Value* right_value = right ? right.get_comptime() : nullptr;
             switch (GetOperatorGroup(opcode)) {
             case OperatorGroup::Arithmetic:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(integer_op(opcode, left_value, right_value));
+                    return Term::of(integer_op(opcode, left_value, right_value));
                 } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
-                    return Term::prvalue(float_op(opcode, left_value, right_value));
+                    return Term::of(float_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::UnaryArithmetic:
                 assert(!right);
                 if (left_kind == Kind::Integer) {
-                    return Term::prvalue(integer_op(opcode, left_value));
+                    return Term::of(integer_op(opcode, left_value));
                 } else if (left_kind == Kind::Float) {
-                    return Term::prvalue(float_op(opcode, left_value));
+                    return Term::of(float_op(opcode, left_value));
                 }
                 break;
             case OperatorGroup::Comparison:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(integer_op(opcode, left_value, right_value));
+                    return Term::of(integer_op(opcode, left_value, right_value));
                 } else if (left_kind == Kind::Float && right_kind == Kind::Float) {
-                    return Term::prvalue(float_op(opcode, left_value, right_value));
+                    return Term::of(float_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::Logical:
                 if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
-                    return Term::prvalue(boolean_op(opcode, left_value, right_value));
+                    return Term::of(boolean_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::UnaryLogical:
                 assert(!right);
                 if (left_kind == Kind::Boolean) {
-                    return Term::prvalue(boolean_op(opcode, left_value));
+                    return Term::of(boolean_op(opcode, left_value));
                 }
                 break;
             case OperatorGroup::Bitwise:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(integer_op(opcode, left_value, right_value));
+                    return Term::of(integer_op(opcode, left_value, right_value));
                 }
                 break;
             case OperatorGroup::UnaryBitwise:
                 if (left_kind == Kind::Integer) {
-                    return Term::prvalue(integer_op(opcode, left_value));
+                    return Term::of(integer_op(opcode, left_value));
                 }
                 break;
             case OperatorGroup::Assignment:
                 /// TODO:
-                if (!left_is_mutable) break;
-                if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
-                    (left_kind == Kind::Float && right_kind == Kind::Float) ||
-                    (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
-                    return Term::lvalue(result_type);
-                }
+                Diagnostic::error_operation_not_defined(
+                    GetOperatorString(opcode),
+                    decayed_left->repr(),
+                    decayed_right ? decayed_right->repr() : ""
+                );
                 break;
             }
         } else {
@@ -1412,12 +1314,12 @@ public:
             case OperatorGroup::Arithmetic:
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float)) {
-                    return Term::prvalue(result_type);
+                    return Term::of(result_type);
                 }
                 break;
             case OperatorGroup::UnaryArithmetic:
                 if (left_kind == Kind::Integer || left_kind == Kind::Float) {
-                    return Term::prvalue(result_type);
+                    return Term::of(result_type);
                 }
                 break;
             case OperatorGroup::Comparison:
@@ -1425,32 +1327,32 @@ public:
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     ((left_kind == Kind::Nullptr || left_kind == Kind::Pointer) &&
                      (right_kind == Kind::Nullptr || right_kind == Kind::Pointer))) {
-                    return Term::prvalue(&BooleanType::instance);
+                    return Term::of(&BooleanType::instance);
                 }
                 break;
             case OperatorGroup::Logical:
                 if (left_kind == Kind::Boolean && right_kind == Kind::Boolean) {
-                    return Term::prvalue(&BooleanType::instance);
+                    return Term::of(&BooleanType::instance);
                 }
                 break;
             case OperatorGroup::UnaryLogical:
                 if (left_kind == Kind::Boolean) {
-                    return Term::prvalue(&BooleanType::instance);
+                    return Term::of(&BooleanType::instance);
                 }
                 break;
             case OperatorGroup::Bitwise:
                 if (left_kind == Kind::Integer && right_kind == Kind::Integer) {
-                    return Term::prvalue(result_type);
+                    return Term::of(result_type);
                 }
                 break;
             case OperatorGroup::UnaryBitwise:
                 if (left_kind == Kind::Integer) {
-                    return Term::prvalue(result_type);
+                    return Term::of(result_type);
                 }
                 break;
             case OperatorGroup::Assignment:
                 /// TODO:
-                if (!left_is_mutable) break;
+                if (!Type::is_mutable(left.effective_type())) break;
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
@@ -1475,12 +1377,12 @@ public:
     auto eval_overloaded_op(
         const ASTNode* node, OperatorCode opcode, Term left, Term right = {}
     ) const noexcept -> Term {
-        const Type* left_type = Sema::apply_value_category(left);
-        const Type* left_base_type = Sema::decay(left_type);
-        const Type* right_type = Sema::apply_value_category(right);
-        const Type* right_base_type = Sema::decay(right_type);
+        const Type* left_type = left.effective_type();
+        const Type* left_base_type = Type::decay(left_type);
+        const Type* right_type = right.effective_type();
+        const Type* right_base_type = Type::decay(right_type);
         if (opcode == OperatorCode::Assign && left_base_type == right_base_type) {
-            if (Sema::is_mutable(left_type)) {
+            if (Type::is_mutable(left_type)) {
                 return Term::lvalue(left_type);
             }
         }
@@ -1492,8 +1394,7 @@ public:
             return {};
         }
         std::array<const Type*, 2> args = {
-            Sema::apply_value_category(left.resolve_to_default()),
-            Sema::apply_value_category(right.resolve_to_default())
+            left.resolve_to_default().effective_type(), right.resolve_to_default().effective_type()
         };
         if (opcode == OperatorCode::PostIncrement || opcode == OperatorCode::PostDecrement) {
             args[1] = &IntegerType::i32_instance;
@@ -1508,9 +1409,9 @@ public:
     auto eval_cast(const ASTAs* node, Term operand, const Type* target_type) const noexcept
         -> Term {
         bool convertible = false;
-        const Type* source_type = Sema::apply_value_category(operand);
-        const Type* decayed_source_type = Sema::decay(source_type);
-        const Type* decayed_target_type = Sema::decay(target_type);
+        const Type* source_type = operand.effective_type();
+        const Type* decayed_source_type = Type::decay(source_type);
+        const Type* decayed_target_type = Type::decay(target_type);
         if (source_type == target_type) {
             return operand;
         }
@@ -1518,7 +1419,7 @@ public:
             if (auto* source_ref = source_type->dyn_cast<ReferenceType>()) {
                 if (auto* target_ref = target_type->dyn_cast<ReferenceType>()) {
                     convertible = source_ref->is_moved_ == target_ref->is_moved_ &&
-                                  (!Sema::is_mutable(target_type) || Sema::is_mutable(source_type));
+                                  (!Type::is_mutable(target_type) || Type::is_mutable(source_type));
                 } else if (Meta::is_fundamental(target_type)) {
                     convertible = true;
                 }
@@ -1548,7 +1449,7 @@ public:
         }
         if (convertible) {
             sema_.codegen_env_.map_type(sema_.current_scope_, node, target_type);
-            return Term::prvalue(target_type);
+            return Term::of(target_type);
         }
         Diagnostic::error_invalid_cast(node->location, source_type->repr(), target_type->repr());
         return {};
@@ -1809,38 +1710,38 @@ public:
         if (expected_) {
             if (node->value->kind_ != expected_->kind_) {
                 if (node->value->kind_ == Kind::Nullptr && expected_->kind_ == Kind::Pointer) {
-                    return Term::prvalue(expected_);
+                    return Term::of(expected_);
                 }
                 Diagnostic::error_type_mismatch(expected_->repr(), node->value->repr());
                 return {};
             } else if (auto* int_type = expected_->dyn_cast<IntegerType>()) {
                 IntegerValue* int_value = node->value->cast<IntegerValue>()->resolve_to(int_type);
-                return Sema::nonnull(Term::prvalue(int_value));
+                return Sema::nonnull(Term::of(int_value));
             } else if (auto* float_type = expected_->dyn_cast<FloatType>()) {
                 FloatValue* float_value = node->value->cast<FloatValue>()->resolve_to(float_type);
-                return Sema::nonnull(Term::prvalue(float_value));
+                return Sema::nonnull(Term::of(float_value));
             } else {
                 if (expected_ != node->value->get_type()) {
                     Diagnostic::error_type_mismatch(expected_->repr(), node->value->repr());
                     return {};
                 }
-                return Term::prvalue(node->value);
+                return Term::of(node->value);
             }
         } else {
-            return Term::prvalue(node->value);
+            return Term::of(node->value);
         }
     }
 
     auto operator()(const ASTStringConstant* node) noexcept -> Symbol {
         Symbol string_view_symbol = sema_.get_std_symbol("string_view");
         TypeResolution strview_type_res = Sema::get<SymbolKind::Type>(string_view_symbol);
-        return Term::prvalue(strview_type_res.get());
+        return Term::of(strview_type_res.get());
     }
 
     auto operator()(const ASTSelfExpr* node) noexcept -> Symbol {
         if (node->is_type) {
             const Type* self_type = sema_.get_self_type();
-            return self_type ? Term::prvalue(self_type) : Symbol{};
+            return self_type ? Term::of(self_type) : Symbol{};
         } else {
             Symbol result = sema_.lookup_symbol("self");
             if (!holds_monostate(result)) {
@@ -1884,7 +1785,7 @@ public:
             return {};
         }
         Term operand_term = Sema::get<SymbolKind::Term>(operand_symbol);
-        return Term::prvalue(TypeRegistry::get<PointerType>(operand_term.effective_type()));
+        return Term::of(TypeRegistry::get<PointerType>(operand_term.effective_type()));
     }
 
     auto operator()(const ASTDereference* node) noexcept -> Symbol {
@@ -1985,7 +1886,7 @@ public:
         if (any_error || !StructType::validate(type, inits)) {
             return {};
         }
-        return Term::prvalue(type);
+        return Term::of(type);
     }
 
     auto operator()(const ASTArrayInitialization* node) noexcept -> Symbol {
@@ -2019,14 +1920,13 @@ public:
                     elements.push_back(Term{});
                 }
             }
-            return Term::prvalue(expected_);
+            return Term::of(expected_);
         } else {
             const Type* element_type = nullptr;
             Symbol first_element_symbol =
                 ValueContextEvaluator{*this, nullptr}(node->elements.front());
             if (Sema::expect(first_element_symbol, SymbolKind::Term)) {
-                element_type =
-                    Sema::decay(Sema::get<SymbolKind::Term>(first_element_symbol).effective_type());
+                element_type = Sema::get<SymbolKind::Term>(first_element_symbol).decay();
             } else {
                 return {};
             }
@@ -2037,7 +1937,7 @@ public:
                 *Sema::get<SymbolKind::Template>(array_type_symbol), template_args
             );
             const Type* result_type = Sema::get_default<SymbolKind::Type>(result_type_symbol);
-            return result_type ? Term::prvalue(result_type) : Symbol{};
+            return result_type ? Term::of(result_type) : Symbol{};
         }
     }
 
@@ -2048,9 +1948,7 @@ public:
             Symbol arg_symbol = ValueContextEvaluator{*this, nullptr}(arg);
             if (Sema::expect(arg_symbol, SymbolKind::Term)) {
                 args_type.push_back(
-                    Sema::apply_value_category(
-                        Sema::get<SymbolKind::Term>(arg_symbol).resolve_to_default()
-                    )
+                    Sema::get<SymbolKind::Term>(arg_symbol).resolve_to_default().effective_type()
                 );
             } else {
                 args_type.push_back(nullptr);
@@ -2071,7 +1969,7 @@ public:
                 );
                 return {};
             }
-            return Term::prvalue(func_type->return_type_);
+            return Term::of(func_type->return_type_);
         }
         return Sema::nonnull(sema_.call_handler_->eval_call(node, func_symbol, args_type));
     }
@@ -2086,7 +1984,7 @@ public:
             return {};
         }
         Term condition_term = Sema::get<SymbolKind::Term>(condition_symbol);
-        if (Sema::decay(condition_term.effective_type()) != &BooleanType::instance) {
+        if (condition_term.decay() != &BooleanType::instance) {
             Diagnostic::error_type_mismatch("bool", condition_term.effective_type()->repr());
             return {};
         }
@@ -2099,7 +1997,7 @@ public:
         }
         Term then_term = Sema::get<SymbolKind::Term>(then_symbol).resolve_to_default();
         Term else_term = Sema::get<SymbolKind::Term>(else_symbol).resolve_to_default();
-        if (Sema::decay(then_term.effective_type()) != Sema::decay(else_term.effective_type())) {
+        if (then_term.decay() != else_term.decay()) {
             Diagnostic::error_type_mismatch(
                 then_term.effective_type()->repr(), else_term.effective_type()->repr()
             );
@@ -2113,9 +2011,9 @@ public:
                 );
                 return {};
             }
-            return Term::prvalue(expected_);
+            return Term::of(expected_);
         }
-        return Term::prvalue(then_term.effective_type());
+        return Term::of(then_term.effective_type());
     }
 
     auto operator()(const ASTAs* node) noexcept -> Symbol {
@@ -2154,7 +2052,7 @@ public:
             param_types | GlobalMemory::collect<std::span>(), return_type
         );
         sema_.codegen_env_.map_type(sema_.current_scope_, node, func_type);
-        return Term::prvalue(func_type);
+        return Term::of(func_type);
     }
 
     auto operator()(const auto* node) noexcept -> Symbol { UNREACHABLE(); }
@@ -2220,7 +2118,7 @@ public:
                 }
             } else {
                 init_term = init_term.resolve_to_default();
-                type = Sema::decay(init_term.effective_type());
+                type = init_term.decay();
             }
         }
         if (type.get()) {
@@ -2439,7 +2337,7 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
         if (auto* type = object->dyn_type()) {
             return type;
         } else {
-            return Term::prvalue(const_cast<Value*>(object->cast<Value>()));
+            return Term::of(object->cast<Value>());
         }
     } else if (auto* pack = value.get<std::span<const Object*>*>()) {
         return *pack;
@@ -2460,31 +2358,42 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
 
 inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init) noexcept
     -> Symbol {
+    assert(!holds_monostate(init.type) || !holds_monostate(init.value));
     TypeResolution type{};
     if (!holds_monostate(init.type)) {
         Guard guard(*this, scope);
         TypeContextEvaluator{*this, type}(init.type);
         if (!type.get()) return {};
+        if (init.is_mutable) {
+            if (Type::category(type.get()) != ValueCategory::Right) {
+                return {};
+            }
+            type = TypeRegistry::get<MutableType>(type.get());
+        }
     }
-    if (holds_monostate(init.value)) {
-        return type.get() ? Symbol{apply_mutable(Term::lvalue(type.get()), init.is_mutable)}
-                          : Symbol{};
-    } else {
+    if (!holds_monostate(init.value)) {
         Symbol init_symbol = ValueContextEvaluator{*this, type.get(), false}(init.value);
         if (!Sema::expect(init_symbol, SymbolKind::Term)) return {};
-        Term init_term = Term::lvalue(std::get<Term>(init_symbol).resolve_to_default());
+        Term init_term = std::get<Term>(init_symbol).resolve_to_default();
+        if (!init_term) return {};
         if (type.get()) {
             AutoBindings auto_bindings;
             if (!type->assignable_from(init_term.effective_type(), auto_bindings)) {
                 return {};
             }
             if (init.is_comptime) return init_term;
-            return apply_mutable(Term::lvalue(type.get()), init.is_mutable);
         } else {
             if (init.is_comptime) return init_term;
-            return apply_mutable(Term::lvalue(init_term.effective_type()), init.is_mutable);
+            type = init_term.decay();
+            if (init.is_mutable) {
+                if (Type::category(init_term.effective_type()) != ValueCategory::Right) {
+                    return {};
+                }
+                type = TypeRegistry::get<MutableType>(type.get());
+            }
         }
     }
+    return Term::lvalue(type.get());
 }
 
 inline auto TemplateHandler::inference(
@@ -2924,7 +2833,7 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
             return result;
         }
     } else if (auto* term = Sema::get_if<SymbolKind::Term>(base_symbol)) {
-        Term decayed = Sema::decay(*term);
+        const Type* decayed = term->decay();
         if (decayed->kind_ == Kind::Struct) {
             return Sema::nonnull(eval_struct_access(*term, node->member));
         } else if (decayed->kind_ == Kind::Instance) {
@@ -2947,10 +2856,10 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
     Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
     Term current_term = base_term;
     while (true) {
-        Term decayed = Sema::decay(current_term);
-        if (auto* pointer_type = decayed.effective_type()->dyn_cast<PointerType>()) {
+        const Type* decayed = current_term.decay();
+        if (auto* pointer_type = decayed->dyn_cast<PointerType>()) {
             Term dereferenced = Term::lvalue(pointer_type->target_type_);
-            Term decayed_dereferenced = Sema::decay(dereferenced);
+            const Type* decayed_dereferenced = dereferenced.decay();
             if (decayed_dereferenced->dyn_cast<StructType>()) {
                 return Sema::nonnull(eval_struct_access(dereferenced, node->member));
             } else if (decayed_dereferenced->dyn_cast<InstanceType>()) {
@@ -2959,7 +2868,7 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
                 Diagnostic::error_invalid_pointer_access(base_term->repr());
                 return {};
             }
-        } else if (decayed.effective_type()->dyn_cast<InstanceType>()) {
+        } else if (decayed->dyn_cast<InstanceType>()) {
             current_term = sema_.operation_handler_->eval_overloaded_op(
                 node, OperatorCode::Pointer, current_term
             );
@@ -2981,11 +2890,11 @@ inline auto AccessHandler::eval_index(const ASTIndexAccess* node) noexcept -> Sy
     }
     Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
     Term index_term = Sema::get<SymbolKind::Term>(index_symbol);
-    const Type* base_type = Sema::decay(base_term.effective_type());
-    const Type* index_type = Sema::decay(index_term.effective_type());
+    const Type* base_type = base_term.decay();
+    const Type* index_type = index_term.decay();
     std::array<const Type*, 2> args_type{
-        Sema::apply_value_category(base_term.resolve_to_default()),
-        Sema::apply_value_category(index_term.resolve_to_default())
+        base_term.resolve_to_default().effective_type(),
+        index_term.resolve_to_default().effective_type()
     };
     if (auto* instance_type = base_type->dyn_cast<InstanceType>();
         instance_type && is_std_indexable_container(instance_type)) {
