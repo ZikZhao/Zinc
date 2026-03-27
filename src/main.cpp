@@ -65,16 +65,19 @@ auto main(int argc, char* argv[]) -> int {
         Diagnostic::print_error_msg("Failed to parse input");
         return EXIT_FAILURE;
     }
+    Diagnostic::print_msg("Parsed input successfully");
+    Diagnostic::print_msg("Collecting symbols...");
 
     root->scope = &Scope::root(std_scope);
     SymbolCollector{&std_scope, nullptr}(root);
+    if (Diagnostic::flush(sources)) return EXIT_FAILURE;
 
+    Diagnostic::print_msg("Type checking...");
     CodeGenEnvironment codegen_env;
     Sema sema{std_scope, *root->scope, codegen_env};
     TypeCheckVisitor{sema}(root);
+    if (Diagnostic::flush(sources)) return EXIT_FAILURE;
 
-    bool has_error = Diagnostic::flush(sources);
-    if (has_error) return EXIT_FAILURE;
-
+    Diagnostic::print_msg("Generating code...");
     return codegen(sources, sema, codegen_env);
 }

@@ -47,6 +47,8 @@ public:
             instance->current_trap_ = prev_;
         }
 
+        auto clear() noexcept -> void { problems_.clear(); }
+
         auto conclude() noexcept -> void {
             Problem main_problem = std::move(problems_.back());
             problems_.pop_back();
@@ -107,9 +109,9 @@ public:
         return true;
     }
 
-    static void print_info_msg(strview msg) {
+    static void print_msg(strview msg) {
         std::lock_guard lock(print_mutex_);
-        std::print(std::cout, "{}[INFO]{} {}\n", ColourEscape::CYAN, ColourEscape::RESET, msg);
+        std::print(std::cout, "{}[MSG]{} {}\n", ColourEscape::GREEN, ColourEscape::RESET, msg);
         std::cout.flush();
     }
 
@@ -491,18 +493,6 @@ public:
         );
     }
 
-    static auto error_explicit_function_instantiation(Location location) noexcept -> void {
-        Diagnostic::report(
-            Problem{
-                .severity = Severity::Error,
-                .location = location,
-                .message = GlobalMemory::String(
-                    "Explicit instantiation of function templates is not supported"sv
-                )
-            }
-        );
-    }
-
     static auto error_auto_binding_mismatch(
         strview auto_rep, strview prev, strview current
     ) noexcept -> void {
@@ -519,6 +509,48 @@ public:
 
     static auto error_invalid_pointer_access(strview type) noexcept -> void {
         unlocated_error(GlobalMemory::format("Invalid pointer access on type '{}'", type));
+    }
+
+    static auto error_cannot_infer_template_argument(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Cannot infer template argument"sv)
+            }
+        );
+    }
+
+    static auto error_variadic_parameter_must_be_last(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Variadic parameter must be the last parameter"sv)
+            }
+        );
+    }
+
+    static auto error_variadic_parameter_in_operator(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Operator parameters cannot be variadic"sv)
+            }
+        );
+    }
+
+    static auto error_ambiguous_template_instantiation(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String(
+                    "Explicit function instantiation is only supported for function overloads when only one overload is template"sv
+                )
+            }
+        );
     }
 };
 

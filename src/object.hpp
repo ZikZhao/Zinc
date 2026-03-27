@@ -1004,7 +1004,6 @@ public:
 class IntegerValue final : public Value {
 public:
     static constexpr Kind kind = Kind::Integer;
-    static IntegerValue zero;
 
 public:
     const IntegerType* const type_;  // nullptr for integer literals without a specific type
@@ -1751,5 +1750,3 @@ inline auto StructType::validate(
 }
 
 inline NullptrValue NullptrValue::instance;
-
-inline IntegerValue IntegerValue::zero = IntegerValue(&IntegerType::untyped_instance, BigInt{});

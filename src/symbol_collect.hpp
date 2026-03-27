@@ -313,8 +313,12 @@ public:
         Diagnostic::ErrorTrap trap{node->location};
         current_scope_->add_function(node->identifier, node);
         Scope& local_scope = Scope::make(*current_scope_, node);
-        for (auto& param : node->parameters) {
+        for (std::size_t i = 0; i < node->parameters.size(); ++i) {
+            const auto& param = node->parameters[i];
             Diagnostic::ErrorTrap param_trap{param.location};
+            if (i != node->parameters.size() - 1 && param.is_variadic) {
+                Diagnostic::error_variadic_parameter_must_be_last(param.location);
+            }
             local_scope.add_variable(
                 param.identifier,
                 new VariableInitialization{
@@ -337,7 +341,8 @@ public:
             node->is_constructor ? constructor_symbol : destructor_symbol, node
         );
         Scope& local_scope = Scope::make(*current_scope_, node);
-        for (auto& param : node->parameters) {
+        for (std::size_t i = 0; i < node->parameters.size(); ++i) {
+            const auto& param = node->parameters[i];
             Diagnostic::ErrorTrap param_trap{param.location};
             local_scope.add_variable(
                 param.identifier,
@@ -359,6 +364,10 @@ public:
         Diagnostic::ErrorTrap trap{node->location};
         current_scope_->add_function(GetOperatorString(node->opcode), node);
         Scope& local_scope = Scope::make(*current_scope_, node);
+        if (node->left.is_variadic) {
+            Diagnostic::error_variadic_parameter_in_operator(node->left.location);
+            return;
+        }
         local_scope.add_variable(
             node->left.identifier,
             new VariableInitialization{
@@ -369,6 +378,10 @@ public:
             }
         );
         if (node->right) {
+            if (node->right->is_variadic) {
+                Diagnostic::error_variadic_parameter_in_operator(node->right->location);
+                return;
+            }
             Diagnostic::ErrorTrap right_trap{node->right->location};
             local_scope.add_variable(
                 node->right->identifier,
@@ -450,6 +463,12 @@ public:
     // Templates
     void operator()(const ASTTemplateDefinition* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
+        for (std::size_t i = 0; i < node->parameters.size(); ++i) {
+            const auto& param = node->parameters[i];
+            if (param.is_variadic && i != node->parameters.size() - 1) {
+                Diagnostic::error_variadic_parameter_must_be_last(param.location);
+            }
+        }
         current_scope_->add_template(node->identifier, node);
     }
 
