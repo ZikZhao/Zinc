@@ -141,6 +141,11 @@ class string {
     fn assign(self: &mut Self, data: const_pointer);
     fn assign(self: &mut Self, data: const_pointer, count: size_type);
 
+    fn erase(self: &mut Self, index: size_type) -> &mut Self;
+    fn erase(self: &mut Self, index: size_type, count: size_type) -> &mut Self;
+    fn erase(self: &mut Self, pos: const_iterator) -> iterator;
+    fn erase(self: &mut Self, first: const_iterator, last: const_iterator) -> iterator;
+
     fn substr(self: &Self, pos: size_type) -> Self;
     fn substr(self: &Self, pos: size_type, count: size_type) -> Self;
 
@@ -258,6 +263,7 @@ class vector<T: type> {
 
     fn push_back(self: &mut Self, value: const_reference);
     fn push_back(self: &mut Self, value: value_type);
+    fn emplace_back<Args...: type>(self: &mut Self, args: Args...) -> reference;
     fn pop_back(self: &mut Self);
 
     fn insert(self: &mut Self, pos: const_iterator, value: const_reference) -> iterator;
@@ -362,14 +368,14 @@ fn make_pair<T1: type, T2: type>(first: T1, second: T2) -> pair<T1, T2>;
 class map<Key: type, T: type> {
     type key_type = Key;
     type mapped_type = T;
-    type value_type = T;
+    type value_type = pair<key_type, mapped_type>;
     type size_type = usize;
     type difference_type = isize;
 
-    type reference = &mut mapped_type;
-    type const_reference = &mapped_type;
-    type pointer = *mut mapped_type;
-    type const_pointer = *mapped_type;
+    type reference = &mut value_type;
+    type const_reference = &value_type;
+    type pointer = *mut value_type;
+    type const_pointer = *value_type;
 
     type iterator = pointer;
     type const_iterator = const_pointer;
@@ -398,8 +404,9 @@ class map<Key: type, T: type> {
     fn count(self: &Self, key: &key_type) -> size_type;
 
     fn clear(self: &mut Self);
-    fn insert(self: &mut Self, key: key_type, value: mapped_type) -> bool;
-    fn emplace(self: &mut Self, key: key_type, value: mapped_type) -> iterator;
+    fn insert(self: &mut Self, value: value_type) -> pair<iterator, bool>;
+    fn insert(self: &mut Self, key: key_type, value: mapped_type) -> pair<iterator, bool>;
+    fn emplace(self: &mut Self, key: key_type, value: mapped_type) -> pair<iterator, bool>;
     fn erase(self: &mut Self, key: &key_type) -> size_type;
     fn erase(self: &mut Self, pos: const_iterator) -> iterator;
     fn erase(self: &mut Self, first: const_iterator, last: const_iterator) -> iterator;
@@ -548,6 +555,7 @@ class ostream {
     type char_type = u8;
 
     fn flush(self: &mut Self) -> &mut Self;
+    fn put(self: &mut Self, ch: char_type) -> &mut Self;
 
     operator<<(self: &mut Self, value: bool) -> &mut Self;
 
@@ -613,6 +621,7 @@ class istringstream {
     fn fail(self: &Self) -> bool;
     fn eof(self: &Self) -> bool;
     fn clear(self: &mut Self);
+    fn putback(self: &mut Self, ch: char_type) -> &mut Self;
 
     operator!(self: &Self) -> bool;
 
@@ -661,6 +670,8 @@ class ifstream {
     fn open(self: &mut Self, filename: *u8, mode: openmode);
     fn close(self: &mut Self);
 
+    fn get(self: &mut Self) -> i32;
+    fn get(self: &mut Self, ch: &mut char_type) -> &mut Self;
     fn read(self: &mut Self, buffer: *mut u8, count: usize) -> &mut Self;
 
     operator!(self: &Self) -> bool;
@@ -684,6 +695,7 @@ class ofstream {
     fn fail(self: &Self) -> bool;
     fn clear(self: &mut Self);
     fn flush(self: &mut Self) -> &mut Self;
+    fn put(self: &mut Self, ch: char_type) -> &mut Self;
 
     fn open(self: &mut Self, path: &filesystem.path);
     fn open(self: &mut Self, path: &filesystem.path, mode: openmode);
@@ -787,6 +799,16 @@ fn next<Iter: type>(it: Iter, n: isize) -> Iter;
 
 fn prev<Iter: type>(it: Iter) -> Iter;
 fn prev<Iter: type>(it: Iter, n: isize) -> Iter;
+
+fn fill<ForwardIt: type, T: type>(first: ForwardIt, last: ForwardIt, value: T);
+
+fn accumulate<InputIt: type, T: type>(first: InputIt, last: InputIt, initial: T) -> T;
+fn accumulate<InputIt: type, T: type, BinaryOp: type>(
+    first: InputIt,
+    last: InputIt,
+    initial: T,
+    op: BinaryOp
+) -> T;
 
 namespace chrono {
     class duration<Rep: type> {
@@ -957,6 +979,17 @@ fn max<T: type>(a: T, b: T) -> T;
 fn clamp<T: type>(value: T, low: T, high: T) -> T;
 fn exchange<T: type>(obj: &mut T, new_value: T) -> T;
 
+class numeric_limits<T: type> {
+    static fn min() -> T;
+    static fn max() -> T;
+    static fn lowest() -> T;
+
+    static fn epsilon() -> T;
+    static fn infinity() -> T;
+    static fn quiet_NaN() -> T;
+    static fn signaling_NaN() -> T;
+}
+
 class unique_ptr<T: type> {
     type element_type = T;
     type pointer = *T;
@@ -1000,10 +1033,17 @@ class shared_ptr<T: type> {
 fn make_unique<T: type, Args...: type>(args: Args...) -> unique_ptr<T>;
 fn make_shared<T: type, Args...: type>(args: Args...) -> shared_ptr<T>;
 
+class nullopt_t {
+    init();
+}
+
+let nullopt: nullopt_t;
+
 class optional<T: type> {
     type value_type = T;
 
     init();
+    init(value: nullopt_t);
     init(value: T);
     init(other: Self);
     init<U: type>(other: optional<U>);
@@ -1020,6 +1060,7 @@ class optional<T: type> {
     operator*(self: &mut Self) -> &mut T;
     operator->(self: &Self) -> *T;
     operator->(self: &mut Self) -> *mut T;
+    operator=(self: &mut Self, value: nullopt_t) -> &mut Self;
     operator=(self: &mut Self, other: &Self) -> &mut Self;
     operator=<U: type>(self: &mut Self, other: optional<U>) -> &mut Self;
 

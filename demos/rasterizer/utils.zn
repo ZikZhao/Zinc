@@ -47,33 +47,33 @@ type PPMData = {
 /// @return Anonymous struct containing width, height, and the file stream positioned at pixel data.
 /// @throws std.runtime_error if file cannot be opened or parsed.
 fn ReadPPM(path: &std.filesystem.path) -> PPMData {
-    let file = std.ifstream(path, std.ifstream.binary);
+    let mut file = std.ifstream(path, std.ifstream.binary);
     if (!file.is_open()) {
         throw std.runtime_error("Could not open PPM file: " + path.string());
     }
 
-    let magic_number: std.string;
+    let mut magic_number: std.string;
     std.getline(file, magic_number);
     if (magic_number != "P6") {
         throw std.runtime_error("Invalid PPM format (expected P6): " + path.string());
     }
 
-    let line: std.string;
+    let mut line: std.string;
     std.getline(file, line);
     for (!line.empty() && line[0] == '#') {
         std.getline(file, line);
     }
 
-    let size_stream = std.istringstream(line);
-    let width: usize;
-    let height: usize;
+    let mut size_stream = std.istringstream(line);
+    let mut width: usize;
+    let mut height: usize;
     if (!(size_stream >> width >> height)) {
         throw std.runtime_error("Failed to parse PPM dimensions: " + path.string());
     }
 
     std.getline(file, line);
-    let max_stream = std.istringstream(line);
-    let max: usize;
+    let mut max_stream = std.istringstream(line);
+    let mut max: usize;
     if (!(max_stream >> max)) {
         throw std.runtime_error("Failed to parse PPM max value: " + path.string());
     }
@@ -93,18 +93,18 @@ fn WritePPM(
     max: usize,
     pixels: &std.vector<u32>
 ) {
-    let output_stream = std.ofstream(filename.data(), std.ofstream.out);
+    let mut output_stream = std.ofstream(filename.data(), std.ofstream.out);
     output_stream << "P6\n";
     output_stream << width << " " << height << "\n";
     output_stream << max << "\n";
 
     for (let i: usize = 0; i < width * height; i++) {
-        let rgb: [char; 3] = [
+        let rgb: [u8; 3] = [
             ((pixels[i] >> 16) & 0xFF) as u8,
             ((pixels[i] >> 8) & 0xFF) as u8,
             ((pixels[i] >> 0) & 0xFF) as u8
         ];
-        output_stream.write(rgb.data(), 3);
+        output_stream.write(rgb.data(), 3 as usize);
     }
 }
 

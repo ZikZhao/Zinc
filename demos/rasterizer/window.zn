@@ -61,23 +61,23 @@ class Window {
 
     init(width: i32, height: i32) {
         // Initialize SDL video subsystem
-        if (sdl.SDL_Init(sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_TIMER) != 0) {
+        if (sdl.SDL_Init((sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_TIMER) as u32) != 0) {
             throw std.runtime_error(std.format("[SDL] Could not initialise SDL: {}\n", sdl.SDL_GetError()));
         }
 
         // Create window surface
-        let flags = sdl.SDL_WINDOW_OPENGL;
+        let mut flags = sdl.SDL_WINDOW_OPENGL;
 
         let anywhere = sdl.SDL_WINDOWPOS_UNDEFINED;
         let window = sdl.SDL_CreateWindow("COMS30020", anywhere, anywhere, width, height, flags);
-        if (!window) {
+        if (window == nullptr) {
             throw std.runtime_error(std.format("[SDL] Could not set video mode: {}\n", sdl.SDL_GetError()));
         }
 
         // Renderer bound to window (software for portability)
         flags = sdl.SDL_RENDERER_SOFTWARE;
         let renderer = sdl.SDL_CreateRenderer(window, -1, flags);
-        if (!renderer) {
+        if (renderer == nullptr) {
             throw std.runtime_error(
                 std.format("[SDL] Could not create renderer: {}\n", sdl.SDL_GetError())
             );
@@ -89,17 +89,17 @@ class Window {
         let pixel_format = sdl.SDL_PIXELFORMAT_ARGB8888;
         let texture =
             sdl.SDL_CreateTexture(renderer, pixel_format, sdl.SDL_TEXTUREACCESS_STATIC, width, height);
-        if (!texture) {
+        if (texture == nullptr) {
             throw std.runtime_error(
                 std.format("[SDL] Could not allocate texture: {}\n", sdl.SDL_GetError())
             );
         }
 
-        let pixel_buffer = std.vector<u32>(width * height);
+        let mut pixel_buffer = std.vector<u32>((width * height) as usize);
 
         return Self{
-            width_ : width,
-            height_ : height,
+            width_ : width as usize,
+            height_ : height as usize,
             window_ : window,
             renderer_ : renderer,
             texture_ : texture,
@@ -108,23 +108,23 @@ class Window {
     }
 
     drop(self: &mut Self) {
-        if (self.texture_) { sdl.SDL_DestroyTexture(self.texture_); }
-        if (self.renderer_) { sdl.SDL_DestroyRenderer(self.renderer_); }
-        if (self.window_) { sdl.SDL_DestroyWindow(self.window_); }
+        if (self.texture_ != nullptr) { sdl.SDL_DestroyTexture(self.texture_); }
+        if (self.renderer_ != nullptr) { sdl.SDL_DestroyRenderer(self.renderer_); }
+        if (self.window_ != nullptr) { sdl.SDL_DestroyWindow(self.window_); }
         sdl.SDL_Quit();
     }
 
-    operator[](self: &mut Self, xy: std.pair<int, int>) -> &mut u32 {
+    operator[](self: &mut Self, xy: std.pair<i32, i32>) -> &mut u32 {
         let x = xy.first as usize;
         let y = xy.second as usize;
         return self.pixel_buffer_[y * self.width_ + x];
     }
 
-    operator[](self: &Self, xy: std.pair<int, int>) -> u32 {
+    /*operator[](self: &Self, xy: std.pair<i32, i32>) -> u32 {
         let x = xy.first as usize;
         let y = xy.second as usize;
         return self.pixel_buffer_[y * self.width_ + x];
-    }
+    }*/
 
     fn get_pixel_buffer(self: &Self) -> &std.vector<u32> {
         return self.pixel_buffer_;
@@ -142,7 +142,6 @@ class Window {
             trigger: trigger,
             handler: handler,
             id: self.next_event_id_++,
-            last_time: std.nullopt
         });
     }
 
@@ -156,7 +155,6 @@ class Window {
             trigger: trigger,
             handler: handler,
             first_motion: true,
-            last_time: std.nullopt
         });
     }
 
@@ -183,33 +181,33 @@ class Window {
             }
 
             // Keyboard transitions
-            if (event.type == sdl.SDL_KEYDOWN && !event.key.repeat) {
+            if (event.type == sdl.SDL_KEYDOWN && event.key.repeat == 0) {
                 let sc = event.key.keysym.scancode;
                 if (sc >= 0 && sc < sdl.SDL_NUM_SCANCODES) {
-                    self.keys_this_frame_[sc] = 1;
+                    self.keys_this_frame_[sc as usize] = true;
                     self.keys_pressed_this_frame_.insert(sc);
                 }
             }
             if (event.type == sdl.SDL_KEYUP) {
                 let sc = event.key.keysym.scancode;
                 if (sc >= 0 && sc < sdl.SDL_NUM_SCANCODES) {
-                    self.keys_this_frame_[sc] = 0;
+                    self.keys_this_frame_[sc as usize] = false;
                 }
             }
 
             // Mouse button transitions
             if (event.type == sdl.SDL_MOUSEBUTTONDOWN) {
                 let b = event.button.button;
-                self.mouse_buttons_this_frame_.insert(b);
-                self.mouse_buttons_updated_this_frame_.insert(b);
+                self.mouse_buttons_this_frame_.insert(b as i32);
+                self.mouse_buttons_updated_this_frame_.insert(b as i32);
                 for (mb : self.mouse_bindings_) {
                     if (mb.button == b) { mb.first_motion = true; }
                 }
             }
             if (event.type == sdl.SDL_MOUSEBUTTONUP) {
                 let b = event.button.button;
-                self.mouse_buttons_this_frame_.erase(b);
-                self.mouse_buttons_updated_this_frame_.insert(b);
+                self.mouse_buttons_this_frame_.erase(b as i32);
+                self.mouse_buttons_updated_this_frame_.insert(b as i32);
             }
 
             // Accumulate relative motion for bound handlers
@@ -239,7 +237,7 @@ class Window {
 
     /// Uploads backbuffer to SDL texture, presents and clears buffer.
     fn update(self: &mut Self) {
-        sdl.SDL_UpdateTexture(self.texture_, nullptr, self.pixel_buffer_.data(), self.width_ * sizeof(std.uint32_t));
+        sdl.SDL_UpdateTexture(self.texture_, nullptr, self.pixel_buffer_.data(), self.width_ * 4);
         sdl.SDL_RenderClear(self.renderer_);
         sdl.SDL_RenderCopy(self.renderer_, self.texture_, nullptr, nullptr);
         sdl.SDL_RenderPresent(self.renderer_);
@@ -252,7 +250,7 @@ class Window {
     }
 
     fn save_ppm(self: &Self, filename: strview) {
-        Utils.WritePPM(filename, self.width_, self.height_, 255, self.pixel_buffer_);
+        Utils.WritePPM(filename, self.width_, self.height_, 255 as usize, self.pixel_buffer_);
     }
 
     fn save_bmp(self: &Self, filename: strview) {
@@ -261,7 +259,7 @@ class Window {
             self.width_,
             self.height_,
             32,
-            self.width_ * sizeof(std.uint32_t),
+            self.width_ * 4,
             0xFF << 16,
             0xFF << 8,
             0xFF << 0,
@@ -355,12 +353,12 @@ class Window {
     /// Checks if any modifier key is currently pressed.
     /// @return `true` if Shift, Ctrl, or Alt is pressed.
     fn is_modifier_key_pressed(self: &Self) -> bool {
-        return self.keys_this_frame_[sdl.SDL_SCANCODE_LSHIFT] ||
-               self.keys_this_frame_[sdl.SDL_SCANCODE_RSHIFT] ||
-               self.keys_this_frame_[sdl.SDL_SCANCODE_LCTRL] ||
-               self.keys_this_frame_[sdl.SDL_SCANCODE_RCTRL] ||
-               self.keys_this_frame_[sdl.SDL_SCANCODE_LALT] ||
-               self.keys_this_frame_[sdl.SDL_SCANCODE_RALT];
+        return self.keys_this_frame_[sdl.SDL_SCANCODE_LSHIFT as usize] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_RSHIFT as usize] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_LCTRL as usize] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_RCTRL as usize] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_LALT as usize] ||
+               self.keys_this_frame_[sdl.SDL_SCANCODE_RALT as usize];
     }
 
     /// Checks if a key binding's trigger condition is met.

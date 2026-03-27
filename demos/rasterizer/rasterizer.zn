@@ -102,9 +102,9 @@ class Rasterizer {
 
     /// Sutherland–Hodgman polygon clipping against a single frustum plane (clip space).
     static fn ClipAgainstPlane(
-        input: &Utils.InplaceVector<World.ClipVertex, 9>, plane: World.ClipPlane
+        input: &Utils.InplaceVector<World.ClipVertex, 9>, plane: i32
     ) -> Utils.InplaceVector<World.ClipVertex, 9> {
-        let output: Utils.InplaceVector<World.ClipVertex, 9>;
+        let mut output: Utils.InplaceVector<World.ClipVertex, 9>;
 
         if (input.size() == 0) { return output; }
 
@@ -151,9 +151,9 @@ class Rasterizer {
             // Sample texture and modulate by material albedo
             let tex_sample = face.material.texture->sample(u, v);
             base_color = glm.vec3(
-                (tex_sample.red / 255.0f) * face.material.base_color.r,
-                (tex_sample.green / 255.0f) * face.material.base_color.g,
-                (tex_sample.blue / 255.0f) * face.material.base_color.b
+                (tex_sample.red as f32 / 255.0f) * face.material.base_color.r,
+                (tex_sample.green as f32 / 255.0f) * face.material.base_color.g,
+                (tex_sample.blue as f32 / 255.0f) * face.material.base_color.b
             );
         } else {
             // No texture: use flat material base color
@@ -168,7 +168,7 @@ class Rasterizer {
     }
 
     let window_: &Window.Window;
-    let z_buffer_: std.vector<f32>;
+    let mut z_buffer_: std.vector<f32>;
 
     init(window: &Window.Window) {
         return Self{
@@ -188,14 +188,14 @@ class Rasterizer {
         self.z_buffer_.assign(self.window_.width_ * self.window_.height_, 0.0f);
     }
 
-    fn wireframe(self: &Self, camera: &World.Camera, faces: &std.vector<World.Face>, vertices: &std.vector<glm.vec3>) {
+    fn wireframe(self: &mut Self, camera: &World.Camera, faces: &std.vector<World.Face>, vertices: &std.vector<glm.vec3>) {
         for (face : faces) {
             self.face_wireframe(camera, face, vertices, std.vector<glm.vec2>());
         }
     }
 
     fn rasterized(
-        self: &Self,
+        self: &mut Self,
         camera: &World.Camera,
         faces: &std.vector<World.Face>,
         vertices: &std.vector<glm.vec3>,
@@ -207,7 +207,7 @@ class Rasterizer {
     }
 
     fn face_wireframe(
-        self: &Self,
+        self: &mut Self,
         camera: &World.Camera,
         face: &World.Face,
         vertices: &std.vector<glm.vec3>,
@@ -246,7 +246,7 @@ class Rasterizer {
                     let depth: &mut f32 = self.z_buffer_[y as usize * width + x as usize];
                     if (inv_z >= depth) {
                         depth = inv_z;
-                        self.window_[std.pair<i32, i32>(x as i32, y as i32)] = colour;
+                        self.window_[std.pair<i32, i32>(x as i32, y as i32)] = World.from_colour(colour);
                     }
                 }
             } else {
@@ -263,7 +263,7 @@ class Rasterizer {
                     let depth: &mut f32 = self.z_buffer_[y as usize * width + x as usize];
                     if (inv_z >= depth) {
                         depth = inv_z;
-                        self.window_[std.pair<i32, i32>(x as i32, y as i32)] = colour;
+                        self.window_[std.pair<i32, i32>(x as i32, y as i32)] = World.from_colour(colour);
                     }
                 }
             }
@@ -271,7 +271,7 @@ class Rasterizer {
     }
 
     fn face_rasterized(
-        self: &Self,
+        self: &mut Self,
         camera: &World.Camera,
         face: &World.Face,
         vertices: &std.vector<glm.vec3>,
@@ -346,7 +346,7 @@ class Rasterizer {
                         let depth: &mut f32 = self.z_buffer_[y as usize * width + x as usize];
                         if (inv_z > depth) {
                             depth = inv_z;
-                            self.window_[std.pair::<i32, i32>(x as i32, y as i32)] = colour;
+                            self.window_[std.pair::<i32, i32>(x as i32, y as i32)] = World.from_colour(colour);
                         }
                     }
                 }
@@ -379,7 +379,7 @@ class Rasterizer {
                         let depth: &mut f32 = self.z_buffer_[y as usize * width + x as usize];
                         if (inv_z > depth) {
                             depth = inv_z;
-                            self.window_[std.pair::<i32, i32>(x as i32, y as i32)] = colour;
+                            self.window_[std.pair::<i32, i32>(x as i32, y as i32)] = World.from_colour(colour);
                         }
                     }
                 }
@@ -394,7 +394,7 @@ class Rasterizer {
     /// @param texcoords The list of texture coordinates.
     /// @return The resulting clipped polygon vertices.
     fn clip_triangle(
-        self: &Self,
+        self: &mut Self,
         camera: &World.Camera,
         face: &World.Face,
         vertices: &std.vector<glm.vec3>,

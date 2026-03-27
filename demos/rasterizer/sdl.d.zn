@@ -160,7 +160,7 @@ fn SDL_Quit();
 fn SDL_GetError() -> *u8;
 
 fn SDL_CreateWindow(
-	title: *u8, x: i32, y: i32, w: i32, h: i32, flags: u32
+	title: strview, x: i32, y: i32, w: i32, h: i32, flags: u32
 ) -> *mut SDL_Window;
 fn SDL_DestroyWindow(window: *mut SDL_Window);
 
@@ -173,7 +173,7 @@ fn SDL_CreateTexture(
 fn SDL_DestroyTexture(texture: *mut SDL_Texture);
 
 fn SDL_RenderSetLogicalSize(renderer: *mut SDL_Renderer, w: i32, h: i32) -> i32;
-fn SDL_SetHint(name: *u8, value: *u8) -> i32;
+fn SDL_SetHint(name: strview, value: strview) -> i32;
 
 fn SDL_UpdateTexture(
 	texture: *mut SDL_Texture, rect: *void, pixels: *void, pitch: usize
@@ -198,10 +198,10 @@ fn SDL_CreateRGBSurfaceFrom(
 	amask: u32
 ) -> *mut SDL_Surface;
 fn SDL_FreeSurface(surface: *mut SDL_Surface);
-fn SDL_SaveBMP(surface: *mut SDL_Surface, path: *u8) -> i32;
+fn SDL_SaveBMP(surface: *mut SDL_Surface, path: strview) -> i32;
 
 // Commonly used extras.
 fn SDL_GetTicks() -> u32;
 fn SDL_Delay(ms: u32);
-fn SDL_SetWindowTitle(window: *mut SDL_Window, title: *u8);
+fn SDL_SetWindowTitle(window: *mut SDL_Window, title: strview);
 fn SDL_SetRelativeMouseMode(enabled: i32) -> i32;

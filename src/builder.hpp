@@ -1095,7 +1095,7 @@ private:
     auto visitDestructor(ZincParser::DestructorContext* ctx) noexcept -> Any<ASTNodeVariant> final {
         return as_variant(new ASTCtorDtorDefinition{
             loc(ctx),
-            std::span<ASTFunctionParameter>{},
+            visit_list<ASTFunctionParameter>(ctx->parameters_),
             visit_list(ctx->body_),
             false,
             ctx->KW_CONST() != nullptr

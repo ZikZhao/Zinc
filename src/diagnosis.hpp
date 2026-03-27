@@ -29,6 +29,8 @@ public:
         ErrorTrap* prev_;
 
     public:
+        ErrorTrap() noexcept : location_{}, prev_(std::exchange(instance->current_trap_, this)) {}
+
         ErrorTrap(Location location) noexcept
             : location_(location), prev_(std::exchange(instance->current_trap_, this)) {}
 
@@ -36,7 +38,8 @@ public:
             GlobalMemory::Vector<Problem>& target =
                 (prev_) ? prev_->problems_ : instance->problems_;
             for (Problem& problem : problems_) {
-                if (problem.location.begin == problem.location.end) {
+                if (problem.location.begin == problem.location.end &&
+                    location_.begin != location_.end) {
                     problem.location = location_;
                 }
                 target.push_back(std::move(problem));
@@ -132,9 +135,7 @@ private:
         instance->problems_.erase(begin, end);
     }
 
-    static void print_problem(
-        SourceManager& sources, const Problem& problem, std::size_t indent = 0
-    ) {
+    static void print_problem(SourceManager& sources, const Problem& problem) {
         strview prefix;
         const char* colour = nullptr;
         switch (problem.severity) {
@@ -154,15 +155,20 @@ private:
         std::print(
             std::cerr, "{}[{}]{} {}\n", colour, prefix, ColourEscape::RESET, problem.message
         );
-        print_code(sources, problem.location, indent + 2);
+        print_code(sources, problem.location);
         for (const Problem& sub_problem : problem.subproblems) {
-            print_problem(sources, sub_problem, indent + 2);
+            print_subproblem(sources, sub_problem);
         }
     }
 
-    static void print_code(
-        SourceManager& sources, const Location& location, std::size_t indent = 0
-    ) {
+    static void print_subproblem(SourceManager& sources, const Problem& problem) {
+        std::print(
+            std::cerr, "{}[INFO]{} {}\n", ColourEscape::CYAN, ColourEscape::RESET, problem.message
+        );
+        print_code(sources, problem.location);
+    }
+
+    static void print_code(SourceManager& sources, const Location& location) {
         const SourceFile& file = sources[location.id];
         strview content = file.content_;
 
@@ -179,9 +185,7 @@ private:
         std::size_t col_num = location.begin - context_start + 1;
         std::print(
             std::cerr,
-            "{:{}}{}{}{}:{}:{}{}\n",
-            "",
-            indent,
+            "    {}{}{}:{}:{}{}\n",
             ColourEscape::DIM,
             ColourEscape::UNDERLINE,
             file.relative_path_
@@ -195,9 +199,7 @@ private:
             [&](std::int64_t line_idx, strview prefix, strview match, strview suffix) {
                 std::print(
                     std::cerr,
-                    "{:{}}{}{:>{}} |{}",
-                    "",
-                    indent,
+                    "    {}{:>{}} |{}",
                     ColourEscape::DIM,
                     line_idx,
                     line_num_width,
@@ -513,6 +515,10 @@ public:
                 current
             )
         );
+    }
+
+    static auto error_invalid_pointer_access(strview type) noexcept -> void {
+        unlocated_error(GlobalMemory::format("Invalid pointer access on type '{}'", type));
     }
 };
 

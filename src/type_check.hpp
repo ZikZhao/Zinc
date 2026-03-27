@@ -286,7 +286,20 @@ public:
 
     static auto apply_mutable(Term term, bool is_mutable) -> Term {
         if (!is_mutable) return term;
+        if (term->kind_ == Kind::Reference || term->kind_ == Kind::Mutable) return term;
         return Term::forward_like(term, TypeRegistry::get<MutableType>(term.effective_type()));
+    }
+
+    static auto ref_to_value_category(Term term) -> Term {
+        if (!term) return term;
+        if (auto ref_type = term->dyn_cast<ReferenceType>()) {
+            if (ref_type->is_moved_) {
+                return Term::xvalue(ref_type->target_type_);
+            } else {
+                return Term::lvalue(ref_type->target_type_);
+            }
+        }
+        return term;
     }
 
 private:
@@ -367,6 +380,9 @@ public:
         auto std_scope = value->get<Scope*>();
         return eval_symbol(*std_scope, *std_scope->find(identifier));
     }
+
+private:
+    auto eval_var_init(Scope& scope, const VariableInitialization& init) noexcept -> Symbol;
 };
 
 class TemplateHandler final : public GlobalMemory::MonotonicAllocated {
@@ -613,6 +629,7 @@ public:
             transformed_args.insert(transformed_args.begin(), transform(method->object));
         }
 
+        Diagnostic::ErrorTrap error_trap{node->location};
         const FunctionType* overload = resolve_overload(callee, transformed_args);
         if (!overload) {
             GlobalMemory::String args_repr;
@@ -625,6 +642,7 @@ public:
             }
             args_repr += ")";
             Diagnostic::error_no_matching_overload(node->location, args_repr);
+            error_trap.conclude();
             resolve_overload(callee, transformed_args);  // for debugging
             return {};
         }
@@ -888,13 +906,21 @@ private:
             if (Sema::is_mutable(param) && !Sema::is_mutable(arg)) return NoMatch;
             return tiebreaker_rank();
         } else {
+            if (decayed_param->kind_ == Kind::Pointer && decayed_arg->kind_ == Kind::Nullptr) {
+                return Upcast;
+            }
             if (!decayed_arg->dyn_cast<PointerType>() || !decayed_param->dyn_cast<PointerType>())
                 return NoMatch;
             auto param_pointee = decayed_param->cast<PointerType>()->target_type_;
             auto arg_pointee = decayed_arg->cast<PointerType>()->target_type_;
             if (Sema::is_mutable(param_pointee) && !Sema::is_mutable(arg_pointee)) return NoMatch;
-            if (Sema::decay(param_pointee) == Sema::decay(arg_pointee)) {
+            auto decayed_param_pointee = Sema::decay(param_pointee);
+            auto decayed_arg_pointee = Sema::decay(arg_pointee);
+            if (decayed_param_pointee == decayed_arg_pointee) {
                 return tiebreaker_rank();
+            }
+            if (decayed_param_pointee->kind_ == Kind::Void) {
+                return Upcast;
             }
             auto param_class = Sema::decay(param_pointee)->dyn_cast<InstanceType>();
             auto arg_class = Sema::decay(arg_pointee)->dyn_cast<InstanceType>();
@@ -1283,8 +1309,9 @@ private:
 public:
     static auto is_primitive(Term operand) noexcept -> bool {
         Term decayed = Sema::decay(operand);
-        return decayed->kind_ == Kind::Integer || decayed->kind_ == Kind::Float ||
-               decayed->kind_ == Kind::Boolean || decayed->kind_ == Kind::Pointer;
+        return decayed->kind_ == Kind::Nullptr || decayed->kind_ == Kind::Integer ||
+               decayed->kind_ == Kind::Float || decayed->kind_ == Kind::Boolean ||
+               decayed->kind_ == Kind::Pointer;
     }
 
 private:
@@ -1384,7 +1411,8 @@ public:
             case OperatorGroup::Comparison:
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
-                    (left_kind == Kind::Pointer && right_kind == Kind::Pointer)) {
+                    ((left_kind == Kind::Nullptr || left_kind == Kind::Pointer) &&
+                     (right_kind == Kind::Nullptr || right_kind == Kind::Pointer))) {
                     return Term::prvalue(&BooleanType::instance);
                 }
                 break;
@@ -1415,6 +1443,10 @@ public:
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
                     return Term::lvalue(result_type);
+                } else {
+                    if (decayed_left == decayed_right) {
+                        return Term::lvalue(result_type);
+                    }
                 }
                 break;
             }
@@ -1435,17 +1467,17 @@ public:
         const Type* left_base_type = Sema::decay(left_type);
         const Type* right_type = Sema::apply_value_category(right);
         const Type* right_base_type = Sema::decay(right_type);
+        if (opcode == OperatorCode::Assign && left_base_type == right_base_type) {
+            if (Sema::is_mutable(left_type)) {
+                return Term::lvalue(left_type);
+            }
+        }
         if (left_base_type->kind_ != Kind::Instance && right_base_type &&
             right_base_type->kind_ != Kind::Instance) {
             Diagnostic::error_operation_not_defined(
                 GetOperatorString(opcode), left_type->repr(), right_type->repr()
             );
             return {};
-        }
-        if (opcode == OperatorCode::Assign && left_base_type == right_base_type) {
-            if (Sema::is_mutable(left_type)) {
-                return Term::lvalue(left_type);
-            }
         }
         std::array<Term, 2> args = {left, right};
         if (opcode == OperatorCode::PostIncrement || opcode == OperatorCode::PostDecrement) {
@@ -1489,8 +1521,13 @@ public:
             }
         } else if (decayed_source_type->kind_ == Kind::Pointer) {
             if (target_type->kind_ == Kind::Pointer) {
-                if (TypeRegistry::is_reachable(source_type, target_type)) {
+                if (target_type->cast<PointerType>()->target_type_ == &VoidType::instance ||
+                    decayed_source_type->cast<PointerType>()->target_type_ == &VoidType::instance) {
                     convertible = true;
+                } else {
+                    if (TypeRegistry::is_reachable(decayed_source_type, target_type)) {
+                        convertible = true;
+                    }
                 }
             }
         }
@@ -1972,7 +2009,8 @@ public:
             Symbol first_element_symbol =
                 ValueContextEvaluator{*this, nullptr}(node->elements.front());
             if (Sema::expect(first_element_symbol, SymbolKind::Term)) {
-                element_type = Sema::get<SymbolKind::Term>(first_element_symbol).effective_type();
+                element_type =
+                    Sema::decay(Sema::get<SymbolKind::Term>(first_element_symbol).effective_type());
             } else {
                 return {};
             }
@@ -2139,7 +2177,7 @@ public:
             TypeContextEvaluator{sema_, type}(node->declared_type);
         }
         if (!holds_monostate(node->expr)) {
-            Symbol init = ValueContextEvaluator{sema_, nullptr, false}(node->expr);
+            Symbol init = ValueContextEvaluator{sema_, type.get(), false}(node->expr);
             if (!Sema::expect(init, SymbolKind::Term)) {
                 return;
             }
@@ -2317,6 +2355,13 @@ inline Sema::Sema(Scope& std_scope, Scope& root, CodeGenEnvironment& codegen_env
       access_handler_(std::make_unique<AccessHandler>(*this)),
       call_handler_(std::make_unique<CallHandler>(*this)) {}
 
+inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void {
+    scope.is_instantiating_template_ = true;
+    SymbolCollector{&std_scope_, &scope}(variant);
+    Guard guard(*this, scope);
+    TypeCheckVisitor{*this}(variant);
+}
+
 inline auto Sema::eval_type(Scope& scope, const ScopeValue& value) noexcept -> TypeResolution {
     if (auto* object = value.get<const Object*>()) {
         if (auto* type = object->dyn_type()) {
@@ -2373,32 +2418,7 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
         TypeResolution out = eval_type(scope, value);
         return out.get() ? Symbol{out.get()} : Symbol{};
     } else if (auto var_init = value.get<const VariableInitialization*>()) {
-        TypeResolution type{};
-        if (!holds_monostate(var_init->type)) {
-            Guard guard(*this, scope);
-            TypeContextEvaluator{*this, type}(var_init->type);
-            if (!type.get()) return {};
-        }
-        if (holds_monostate(var_init->value)) {
-            return type.get()
-                       ? Symbol{apply_mutable(Term::lvalue(type.get()), var_init->is_mutable)}
-                       : Symbol{};
-        } else {
-            Symbol init_symbol = ValueContextEvaluator{*this, type.get(), false}(var_init->value);
-            if (!Sema::expect(init_symbol, SymbolKind::Term)) return {};
-            Term init = Term::lvalue(std::get<Term>(init_symbol).resolve_to_default());
-            if (type.get()) {
-                AutoBindings auto_bindings;
-                if (!type->assignable_from(init.effective_type(), auto_bindings)) {
-                    return {};
-                }
-                if (var_init->is_comptime) return init;
-                return apply_mutable(Term::lvalue(type.get()), var_init->is_mutable);
-            } else {
-                if (var_init->is_comptime) return init;
-                return apply_mutable(Term::lvalue(init.effective_type()), var_init->is_mutable);
-            }
-        }
+        return eval_var_init(scope, *var_init);
     } else if (value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
         return std::pair{&scope, &value};
     } else if (auto* template_family = value.get<TemplateFamily*>()) {
@@ -2409,11 +2429,33 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
     UNREACHABLE();
 }
 
-inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void {
-    scope.is_instantiating_template_ = true;
-    SymbolCollector{&std_scope_, &scope}(variant);
-    Guard guard(*this, scope);
-    TypeCheckVisitor{*this}(variant);
+inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init) noexcept
+    -> Symbol {
+    TypeResolution type{};
+    if (!holds_monostate(init.type)) {
+        Guard guard(*this, scope);
+        TypeContextEvaluator{*this, type}(init.type);
+        if (!type.get()) return {};
+    }
+    if (holds_monostate(init.value)) {
+        return type.get() ? Symbol{apply_mutable(Term::lvalue(type.get()), init.is_mutable)}
+                          : Symbol{};
+    } else {
+        Symbol init_symbol = ValueContextEvaluator{*this, type.get(), false}(init.value);
+        if (!Sema::expect(init_symbol, SymbolKind::Term)) return {};
+        Term init_term = Term::lvalue(std::get<Term>(init_symbol).resolve_to_default());
+        if (type.get()) {
+            AutoBindings auto_bindings;
+            if (!type->assignable_from(init_term.effective_type(), auto_bindings)) {
+                return {};
+            }
+            if (init.is_comptime) return init_term;
+            return apply_mutable(Term::lvalue(type.get()), init.is_mutable);
+        } else {
+            if (init.is_comptime) return init_term;
+            return apply_mutable(Term::lvalue(init_term.effective_type()), init.is_mutable);
+        }
+    }
 }
 
 inline auto TemplateHandler::inference(
@@ -2836,19 +2878,28 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
         return {};
     }
     Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
-    Term decayed = Sema::decay(base_term);
-    if (auto* pointer_type = decayed.effective_type()->dyn_cast<PointerType>()) {
-        Term dereferenced;
-        dereferenced = Term::lvalue(pointer_type->target_type_);
-        if (pointer_type->target_type_->dyn_cast<StructType>()) {
-            return Sema::term_to_symbol(eval_struct_access(dereferenced, node->member));
-        } else if (pointer_type->target_type_->dyn_cast<InstanceType>()) {
-            return eval_instance_access(dereferenced, node->member);
+    Term current_term = base_term;
+    while (true) {
+        Term decayed = Sema::decay(current_term);
+        if (auto* pointer_type = decayed.effective_type()->dyn_cast<PointerType>()) {
+            Term dereferenced = Term::lvalue(pointer_type->target_type_);
+            Term decayed_dereferenced = Sema::decay(dereferenced);
+            if (decayed_dereferenced->dyn_cast<StructType>()) {
+                return Sema::term_to_symbol(eval_struct_access(dereferenced, node->member));
+            } else if (decayed_dereferenced->dyn_cast<InstanceType>()) {
+                return eval_instance_access(dereferenced, node->member);
+            } else {
+                Diagnostic::error_invalid_pointer_access(base_term->repr());
+                return {};
+            }
+        } else if (decayed.effective_type()->dyn_cast<InstanceType>()) {
+            current_term = sema_.operation_handler_->eval_overloaded_op(
+                node, OperatorCode::Pointer, current_term
+            );
+        } else {
+            Diagnostic::error_invalid_pointer_access(base_term->repr());
+            return {};
         }
-    } else if (decayed.effective_type()->dyn_cast<InstanceType>()) {
-        return Sema::term_to_symbol(
-            sema_.operation_handler_->eval_overloaded_op(node, OperatorCode::Pointer, base_term)
-        );
     }
     return {};
 }

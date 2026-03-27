@@ -15,14 +15,14 @@ class Renderer {
     init(world: &World.World, window: &Window.Window) {
         return Self{
             world_: world,
-            rasterizer_: std.make_unique<Rasterizer.Rasterizer>(window),
+            rasterizer_: std.make_unique::<Rasterizer.Rasterizer>(window),
             mode_: Mode.RASTERIZED
         };
     }
 
-    fn set_mode(self: &mut Self, mode: Mode) { self.mode_ = mode; }
+    fn set_mode(self: &mut Self, mode: i32) { self.mode_ = mode; }
 
-    fn render(self: &Self) {
+    fn render(self: &mut Self) {
         self.clear();
         switch (self.mode_) {
             case Mode.WIREFRAME: {
@@ -36,16 +36,16 @@ class Renderer {
         }
     }
 
-    fn clear(self: &Self) {
-        self.rasterizer_.clear();
+    fn clear(self: &mut Self) {
+        self.rasterizer_->clear();
     }
 
-    fn render_wireframe(self: &Self) {
-        self.rasterizer_.wireframe(self.world_.camera_, self.world_.all_faces_, self.world_.all_vertices_);
+    fn render_wireframe(self: &mut Self) {
+        self.rasterizer_->wireframe(self.world_.camera_, self.world_.all_faces_, self.world_.all_vertices_);
     }
 
-    fn render_rasterized(self: &Self) {
-        self.rasterizer_.rasterized(
+    fn render_rasterized(self: &mut Self) {
+        self.rasterizer_->rasterized(
             self.world_.camera_, self.world_.all_faces_, self.world_.all_vertices_, self.world_.all_texcoords_
         );
     }
