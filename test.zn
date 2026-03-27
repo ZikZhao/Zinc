@@ -12,6 +12,15 @@ class A{
     }
 }
 
+enum B {
+    A,
+    C,
+}
+
 fn main(args: [strview]) {
-    A.bar(5);
+    let d = foo(B.A);
+}
+
+fn foo(b: B) {
+    return;
 }

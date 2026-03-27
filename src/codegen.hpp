@@ -418,7 +418,28 @@ public:
         }
     }
 
-    auto operator()(GlobalMemory::String& out, const Value* value) const -> void { throw; }
+    auto operator()(GlobalMemory::String& out, const Value* value) const -> void {
+        switch (value->kind_) {
+        case Kind::Nullptr:
+            out += "Vn"sv;
+            break;
+        case Kind::Integer: {
+            const IntegerValue* int_value = value->cast<IntegerValue>();
+            std::format_to(std::back_inserter(out), "Vi{}"sv, int_value->value_.to_string());
+            break;
+        }
+        case Kind::Float: {
+            const FloatValue* float_value = value->cast<FloatValue>();
+            std::format_to(std::back_inserter(out), "Vf{:a}"sv, float_value->value_);
+            break;
+        }
+        case Kind::Boolean:
+            out += value->cast<BooleanValue>()->value_ ? "Vtrue"sv : "Vfalse"sv;
+            break;
+        default:
+            UNREACHABLE();
+        }
+    }
 
     auto operator()(GlobalMemory::String& out, OperatorCode opcode) const noexcept -> void {
         switch (opcode) {

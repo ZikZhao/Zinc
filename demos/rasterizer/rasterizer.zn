@@ -14,7 +14,7 @@ import "window.zn" as Window;
 /// - Z-buffering for depth testing
 class Rasterizer {
     /// Clip-space half-space test: inside test for a homogeneous vertex versus a frustum plane.
-    static fn InsidePlane(v: &glm.vec4, plane: World.ClipPlane) -> bool {
+    static fn InsidePlane(v: &glm.vec4, plane: i32) -> bool {
         switch (plane) {
             case World.ClipPlane.LEFT: {
                 return v.x >= -v.w;
@@ -39,7 +39,7 @@ class Rasterizer {
     }
 
     /// Edge-plane intersection parameter `t` in clip space (homogeneous distances).
-    static fn ComputeIntersectionT(v0: &glm.vec4, v1: &glm.vec4, plane: World.ClipPlane) -> f32 {
+    static fn ComputeIntersectionT(v0: &glm.vec4, v1: &glm.vec4, plane: i32) -> f32 {
         let mut d0: f32;
         let mut d1: f32;
         switch (plane) {
@@ -85,16 +85,16 @@ class Rasterizer {
 
     /// Attribute interpolation at plane intersection (colour, UV linear in clip space).
     static fn IntersectPlane(
-        v0: &World.ClipVertex, v1: &World.ClipVertex, plane: World.ClipPlane
+        v0: &World.ClipVertex, v1: &World.ClipVertex, plane: i32
     ) -> World.ClipVertex {
         let t = Self.ComputeIntersectionT(v0.position_clip, v1.position_clip, plane);
         return World.ClipVertex{
             position_clip: v0.position_clip * (1.0f - t) + v1.position_clip * t,
             colour:
                 World.Colour{
-                    red: (v0.colour.red * (1.0f - t) + v1.colour.red * t) as u8,
-                    green: (v0.colour.green * (1.0f - t) + v1.colour.green * t) as u8,
-                    blue: (v0.colour.blue * (1.0f - t) + v1.colour.blue * t) as u8,
+                    red: (v0.colour.red as f32 * (1.0f - t) + v1.colour.red as f32 * t) as u8,
+                    green: (v0.colour.green as f32 * (1.0f - t) + v1.colour.green as f32 * t) as u8,
+                    blue: (v0.colour.blue as f32 * (1.0f - t) + v1.colour.blue as f32 * t) as u8,
                 },
             uv: v0.uv * (1.0f - t) + v1.uv * t,
         };

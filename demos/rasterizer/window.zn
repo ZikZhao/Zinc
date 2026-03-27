@@ -256,16 +256,16 @@ class Window {
     fn save_bmp(self: &Self, filename: strview) {
         let surface = sdl.SDL_CreateRGBSurfaceFrom(
             self.pixel_buffer_.data() as *void,
-            self.width_,
-            self.height_,
+            self.width_ as i32,
+            self.height_ as i32,
             32,
-            self.width_ * 4,
-            0xFF << 16,
-            0xFF << 8,
-            0xFF << 0,
-            0xFF << 24
+            (self.width_ * 4) as usize,
+            (0xFF << 16) as u32,
+            (0xFF << 8) as u32,
+            (0xFF << 0) as u32,
+            (0xFF << 24) as u32
         );
-        sdl.SDL_SaveBMP(surface, filename.data());
+        sdl.SDL_SaveBMP(surface, filename);
         sdl.SDL_FreeSurface(surface);
     }
 

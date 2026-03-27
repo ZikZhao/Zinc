@@ -267,17 +267,12 @@ public:
         return do_compare(other, assumed_equal);
     }
 
-    auto assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept -> bool;
-
     virtual auto default_construct() const noexcept -> bool = 0;
 
 protected:
     virtual auto do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept -> std::strong_ordering = 0;
-
-    virtual auto do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept
-        -> bool = 0;
 };
 
 class PrimitiveType : public Type {
@@ -305,9 +300,6 @@ public:
 public:
     VoidType() noexcept : PrimitiveType(kind) {}
     GlobalMemory::String repr() const final { return "void"; }
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        return source->kind_ == Kind::Void;
-    }
     bool default_construct() const noexcept final { UNREACHABLE(); }
 };
 
@@ -319,10 +311,6 @@ public:
 public:
     NullptrType() noexcept : PrimitiveType(kind) {}
     GlobalMemory::String repr() const final { return "nullptr"; }
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        /// No variable can have null type except null literal
-        UNREACHABLE();
-    }
     bool default_construct() const noexcept final { return true; }
 };
 
@@ -351,11 +339,6 @@ public:
     GlobalMemory::String repr() const final {
         return GlobalMemory::format("{}{}", is_signed_ ? "i" : "u", bits_);
     }
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        const IntegerType* other_int = source->dyn_cast<IntegerType>();
-        return other_int && (other_int->bits_ == 0 || (this->is_signed_ == other_int->is_signed_ &&
-                                                       this->bits_ >= other_int->bits_));
-    }
     bool default_construct() const noexcept final { return true; }
 };
 
@@ -374,10 +357,6 @@ public:
         assert(bits == 0 || bits == 32 || bits == 64);
     }
     GlobalMemory::String repr() const final { return GlobalMemory::format("f{}", bits_); }
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        const FloatType* other_float = source->dyn_cast<FloatType>();
-        return other_float && (other_float->bits_ == 0 || this->bits_ >= other_float->bits_);
-    }
     bool default_construct() const noexcept final { return true; }
 };
 
@@ -389,9 +368,6 @@ public:
 public:
     BooleanType() noexcept : PrimitiveType(kind) {}
     GlobalMemory::String repr() const final { return "bool"; }
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        return source->dyn_cast<BooleanType>() != nullptr;
-    }
     bool default_construct() const noexcept final { return true; }
 };
 
@@ -448,8 +424,6 @@ protected:
         return return_type_->compare(other_func->return_type_, assumed_equal);
     }
 
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final;
-
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const FunctionType* other_func = target->dyn_cast<FunctionType>();
         if (!other_func || parameters_.size() != other_func->parameters_.size()) {
@@ -465,11 +439,6 @@ protected:
 };
 
 class StructType : public Type {
-public:
-    static auto validate(
-        const Type* type, GlobalMemory::FlatMap<strview, const Type*> inits
-    ) noexcept -> bool;
-
 public:
     static constexpr Kind kind = Kind::Struct;
 
@@ -526,23 +495,6 @@ protected:
         return std::strong_ordering::equal;
     }
 
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        // (a,b,c) is assignable to (a,b)
-        // i.e., source must have at least all fields of this
-        const StructType* other_struct = source->dyn_cast<StructType>();
-        if (other_struct == nullptr) {
-            return false;
-        }
-        for (const auto& [name, type] : fields_) {
-            auto it = other_struct->fields_.find(name);
-            if (it == other_struct->fields_.end() ||
-                !(*it).second->assignable_from(type, auto_bindings)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const StructType* other_struct = target->dyn_cast<StructType>();
         if (!other_struct) {
@@ -587,11 +539,6 @@ protected:
     ) const noexcept final {
         /// TODO:
         return std::strong_ordering::equal;
-    }
-
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        /// TODO:
-        return false;
     }
 };
 
@@ -661,10 +608,6 @@ protected:
         return this <=> other;
     }
 
-    bool do_assignable_from(const Type* other, AutoBindings& auto_bindings) const noexcept final {
-        return this == other;
-    }
-
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const InstanceType* other_instance = target->dyn_cast<InstanceType>();
         if (!other_instance) {
@@ -719,11 +662,6 @@ protected:
         return target_type_->compare(other_mut->target_type_, assumed_equal);
     }
 
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        const MutableType* other_mut = source->dyn_cast<MutableType>();
-        return other_mut && target_type_->assignable_from(other_mut->target_type_, auto_bindings);
-    }
-
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const MutableType* other_mut = target->dyn_cast<MutableType>();
         return other_mut && target_type_->pattern_match(other_mut->target_type_, auto_bindings);
@@ -762,12 +700,6 @@ protected:
         return target_type_->compare(other_ref->target_type_, assumed_equal);
     }
 
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        const ReferenceType* other_ref = source->dyn_cast<ReferenceType>();
-        return other_ref && (is_moved_ == other_ref->is_moved_) &&
-               target_type_->assignable_from(other_ref->target_type_, auto_bindings);
-    }
-
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const ReferenceType* other_ref = target->dyn_cast<ReferenceType>();
         return other_ref && (is_moved_ == other_ref->is_moved_) &&
@@ -801,13 +733,6 @@ protected:
     ) const noexcept final {
         const PointerType* other_ptr = other->cast<PointerType>();
         return target_type_->compare(other_ptr->target_type_, assumed_equal);
-    }
-
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        const PointerType* other_ptr = source->dyn_cast<PointerType>();
-        return (other_ptr &&
-                target_type_->assignable_from(other_ptr->target_type_, auto_bindings)) ||
-               source->kind_ == Kind::Nullptr;
     }
 
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
@@ -892,27 +817,6 @@ protected:
             }
         }
         return std::strong_ordering::equal;
-    }
-
-    bool do_assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept final {
-        // (a | b) is assignable to (a | b | c)
-        // i.e., source must be assignable to at least one of the types in this
-        if (const UnionType* other_union = source->dyn_cast<UnionType>()) {
-            for (const auto& type : other_union->types_) {
-                bool found = false;
-                for (const auto& other_type : types_) {
-                    if (other_type->assignable_from(type, auto_bindings)) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        return false;
     }
 
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
@@ -1201,18 +1105,6 @@ public:
         }
         return true;
     }
-    bool do_assignable_from(
-        const Type* source, AutoBindings& auto_bindings
-    ) const noexcept override {
-        auto [it, inserted] = auto_bindings.insert({this, source});
-        if (!inserted) {
-            if (it->second != source) {
-                Diagnostic::error_auto_binding_mismatch(repr(), it->second->repr(), source->repr());
-                return false;
-            }
-        }
-        return true;
-    }
 
 private:
     GlobalMemory::String repr() const final { return GlobalMemory::format("auto#{}", index_); }
@@ -1252,14 +1144,6 @@ public:
         } else {
             return this == target->cast<Value>()->cast<SkolemObject>();
         }
-    }
-    bool do_assignable_from(
-        const Type* source, AutoBindings& auto_bindings
-    ) const noexcept override {
-        if (source->kind_ != Kind::Skolem) {
-            return false;
-        }
-        return this == source->cast<SkolemObject>();
     }
 
 private:
@@ -1712,27 +1596,6 @@ inline auto Type::category(const Type* type) noexcept -> ValueCategory {
     }
 }
 
-inline auto Type::assignable_from(const Type* source, AutoBindings& auto_bindings) const noexcept
-    -> bool {
-    assert(!(this == source) || do_assignable_from(source, auto_bindings));
-    if (this == source) {
-        return true;
-    }
-    const Type* decayed_source = decay(source);
-    const Type* decayed_this = decay(this);
-    if (is_mutable(this) && !is_mutable(source)) {
-        return false;
-    }
-    if (kind_ != source->kind_) {
-        if (auto mut = source->dyn_cast<MutableType>()) {
-            return do_assignable_from(mut->target_type_, auto_bindings);
-        } else if (auto ref = source->dyn_cast<ReferenceType>()) {
-            return do_assignable_from(ref->target_type_, auto_bindings);
-        }
-    }
-    return do_assignable_from(source, auto_bindings);
-}
-
 inline VoidType VoidType::instance;
 
 inline NullptrType NullptrType::instance;
@@ -1753,25 +1616,6 @@ inline FloatType FloatType::f64_instance = FloatType(64);
 
 inline BooleanType BooleanType::instance;
 
-inline auto FunctionType::do_assignable_from(
-    const Type* source, AutoBindings& auto_bindings
-) const noexcept -> bool {
-    // (Base) => Derived is assignable to (Derived) => Base
-    // i.e., parameters are contravariant, return type is covariant
-    if (const FunctionType* func_other = source->dyn_cast<FunctionType>()) {
-        if (parameters_.size() != func_other->parameters_.size()) {
-            return false;
-        }
-        for (std::size_t i = 0; i < parameters_.size(); ++i) {
-            if (!func_other->parameters_[i]->assignable_from(parameters_[i], auto_bindings)) {
-                return false;
-            }
-        }
-        return return_type_->assignable_from(func_other->return_type_, auto_bindings);
-    }
-    return false;
-}
-
 inline auto StructType::default_construct() const noexcept -> bool {
     for (const auto& [_, field_type] : fields_) {
         if (!field_type->default_construct()) {
@@ -1779,44 +1623,6 @@ inline auto StructType::default_construct() const noexcept -> bool {
         }
     }
     return true;
-}
-
-inline auto StructType::validate(
-    const Type* type, GlobalMemory::FlatMap<strview, const Type*> inits
-) noexcept -> bool {
-    GlobalMemory::FlatMap<strview, const Type*> field_types;
-    if (auto struct_type = type->dyn_cast<StructType>()) {
-        field_types = struct_type->fields_;
-    } else if (auto instance_type = type->dyn_cast<InstanceType>()) {
-        field_types = instance_type->attrs_;
-    } else {
-        Diagnostic::error_type_mismatch("struct or class", type->repr());
-        return false;
-    }
-    bool valid = true;
-    AutoBindings auto_bindings;
-    for (auto [field_name, field_type] : field_types) {
-        auto init_it = inits.find(field_name);
-        if (init_it == inits.end()) {
-            if (!field_type->default_construct()) {
-                Diagnostic::error_uninitialized_attribute(field_name);
-                valid = false;
-            }
-        } else {
-            if (!field_type->assignable_from(init_it->second, auto_bindings)) {
-                Diagnostic::error_type_mismatch(field_type->repr(), init_it->second->repr());
-                valid = false;
-            }
-            inits.erase(init_it);
-        }
-    }
-    if (!inits.empty()) {
-        for (const auto& [id, _] : inits) {
-            Diagnostic::error_unrecognized_attribute(id);
-        }
-        return false;
-    }
-    return valid;
 }
 
 inline NullptrValue NullptrValue::instance;

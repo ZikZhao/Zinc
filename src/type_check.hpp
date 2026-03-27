@@ -605,6 +605,16 @@ public:
         return Term::of(overload->return_type_);
     }
 
+    static auto assignable(const Type* from, const Type* to) noexcept -> bool {
+        AutoBindings _;
+        return param_rank(to, from, _) != ConversionRank::NoMatch;
+    }
+
+    static auto assignable(const Type* from, const Type* to, AutoBindings& auto_bindings) noexcept
+        -> bool {
+        return param_rank(to, from, auto_bindings) != ConversionRank::NoMatch;
+    }
+
 private:
     auto list_normal_overloads(Symbol func) -> GlobalMemory::Vector<const FunctionType*> {
         auto reification = [&](
@@ -821,7 +831,8 @@ private:
         return best_candidate;
     }
 
-    static auto param_rank(const Type* param, const Type* arg) -> ConversionRank {
+    static auto param_rank(const Type* param, const Type* arg, AutoBindings& auto_bindings) noexcept
+        -> ConversionRank {
         using enum ConversionRank;
         const Type* decayed_param = Type::decay(param);
         const Type* decayed_arg = Type::decay(arg);
@@ -850,14 +861,29 @@ private:
             }
         };
         if (decayed_param == decayed_arg) {
+            // qualification conversion
             if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
             return tiebreaker_rank();
+        } else if (decayed_param->kind_ == Kind::Auto) {
+            // auto type deduction
+            const AutoObject* auto_obj = decayed_param->cast<AutoObject>();
+            if (auto it = auto_bindings.find(auto_obj); it != auto_bindings.end()) {
+                if (it->second != decayed_arg) {
+                    return NoMatch;
+                }
+            } else {
+                auto_bindings[auto_obj] = decayed_arg;
+            }
+            return tiebreaker_rank();
         } else {
+            // pointer conversion
+            if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
             if (decayed_param->kind_ == Kind::Pointer && decayed_arg->kind_ == Kind::Nullptr) {
                 return Upcast;
             }
-            if (!decayed_arg->dyn_cast<PointerType>() || !decayed_param->dyn_cast<PointerType>())
+            if (!decayed_arg->dyn_cast<PointerType>() || !decayed_param->dyn_cast<PointerType>()) {
                 return NoMatch;
+            }
             auto param_pointee = decayed_param->cast<PointerType>()->target_type_;
             auto arg_pointee = decayed_arg->cast<PointerType>()->target_type_;
             if (Type::is_mutable(param_pointee) && !Type::is_mutable(arg_pointee)) return NoMatch;
@@ -865,15 +891,16 @@ private:
             const Type* decayed_arg_pointee = Type::decay(arg_pointee);
             if (decayed_param_pointee == decayed_arg_pointee) {
                 return tiebreaker_rank();
-            }
-            if (decayed_param_pointee->kind_ == Kind::Void) {
+            } else if (decayed_param_pointee->kind_ == Kind::Void) {
                 return Upcast;
-            }
-            const InstanceType* param_class = Type::decay(param_pointee)->dyn_cast<InstanceType>();
-            const InstanceType* arg_class = Type::decay(arg_pointee)->dyn_cast<InstanceType>();
-            if (param_class && arg_class) {
-                if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
-                if (!TypeRegistry::is_base(arg_class, param_class)) return NoMatch;
+            } else {
+                const InstanceType* param_class =
+                    Type::decay(param_pointee)->dyn_cast<InstanceType>();
+                const InstanceType* arg_class = Type::decay(arg_pointee)->dyn_cast<InstanceType>();
+                if (param_class && arg_class) {
+                    if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
+                    if (!TypeRegistry::is_base(arg_class, param_class)) return NoMatch;
+                }
             }
             return NoMatch;
         }
@@ -884,9 +911,10 @@ private:
         if (func->parameters_.size() != arg_types.size()) {
             return ConversionRank::NoMatch;
         }
+        AutoBindings auto_bindings;
         ConversionRank worst_rank = ConversionRank::Exact;
         for (std::size_t i = 0; i < arg_types.size(); ++i) {
-            ConversionRank rank = param_rank(func->parameters_[i], arg_types[i]);
+            ConversionRank rank = param_rank(func->parameters_[i], arg_types[i], auto_bindings);
             if (rank > worst_rank) {
                 worst_rank = rank;
                 if (rank == ConversionRank::NoMatch) {
@@ -902,9 +930,12 @@ private:
     ) -> std::partial_ordering {
         bool left_ever_better = false;
         bool right_ever_better = false;
+        AutoBindings auto_bindings;
         for (std::size_t i = 0; i < arg_types.size(); ++i) {
-            ConversionRank left_rank = param_rank(left->parameters_[i], arg_types[i]);
-            ConversionRank right_rank = param_rank(right->parameters_[i], arg_types[i]);
+            ConversionRank left_rank =
+                param_rank(left->parameters_[i], arg_types[i], auto_bindings);
+            ConversionRank right_rank =
+                param_rank(right->parameters_[i], arg_types[i], auto_bindings);
             if (left_rank < right_rank) {
                 left_ever_better = true;
             } else if (right_rank < left_rank) {
@@ -1883,7 +1914,7 @@ public:
             }
             inits.emplace(init.identifier, Sema::get<SymbolKind::Term>(symbol).effective_type());
         }
-        if (any_error || !StructType::validate(type, inits)) {
+        if (any_error || !struct_validate(type, inits)) {
             return {};
         }
         return Term::of(type);
@@ -2022,7 +2053,7 @@ public:
         }
         if (expected_) {
             AutoBindings auto_bindings;
-            if (!expected_->assignable_from(then_term.effective_type(), auto_bindings)) {
+            if (!CallHandler::assignable(then_term.effective_type(), expected_)) {
                 Diagnostic::error_type_mismatch(
                     expected_->repr(), then_term.effective_type()->repr()
                 );
@@ -2073,6 +2104,45 @@ public:
     }
 
     auto operator()(const auto* node) noexcept -> Symbol { UNREACHABLE(); }
+
+private:
+    auto struct_validate(
+        const Type* type, GlobalMemory::FlatMap<strview, const Type*> inits
+    ) noexcept -> bool {
+        GlobalMemory::FlatMap<strview, const Type*> field_types;
+        if (auto struct_type = type->dyn_cast<StructType>()) {
+            field_types = struct_type->fields_;
+        } else if (auto instance_type = type->dyn_cast<InstanceType>()) {
+            field_types = instance_type->attrs_;
+        } else {
+            Diagnostic::error_type_mismatch("struct or class", type->repr());
+            return false;
+        }
+        bool valid = true;
+        AutoBindings auto_bindings;
+        for (auto [field_name, field_type] : field_types) {
+            auto init_it = inits.find(field_name);
+            if (init_it == inits.end()) {
+                if (!field_type->default_construct()) {
+                    Diagnostic::error_uninitialized_attribute(field_name);
+                    valid = false;
+                }
+            } else {
+                if (!CallHandler::assignable(init_it->second, field_type)) {
+                    Diagnostic::error_type_mismatch(field_type->repr(), init_it->second->repr());
+                    valid = false;
+                }
+                inits.erase(init_it);
+            }
+        }
+        if (!inits.empty()) {
+            for (const auto& [id, _] : inits) {
+                Diagnostic::error_unrecognized_attribute(id);
+            }
+            return false;
+        }
+        return valid;
+    }
 };
 
 class TypeCheckVisitor {
@@ -2127,8 +2197,7 @@ public:
             }
             Term init_term = Sema::get<SymbolKind::Term>(init);
             if (type.get()) {
-                AutoBindings auto_bindings;
-                if (!type.get()->assignable_from(init_term.effective_type(), auto_bindings)) {
+                if (!CallHandler::assignable(init_term.effective_type(), type.get())) {
                     Diagnostic::error_type_mismatch(
                         type.get()->repr(), init_term.effective_type()->repr()
                     );
@@ -2196,9 +2265,6 @@ public:
 
     // Functions and classes
     void operator()(const ASTFunctionDefinition* node) noexcept {
-        if (node->location.id != 0) {
-            int a = 0;
-        }
         const FunctionType* func = sema_.call_handler_->get_func_type(sema_.current_scope_, node);
         Sema::Guard guard(sema_, node);
         if (func) {
@@ -2393,8 +2459,7 @@ inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init
         Term init_term = std::get<Term>(init_symbol).resolve_to_default();
         if (!init_term) return {};
         if (type.get()) {
-            AutoBindings auto_bindings;
-            if (!type->assignable_from(init_term.effective_type(), auto_bindings)) {
+            if (!CallHandler::assignable(init_term.effective_type(), type.get())) {
                 return {};
             }
             if (init.is_comptime) return init_term;
@@ -2510,7 +2575,7 @@ inline auto TemplateHandler::inference(
     // pattern match and auto binding
     for (std::size_t i = 0; i < patterns.size(); i++) {
         if (patterns[i] == nullptr) return nullptr;
-        if (!patterns[i]->assignable_from(args_type[i], auto_bindings)) {
+        if (!CallHandler::assignable(args_type[i], patterns[i], auto_bindings)) {
             Diagnostic::error_candidate_type_mismatch(
                 func_node->location, i, patterns[i]->repr(), args_type[i]->repr()
             );
