@@ -982,23 +982,7 @@ public:
     }
 
     auto operator()(const ASTDeclaration* node) -> void {
-        auto* mapped = env_.find(current_scope_, node);
-        if (!mapped) {
-            auto scope_it = env_.scope_map_.find(current_scope_);
-            std::cerr << "[DEBUG] missing codegen side table for declaration '" << node->identifier
-                      << "' at file=" << node->location.id << ", begin=" << node->location.begin
-                      << ", end=" << node->location.end << "\n";
-            std::cerr << "[DEBUG] current_scope=" << static_cast<const void*>(current_scope_)
-                      << ", scope_map_size=" << env_.scope_map_.size() << "\n";
-            if (scope_it == env_.scope_map_.end()) {
-                std::cerr << "[DEBUG] reason: scope entry missing\n";
-            } else {
-                std::cerr << "[DEBUG] reason: node entry missing, table_size="
-                          << scope_it->second.size() << "\n";
-            }
-            throw std::runtime_error("missing side-table type info for declaration");
-        }
-        const Type* type = std::get<const Type*>(*mapped);
+        const Type* type = std::get<const Type*>(*env_.find(current_scope_, node));
         ObjectCodeGen::output(definitions_, type, types_);
         std::format_to(std::back_inserter(definitions_), " {}", node->identifier);
         if (!holds_monostate(node->expr)) {

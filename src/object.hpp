@@ -1017,7 +1017,7 @@ public:
     auto repr() const -> GlobalMemory::String final {
         strview prefix;
         if (type_ == &IntegerType::untyped_instance) {
-            prefix = "untyped";
+            return value_.to_string();
         } else if (type_->is_signed_) {
             switch (type_->bits_) {
             case 8:
@@ -1148,7 +1148,7 @@ public:
         strview prefix;
         switch (type_->bits_) {
         case 0:
-            prefix = "untyped";
+            return GlobalMemory::format("{:#}", value_);
             break;
         case 32:
             prefix = "f32";

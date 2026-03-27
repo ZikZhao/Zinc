@@ -241,13 +241,14 @@ public:
 
     template <typename T>
     static auto args_repr(std::span<const T*> args) -> GlobalMemory::String {
-        GlobalMemory::String str;
+        GlobalMemory::String str = "(";
         strview sep = ""sv;
         for (const T* arg : args) {
             str += sep;
             str += arg->repr();
             sep = ", "sv;
         }
+        str += ")";
         return str;
     }
 
@@ -2046,7 +2047,11 @@ public:
         for (const ASTExprVariant& arg : node->arguments) {
             Symbol arg_symbol = ValueContextEvaluator{*this, nullptr}(arg);
             if (Sema::expect(arg_symbol, SymbolKind::Term)) {
-                args_type.push_back(Sema::get<SymbolKind::Term>(arg_symbol).effective_type());
+                args_type.push_back(
+                    Sema::apply_value_category(
+                        Sema::get<SymbolKind::Term>(arg_symbol).resolve_to_default()
+                    )
+                );
             } else {
                 args_type.push_back(nullptr);
             }
@@ -2528,8 +2533,8 @@ inline auto TemplateHandler::inference(
             patterns.push_back(Sema::get_default<SymbolKind::Type>(pattern_symbol));
         }
         if (!variadic_param.empty()) {
-            for (size_t i = param_count; i <= args_type.size(); i++) {
-                const AutoObject* auto_inst = auto_instances[i - primary->parameters.size() - 1];
+            for (size_t i = 0; i <= args_type.size() - param_count; i++) {
+                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size() - 1];
                 pattern_scope.set_template_argument(variadic_param, auto_inst->as_object(false));
                 Symbol pattern_symbol = ValueContextEvaluator{
                     sema_, nullptr, false
@@ -2545,8 +2550,8 @@ inline auto TemplateHandler::inference(
             patterns.push_back(Sema::get_default<SymbolKind::Type>(pattern_symbol));
         }
         if (!variadic_param.empty()) {
-            for (size_t i = param_count; i <= args_type.size(); i++) {
-                const AutoObject* auto_inst = auto_instances[i - primary->parameters.size() - 1];
+            for (size_t i = 0; i <= args_type.size() - param_count; i++) {
+                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size() - 1];
                 pattern_scope.set_template_argument(variadic_param, auto_inst->as_object(false));
                 Symbol pattern_symbol = ValueContextEvaluator{
                     sema_, nullptr, false
@@ -2668,7 +2673,7 @@ inline auto TemplateHandler::validate(
         return false;
     }
     for (size_t i = 0; i < args.size(); i++) {
-        const auto& param = primary.parameters[std::max(i, primary.parameters.size() - 1)];
+        const auto& param = primary.parameters[std::min(i, primary.parameters.size() - 1)];
         if (static_cast<bool>(args[i]->dyn_value()) != param.is_nttp) {
             return false;
         }
