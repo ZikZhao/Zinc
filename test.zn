@@ -5,10 +5,13 @@ class A{
     }
     fn foo(self: &mut Self) {
         self.a = 5;
+        Self.bar(5);
+    }
+    static fn bar(a: i32) -> i32 {
+        return 1;
     }
 }
 
 fn main(args: [strview]) {
-    let mut a = A(1, 2);
-    a.foo();
+    A.bar(5);
 }

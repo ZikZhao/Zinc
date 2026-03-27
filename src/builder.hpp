@@ -122,9 +122,21 @@ private:
             has_error_ = true;
             return nullptr;
         }
-        if (const void* cached = sources_.get_cache(module_file_id)) {
-            return static_cast<const ASTRoot*>(cached);
+        if (sources_.is_cached(module_file_id)) {
+            std::optional<const void*> cached = sources_.get_cache(module_file_id);
+            has_error_ |= (!cached.has_value() || cached.value() == nullptr);
+            return static_cast<const ASTRoot*>(*cached);
         } else {
+            bool reserved = sources_.reserve_cache(module_file_id);
+            if (!reserved) {
+                Diagnostic::print_error_msg(
+                    GlobalMemory::format(
+                        "Circular module dependency detected: '{}' -> '{}'",
+                        sources_[file_id_].relative_path_.string(),
+                        path
+                    )
+                );
+            }
             const ASTRoot* module_root = ASTBuilder{sources_, module_file_id}();
             sources_.set_cache(module_file_id, module_root);
             if (module_root == nullptr) {
@@ -667,6 +679,10 @@ private:
         return as_variant(
             new ASTArrayInitialization{loc(ctx), visit_list<ASTExprVariant>(ctx->elements_)}
         );
+    }
+
+    auto visitMoveExpr(ZincParser::MoveExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        return as_variant(new ASTMoveExpr{loc(ctx), visit_expr(ctx->inner_expr_)});
     }
 
     auto visitParenExpr(ZincParser::ParenExprContext* ctx) noexcept -> Any<ASTExprVariant> final {

@@ -207,7 +207,6 @@ expr:
 		elements_ += expr (OP_COMMA elements_ += expr)*
 	)? OP_RBRACKET																# ArrayInitExpr
 	| base_ = expr OP_LBRACKET start_ = expr OP_COLON end_ = expr OP_RBRACKET	# SliceExpr
-	| KW_MUT inner_expr_ = expr													# MutExpr
 	| KW_MOVE inner_expr_ = expr												# MoveExpr
 	| KW_FORWARD inner_expr_ = expr												# ForwardExpr
 	| OP_LPAREN inner_expr_ = expr OP_RPAREN									# ParenExpr

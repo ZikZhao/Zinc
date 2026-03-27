@@ -552,6 +552,38 @@ public:
             }
         );
     }
+
+    static auto error_double_move(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Value is already moved"sv)
+            }
+        );
+    }
+
+    static auto error_move_non_reference(Location location, strview expr) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format("Cannot move non-reference value '{}'", expr)
+            }
+        );
+    }
+
+    static auto error_mutable_variable_with_immutable_type(Location location, strview type) noexcept
+        -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message =
+                    GlobalMemory::format("Cannot declare mutable variable of type '{}'", type)
+            }
+        );
+    }
 };
 
 inline thread_local std::optional<Diagnostic> Diagnostic::instance;

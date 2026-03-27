@@ -1718,6 +1718,11 @@ inline auto Type::assignable_from(const Type* source, AutoBindings& auto_binding
     if (this == source) {
         return true;
     }
+    const Type* decayed_source = decay(source);
+    const Type* decayed_this = decay(this);
+    if (is_mutable(this) && !is_mutable(source)) {
+        return false;
+    }
     if (kind_ != source->kind_) {
         if (auto mut = source->dyn_cast<MutableType>()) {
             return do_assignable_from(mut->target_type_, auto_bindings);

@@ -1741,7 +1741,7 @@ public:
     auto operator()(const ASTSelfExpr* node) noexcept -> Symbol {
         if (node->is_type) {
             const Type* self_type = sema_.get_self_type();
-            return self_type ? Term::of(self_type) : Symbol{};
+            return self_type ? Symbol{self_type} : Symbol{};
         } else {
             Symbol result = sema_.lookup_symbol("self");
             if (!holds_monostate(result)) {
@@ -1941,6 +1941,23 @@ public:
         }
     }
 
+    auto operator()(const ASTMoveExpr* node) noexcept -> Symbol {
+        Symbol inner_symbol = ValueContextEvaluator{*this, nullptr}(node->inner);
+        if (!Sema::expect(inner_symbol, SymbolKind::Term)) {
+            return {};
+        }
+        Term inner_term = Sema::get<SymbolKind::Term>(inner_symbol);
+        if (auto* ref_type = inner_term.effective_type()->dyn_cast<ReferenceType>()) {
+            if (ref_type->is_moved_) {
+                Diagnostic::error_double_move(node->location);
+                return {};
+            }
+            return Term::of(TypeRegistry::get<ReferenceType>(ref_type->target_type_, true));
+        }
+        Diagnostic::error_move_non_reference(node->location, inner_term.effective_type()->repr());
+        return {};
+    }
+
     auto operator()(const ASTFunctionCall* node) noexcept -> Symbol {
         GlobalMemory::Vector<const Type*> args_type;
         args_type.reserve(node->arguments.size());
@@ -2120,6 +2137,11 @@ public:
                 init_term = init_term.resolve_to_default();
                 type = init_term.decay();
             }
+        }
+        if (node->is_mutable && type.get() && Type::category(type.get()) != ValueCategory::Right) {
+            Diagnostic::error_mutable_variable_with_immutable_type(
+                node->location, type.get()->repr()
+            );
         }
         if (type.get()) {
             sema_.codegen_env_.map_type(sema_.current_scope_, node, type);
@@ -2364,12 +2386,6 @@ inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init
         Guard guard(*this, scope);
         TypeContextEvaluator{*this, type}(init.type);
         if (!type.get()) return {};
-        if (init.is_mutable) {
-            if (Type::category(type.get()) != ValueCategory::Right) {
-                return {};
-            }
-            type = TypeRegistry::get<MutableType>(type.get());
-        }
     }
     if (!holds_monostate(init.value)) {
         Symbol init_symbol = ValueContextEvaluator{*this, type.get(), false}(init.value);
@@ -2385,13 +2401,13 @@ inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init
         } else {
             if (init.is_comptime) return init_term;
             type = init_term.decay();
-            if (init.is_mutable) {
-                if (Type::category(init_term.effective_type()) != ValueCategory::Right) {
-                    return {};
-                }
-                type = TypeRegistry::get<MutableType>(type.get());
-            }
         }
+    }
+    if (init.is_mutable) {
+        if (Type::category(type.get()) != ValueCategory::Right) {
+            return {};
+        }
+        return Term::lvalue(TypeRegistry::get<MutableType>(type.get()));
     }
     return Term::lvalue(type.get());
 }

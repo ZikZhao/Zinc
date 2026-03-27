@@ -250,13 +250,13 @@ class World {
             } else if (ext == ".txt") {
                 // Text scene
                 let mut model: Model;
-                world.parse_txt(mut model, path);
+                world.parse_txt(model, path);
                 models_.emplace_back(move model);
             } else if (ext == ".obj") {
                 // Standard OBJ model
                 /*
                 let mut model: Model;
-                parse_obj(mut model, path);
+                parse_obj(model, path);
                 models_.emplace_back(move model);
                 */
             } else {

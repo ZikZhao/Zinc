@@ -71,6 +71,7 @@ struct ASTBinaryOp;
 struct ASTFieldInitialization;
 struct ASTStructInitialization;
 struct ASTArrayInitialization;
+struct ASTMoveExpr;
 struct ASTFunctionCall;
 struct ASTTemplateInstantiation;
 struct ASTTernaryOp;
@@ -163,6 +164,7 @@ using ASTExprVariant = std::variant<
     // Complex expressions
     const ASTStructInitialization*,
     const ASTArrayInitialization*,
+    const ASTMoveExpr*,
     const ASTFunctionCall*,
     const ASTTemplateInstantiation*,
     const ASTTernaryOp*,
@@ -274,6 +276,10 @@ struct ASTStructInitialization final : public ASTExpression {
 
 struct ASTArrayInitialization final : public ASTExpression {
     std::span<ASTExprVariant> elements;
+};
+
+struct ASTMoveExpr final : public ASTExpression {
+    ASTExprVariant inner;
 };
 
 struct ASTFunctionCall final : public ASTExpression {

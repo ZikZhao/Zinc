@@ -62,7 +62,7 @@ class SourceManager {
 public:
     GlobalMemory::FlatMap<std::filesystem::path, std::uint32_t> file_id_map_;
     GlobalMemory::Vector<SourceFile> files;
-    GlobalMemory::FlatMap<std::uint32_t, const void*> node_cache_;
+    GlobalMemory::FlatMap<std::uint32_t, std::optional<const void*>> module_cache_;
 
 public:
     /// Used to load main file
@@ -114,16 +114,24 @@ public:
         return files[id];
     }
 
-    auto set_cache(std::uint32_t file_id, const void* node) noexcept -> void {
-        node_cache_[file_id] = node;
+    auto reserve_cache(std::uint32_t file_id) noexcept -> bool {
+        return module_cache_.insert({file_id, std::nullopt}).second;
     }
 
-    auto get_cache(std::uint32_t file_id) const noexcept -> const void* {
-        auto it = node_cache_.find(file_id);
-        if (it != node_cache_.end()) {
+    auto set_cache(std::uint32_t file_id, const void* node) noexcept -> void {
+        module_cache_[file_id] = node;
+    }
+
+    auto is_cached(std::uint32_t file_id) const noexcept -> bool {
+        return module_cache_.find(file_id) != module_cache_.end();
+    }
+
+    auto get_cache(std::uint32_t file_id) const noexcept -> std::optional<const void*> {
+        auto it = module_cache_.find(file_id);
+        if (it != module_cache_.end()) {
             return it->second;
         } else {
-            return nullptr;
+            return std::nullopt;
         }
     }
 };
