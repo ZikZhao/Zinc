@@ -350,7 +350,8 @@ public:
         }
     }
 
-    auto operator()(GlobalMemory::String& out, const Scope* scope) const -> void {
+    auto operator()(GlobalMemory::String& out, const Scope* scope, strview identifier) const
+        -> void {
         if (scope->is_extern_) {
             [&](this auto&& self, const Scope* current) -> void {
                 if (current->parent_) self(current->parent_);
@@ -358,6 +359,7 @@ public:
                     std::format_to(std::back_inserter(out), "{}::"sv, current->scope_id_);
                 }
             }(scope);
+            out += identifier;
         } else {
             [&](this auto&& self, const Scope* current) -> void {
                 if (current->parent_) self(current->parent_);
@@ -370,6 +372,7 @@ public:
                     );
                 }
             }(scope);
+            std::format_to(std::back_inserter(out), "_{}{}"sv, identifier.length(), identifier);
         }
     }
 
@@ -605,6 +608,7 @@ private:
     };
 
 private:
+    GlobalMemory::String constants_;
     GlobalMemory::String forward_declarations_;
     GlobalMemory::String definitions_;
     CodeGenEnvironment& env_;
@@ -619,6 +623,23 @@ public:
 
     auto operator()(std::ofstream& stream) -> void {
         GlobalMemory::String mangled_path;
+        for (const auto& [scope_and_id, value] : env_.constants_) {
+            const Scope* scope = scope_and_id.first;
+            strview identifier = scope_and_id.second;
+            if (scope->is_extern_) {
+                std::format_to(
+                    std::back_inserter(constants_), "constexpr auto {} = "sv, identifier
+                );
+            } else {
+                CodeGenEnvironment::mangle_path(mangled_path, scope, identifier);
+                std::format_to(
+                    std::back_inserter(constants_), "constexpr auto {} = "sv, mangled_path
+                );
+            }
+            ObjectCodeGen::output(constants_, value, type_map_);
+            constants_ += ";\n"sv;
+            mangled_path.clear();
+        }
         for (const auto& [scope, node, func_obj] : env_.functions_) {
             current_scope_ = scope;
             if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&node)) {
@@ -638,6 +659,8 @@ public:
             mangled_path.clear();
             newline(false);
         }
+        stream << "// ----- Constants -----\n"sv;
+        stream.write(constants_.data(), static_cast<std::streamsize>(constants_.size()));
         stream << "\n// ----- Function Forward Declarations -----\n"sv;
         stream.write(
             forward_declarations_.data(), static_cast<std::streamsize>(forward_declarations_.size())
@@ -652,7 +675,10 @@ public:
 
     auto operator()(std::monostate) -> void { UNREACHABLE(); }
 
-    auto operator()(const auto*) -> void {}
+    template <typename T>
+    auto operator()(const T*) -> void
+        requires(std::is_base_of_v<ASTNode, T>)
+    {}
 
     auto operator()(
         const ASTFunctionDefinition* node, strview mangled_path, const FunctionType* func_type
@@ -831,7 +857,7 @@ public:
                 definitions_ += "::"sv;
                 definitions_ += node->member;
             } else {
-                mangler_(definitions_, member_scope);
+                mangler_(definitions_, member_scope, node->member);
             }
         } else {
             (*this)(node->base);
@@ -953,11 +979,15 @@ public:
             }
         }
         definitions_ += "("sv;
-        const char* sep = "";
+        strview sep = "";
+        if (self_type) {
+            (*this)(node->function);
+            sep = ", "sv;
+        }
         for (ASTExprVariant arg : node->arguments) {
             definitions_ += sep;
             (*this)(arg);
-            sep = ", ";
+            sep = ", "sv;
         }
         definitions_ += ")"sv;
     }
@@ -1039,20 +1069,17 @@ public:
     auto operator()(const ASTSwitchStatement* node) -> void {
         definitions_ += "switch ("sv;
         (*this)(node->condition);
-        definitions_ += ") {\n"sv;
+        definitions_ += ") {"sv;
         for (const ASTSwitchCase& switch_case : node->cases) {
             newline();
             if (holds_monostate(switch_case.value)) {
-                definitions_ += "default:\n"sv;
+                definitions_ += "default: "sv;
             } else {
                 definitions_ += "case "sv;
                 (*this)(switch_case.value);
-                definitions_ += ":\n"sv;
+                definitions_ += ": "sv;
             }
-            indent_level_++;
-            newline();
             (*this)(switch_case.body);
-            indent_level_--;
         }
         newline();
         definitions_ += "}"sv;
@@ -1062,7 +1089,8 @@ public:
         Guard guard{*this, node};
         definitions_ += "for ("sv;
         if (auto* decl = std::get_if<const ASTDeclaration*>(&node->initializer)) {
-            (*this)(decl);
+            (*this)(*decl);
+            definitions_ += " "sv;
         } else if (auto* expr = std::get_if<ASTExprVariant>(&node->initializer)) {
             if (!holds_monostate(*expr)) {
                 (*this)(*expr);
@@ -1106,6 +1134,16 @@ public:
         definitions_ += ">"sv;
     }
 
+    auto operator()(const ASTBreakStatement* node) -> void { definitions_ += "break;"sv; }
+
+    auto operator()(const ASTContinueStatement* node) -> void { definitions_ += "continue;"sv; }
+
+    auto operator()(const ASTMoveExpr* node) -> void {
+        definitions_ += "std::move("sv;
+        (*this)(node->inner);
+        definitions_ += ")"sv;
+    }
+
     auto operator()(const ASTThrowStatement* node) -> void {
         definitions_ += "throw"sv;
         if (!holds_monostate(node->expr)) {
@@ -1146,7 +1184,6 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
            "#include <fstream>\n"
            "#include <functional>\n"
            "#include <future>\n"
-           "#include <generator>\n"
            "#include <initializer_list>\n"
            "#include <iostream>\n"
            "#include <iterator>\n"
@@ -1154,7 +1191,6 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
            "#include <memory>\n"
            "#include <memory_resource>\n"
            "#include <numeric>\n"
-           "#include <print>\n"
            "#include <ranges>\n"
            "#include <set>\n"
            "#include <stdexcept>\n"

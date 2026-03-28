@@ -92,12 +92,17 @@ public:
     }
 
 public:
+    GlobalMemory::FlatMap<std::pair<const Scope*, strview>, const Value*> constants_;
     GlobalMemory::Vector<FunctionDef> functions_;
     GlobalMemory::Vector<std::pair<Scope*, std::span<const Object*>>> instantiations_;
     GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
     GlobalMemory::Vector<strview> cpp_blocks_;
 
 public:
+    auto add_constant(const Scope* scope, strview identifier, const Value* value) -> void {
+        constants_.insert({{scope, identifier}, value});
+    }
+
     auto add_function_output(
         const Scope* current_scope, ASTNodeVariant node, const FunctionType* func_obj
     ) -> void {
@@ -2332,7 +2337,16 @@ public:
         }
     }
 
-    void operator()(const ASTEnumDefinition* node) noexcept {}
+    void operator()(const ASTEnumDefinition* node) noexcept {
+        Sema::Guard guard(sema_, node);
+        for (std::size_t i = 0; i < node->enumerators.size(); ++i) {
+            sema_.codegen_env_.add_constant(
+                sema_.current_scope_,
+                node->enumerators[i],
+                new IntegerValue(&IntegerType::i32_instance, i)
+            );
+        }
+    }
 
     void operator()(const ASTNamespaceDefinition* node) noexcept {
         Sema::Guard guard(sema_, node);
@@ -2554,9 +2568,9 @@ inline auto TemplateHandler::inference(
             Symbol pattern_symbol = ValueContextEvaluator{sema_, nullptr, false}(pattern.type);
             patterns.push_back(Sema::get_default<SymbolKind::Type>(pattern_symbol));
         }
-        if (!variadic_param.empty()) {
-            for (size_t i = 1; i <= args_type.size() + 1 - param_count; i++) {
-                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size()];
+        if (!variadic_param.empty() && args_type.size() >= param_count) {
+            for (size_t i = 0; i <= args_type.size() - param_count; i++) {
+                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size() - 1];
                 pattern_scope.set_template_argument(variadic_param, auto_inst->as_object(false));
                 Symbol pattern_symbol = ValueContextEvaluator{
                     sema_, nullptr, false
@@ -2571,9 +2585,9 @@ inline auto TemplateHandler::inference(
             Symbol pattern_symbol = ValueContextEvaluator{sema_, nullptr, false}(pattern.type);
             patterns.push_back(Sema::get_default<SymbolKind::Type>(pattern_symbol));
         }
-        if (!variadic_param.empty()) {
-            for (size_t i = 1; i <= args_type.size() + 1 - param_count; i++) {
-                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size()];
+        if (!variadic_param.empty() && args_type.size() >= param_count) {
+            for (size_t i = 0; i <= args_type.size() - param_count; i++) {
+                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size() - 1];
                 pattern_scope.set_template_argument(variadic_param, auto_inst->as_object(false));
                 Symbol pattern_symbol = ValueContextEvaluator{
                     sema_, nullptr, false

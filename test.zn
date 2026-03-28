@@ -1,6 +1,7 @@
 class A {
     let x: i32;
     init(x: i32) { return Self{ x: x }; }
+    fn foo(self: &mut Self) { self.x += 1; }
 }
 
 enum B {
@@ -9,16 +10,7 @@ enum B {
 }
 
 fn main(args: [strview]) {
-    let b = B.C;
-    switch (b) {
-        case B.C: {
-            std.print("C");
-            break;
-        }
-        case B.D: {
-            std.print("D");
-            break;
-        }
-    }
+    let mut a = A(1);
+    a.foo();
 }
 
