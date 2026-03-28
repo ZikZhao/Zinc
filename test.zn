@@ -1,17 +1,9 @@
-class A {
-    let x: i32;
-    init(x: i32) { return Self{ x: x }; }
-    fn foo(self: &Self) {}
-}
-
-enum B {
-    C,
-    D,
-}
-
-type E = std.pair<*A, i32>;
+type A = {
+    x: i32,
+    y: i32,
+};
 
 fn main(args: [strview]) {
-    let mut a: std.pair<*E, i32>;
+    let strs = std.span<strview>(args.begin(), args.end());
 }
 

@@ -1,10 +1,10 @@
 // Window
 const WindowWidth: i32 = 1920;
 const WindowHeight: i32 = 1080;
-const TargetFrameTime = std.chrono.microseconds(15000 as i64);  // ~66 FPS cap
+// const TargetFrameTime = std.chrono.microseconds(15000 as i64);  // ~66 FPS cap
 
 // Camera
-const OrbitInterval = std.chrono.seconds(1 as i64) / 60 as i64;
+// const OrbitInterval = std.chrono.seconds(1 as i64) / 60 as i64;
 const FOV = 45.0f;
 const NearPlane = 0.001f;
 const FarPlane = 100.0f;

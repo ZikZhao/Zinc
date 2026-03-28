@@ -18,7 +18,7 @@ enum class SymbolKind : std::uint8_t {
     PartialInstantiation = 9,
 };
 
-struct SelfResolution : GlobalMemory::MonotonicAllocated {
+struct PointerChain : GlobalMemory::MonotonicAllocated {
     ASTExprVariant base;
     std::span<std::pair<const InstanceType*, const FunctionType*>> pointers;
 };
@@ -27,7 +27,7 @@ struct BoundMethod {
     Term object;
     Scope* scope;
     const ScopeValue* value;
-    SelfResolution* self;
+    PointerChain* self;
 };
 
 using Symbol = std::variant<
@@ -52,7 +52,7 @@ public:
 
     struct FunctionCall {
         const FunctionType* func_type;
-        SelfResolution* self;
+        PointerChain* self;
         bool is_constructor;
         bool do_not_mangle;
     };
@@ -60,6 +60,7 @@ public:
     using TableValue = std::variant<
         const Type*,                // type expression
         const Scope*,               // member access
+        PointerChain*,              // pointer access
         FunctionCall,               // function call
         std::span<const Object*>>;  // template instantiation
 
@@ -105,7 +106,7 @@ public:
     GlobalMemory::Vector<strview> cpp_blocks_;
 
 public:
-    auto add_constant(const Scope* scope, strview identifier, const Value* value) -> void {
+    auto add_global(const Scope* scope, strview identifier, const Value* value) -> void {
         constants_.insert({{scope, identifier}, value});
     }
 
@@ -131,11 +132,16 @@ public:
         scope_map_[current_scope][node] = scope;
     }
 
+    auto map_pointer_access(const Scope* current_scope, const ASTNode* node, PointerChain* chain)
+        -> void {
+        scope_map_[current_scope][node] = chain;
+    }
+
     auto map_func_call(
         const Scope* current_scope,
         const ASTNode* node,
         const FunctionType* func_type,
-        SelfResolution* self,
+        PointerChain* self,
         bool is_constructor,
         bool do_not_mangle
     ) -> void {
@@ -977,7 +983,7 @@ private:
         if (auto* type = Sema::get_if<SymbolKind::Type>(callee)) {
             return (*type)->cast<InstanceType>()->scope_->is_extern_;
         } else if (auto* term = Sema::get_if<SymbolKind::Term>(callee)) {
-            return (*term)->kind_ == Kind::Function;
+            return (*term).decay()->kind_ == Kind::Function;
         } else if (auto* function = Sema::get_if<SymbolKind::Function>(callee)) {
             return function->first->is_extern_;
         } else if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
@@ -1934,7 +1940,10 @@ public:
                 any_error = true;
                 continue;
             }
-            inits.emplace(init.identifier, Sema::get<SymbolKind::Term>(symbol).effective_type());
+            inits.emplace(
+                init.identifier,
+                Sema::get<SymbolKind::Term>(symbol).resolve_to_default().effective_type()
+            );
         }
         if (any_error || !struct_validate(type, inits)) {
             return {};
@@ -2226,6 +2235,10 @@ public:
     }
 
     void operator()(const ASTDeclaration* node) noexcept {
+        bool is_global = sema_.current_scope_->parent_ == nullptr;
+        if (is_global && node->is_mutable) {
+            Diagnostic::error_mutable_global_variable(node->location);
+        }
         TypeResolution type;
         if (!holds_monostate(node->declared_type)) {
             TypeContextEvaluator{sema_, type}(node->declared_type);
@@ -2245,6 +2258,14 @@ public:
             } else {
                 init_term = init_term.resolve_to_default();
                 type = init_term.decay();
+            }
+            if (node->is_constant && !init_term.is_comptime()) {
+                Diagnostic::error_not_constant_expression(node->location);
+            }
+            if (is_global && !sema_.current_scope_->is_extern_) {
+                sema_.codegen_env_.add_global(
+                    sema_.current_scope_, node->identifier, init_term.get_comptime()
+                );
             }
         }
         if (node->is_mutable && type.get() && Type::category(type.get()) != ValueCategory::Right) {
@@ -2353,7 +2374,7 @@ public:
     void operator()(const ASTEnumDefinition* node) noexcept {
         Sema::Guard guard(sema_, node);
         for (std::size_t i = 0; i < node->enumerators.size(); ++i) {
-            sema_.codegen_env_.add_constant(
+            sema_.codegen_env_.add_global(
                 sema_.current_scope_,
                 node->enumerators[i],
                 new IntegerValue(&IntegerType::i32_instance, i)
@@ -2980,7 +3001,7 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
             Symbol result = eval_instance_access(*term, node->member);
             if (auto* method = Sema::get_if<SymbolKind::Method>(result);
                 method && !instance_type->scope_->is_extern_) {
-                method->self = new SelfResolution{{}, node->base, {}};
+                method->self = new PointerChain{{}, node->base, {}};
                 sema_.codegen_env_.map_member_access(sema_.current_scope_, node, method->scope);
             }
             return result;
@@ -3004,18 +3025,30 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
     GlobalMemory::Vector<std::pair<const InstanceType*, const FunctionType*>> dereference_chain;
     while (true) {
         const Type* decayed = current_term.decay();
+        if (decayed == nullptr) {
+            return {};
+        }
         if (auto* pointer_type = decayed->dyn_cast<PointerType>()) {
             Term dereferenced = Term::lvalue(pointer_type->target_type_);
             const Type* decayed_dereferenced = dereferenced.decay();
             if (decayed_dereferenced->dyn_cast<StructType>()) {
+                sema_.codegen_env_.map_pointer_access(
+                    sema_.current_scope_,
+                    node,
+                    new PointerChain{
+                        {}, node->base, dereference_chain | GlobalMemory::collect<std::span>()
+                    }
+                );
                 return Sema::nonnull(eval_struct_access(dereferenced, node->member));
             } else if (decayed_dereferenced->dyn_cast<InstanceType>()) {
                 Symbol result = eval_instance_access(dereferenced, node->member);
+                PointerChain* chain = new PointerChain{
+                    {}, node->base, dereference_chain | GlobalMemory::collect<std::span>()
+                };
                 if (auto* method = Sema::get_if<SymbolKind::Method>(result)) {
-                    method->self = new SelfResolution{
-                        {}, node->base, dereference_chain | GlobalMemory::collect<std::span>()
-                    };
+                    method->self = chain;
                 }
+                sema_.codegen_env_.map_pointer_access(sema_.current_scope_, node, chain);
                 return result;
             } else {
                 Diagnostic::error_invalid_pointer_access(base_term->repr());

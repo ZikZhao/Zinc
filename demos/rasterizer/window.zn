@@ -82,7 +82,7 @@ class Window {
                 std.format("[SDL] Could not create renderer: {}\n", sdl.SDL_GetError())
             );
         }
-        sdl.SDL_SetHint(sdl.SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+        sdl.SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "linear");
         sdl.SDL_RenderSetLogicalSize(renderer, width, height);
 
         // Backbuffer texture receiving ARGB pixels

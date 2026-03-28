@@ -425,6 +425,16 @@ public:
         );
     }
 
+    static auto error_mutable_global_variable(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Global variables cannot be mutable"sv)
+            }
+        );
+    }
+
     static auto error_construct_instance_out_of_class(
         Location location, strview class_name
     ) noexcept -> void {

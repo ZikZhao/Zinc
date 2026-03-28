@@ -8,13 +8,39 @@ class string_view {
     type reference = &value_type;
     type const_reference = &value_type;
 
-    type iterator = const_pointer;
-    type const_iterator = const_pointer;
+    class iterator {
+        type difference_type = isize;
+        type pointer = *value_type;
+        type reference = &value_type;
+
+        init();
+        init(ptr: pointer);
+
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator--(self: &mut Self) -> &mut Self;
+        operator+(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, other: &Self) -> difference_type;
+        operator+=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator-=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
+
+    type const_iterator = iterator;
     type reverse_iterator = const_iterator;
     type const_reverse_iterator = const_iterator;
 
     init();
     init(data: const_pointer, size: size_type);
+    init<Iter: type>(first: Iter, last: Iter);
     init(first: const_iterator, last: const_iterator);
 
     fn at(self: &Self, index: size_type) -> value_type;
@@ -78,8 +104,58 @@ class string {
     type reference = &mut value_type;
     type const_reference = &value_type;
 
-    type iterator = pointer;
-    type const_iterator = const_pointer;
+    class iterator {
+        type difference_type = isize;
+        type pointer = *mut value_type;
+        type reference = &mut value_type;
+
+        init();
+        init(ptr: pointer);
+
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator--(self: &mut Self) -> &mut Self;
+        operator+(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, other: &Self) -> difference_type;
+        operator+=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator-=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
+
+    class const_iterator {
+        type difference_type = isize;
+        type pointer = *value_type;
+        type reference = &value_type;
+
+        init();
+        init(ptr: pointer);
+        init(other: iterator);
+
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator--(self: &mut Self) -> &mut Self;
+        operator+(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, other: &Self) -> difference_type;
+        operator+=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator-=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
     type reverse_iterator = iterator;
     type const_reverse_iterator = const_iterator;
 
@@ -89,6 +165,8 @@ class string {
     init(count: size_type, ch: value_type);
     init(data: const_pointer);
     init(data: const_pointer, count: size_type);
+    init<Iter: type>(first: Iter, last: Iter);
+    init(first: iterator, last: iterator);
     init(first: const_iterator, last: const_iterator);
 
     fn at(self: &Self, index: size_type) -> const_reference;
@@ -224,8 +302,58 @@ class vector<T: type> {
     type reference = &mut value_type;
     type const_reference = &value_type;
 
-    type iterator = pointer;
-    type const_iterator = const_pointer;
+    class iterator {
+        type difference_type = isize;
+        type pointer = *mut value_type;
+        type reference = &mut value_type;
+
+        init();
+        init(ptr: pointer);
+
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator--(self: &mut Self) -> &mut Self;
+        operator+(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, other: &Self) -> difference_type;
+        operator+=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator-=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
+
+    class const_iterator {
+        type difference_type = isize;
+        type pointer = *value_type;
+        type reference = &value_type;
+
+        init();
+        init(ptr: pointer);
+        init(other: iterator);
+
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator--(self: &mut Self) -> &mut Self;
+        operator+(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, other: &Self) -> difference_type;
+        operator+=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator-=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
     type reverse_iterator = iterator;
     type const_reverse_iterator = const_iterator;
 
@@ -233,6 +361,8 @@ class vector<T: type> {
     init(other: &Self);
     init(count: size_type);
     init(count: size_type, value: const_reference);
+    init<Iter: type>(first: Iter, last: Iter);
+    init(first: iterator, last: iterator);
     init(first: const_iterator, last: const_iterator);
 
     fn at(self: &Self, index: size_type) -> const_reference;
@@ -277,6 +407,8 @@ class vector<T: type> {
     fn insert(self: &mut Self, pos: const_iterator, value: const_reference) -> iterator;
     fn insert(self: &mut Self, pos: const_iterator, value: value_type) -> iterator;
     fn insert(self: &mut Self, pos: const_iterator, count: size_type, value: const_reference) -> iterator;
+    fn insert<Iter: type>(self: &mut Self, pos: iterator, first: Iter, last: Iter) -> iterator;
+    fn insert<Iter: type>(self: &mut Self, pos: const_iterator, first: Iter, last: Iter) -> iterator;
     fn insert(self: &mut Self, pos: const_iterator, first: const_iterator, last: const_iterator) -> iterator;
 
     fn erase(self: &mut Self, pos: const_iterator) -> iterator;
@@ -309,12 +441,32 @@ class unordered_set<Key: type> {
     type pointer = *mut value_type;
     type const_pointer = *value_type;
 
-    type iterator = pointer;
-    type const_iterator = const_pointer;
+    class iterator {
+        init();
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+    }
+
+    class const_iterator {
+        init();
+        init(other: iterator);
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> const_reference;
+        operator->(self: &Self) -> const_pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+    }
 
     init();
     init(other: &Self);
     init(count: size_type);
+    init<Iter: type>(first: Iter, last: Iter);
+    init(first: iterator, last: iterator);
     init(first: const_iterator, last: const_iterator);
 
     fn size(self: &Self) -> size_type;
@@ -337,6 +489,7 @@ class unordered_set<Key: type> {
     fn clear(self: &mut Self);
     fn insert(self: &mut Self, value: const_reference) -> bool;
     fn insert(self: &mut Self, value: value_type) -> bool;
+    fn insert<Iter: type>(self: &mut Self, first: Iter, last: Iter);
     fn erase(self: &mut Self, key: const_reference) -> size_type;
     fn erase(self: &mut Self, pos: const_iterator) -> iterator;
     fn erase(self: &mut Self, first: const_iterator, last: const_iterator) -> iterator;
@@ -385,16 +538,36 @@ class map<Key: type, T: type> {
     type pointer = *mut value_type;
     type const_pointer = *value_type;
 
-    type iterator = pointer;
-    type const_iterator = const_pointer;
+    class iterator {
+        init();
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+    }
+
+    class const_iterator {
+        init();
+        init(other: iterator);
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> const_reference;
+        operator->(self: &Self) -> const_pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+    }
 
     init();
     init(other: &Self);
+    init<Iter: type>(first: Iter, last: Iter);
+    init(first: iterator, last: iterator);
     init(first: const_iterator, last: const_iterator);
 
-    fn at(self: &Self, key: &key_type) -> const_reference;
-    fn at(self: &mut Self, key: &key_type) -> reference;
-    operator[](self: &mut Self, key: key_type) -> reference;
+    fn at(self: &Self, key: &key_type) -> &mapped_type;
+    fn at(self: &mut Self, key: &key_type) -> &mut mapped_type;
+    operator[](self: &mut Self, key: key_type) -> &mut mapped_type;
 
     fn size(self: &Self) -> size_type;
     fn empty(self: &Self) -> bool;
@@ -414,6 +587,7 @@ class map<Key: type, T: type> {
     fn clear(self: &mut Self);
     fn insert(self: &mut Self, value: value_type) -> pair<iterator, bool>;
     fn insert(self: &mut Self, key: key_type, value: mapped_type) -> pair<iterator, bool>;
+    fn insert<Iter: type>(self: &mut Self, first: Iter, last: Iter);
     fn emplace(self: &mut Self, key: key_type, value: mapped_type) -> pair<iterator, bool>;
     fn erase(self: &mut Self, key: &key_type) -> size_type;
     fn erase(self: &mut Self, pos: const_iterator) -> iterator;
@@ -447,14 +621,64 @@ class span<T: type> {
     type reference = &element_type;
     type const_reference = &element_type;
 
-    type iterator = pointer;
-    type const_iterator = const_pointer;
+    class iterator {
+        type difference_type = isize;
+        type pointer = *value_type;
+        type reference = &value_type;
+
+        init();
+        init(ptr: pointer);
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator--(self: &mut Self) -> &mut Self;
+        operator+(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, other: &Self) -> difference_type;
+        operator+=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator-=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
+
+    class const_iterator {
+        type difference_type = isize;
+        type pointer = *value_type;
+        type reference = &value_type;
+
+        init();
+        init(ptr: pointer);
+        init(other: iterator);
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator--(self: &mut Self) -> &mut Self;
+        operator+(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, other: &Self) -> difference_type;
+        operator+=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator-=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
     type reverse_iterator = iterator;
     type const_reverse_iterator = const_iterator;
 
     init();
     init(data: pointer, size: size_type);
+    init<Iter: type>(first: Iter, last: Iter);
     init(first: iterator, last: iterator);
+    init(first: const_iterator, last: const_iterator);
     init<N: usize>(arr: &array<T, N>);
     init<N: usize>(arr: &mut array<T, N>);
 
@@ -512,8 +736,60 @@ class array<T: type, N: usize> {
     type reference = &mut value_type;
     type const_reference = &value_type;
 
-    type iterator = pointer;
-    type const_iterator = const_pointer;
+    class iterator {
+        type difference_type = isize;
+        type pointer = *mut value_type;
+        type reference = &mut value_type;
+
+        init();
+        init(ptr: pointer);
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator--(self: &mut Self) -> &mut Self;
+        operator+(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, other: &Self) -> difference_type;
+        operator+=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator-=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
+
+    class const_iterator {
+        type difference_type = isize;
+        type pointer = *value_type;
+        type reference = &value_type;
+
+        init();
+        init(ptr: pointer);
+        init(other: iterator);
+        operator=(self: &mut Self, other: &Self) -> &mut Self;
+        operator*(self: &Self) -> reference;
+        operator->(self: &Self) -> pointer;
+        operator++(self: &mut Self) -> &mut Self;
+        operator--(self: &mut Self) -> &mut Self;
+        operator+(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, n: difference_type) -> Self;
+        operator-(self: &Self, other: &Self) -> difference_type;
+        operator+=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator-=(self: &mut Self, n: difference_type) -> &mut Self;
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+
+    init<Iter: type>(first: Iter, last: Iter);
+    init(first: iterator, last: iterator);
+    init(first: const_iterator, last: const_iterator);
+        operator<(self: &Self, other: &Self) -> bool;
+        operator<=(self: &Self, other: &Self) -> bool;
+        operator>(self: &Self, other: &Self) -> bool;
+        operator>=(self: &Self, other: &Self) -> bool;
+    }
     type reverse_iterator = iterator;
     type const_reverse_iterator = const_iterator;
 

@@ -240,7 +240,7 @@ class World {
         for (filename : filenames) {
             let path = std.filesystem.path(filename);
             if (std.filesystem.is_directory(path)) {
-                throw std.runtime_error("File does not exist: " + std.string(filename));
+                throw std.runtime_error(std.string("File does not exist: ") + std.string(filename));
             }
             let ext = path.extension().string();
             std.transform(ext.begin(), ext.end(), ext.begin(), std.tolower);
@@ -260,7 +260,7 @@ class World {
                 models_.emplace_back(move model);
                 */
             } else {
-                throw std.runtime_error("Unsupported file format: " + std.string(filename));
+                throw std.runtime_error(std.string("Unsupported file format: ") + std.string(filename));
             }
         }
 
@@ -309,7 +309,7 @@ class World {
         let mut current_material = model.materials.end();
         let mut file = std.ifstream(path);
         if (!file.is_open()) {
-            throw std.runtime_error("Could not open material file: " + path.string());
+            throw std.runtime_error(std.string("Could not open material file: ") + path.string());
         }
 
         let mut line: std.string;
@@ -394,7 +394,7 @@ class World {
         let mut current_obj = model.objects.end();
         let mut file = std.ifstream(path);
         if (!file.is_open()) {
-            throw std.runtime_error("Could not open file: " + path.string());
+            throw std.runtime_error(std.string("Could not open file: ") + path.string());
         }
 
         let mut line: std.string;
@@ -661,7 +661,7 @@ class World {
             let blue = ppm.stream.get();
             if (red == EOF || green == EOF || blue == EOF) {
                 throw std.runtime_error(
-                    "Unexpected end of file while reading texture: " + path.string()
+                    std.string("Unexpected end of file while reading texture: ") + path.string()
                 );
             }
             texture_data[i] = Colour{

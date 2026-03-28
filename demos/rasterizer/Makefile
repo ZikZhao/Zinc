@@ -16,7 +16,7 @@ endif
 
 GLM_CFLAGS := -I./libs/glm-0.9.7.2
 
-CFLAGS += -O2 -Wall -Wextra -MMD -MP
+CFLAGS += -O2 -Wall -Wextra -MMD -MP -funsigned-char -fpermissive
 CXXFLAGS += -x c++ -std=gnu++23
 CPPFLAGS += $(SDL2_CFLAGS) $(GLM_CFLAGS) -DGLM_FORCE_PURE
 LDFLAGS += $(SDL2_LIBS)

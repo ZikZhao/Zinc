@@ -49,13 +49,13 @@ type PPMData = {
 fn ReadPPM(path: &std.filesystem.path) -> PPMData {
     let mut file = std.ifstream(path, std.ifstream.binary);
     if (!file.is_open()) {
-        throw std.runtime_error("Could not open PPM file: " + path.string());
+        throw std.runtime_error(std.string("Could not open PPM file: ") + path.string());
     }
 
     let mut magic_number: std.string;
     std.getline(file, magic_number);
     if (magic_number != "P6") {
-        throw std.runtime_error("Invalid PPM format (expected P6): " + path.string());
+        throw std.runtime_error(std.string("Invalid PPM format (expected P6): ") + path.string());
     }
 
     let mut line: std.string;
@@ -68,14 +68,14 @@ fn ReadPPM(path: &std.filesystem.path) -> PPMData {
     let mut width: usize;
     let mut height: usize;
     if (!(size_stream >> width >> height)) {
-        throw std.runtime_error("Failed to parse PPM dimensions: " + path.string());
+        throw std.runtime_error(std.string("Failed to parse PPM dimensions: ") + path.string());
     }
 
     std.getline(file, line);
     let mut max_stream = std.istringstream(line);
     let mut max: usize;
     if (!(max_stream >> max)) {
-        throw std.runtime_error("Failed to parse PPM max value: " + path.string());
+        throw std.runtime_error(std.string("Failed to parse PPM max value: ") + path.string());
     }
 
     return PPMData{width: width, height: height, max: max, stream: move file};

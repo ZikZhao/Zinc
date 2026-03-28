@@ -160,18 +160,20 @@ public:
             /// TODO:
             break;
         case Kind::Mutable:
-            /// TODO:
             output(out, type->cast<MutableType>()->target_type_, type_map);
             break;
         case Kind::Reference:
             output(out, type->cast<ReferenceType>()->target_type_, type_map);
-            if (!type->dyn_cast<MutableType>()) {
+            if (!type->cast<ReferenceType>()->target_type_->dyn_cast<MutableType>()) {
                 out += " const"sv;
             }
             out += "&"sv;
             break;
         case Kind::Pointer:
             output(out, type->cast<PointerType>()->target_type_, type_map);
+            if (!type->cast<PointerType>()->target_type_->dyn_cast<MutableType>()) {
+                out += " const"sv;
+            }
             out += "*"sv;
             break;
         default:
@@ -228,12 +230,28 @@ public:
             out += "nullptr"sv;
             break;
         case Kind::Integer: {
-            out += value->cast<IntegerValue>()->value_.to_string();
+            const IntegerValue* int_value = value->cast<IntegerValue>();
+            out += int_value->value_.to_string();
+            if (!int_value->type_->is_signed_ &&
+                int_value->type_ != &IntegerType::untyped_instance) {
+                out += "u"sv;
+            }
+            if (int_value->type_->bits_ == 64) {
+                out += "LL"sv;
+            }
             break;
         }
-        case Kind::Float:
-            std::format_to(std::back_inserter(out), "0x{:a}"sv, value->cast<FloatValue>()->value_);
+        case Kind::Float: {
+            // std::format does not output hexfloat with the "0x" prefix, so we use
+            // std::ostringstream instead
+            std::ostringstream oss;
+            oss << std::hexfloat << value->cast<FloatValue>()->value_;
+            out += oss.str();
+            if (value->cast<FloatValue>()->type_->bits_ == 32) {
+                out += "f"sv;
+            }
             break;
+        }
         case Kind::Boolean:
             out += value->cast<BooleanValue>()->value_ ? "true"sv : "false"sv;
             break;
@@ -842,26 +860,7 @@ public:
     }
 
     auto operator()(const ASTConstant* node) -> void {
-        switch (node->value->kind_) {
-        case Kind::Nullptr:
-            definitions_ += "nullptr"sv;
-            break;
-        case Kind::Integer:
-            definitions_ += node->value->cast<IntegerValue>()->value_.to_string();
-            break;
-        case Kind::Float:
-            std::format_to(
-                std::back_inserter(definitions_),
-                "0x{:a}"sv,
-                node->value->cast<FloatValue>()->value_
-            );
-            break;
-        case Kind::Boolean:
-            definitions_ += node->value->cast<BooleanValue>()->value_ ? "true"sv : "false"sv;
-            break;
-        default:
-            UNREACHABLE();
-        }
+        ObjectCodeGen::output(definitions_, node->value, type_map_);
     }
 
     auto operator()(const ASTStringConstant* node) -> void {
@@ -890,6 +889,29 @@ public:
         } else {
             (*this)(node->base);
             definitions_ += "."sv;
+            definitions_ += node->member;
+        }
+    }
+
+    auto operator()(const ASTPointerAccess* node) -> void {
+        if (auto* replacement = env_.find(current_scope_, node)) {
+            auto [base, pointers] = *std::get<PointerChain*>(*replacement);
+            for (const auto& [inst_type, func_type] : pointers | std::views::reverse) {
+                definitions_ += "_op_"sv;
+                mangler_(definitions_, OperatorCode::Pointer);
+                definitions_ += "_0"sv;
+                mangler_(definitions_, func_type->parameters_[0]);
+                definitions_ += "(*"sv;
+            }
+            (*this)(base);
+            for (std::size_t i = 0; i < pointers.size(); i++) {
+                definitions_ += ")"sv;
+            }
+            definitions_ += "->"sv;
+            definitions_ += node->member;
+        } else {
+            (*this)(node->base);
+            definitions_ += "->"sv;
             definitions_ += node->member;
         }
     }
@@ -1189,7 +1211,7 @@ private:
         }
     }
 
-    auto output_self(const SelfResolution& self_resolution) -> void {
+    auto output_self(const PointerChain& self_resolution) -> void {
         for (auto [base, func] : self_resolution.pointers | std::views::reverse) {
             definitions_ += "_op_t"sv;
             std::format_to(std::back_inserter(definitions_), "{}"sv, type_map_.at(base));
