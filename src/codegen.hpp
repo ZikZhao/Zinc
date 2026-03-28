@@ -27,16 +27,23 @@ public:
     TypeSorter() noexcept = default;
 
     void add(const Type* type) noexcept {
+        if (!types_.insert(type).second) return;
         switch (type->kind_) {
+        case Kind::Function:
+            for (const Type* param_type : type->cast<FunctionType>()->parameters_) {
+                edges_.insert({.child = param_type, .parent = type});
+                add(param_type);
+            }
+            edges_.insert({.child = type->cast<FunctionType>()->return_type_, .parent = type});
+            add(type->cast<FunctionType>()->return_type_);
+            break;
         case Kind::Struct:
-            types_.insert(type);
             for (const auto& field : type->cast<StructType>()->fields_) {
                 edges_.insert({.child = field.second, .parent = type});
                 add(field.second);
             }
             break;
         case Kind::Instance: {
-            types_.insert(type);
             const InstanceType* instance = type->cast<InstanceType>();
             for (const auto& attr : type->cast<InstanceType>()->attrs_) {
                 edges_.insert({.child = attr.second, .parent = type});
@@ -53,11 +60,24 @@ public:
             break;
         }
         case Kind::Mutable:
-            edges_.insert({.child = type->cast<MutableType>()->target_type_, .parent = type});
+            if (!is_forward_declared(type->cast<MutableType>()->target_type_)) {
+                edges_.insert({.child = type->cast<MutableType>()->target_type_, .parent = type});
+            }
+            add(type->cast<MutableType>()->target_type_);
+            break;
+        case Kind::Reference:
+            if (!is_forward_declared(type->cast<ReferenceType>()->target_type_)) {
+                edges_.insert({.child = type->cast<ReferenceType>()->target_type_, .parent = type});
+            }
+            add(type->cast<ReferenceType>()->target_type_);
+            break;
+        case Kind::Pointer:
+            if (!is_forward_declared(type->cast<PointerType>()->target_type_)) {
+                edges_.insert({.child = type->cast<PointerType>()->target_type_, .parent = type});
+            }
+            add(type->cast<PointerType>()->target_type_);
             break;
         default:
-            /// Indirect dependencies through pointers and references are not added
-            /// to the graph since they do not affect type completeness
             break;
         }
     }
@@ -89,6 +109,16 @@ public:
                 }
             }
         }
+    }
+
+private:
+    auto is_forward_declared(const Type* type) const noexcept -> bool {
+        if (auto inst_type = type->dyn_cast<InstanceType>()) {
+            return !inst_type->scope_->is_extern_;
+        } else if (type->dyn_cast<StructType>()) {
+            return true;
+        }
+        return false;
     }
 };
 
@@ -622,7 +652,6 @@ public:
         : env_(env), mangler_(mangler), type_map_(type_map) {}
 
     auto operator()(std::ofstream& stream) -> void {
-        GlobalMemory::String mangled_path;
         for (const auto& [scope_and_id, value] : env_.constants_) {
             const Scope* scope = scope_and_id.first;
             strview identifier = scope_and_id.second;
@@ -631,6 +660,7 @@ public:
                     std::back_inserter(constants_), "constexpr auto {} = "sv, identifier
                 );
             } else {
+                GlobalMemory::String mangled_path;
                 CodeGenEnvironment::mangle_path(mangled_path, scope, identifier);
                 std::format_to(
                     std::back_inserter(constants_), "constexpr auto {} = "sv, mangled_path
@@ -638,17 +668,11 @@ public:
             }
             ObjectCodeGen::output(constants_, value, type_map_);
             constants_ += ";\n"sv;
-            mangled_path.clear();
         }
         for (const auto& [scope, node, func_obj] : env_.functions_) {
             current_scope_ = scope;
             if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&node)) {
-                if ((*func_def)->identifier == "main" && scope->parent_->parent_ == nullptr) {
-                    (*this)(*func_def, "main", func_obj);
-                } else {
-                    CodeGenEnvironment::mangle_path(mangled_path, scope, (*func_def)->identifier);
-                    (*this)(*func_def, mangled_path, func_obj);
-                }
+                (*this)(*func_def, func_obj);
             } else if (auto* ctor_def = std::get_if<const ASTCtorDtorDefinition*>(&node)) {
                 (*this)(*ctor_def, func_obj);
             } else if (auto* op_def = std::get_if<const ASTOperatorDefinition*>(&node)) {
@@ -656,7 +680,6 @@ public:
             } else {
                 UNREACHABLE();
             }
-            mangled_path.clear();
             newline(false);
         }
         stream << "// ----- Constants -----\n"sv;
@@ -680,14 +703,19 @@ public:
         requires(std::is_base_of_v<ASTNode, T>)
     {}
 
-    auto operator()(
-        const ASTFunctionDefinition* node, strview mangled_path, const FunctionType* func_type
-    ) -> void {
+    auto operator()(const ASTFunctionDefinition* node, const FunctionType* func_type) -> void {
+        bool is_main = node->identifier == "main"sv && current_scope_->parent_->parent_ == nullptr;
         auto gen = [&](GlobalMemory::String& out) {
-            if (mangled_path == "main"sv) {
+            if (is_main) {
                 out += "auto main(int $argc, char** $argv) -> int"sv;
             } else {
-                std::format_to(std::back_inserter(out), "auto {}("sv, mangled_path);
+                out += "auto "sv;
+                CodeGenEnvironment::mangle_path(out, current_scope_, node->identifier);
+                out += "_0"sv;
+                for (const Type* param_type : func_type->parameters_) {
+                    mangler_(out, param_type);
+                }
+                out += "("sv;
                 strview sep = ""sv;
                 for (std::size_t i = 0; i < node->parameters.size(); i++) {
                     out += sep;
@@ -706,7 +734,7 @@ public:
         gen(definitions_);
         definitions_ += " {"sv;
         indent_level_++;
-        if (mangled_path == "main"sv) {
+        if (is_main) {
             newline();
             definitions_ += "const std::vector<std::string_view> $args_vec{$argv, $argv + $argc};";
             newline();
@@ -959,7 +987,7 @@ public:
     }
 
     auto operator()(const ASTFunctionCall* node) -> void {
-        const auto& [func_type, self_type, is_constructor, do_not_mangle] =
+        const auto& [func_type, self_node, is_constructor, do_not_mangle] =
             std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
         if (do_not_mangle) {
             (*this)(node->function);
@@ -971,17 +999,14 @@ public:
                 (*this)(node->function);
             }
             definitions_ += "_0"sv;
-            if (self_type) {
-                mangler_(definitions_, self_type);
-            }
             for (auto* param_type : func_type->parameters_) {
                 mangler_(definitions_, param_type);
             }
         }
         definitions_ += "("sv;
         strview sep = "";
-        if (self_type) {
-            (*this)(node->function);
+        if (self_node) {
+            output_self(*self_node);
             sep = ", "sv;
         }
         for (ASTExprVariant arg : node->arguments) {
@@ -1163,6 +1188,20 @@ private:
             definitions_ += "    "sv;
         }
     }
+
+    auto output_self(const SelfResolution& self_resolution) -> void {
+        for (auto [base, func] : self_resolution.pointers | std::views::reverse) {
+            definitions_ += "_op_t"sv;
+            std::format_to(std::back_inserter(definitions_), "{}"sv, type_map_.at(base));
+            mangler_(definitions_, OperatorCode::Pointer);
+            mangler_(definitions_, func->parameters_[0]);
+            definitions_ += "(*"sv;
+        }
+        (*this)(self_resolution.base);
+        for (size_t i = 0; i < self_resolution.pointers.size(); i++) {
+            definitions_ += ")"sv;
+        }
+    }
 };
 
 auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env) -> int {
@@ -1200,6 +1239,7 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
            "#include <type_traits>\n"
            "#include <typeindex>\n"
            "#include <unordered_map>\n"
+           "#include <unordered_set>\n"
            "#include <utility>\n"
            "#include <vector>\n"
            "using namespace std::literals;\n\n";

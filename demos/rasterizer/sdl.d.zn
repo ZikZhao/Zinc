@@ -1,7 +1,9 @@
 // Lightweight SDL2 declarations for Zinc demos.
 
 #CPP {
-    #include <SDL2/SDL.h>
+    namespace sdl {
+        #include <SDL2/SDL.h>
+    };
 }
 
 type SDL_Scancode = i32;

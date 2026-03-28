@@ -1,7 +1,7 @@
 class A {
     let x: i32;
     init(x: i32) { return Self{ x: x }; }
-    fn foo(self: &mut Self) { self.x += 1; }
+    fn foo(self: &Self) {}
 }
 
 enum B {
@@ -9,8 +9,9 @@ enum B {
     D,
 }
 
+type E = std.pair<*A, i32>;
+
 fn main(args: [strview]) {
-    let mut a = A(1);
-    a.foo();
+    let mut a: std.pair<*E, i32>;
 }
 

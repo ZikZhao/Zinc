@@ -18,10 +18,16 @@ enum class SymbolKind : std::uint8_t {
     PartialInstantiation = 9,
 };
 
+struct SelfResolution : GlobalMemory::MonotonicAllocated {
+    ASTExprVariant base;
+    std::span<std::pair<const InstanceType*, const FunctionType*>> pointers;
+};
+
 struct BoundMethod {
     Term object;
     Scope* scope;
     const ScopeValue* value;
+    SelfResolution* self;
 };
 
 using Symbol = std::variant<
@@ -46,7 +52,7 @@ public:
 
     struct FunctionCall {
         const FunctionType* func_type;
-        const Type* self_type;
+        SelfResolution* self;
         bool is_constructor;
         bool do_not_mangle;
     };
@@ -129,13 +135,13 @@ public:
         const Scope* current_scope,
         const ASTNode* node,
         const FunctionType* func_type,
-        const Type* self_type,
+        SelfResolution* self,
         bool is_constructor,
         bool do_not_mangle
     ) -> void {
         scope_map_[current_scope][node] = FunctionCall{
             .func_type = func_type,
-            .self_type = self_type,
+            .self = self,
             .is_constructor = is_constructor,
             .do_not_mangle = do_not_mangle,
         };
@@ -224,22 +230,28 @@ public:
     }
 
     template <SymbolKind kind>
-    static auto get(const Symbol& symbol) -> auto& {
+    static auto get(Symbol& symbol) -> auto& {
         assert(symbol.index() == static_cast<std::uint8_t>(kind));
         return std::get<static_cast<std::uint8_t>(kind)>(symbol);
     }
 
     template <SymbolKind kind>
-    static auto get_if(const Symbol& symbol) -> auto* {
+    static auto get(const Symbol& symbol) -> const auto& {
+        assert(symbol.index() == static_cast<std::uint8_t>(kind));
+        return std::get<static_cast<std::uint8_t>(kind)>(symbol);
+    }
+
+    template <SymbolKind kind>
+    static auto get_if(Symbol& symbol) -> auto* {
         return std::get_if<static_cast<std::uint8_t>(kind)>(&symbol);
     }
 
     template <SymbolKind kind>
-    static auto get_default(const Symbol& symbol) -> auto {
+    static auto get_default(Symbol& symbol) -> auto {
         if (auto* ptr = get_if<kind>(symbol)) {
             return *ptr;
         } else {
-            return decltype(get<kind>(symbol)){};
+            return std::remove_cvref_t<decltype(get<kind>(symbol))>{};
         }
     }
 
@@ -581,7 +593,8 @@ public:
 
     auto get_func_type(Scope* scope, FunctionOverloadDef overload) noexcept -> const FunctionType*;
 
-    auto eval_call(const ASTNode* node, Symbol callee, std::span<const Type*> args_type) -> Term {
+    auto eval_call(const ASTNode* node, Symbol callee, std::span<const Type*> args_type)
+        -> std::pair<Term, const FunctionType*> {
         if (holds_monostate(callee)) return {};
         assert(!std::ranges::contains(args_type, nullptr));
         GlobalMemory::Vector<const Type*> combined_args{args_type.begin(), args_type.end()};
@@ -604,13 +617,12 @@ public:
             sema_.current_scope_,
             node,
             overload,
-            Sema::get_if<SymbolKind::Method>(callee)
-                ? Sema::get<SymbolKind::Method>(callee).object.effective_type()
-                : nullptr,
+            Sema::get_if<SymbolKind::Method>(callee) ? Sema::get<SymbolKind::Method>(callee).self
+                                                     : nullptr,
             Sema::get_if<SymbolKind::Type>(callee),
             should_not_mangle(callee)
         );
-        return Term::of(overload->return_type_);
+        return {Term::of(overload->return_type_), overload};
     }
 
     static auto assignable(const Type* from, const Type* to) noexcept -> bool {
@@ -1415,14 +1427,14 @@ public:
 
     auto eval_overloaded_op(
         const ASTNode* node, OperatorCode opcode, Term left, Term right = {}
-    ) const noexcept -> Term {
+    ) const noexcept -> std::pair<Term, const FunctionType*> {
         const Type* left_type = left.effective_type();
         const Type* left_base_type = Type::decay(left_type);
         const Type* right_type = right.effective_type();
         const Type* right_base_type = Type::decay(right_type);
         if (opcode == OperatorCode::Assign && left_base_type == right_base_type) {
             if (Type::is_mutable(left_type)) {
-                return Term::lvalue(left_type);
+                return {Term::lvalue(left_type), nullptr};
             }
         }
         if (left_base_type->kind_ != Kind::Instance && right_base_type &&
@@ -1855,7 +1867,7 @@ public:
             ));
         } else {
             return Sema::nonnull(
-                sema_.operation_handler_->eval_overloaded_op(node, node->opcode, expr_term)
+                sema_.operation_handler_->eval_overloaded_op(node, node->opcode, expr_term).first
             );
         }
     }
@@ -1876,12 +1888,13 @@ public:
                 sema_.operation_handler_->eval_primitive_op(node->opcode, left_term, right_term)
             );
         } else {
-            return Sema::nonnull(sema_.operation_handler_->eval_overloaded_op(
+            auto result = sema_.operation_handler_->eval_overloaded_op(
                 node,
                 node->opcode,
                 Sema::get<SymbolKind::Term>(left_symbol),
                 Sema::get<SymbolKind::Term>(right_symbol)
-            ));
+            );
+            return Sema::nonnull(result.first);
         }
     }
 
@@ -2046,7 +2059,7 @@ public:
             );
             return Term::of(func_type->return_type_);
         }
-        return Sema::nonnull(sema_.call_handler_->eval_call(node, func_symbol, args_type));
+        return Sema::nonnull(sema_.call_handler_->eval_call(node, func_symbol, args_type).first);
     }
 
     auto operator()(const ASTTemplateInstantiation* node) noexcept -> Symbol {
@@ -2963,8 +2976,14 @@ inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> 
         const Type* decayed = term->decay();
         if (decayed->kind_ == Kind::Struct) {
             return Sema::nonnull(eval_struct_access(*term, node->member));
-        } else if (decayed->kind_ == Kind::Instance) {
-            return eval_instance_access(*term, node->member);
+        } else if (auto* instance_type = decayed->dyn_cast<InstanceType>()) {
+            Symbol result = eval_instance_access(*term, node->member);
+            if (auto* method = Sema::get_if<SymbolKind::Method>(result);
+                method && !instance_type->scope_->is_extern_) {
+                method->self = new SelfResolution{{}, node->base, {}};
+                sema_.codegen_env_.map_member_access(sema_.current_scope_, node, method->scope);
+            }
+            return result;
         }
     } else if (auto* namespace_scope = Sema::get_if<SymbolKind::Namespace>(base_symbol)) {
         Symbol result = eval_static_access(*namespace_scope, node->member);
@@ -2982,6 +3001,7 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
     }
     Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
     Term current_term = base_term;
+    GlobalMemory::Vector<std::pair<const InstanceType*, const FunctionType*>> dereference_chain;
     while (true) {
         const Type* decayed = current_term.decay();
         if (auto* pointer_type = decayed->dyn_cast<PointerType>()) {
@@ -2990,15 +3010,23 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
             if (decayed_dereferenced->dyn_cast<StructType>()) {
                 return Sema::nonnull(eval_struct_access(dereferenced, node->member));
             } else if (decayed_dereferenced->dyn_cast<InstanceType>()) {
-                return eval_instance_access(dereferenced, node->member);
+                Symbol result = eval_instance_access(dereferenced, node->member);
+                if (auto* method = Sema::get_if<SymbolKind::Method>(result)) {
+                    method->self = new SelfResolution{
+                        {}, node->base, dereference_chain | GlobalMemory::collect<std::span>()
+                    };
+                }
+                return result;
             } else {
                 Diagnostic::error_invalid_pointer_access(base_term->repr());
                 return {};
             }
-        } else if (decayed->dyn_cast<InstanceType>()) {
-            current_term = sema_.operation_handler_->eval_overloaded_op(
+        } else if (auto* instance_type = decayed->dyn_cast<InstanceType>()) {
+            auto result = sema_.operation_handler_->eval_overloaded_op(
                 node, OperatorCode::Pointer, current_term
             );
+            current_term = result.first;
+            dereference_chain.push_back({instance_type, result.second});
         } else {
             Diagnostic::error_invalid_pointer_access(base_term->repr());
             return {};
@@ -3030,9 +3058,11 @@ inline auto AccessHandler::eval_index(const ASTIndexAccess* node) noexcept -> Sy
             index_type = args_type[1] = &IntegerType::u64_instance;
         }
     }
-    return Sema::nonnull(sema_.call_handler_->eval_call(
-        node, std::tuple{OperatorCode::Index, base_type, index_type}, args_type
-    ));
+    return Sema::nonnull(
+        sema_.call_handler_
+            ->eval_call(node, std::tuple{OperatorCode::Index, base_type, index_type}, args_type)
+            .first
+    );
 }
 
 inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) noexcept -> void {

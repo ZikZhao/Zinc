@@ -18,7 +18,7 @@ GLM_CFLAGS := -I./libs/glm-0.9.7.2
 
 CFLAGS += -O2 -Wall -Wextra -MMD -MP
 CXXFLAGS += -x c++ -std=gnu++23
-CPPFLAGS += $(SDL2_CFLAGS) $(GLM_CFLAGS)
+CPPFLAGS += $(SDL2_CFLAGS) $(GLM_CFLAGS) -DGLM_FORCE_PURE
 LDFLAGS += $(SDL2_LIBS)
 LDLIBS += -lstdc++
 
@@ -27,7 +27,7 @@ LDLIBS += -lstdc++
 all: $(TARGET)
 
 $(TARGET): $(OBJ)
-	$(CC) $(CXXFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
+	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(BUILD_DIR)/main.zn.o: $(SRC) | $(BUILD_DIR)
 	$(CC) $(CXXFLAGS) $(CFLAGS) $(CPPFLAGS) -c $< -o $@

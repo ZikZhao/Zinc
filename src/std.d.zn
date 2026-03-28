@@ -854,8 +854,9 @@ namespace chrono {
 
     fn duration_cast<ToDuration: type, Rep: type>(d: duration<Rep>) -> ToDuration;
 
-    class time_point {
-        type duration_type = duration<i64>;
+    class time_point<Clock: type, Duration: type> {
+        type clock = Clock;
+        type duration_type = Duration;
 
         init();
         init(d: duration_type);
@@ -878,19 +879,19 @@ namespace chrono {
 
     class steady_clock {
         type duration = chrono.duration<i64>;
-        type time_point = chrono.time_point;
+        type time_point = chrono.time_point<steady_clock, duration>;
 
         static fn now() -> time_point;
     }
 
     class system_clock {
         type duration = chrono.duration<i64>;
-        type time_point = chrono.time_point;
+        type time_point = chrono.time_point<system_clock, duration>;
 
         static fn now() -> time_point;
     }
 
-    fn now() -> time_point;
+    fn now() -> system_clock.time_point;
 }
 
 fn abs(value: i8) -> i8;
