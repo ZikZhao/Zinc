@@ -4,6 +4,6 @@ type A = {
 };
 
 fn main(args: [strview]) {
-    let strs = std.span<strview>(args.begin(), args.end());
+    std.cout << "Hello, world!";
 }
 

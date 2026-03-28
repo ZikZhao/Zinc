@@ -48,6 +48,7 @@ using ScopeValue = PointerVariant<
 
 class Scope final : public GlobalMemory::MonotonicAllocated {
     friend class Sema;
+    friend class NameMangler;
     friend class CodeGen;
 
 public:

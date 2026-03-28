@@ -154,7 +154,7 @@ public:
             break;
         case Kind::Struct:
         case Kind::Instance:
-            std::format_to(std::back_inserter(out), "t{}"sv, type_map.at(type));
+            std::format_to(std::back_inserter(out), "_t{}"sv, type_map.at(type));
             break;
         case Kind::Interface:
             /// TODO:
@@ -313,8 +313,8 @@ private:
         std::size_t type_index = type_map_.at(type);
         auto it_fwd = std::back_inserter(forward_declarations_);
         auto it_def = std::back_inserter(definitions_);
-        std::format_to(it_fwd, "struct t{};\n"sv, type_index);
-        std::format_to(it_def, "struct t{} {{\n"sv, type_index);
+        std::format_to(it_fwd, "struct _t{};\n"sv, type_index);
+        std::format_to(it_def, "struct _t{} {{\n"sv, type_index);
         for (const auto& [field_name, field_type] : type->fields_) {
             definitions_ += "    "sv;
             output(definitions_, field_type, type_map_);
@@ -328,40 +328,40 @@ private:
     void generate_class(const InstanceType* type) {
         std::size_t type_index = type_map_.at(type);
         if (type->scope_->is_extern_) {
-            std::format_to(std::back_inserter(definitions_), "using t{} = "sv, type_index);
+            std::format_to(
+                std::back_inserter(forward_declarations_), "#define _t{} "sv, type_index
+            );
             GlobalMemory::String qualified_name;
             strview sep = ""sv;
-            for (const Scope* current = type->scope_; current; current = current->parent_) {
+            for (const Scope* current = type->scope_->parent_; current;
+                 current = current->parent_) {
                 if (!current->scope_id_.empty()) {
                     qualified_name.insert(0, sep);
                     qualified_name.insert(0, current->scope_id_);
                     sep = "::"sv;
                 }
             }
-            definitions_ += qualified_name;
-            if (type->primary_template_) {
-                sep = "<"sv;
-                for (const Object* arg : type->template_args_) {
-                    definitions_ += sep;
-                    output(definitions_, arg, type_map_);
-                    sep = ", "sv;
-                }
-                definitions_ += ">"sv;
+            forward_declarations_ += qualified_name;
+            if (!type->primary_template_) {
+                forward_declarations_ += "::"sv;
+                forward_declarations_ += type->identifier_;
             }
-            definitions_ += ";\n"sv;
-            return;
+            forward_declarations_ += "\n"sv;
+        } else {
+            std::format_to(
+                std::back_inserter(forward_declarations_), "struct _t{};\n"sv, type_index
+            );
+            std::format_to(std::back_inserter(definitions_), "struct _t{} {{\n"sv, type_index);
+            for (const auto& [attr_name, attr_type] : type->attrs_) {
+                definitions_ += "    "sv;
+                output(definitions_, attr_type, type_map_);
+                definitions_ += " "sv;
+                definitions_ += attr_name;
+                definitions_ += ";\n"sv;
+            }
+            /// TODO: methods with instantiations
+            definitions_ += "};\n"sv;
         }
-        std::format_to(std::back_inserter(forward_declarations_), "struct t{};\n"sv, type_index);
-        std::format_to(std::back_inserter(definitions_), "struct t{} {{\n"sv, type_index);
-        for (const auto& [attr_name, attr_type] : type->attrs_) {
-            definitions_ += "    "sv;
-            output(definitions_, attr_type, type_map_);
-            definitions_ += " "sv;
-            definitions_ += attr_name;
-            definitions_ += ";\n"sv;
-        }
-        /// TODO: methods with instantiations
-        definitions_ += "};\n"sv;
     }
 };
 
@@ -374,27 +374,45 @@ public:
 
     auto mangle_all_instantiations(CodeGenEnvironment& env) const -> void {
         for (auto& [scope, args] : env.instantiations_) {
+            GlobalMemory::String qualified_name;
             if (scope->is_extern_) {
-                continue;
-            }
-            GlobalMemory::String mangled_part = "0";
-            for (const Object* arg : args) {
-                std::size_t prev_size = mangled_part.size();
-                if (auto* type = arg->dyn_type()) {
-                    (*this)(mangled_part, type);
-                } else {
-                    (*this)(mangled_part, arg->cast<Value>());
+                qualified_name += scope->scope_id_;
+                qualified_name += "<"sv;
+                strview sep = ""sv;
+                for (const Object* arg : args) {
+                    qualified_name += sep;
+                    if (auto* type = arg->dyn_type()) {
+                        ObjectCodeGen::output(qualified_name, type, type_map_);
+                    } else {
+                        ObjectCodeGen::output(qualified_name, arg->cast<Value>(), type_map_);
+                    }
+                    sep = ", "sv;
                 }
-                std::format_to(
-                    std::inserter(
-                        mangled_part,
-                        std::next(mangled_part.begin(), static_cast<std::ptrdiff_t>(prev_size))
-                    ),
-                    "{}"sv,
-                    mangled_part.size() - prev_size
-                );
+                qualified_name += ">"sv;
+                scope->scope_id_ = GlobalMemory::persist(qualified_name);
+            } else {
+                qualified_name += "0"sv;
+                for (const Object* arg : args) {
+                    std::size_t prev_size = qualified_name.size();
+                    if (auto* type = arg->dyn_type()) {
+                        ObjectCodeGen::output(qualified_name, type, type_map_);
+                    } else {
+                        ObjectCodeGen::output(qualified_name, arg->cast<Value>(), type_map_);
+                    }
+                    std::format_to(
+                        std::inserter(
+                            qualified_name,
+                            std::next(
+                                qualified_name.begin(), static_cast<std::ptrdiff_t>(prev_size)
+                            )
+                        ),
+                        "{}"sv,
+                        qualified_name.size() - prev_size
+                    );
+                }
+                scope->scope_id_ = GlobalMemory::persist(qualified_name);
             }
-            scope->scope_id_ = GlobalMemory::persist(mangled_part);
+            scope->children_.begin()->second->scope_id_ = {};
         }
     }
 
@@ -982,7 +1000,7 @@ public:
         if (!holds_monostate(node->struct_type)) {
             auto* variant = env_.find(current_scope_, node);
             const Type* struct_type = std::get<const Type*>(*variant);
-            std::format_to(std::back_inserter(definitions_), "t{}"sv, type_map_.at(struct_type));
+            ObjectCodeGen::output(definitions_, struct_type, type_map_);
         }
         definitions_ += "{"sv;
         indent_level_++;

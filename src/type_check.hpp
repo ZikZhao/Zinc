@@ -458,6 +458,7 @@ public:
             return as_symbol(cache_it->second);
         }
         auto [inst_scope, target] = specialization_resolution(family, args);
+        inst_scope->scope_id_ = family.primary->identifier;
         Sema::Guard inner_guard(sema_, *inst_scope);
         std::span persisted_args = args | GlobalMemory::collect<std::span>();
         sema_.codegen_env_.add_instantiation(inst_scope, persisted_args);
@@ -484,7 +485,7 @@ public:
         if (!validate(*primary, args)) {
             return {};
         }
-        Scope& inst_scope = Scope::make(*sema_.current_scope_);
+        Scope& inst_scope = Scope::make(*sema_.current_scope_, nullptr, primary->identifier);
         for (size_t i = 0; i < args.size(); i++) {
             inst_scope.set_template_argument(primary->parameters[i].identifier, args[i]);
         }
@@ -2669,15 +2670,15 @@ inline auto TemplateHandler::inference(
     // instantiate the template with auto bindings
     Symbol func_symbol = instantiate(scope, primary, instantiation_args);
     if (!holds_monostate(func_symbol)) {
-        auto [inst_scope, value] = Sema::get<SymbolKind::Function>(func_symbol);
+        auto [scope, value] = Sema::get<SymbolKind::Function>(func_symbol);
         FunctionOverloadDef overload_def =
             (*value->get<GlobalMemory::Vector<FunctionOverloadDef>*>())[0];
         if (auto* func_def = overload_def.get<const ASTFunctionDefinition*>()) {
-            return sema_.call_handler_->get_func_type(inst_scope, func_def);
+            return sema_.call_handler_->get_func_type(scope, func_def);
         } else if (auto* ctor_def = overload_def.get<const ASTCtorDtorDefinition*>()) {
-            return sema_.call_handler_->get_func_type(inst_scope, ctor_def);
+            return sema_.call_handler_->get_func_type(scope, ctor_def);
         } else if (auto* op_def = overload_def.get<const ASTOperatorDefinition*>()) {
-            return sema_.call_handler_->get_func_type(inst_scope, op_def);
+            return sema_.call_handler_->get_func_type(scope, op_def);
         } else {
             UNREACHABLE();
         }
