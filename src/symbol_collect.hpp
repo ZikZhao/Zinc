@@ -485,6 +485,7 @@ public:
             module_scope = &Scope::root(*std_scope_);
             if (node->path.ends_with(".d.zn"sv)) {
                 module_scope->is_extern_ = true;
+                module_scope->scope_id_ = node->path.substr(0, node->path.size() - 5);
             }
             module_visitor(node->module_root);
         }

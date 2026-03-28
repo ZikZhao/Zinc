@@ -95,6 +95,7 @@ public:
     GlobalMemory::Vector<FunctionDef> functions_;
     GlobalMemory::Vector<std::pair<Scope*, std::span<const Object*>>> instantiations_;
     GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
+    GlobalMemory::Vector<strview> cpp_blocks_;
 
 public:
     auto add_function_output(
@@ -107,6 +108,8 @@ public:
     auto add_instantiation(const Scope* inst_scope, std::span<const Object*> args) -> void {
         instantiations_.push_back({const_cast<Scope*>(inst_scope), args});
     }
+
+    auto add_cpp_block(strview code) -> void { cpp_blocks_.push_back(code); }
 
     auto map_type(const Scope* current_scope, const ASTNode* node, const Type* type) -> void {
         scope_map_[current_scope][node] = type;
@@ -1444,6 +1447,7 @@ public:
         const Type* decayed_source_type = Type::decay(source_type);
         const Type* decayed_target_type = Type::decay(target_type);
         if (source_type == target_type) {
+            sema_.codegen_env_.map_type(sema_.current_scope_, node, target_type);
             return operand;
         }
         if (decayed_source_type == decayed_target_type) {
@@ -1961,6 +1965,21 @@ public:
             } else {
                 return {};
             }
+            for (size_t i = 1; i < node->elements.size(); ++i) {
+                Symbol element_symbol =
+                    ValueContextEvaluator{*this, element_type}(node->elements[i]);
+                if (Sema::expect(element_symbol, SymbolKind::Term)) {
+                    Term element_term = Sema::get<SymbolKind::Term>(element_symbol);
+                    if (element_term.decay() != element_type) {
+                        Diagnostic::error_type_mismatch(
+                            element_type->repr(), element_term.effective_type()->repr()
+                        );
+                        return {};
+                    }
+                } else {
+                    return {};
+                }
+            }
             std::array<const Object*, 2> template_args = {
                 element_type, new IntegerValue(&IntegerType::u64_instance, node->elements.size())
             };
@@ -2017,6 +2036,9 @@ public:
                 );
                 return {};
             }
+            sema_.codegen_env_.map_func_call(
+                sema_.current_scope_, node, func_type, nullptr, false, false
+            );
             return Term::of(func_type->return_type_);
         }
         return Sema::nonnull(sema_.call_handler_->eval_call(node, func_symbol, args_type));
@@ -2353,9 +2375,19 @@ public:
         }
     }
 
+    void operator()(const ASTThrowStatement* node) noexcept {
+        if (!holds_monostate(node->expr)) {
+            ValueContextEvaluator{sema_, nullptr, false}(node->expr);
+        }
+    }
+
     void operator()(const ASTImportStatement* node) noexcept {
         Sema::Guard guard{sema_, *node->module_root->scope};
         (*this)(node->module_root);
+    }
+
+    void operator()(const ASTCppBlock* node) noexcept {
+        sema_.codegen_env_.add_cpp_block(node->code);
     }
 };
 
@@ -2523,8 +2555,8 @@ inline auto TemplateHandler::inference(
             patterns.push_back(Sema::get_default<SymbolKind::Type>(pattern_symbol));
         }
         if (!variadic_param.empty()) {
-            for (size_t i = 0; i <= args_type.size() - param_count; i++) {
-                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size() - 1];
+            for (size_t i = 1; i <= args_type.size() + 1 - param_count; i++) {
+                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size()];
                 pattern_scope.set_template_argument(variadic_param, auto_inst->as_object(false));
                 Symbol pattern_symbol = ValueContextEvaluator{
                     sema_, nullptr, false
@@ -2540,8 +2572,8 @@ inline auto TemplateHandler::inference(
             patterns.push_back(Sema::get_default<SymbolKind::Type>(pattern_symbol));
         }
         if (!variadic_param.empty()) {
-            for (size_t i = 0; i <= args_type.size() - param_count; i++) {
-                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size() - 1];
+            for (size_t i = 1; i <= args_type.size() + 1 - param_count; i++) {
+                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size()];
                 pattern_scope.set_template_argument(variadic_param, auto_inst->as_object(false));
                 Symbol pattern_symbol = ValueContextEvaluator{
                     sema_, nullptr, false

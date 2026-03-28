@@ -206,6 +206,14 @@ class string {
     operator>=(data: const_pointer, self: &Self) -> bool;
 }
 
+class runtime_error {
+    init(message: &string);
+    init(message: string_view);
+    init(message: *u8);
+
+    fn what(self: &Self) -> *u8;
+}
+
 class vector<T: type> {
     type value_type = T;
     type size_type = usize;

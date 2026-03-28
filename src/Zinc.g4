@@ -14,7 +14,8 @@ top_level_statement:
 	| enum_definition
 	| namespace_definition
 	| static_assert_statement
-	| import_statement;
+	| import_statement
+	| cpp_block;
 
 statement:
 	local_block
@@ -376,6 +377,8 @@ instantiation_list:
 
 instantiation_argument: type_ = type | value_ = expr;
 
+cpp_block: T_CPP_BLOCK;
+
 KW_LET: 'let';
 KW_MUT: 'mut';
 KW_CONST: 'const';
@@ -510,3 +513,6 @@ WHITESPACE: [ \t\n\r\f]+ -> skip;
 LINE_COMMENT: '//' ~[\r\n]* -> channel(HIDDEN);
 
 BLOCK_COMMENT: '/*' .*? '*/' -> channel(HIDDEN);
+
+T_CPP_BLOCK:
+	'#CPP' [ \t]* '{' [ \t]* '\r'? '\n' .*? '\r'? '\n' '}';

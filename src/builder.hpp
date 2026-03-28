@@ -1163,4 +1163,11 @@ private:
         -> Any<ASTExprVariant> final {
         return ctx->type_ ? visit_expr(ctx->type_) : visit_expr(ctx->value_);
     }
+
+    auto visitCpp_block(ZincParser::Cpp_blockContext* ctx) noexcept -> Any<ASTNodeVariant> final {
+        strview code = text(ctx);
+        std::size_t brace_pos = code.find_first_of("{");  // skip the #CPP and the opening brace
+        code = code.substr(brace_pos + 1, code.size() - brace_pos - 2);  // remove the braces
+        return as_variant(new ASTCppBlock{loc(ctx), code});
+    }
 };

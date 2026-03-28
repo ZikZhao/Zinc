@@ -110,6 +110,7 @@ struct ASTTemplateSpecialization;
 struct ASTThrowStatement;
 struct ASTStaticAssertStatement;
 struct ASTImportStatement;
+struct ASTCppBlock;
 
 // All AST node types (base classes and final classes)
 using ASTNodeVariant = std::variant<
@@ -143,7 +144,9 @@ using ASTNodeVariant = std::variant<
     // Error handling
     const ASTThrowStatement*,
     // Import
-    const ASTImportStatement*>;
+    const ASTImportStatement*,
+    // C++ block
+    const ASTCppBlock*>;
 
 // All expression node types (all ASTExpression derivatives)
 using ASTExprVariant = std::variant<
@@ -500,6 +503,10 @@ struct ASTImportStatement final : public ASTNode {
     strview path;
     strview alias;
     const ASTRoot* module_root;
+};
+
+struct ASTCppBlock final : public ASTNode {
+    strview code;
 };
 
 enum class OperatorGroup : std::uint8_t {

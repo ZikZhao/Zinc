@@ -4,7 +4,7 @@
 #include "object.hpp"
 #include "type_check.hpp"
 
-using TypeStore = std::span<const Type*>;
+using TypeMap = GlobalMemory::FlatMap<const Type*, std::size_t>;
 
 class TypeSorter final {
 private:
@@ -32,14 +32,26 @@ public:
             types_.insert(type);
             for (const auto& field : type->cast<StructType>()->fields_) {
                 edges_.insert({.child = field.second, .parent = type});
+                add(field.second);
             }
             break;
-        case Kind::Instance:
+        case Kind::Instance: {
             types_.insert(type);
+            const InstanceType* instance = type->cast<InstanceType>();
             for (const auto& attr : type->cast<InstanceType>()->attrs_) {
                 edges_.insert({.child = attr.second, .parent = type});
+                add(attr.second);
+            }
+            if (instance->primary_template_ && instance->scope_->is_extern_) {
+                for (const Object* template_arg : instance->template_args_) {
+                    if (auto template_arg_type = template_arg->dyn_type()) {
+                        edges_.insert({.child = template_arg_type, .parent = type});
+                        add(template_arg_type);
+                    }
+                }
             }
             break;
+        }
         case Kind::Mutable:
             edges_.insert({.child = type->cast<MutableType>()->target_type_, .parent = type});
             break;
@@ -82,15 +94,15 @@ public:
 
 class ObjectCodeGen final {
 public:
-    static void output(GlobalMemory::String& out, const Object* obj, TypeStore types) {
+    static void output(GlobalMemory::String& out, const Object* obj, TypeMap& type_map) {
         if (auto* type = obj->dyn_type()) {
-            output(out, type, types);
+            output(out, type, type_map);
         } else {
-            output(out, obj->cast<Value>(), types);
+            output(out, obj->cast<Value>(), type_map);
         }
     }
 
-    static void output(GlobalMemory::String& out, const Type* type, TypeStore types) {
+    static void output(GlobalMemory::String& out, const Type* type, TypeMap& type_map) {
         switch (type->kind_) {
         case Kind::Void:
             out += "void"sv;
@@ -99,37 +111,37 @@ public:
             out += "std::nullptr_t"sv;
             break;
         case Kind::Integer:
-            output(out, type->cast<IntegerType>(), types);
+            output(out, type->cast<IntegerType>(), type_map);
             break;
         case Kind::Float:
-            output(out, type->cast<FloatType>(), types);
+            output(out, type->cast<FloatType>(), type_map);
             break;
         case Kind::Boolean:
             out += "bool"sv;
             break;
         case Kind::Function:
-            output(out, type->cast<FunctionType>(), types);
+            output(out, type->cast<FunctionType>(), type_map);
             break;
         case Kind::Struct:
         case Kind::Instance:
-            std::format_to(std::back_inserter(out), "t{}"sv, index(types, type));
+            std::format_to(std::back_inserter(out), "t{}"sv, type_map.at(type));
             break;
         case Kind::Interface:
             /// TODO:
             break;
         case Kind::Mutable:
             /// TODO:
-            output(out, type->cast<MutableType>()->target_type_, types);
+            output(out, type->cast<MutableType>()->target_type_, type_map);
             break;
         case Kind::Reference:
-            output(out, type->cast<ReferenceType>()->target_type_, types);
+            output(out, type->cast<ReferenceType>()->target_type_, type_map);
             if (!type->dyn_cast<MutableType>()) {
                 out += " const"sv;
             }
             out += "&"sv;
             break;
         case Kind::Pointer:
-            output(out, type->cast<PointerType>()->target_type_, types);
+            output(out, type->cast<PointerType>()->target_type_, type_map);
             out += "*"sv;
             break;
         default:
@@ -137,7 +149,7 @@ public:
         }
     }
 
-    static void output(GlobalMemory::String& out, const IntegerType* type, TypeStore types) {
+    static void output(GlobalMemory::String& out, const IntegerType* type, TypeMap& type_map) {
         std::format_to(std::back_inserter(out), "std::{}int"sv, type->is_signed_ ? "" : "u");
         switch (type->bits_) {
         case 8:
@@ -157,7 +169,7 @@ public:
         }
     }
 
-    static void output(GlobalMemory::String& out, const FloatType* type, TypeStore types) {
+    static void output(GlobalMemory::String& out, const FloatType* type, TypeMap& type_map) {
         if (type->bits_ == 32) {
             out += "float"sv;
         } else if (type->bits_ == 64) {
@@ -167,20 +179,20 @@ public:
         }
     }
 
-    static void output(GlobalMemory::String& out, const FunctionType* type, TypeStore types) {
+    static void output(GlobalMemory::String& out, const FunctionType* type, TypeMap& type_map) {
         out += "std::function<"sv;
-        output(out, type->return_type_, types);
+        output(out, type->return_type_, type_map);
         out += "("sv;
         strview sep = ""sv;
         for (const Type* param_type : type->parameters_) {
             out += sep;
-            output(out, param_type, types);
+            output(out, param_type, type_map);
             sep = ", "sv;
         }
         out += ")>"sv;
     }
 
-    static void output(GlobalMemory::String& out, const Value* value, TypeStore types) {
+    static void output(GlobalMemory::String& out, const Value* value, TypeMap& type_map) {
         switch (value->kind_) {
         case Kind::Nullptr:
             out += "nullptr"sv;
@@ -201,12 +213,13 @@ public:
     }
 
 private:
-    GlobalMemory::Vector<const Type*>& types_;
+    TypeMap& type_map_;
+    GlobalMemory::Vector<const Type*> types_;
     GlobalMemory::String forward_declarations_;
     GlobalMemory::String definitions_;
 
 public:
-    ObjectCodeGen(GlobalMemory::Vector<const Type*>& types) noexcept : types_(types) {}
+    ObjectCodeGen(TypeMap& type_map) noexcept : type_map_(type_map) {}
 
     void order_types() {
         TypeSorter sorter;
@@ -221,9 +234,9 @@ public:
             std::get<TypeRegistry::TypeSet<StructType>>(TypeRegistry::instance->types_).size() +
             TypeRegistry::instance->instance_types_.size()
         );
-        auto it = std::back_inserter(types_);
-        std::ranges::copy(std::move(sorter).iterate(), it);
-        std::ranges::sort(types_);
+        std::ranges::copy(std::move(sorter).iterate(), std::back_inserter(types_));
+        type_map_ =
+            TypeMap(std::from_range, std::views::zip(types_, std::views::iota(std::size_t{0})));
     }
 
     void output_type_defs(std::ofstream& stream) {
@@ -249,14 +262,14 @@ public:
 
 private:
     void generate_struct(const StructType* type) {
-        std::size_t type_index = index(types_, type);
+        std::size_t type_index = type_map_.at(type);
         auto it_fwd = std::back_inserter(forward_declarations_);
         auto it_def = std::back_inserter(definitions_);
         std::format_to(it_fwd, "struct t{};\n"sv, type_index);
         std::format_to(it_def, "struct t{} {{\n"sv, type_index);
         for (const auto& [field_name, field_type] : type->fields_) {
             definitions_ += "    "sv;
-            output(definitions_, field_type, types_);
+            output(definitions_, field_type, type_map_);
             definitions_ += " "sv;
             definitions_ += field_name;
             definitions_ += ";\n"sv;
@@ -265,7 +278,7 @@ private:
     }
 
     void generate_class(const InstanceType* type) {
-        std::size_t type_index = index(types_, type);
+        std::size_t type_index = type_map_.at(type);
         if (type->scope_->is_extern_) {
             std::format_to(std::back_inserter(definitions_), "using t{} = "sv, type_index);
             GlobalMemory::String qualified_name;
@@ -282,7 +295,7 @@ private:
                 sep = "<"sv;
                 for (const Object* arg : type->template_args_) {
                     definitions_ += sep;
-                    output(definitions_, arg, types_);
+                    output(definitions_, arg, type_map_);
                     sep = ", "sv;
                 }
                 definitions_ += ">"sv;
@@ -294,7 +307,7 @@ private:
         std::format_to(std::back_inserter(definitions_), "struct t{} {{\n"sv, type_index);
         for (const auto& [attr_name, attr_type] : type->attrs_) {
             definitions_ += "    "sv;
-            output(definitions_, attr_type, types_);
+            output(definitions_, attr_type, type_map_);
             definitions_ += " "sv;
             definitions_ += attr_name;
             definitions_ += ";\n"sv;
@@ -306,10 +319,10 @@ private:
 
 class NameMangler final {
 private:
-    std::span<const Type*> types_;
+    TypeMap& type_map_;
 
 public:
-    NameMangler(std::span<const Type*> types) noexcept : types_(types) {}
+    NameMangler(TypeMap& type_map) noexcept : type_map_(type_map) {}
 
     auto mangle_all_instantiations(CodeGenEnvironment& env) const -> void {
         for (auto& [scope, args] : env.instantiations_) {
@@ -410,7 +423,7 @@ public:
             break;
         case Kind::Struct:
         case Kind::Instance: {
-            std::format_to(std::back_inserter(out), "t{}"sv, index(types_, type));
+            std::format_to(std::back_inserter(out), "t{}"sv, type_map_.at(type));
             break;
         }
         default:
@@ -596,13 +609,13 @@ private:
     GlobalMemory::String definitions_;
     CodeGenEnvironment& env_;
     NameMangler mangler_;
-    std::span<const Type*> types_;
+    TypeMap& type_map_;
     const Scope* current_scope_;
     std::size_t indent_level_;
 
 public:
-    CodeGen(CodeGenEnvironment& env, NameMangler& mangler, std::span<const Type*> types) noexcept
-        : env_(env), mangler_(mangler), types_(types) {}
+    CodeGen(CodeGenEnvironment& env, NameMangler& mangler, TypeMap& type_map) noexcept
+        : env_(env), mangler_(mangler), type_map_(type_map) {}
 
     auto operator()(std::ofstream& stream) -> void {
         GlobalMemory::String mangled_path;
@@ -653,13 +666,13 @@ public:
                 for (std::size_t i = 0; i < node->parameters.size(); i++) {
                     out += sep;
                     const ASTFunctionParameter& param = node->parameters[i];
-                    ObjectCodeGen::output(out, func_type->parameters_[i], types_);
+                    ObjectCodeGen::output(out, func_type->parameters_[i], type_map_);
                     out += " "sv;
                     out += param.identifier;
                     sep = ", "sv;
                 }
                 out += ") -> "sv;
-                ObjectCodeGen::output(out, func_type->return_type_, types_);
+                ObjectCodeGen::output(out, func_type->return_type_, type_map_);
             }
         };
         gen(forward_declarations_);
@@ -686,9 +699,7 @@ public:
     auto operator()(const ASTCtorDtorDefinition* node, const FunctionType* func_type) -> void {
         auto gen = [&](GlobalMemory::String& out) {
             std::format_to(
-                std::back_inserter(out),
-                "auto _init_t{}_0"sv,
-                index(types_, func_type->return_type_)
+                std::back_inserter(out), "auto _init_t{}_0"sv, type_map_.at(func_type->return_type_)
             );
             for (const Type* param_type : func_type->parameters_) {
                 mangler_(out, param_type);
@@ -698,13 +709,13 @@ public:
             for (std::size_t i = 0; i < node->parameters.size(); i++) {
                 out += sep;
                 const ASTFunctionParameter& param = node->parameters[i];
-                ObjectCodeGen::output(out, func_type->parameters_[i], types_);
+                ObjectCodeGen::output(out, func_type->parameters_[i], type_map_);
                 out += " "sv;
                 out += param.identifier;
                 sep = ", "sv;
             }
             out += ") -> "sv;
-            ObjectCodeGen::output(out, func_type->return_type_, types_);
+            ObjectCodeGen::output(out, func_type->return_type_, type_map_);
         };
         gen(forward_declarations_);
         forward_declarations_ += ";\n"sv;
@@ -730,17 +741,17 @@ public:
                 mangler_(out, param_type);
             }
             out += "("sv;
-            ObjectCodeGen::output(out, func_type->parameters_[0], types_);
+            ObjectCodeGen::output(out, func_type->parameters_[0], type_map_);
             out += " "sv;
             out += node->left.identifier;
             if (node->right) {
                 out += ", "sv;
-                ObjectCodeGen::output(out, func_type->parameters_[1], types_);
+                ObjectCodeGen::output(out, func_type->parameters_[1], type_map_);
                 out += " "sv;
                 out += node->right->identifier;
             }
             out += ") -> "sv;
-            ObjectCodeGen::output(out, func_type->return_type_, types_);
+            ObjectCodeGen::output(out, func_type->return_type_, type_map_);
         };
         gen(forward_declarations_);
         forward_declarations_ += ";\n"sv;
@@ -895,7 +906,7 @@ public:
         if (!holds_monostate(node->struct_type)) {
             auto* variant = env_.find(current_scope_, node);
             const Type* struct_type = std::get<const Type*>(*variant);
-            std::format_to(std::back_inserter(definitions_), "t{}"sv, index(types_, struct_type));
+            std::format_to(std::back_inserter(definitions_), "t{}"sv, type_map_.at(struct_type));
         }
         definitions_ += "{"sv;
         indent_level_++;
@@ -962,7 +973,7 @@ public:
     auto operator()(const ASTAs* node) -> void {
         auto* replacement = env_.find(current_scope_, node);
         definitions_ += "static_cast<"sv;
-        ObjectCodeGen::output(definitions_, std::get<const Type*>(*replacement), types_);
+        ObjectCodeGen::output(definitions_, std::get<const Type*>(*replacement), type_map_);
         definitions_ += ">("sv;
         (*this)(node->expr);
         definitions_ += ")"sv;
@@ -977,7 +988,7 @@ public:
         for (size_t i = 0; i < node->parameters.size(); i++) {
             const auto& param = node->parameters[i];
             definitions_ += sep;
-            ObjectCodeGen::output(definitions_, lambda_type->parameters_[i], types_);
+            ObjectCodeGen::output(definitions_, lambda_type->parameters_[i], type_map_);
             definitions_ += " "sv;
             definitions_ += param.identifier;
             sep = ", "sv;
@@ -985,7 +996,7 @@ public:
         definitions_ += ")"sv;
         if (lambda_type->return_type_->kind_ != Kind::Void) {
             definitions_ += " -> "sv;
-            ObjectCodeGen::output(definitions_, lambda_type->return_type_, types_);
+            ObjectCodeGen::output(definitions_, lambda_type->return_type_, type_map_);
         }
         Guard guard{*this, node};
         if (auto* node_variant = std::get_if<ASTNodeVariant>(&node->body)) {
@@ -1004,7 +1015,7 @@ public:
 
     auto operator()(const ASTDeclaration* node) -> void {
         const Type* type = std::get<const Type*>(*env_.find(current_scope_, node));
-        ObjectCodeGen::output(definitions_, type, types_);
+        ObjectCodeGen::output(definitions_, type, type_map_);
         std::format_to(std::back_inserter(definitions_), " {}", node->identifier);
         if (!holds_monostate(node->expr)) {
             definitions_ += " = "sv;
@@ -1026,7 +1037,6 @@ public:
     }
 
     auto operator()(const ASTSwitchStatement* node) -> void {
-        Guard guard{*this, node};
         definitions_ += "switch ("sv;
         (*this)(node->condition);
         definitions_ += ") {\n"sv;
@@ -1087,13 +1097,22 @@ public:
         for (const Object* arg : args) {
             definitions_ += sep;
             if (auto* type = arg->dyn_type()) {
-                ObjectCodeGen::output(definitions_, type, types_);
+                ObjectCodeGen::output(definitions_, type, type_map_);
             } else {
-                ObjectCodeGen::output(definitions_, arg->cast<Value>(), types_);
+                ObjectCodeGen::output(definitions_, arg->cast<Value>(), type_map_);
             }
             sep = ", "sv;
         }
         definitions_ += ">"sv;
+    }
+
+    auto operator()(const ASTThrowStatement* node) -> void {
+        definitions_ += "throw"sv;
+        if (!holds_monostate(node->expr)) {
+            definitions_ += " "sv;
+            (*this)(node->expr);
+        }
+        definitions_ += ";"sv;
     }
 
 private:
@@ -1149,12 +1168,16 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
            "#include <vector>\n"
            "using namespace std::literals;\n\n";
 
-    GlobalMemory::Vector<const Type*> types;
-    ObjectCodeGen type_codegen{types};
+    for (strview cpp_block : codegen_env.cpp_blocks_) {
+        out << cpp_block << "\n";
+    }
+
+    TypeMap type_map;
+    ObjectCodeGen type_codegen{type_map};
     type_codegen.order_types();
-    NameMangler mangler(types);
+    NameMangler mangler(type_map);
     mangler.mangle_all_instantiations(codegen_env);
     type_codegen.output_type_defs(out);
-    CodeGen{codegen_env, mangler, types}(out);
+    CodeGen{codegen_env, mangler, type_map}(out);
     return EXIT_SUCCESS;
 }

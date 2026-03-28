@@ -1,26 +1,24 @@
-class A{
-    let a: i32;
-    init(a: i32, b: i32) {
-        return Self{a: a};
-    }
-    fn foo(self: &mut Self) {
-        self.a = 5;
-        Self.bar(5);
-    }
-    static fn bar(a: i32) -> i32 {
-        return 1;
-    }
+class A {
+    let x: i32;
+    init(x: i32) { return Self{ x: x }; }
 }
 
 enum B {
-    A,
     C,
+    D,
 }
 
 fn main(args: [strview]) {
-    let d = foo(B.A);
+    let b = B.C;
+    switch (b) {
+        case B.C: {
+            std.print("C");
+            break;
+        }
+        case B.D: {
+            std.print("D");
+            break;
+        }
+    }
 }
 
-fn foo(b: B) {
-    return;
-}

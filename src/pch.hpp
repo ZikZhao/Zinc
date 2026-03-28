@@ -103,12 +103,6 @@ auto hash_combine(std::size_t first, const Ts&... rest) noexcept -> std::size_t 
     return first;
 }
 
-auto index(const auto& container, auto&& value) {
-    auto it = std::ranges::find(container, value);
-    assert(it != container.end());
-    return static_cast<std::size_t>(std::distance(container.begin(), it));
-}
-
 template <typename... Ts>
     requires(std::is_pointer_v<Ts> && ...)
 class PointerVariant {

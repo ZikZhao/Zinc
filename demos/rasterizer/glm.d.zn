@@ -1,5 +1,9 @@
 // Lightweight GLM-style declarations for Zinc demos.
 
+#CPP {
+    #include <glm/glm.hpp>
+}
+
 const PI: f32 = 3.14159265358979323846;
 
 class vec2 {
