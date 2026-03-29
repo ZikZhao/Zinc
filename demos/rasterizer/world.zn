@@ -244,7 +244,7 @@ class World {
                 throw std.runtime_error(std.string("File does not exist: ") + std.string(filename));
             }
             let ext = path.extension().string();
-            std.transform(ext.begin(), ext.end(), ext.begin(), std.tolower);
+            std.transform(ext.begin(), ext.end(), ext.begin(), (ch: u8): u8 => std.tolower(ch));
 
             if (ext == ".hdr") {
                 // load_hdr_env_map(path);
@@ -252,13 +252,13 @@ class World {
                 // Text scene
                 let mut model: Model;
                 world.parse_txt(model, path);
-                models_.emplace_back(move model);
+                world.models_.emplace_back(move model);
             } else if (ext == ".obj") {
                 // Standard OBJ model
                 /*
                 let mut model: Model;
                 parse_obj(model, path);
-                models_.emplace_back(move model);
+                world.models_.emplace_back(move model);
                 */
             } else {
                 throw std.runtime_error(std.string("Unsupported file format: ") + std.string(filename));
@@ -648,7 +648,6 @@ class World {
             }
         }
 
-        Self.compute_all_face_normals(model);
         Self.flatten_model_faces(model);
     }
 
@@ -673,20 +672,7 @@ class World {
         }
         return Texture(ppm.width, ppm.height, move texture_data);
     }
-
-    fn compute_all_face_normals(model: &mut Model) {
-        for (let mut it = model.objects.begin(); it != model.objects.end(); ++it) {
-            let obj = *it;
-            for (let mut it = obj.faces.begin(); it != obj.faces.end(); ++it) {
-                let f = *it;
-                let v0: &glm.vec3 = model.vertices[f.v_indices[0] as usize];
-                let v1: &glm.vec3 = model.vertices[f.v_indices[1] as usize];
-                let v2: &glm.vec3 = model.vertices[f.v_indices[2] as usize];
-                f.face_normal = FaceNormal(v0, v1, v2);
-            }
-        }
-    }
-
+    
     static fn flatten_model_faces(model: &mut Model) {
         model.all_faces.clear();
         model.all_faces.reserve(std.accumulate(

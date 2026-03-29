@@ -275,7 +275,7 @@ class Window {
     fn process_key_bindings(self: &mut Self) {
         let now = std.chrono.steady_clock.now();
         for (let mut it = self.key_bindings_.begin(); it != self.key_bindings_.end(); ++it) {
-            let binding = *it;
+            let mut binding = *it;
             // Continuous trigger (ANY_PRESSED) needs delta time tracking
             if (binding.trigger == Trigger.ANY_PRESSED) {
                 if (!self.check_key_trigger(binding)) { continue; }

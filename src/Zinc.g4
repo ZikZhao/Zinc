@@ -39,11 +39,11 @@ local_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 expr_statement: expr_ = expr OP_SEMICOLON;
 
 declaration_statement:
-	KW_STATIC? KW_LET KW_MUT? identifier_ = T_IDENTIFIER (
+	KW_STATIC? KW_LET KW_MUT? identifier_ = any_identifier (
 		OP_COLON type_ = type
 	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON # LetDecl
-	| (specialize_list_ = specialize_parameter_list)? KW_STATIC? KW_CONST identifier_ = T_IDENTIFIER
-		(
+	| (specialize_list_ = specialize_parameter_list)? KW_STATIC? KW_CONST identifier_ =
+		any_identifier (
 		template_list_ = template_parameter_list
 		| instantiation_list_ = instantiation_list
 	)? (OP_COLON type_ = type)? OP_ASSIGN value_ = expr OP_SEMICOLON # ConstDecl;

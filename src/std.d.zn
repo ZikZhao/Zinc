@@ -1086,6 +1086,13 @@ fn prev<Iter: type>(it: Iter, n: isize) -> Iter;
 
 fn fill<ForwardIt: type, T: type>(first: ForwardIt, last: ForwardIt, value: T);
 
+fn transform<InputIt: type, OutputIt: type, Op: type>(
+    first: InputIt,
+    last: InputIt,
+    d_first: OutputIt,
+    op: Op
+) -> OutputIt;
+
 fn accumulate<InputIt: type, T: type>(first: InputIt, last: InputIt, initial: T) -> T;
 fn accumulate<InputIt: type, T: type, BinaryOp: type>(
     first: InputIt,
@@ -1266,6 +1273,9 @@ fn acosh(value: f64) -> f64;
 fn atanh(value: f32) -> f32;
 fn atanh(value: f64) -> f64;
 
+fn tolower(ch: u8) -> u8;
+fn tolower(ch: i32) -> i32;
+
 fn hypot(x: f32, y: f32) -> f32;
 fn hypot(x: f64, y: f64) -> f64;
 
@@ -1341,7 +1351,6 @@ class optional<T: type> {
     init(value: nullopt_t);
     init(value: T);
     init(other: Self);
-    init<U: type>(other: optional<U>);
 
     fn has_value(self: &Self) -> bool;
     fn value(self: &Self) -> &T;
@@ -1356,8 +1365,8 @@ class optional<T: type> {
     operator->(self: &Self) -> *T;
     operator->(self: &mut Self) -> *mut T;
     operator=(self: &mut Self, value: nullopt_t) -> &mut Self;
+    operator=(self: &mut Self, value: T) -> &mut Self;
     operator=(self: &mut Self, other: &Self) -> &mut Self;
-    operator=<U: type>(self: &mut Self, other: optional<U>) -> &mut Self;
 
     operator==(self: &Self, other: &Self) -> bool;
     operator!=(self: &Self, other: &Self) -> bool;

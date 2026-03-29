@@ -19,79 +19,79 @@ class SDL_Texture {
 class SDL_Surface {
 }
 
-type SDL_Keysym = {
-	scancode: SDL_Scancode,
-	sym: SDL_Keycode,
-	mod: u16,
-	unused: u32,
-};
+class SDL_Keysym {
+	let scancode: SDL_Scancode;
+	let sym: SDL_Keycode;
+	let mod: u16;
+	let unused: u32;
+}
 
-type SDL_WindowEvent = {
-	type: u32,
-	timestamp: u32,
-	windowID: u32,
-	event: u8,
-	padding1: u8,
-	padding2: u8,
-	padding3: u8,
-	data1: i32,
-	data2: i32,
-};
+class SDL_WindowEvent {
+	let type: u32;
+	let timestamp: u32;
+	let windowID: u32;
+	let event: u8;
+	let padding1: u8;
+	let padding2: u8;
+	let padding3: u8;
+	let data1: i32;
+	let data2: i32;
+}
 
-type SDL_KeyboardEvent = {
-	type: u32,
-	timestamp: u32,
-	windowID: u32,
-	state: u8,
-	repeat: u8,
-	padding2: u8,
-	padding3: u8,
-	keysym: SDL_Keysym,
-};
+class SDL_KeyboardEvent {
+	let type: u32;
+	let timestamp: u32;
+	let windowID: u32;
+	let state: u8;
+	let repeat: u8;
+	let padding2: u8;
+	let padding3: u8;
+	let keysym: SDL_Keysym;
+}
 
-type SDL_MouseButtonEvent = {
-	type: u32,
-	timestamp: u32,
-	windowID: u32,
-	which: u32,
-	button: u8,
-	state: u8,
-	clicks: u8,
-	padding1: u8,
-	x: i32,
-	y: i32,
-};
+class SDL_MouseButtonEvent {
+	let type: u32;
+	let timestamp: u32;
+	let windowID: u32;
+	let which: u32;
+	let button: u8;
+	let state: u8;
+	let clicks: u8;
+	let padding1: u8;
+	let x: i32;
+	let y: i32;
+}
 
-type SDL_MouseMotionEvent = {
-	type: u32,
-	timestamp: u32,
-	windowID: u32,
-	which: u32,
-	state: u32,
-	x: i32,
-	y: i32,
-	xrel: i32,
-	yrel: i32,
-};
+class SDL_MouseMotionEvent {
+	let type: u32;
+	let timestamp: u32;
+	let windowID: u32;
+	let which: u32;
+	let state: u32;
+	let x: i32;
+	let y: i32;
+	let xrel: i32;
+	let yrel: i32;
+}
 
-type SDL_MouseWheelEvent = {
-	type: u32,
-	timestamp: u32,
-	windowID: u32,
-	which: u32,
-	x: i32,
-	y: i32,
-	direction: u32,
-};
+class SDL_MouseWheelEvent {
+	let type: u32;
+	let timestamp: u32;
+	let windowID: u32;
+	let which: u32;
+	let x: i32;
+	let y: i32;
+	let direction: u32;
+}
 
-type SDL_Event = {
-	type: u32,
-	window: SDL_WindowEvent,
-	key: SDL_KeyboardEvent,
-	button: SDL_MouseButtonEvent,
-	motion: SDL_MouseMotionEvent,
-	wheel: SDL_MouseWheelEvent,
-};
+class SDL_Event {
+	let type: u32;
+	let window: SDL_WindowEvent;
+	let key: SDL_KeyboardEvent;
+	let button: SDL_MouseButtonEvent;
+	let motion: SDL_MouseMotionEvent;
+	let wheel: SDL_MouseWheelEvent;
+}
 
 const SDL_INIT_TIMER: u32 = 0x00000001;
 const SDL_INIT_VIDEO: u32 = 0x00000020;

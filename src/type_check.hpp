@@ -50,18 +50,18 @@ public:
         const FunctionType* func_type;
     };
 
-    struct FunctionCall {
+    struct FunctionCall : public GlobalMemory::MonotonicAllocated {
         const FunctionType* func_type;
+        const Scope* scope;
+        strview identifier;
         PointerChain* self;
-        bool is_constructor;
-        bool do_not_mangle;
     };
 
     using TableValue = std::variant<
         const Type*,                // type expression
         const Scope*,               // member access
         PointerChain*,              // pointer access
-        FunctionCall,               // function call
+        FunctionCall*,              // function call
         std::span<const Object*>>;  // template instantiation
 
     using Table = GlobalMemory::FlatMap<const ASTNode*, TableValue>;
@@ -141,15 +141,15 @@ public:
         const Scope* current_scope,
         const ASTNode* node,
         const FunctionType* func_type,
-        PointerChain* self,
-        bool is_constructor,
-        bool do_not_mangle
+        const Scope* func_scope,
+        strview identifier,
+        PointerChain* self
     ) -> void {
-        scope_map_[current_scope][node] = FunctionCall{
+        scope_map_[current_scope][node] = new FunctionCall{
             .func_type = func_type,
+            .scope = func_scope,
+            .identifier = identifier,
             .self = self,
-            .is_constructor = is_constructor,
-            .do_not_mangle = do_not_mangle,
         };
     }
 
@@ -440,8 +440,9 @@ public:
 
     inline auto instantiate(TemplateFamily& family, TemplateArgs args) -> Symbol {
         if (Object::any_pattern(args)) {
+            std::span persisted_args = args | GlobalMemory::collect<std::span>();
             if (std::get_if<const ASTClassDefinition*>(&family.primary->target_node)) {
-                return new InstanceType(family.primary->identifier, family.primary, args);
+                return new InstanceType(family.primary->identifier, family.primary, persisted_args);
             }
             // Patterns can only be used for class templates
             throw;
@@ -619,15 +620,15 @@ public:
             return {};
         }
 
-        sema_.codegen_env_.map_func_call(
-            sema_.current_scope_,
-            node,
-            overload,
-            Sema::get_if<SymbolKind::Method>(callee) ? Sema::get<SymbolKind::Method>(callee).self
-                                                     : nullptr,
-            Sema::get_if<SymbolKind::Type>(callee),
-            should_not_mangle(callee)
-        );
+        auto [should_mangle, scope, identifier] = get_mangle_info(callee);
+        if (should_mangle) {
+            PointerChain* self = Sema::get_if<SymbolKind::Method>(callee)
+                                     ? Sema::get<SymbolKind::Method>(callee).self
+                                     : nullptr;
+            sema_.codegen_env_.map_func_call(
+                sema_.current_scope_, node, overload, scope, identifier, self
+            );
+        }
         return {Term::of(overload->return_type_), overload};
     }
 
@@ -890,17 +891,25 @@ private:
             // qualification conversion
             if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
             return tiebreaker_rank();
-        } else if (decayed_param->kind_ == Kind::Auto) {
+        } else if (decayed_param->is_pattern()) {
             // auto type deduction
-            const AutoObject* auto_obj = decayed_param->cast<AutoObject>();
-            if (auto it = auto_bindings.find(auto_obj); it != auto_bindings.end()) {
-                if (it->second != decayed_arg) {
-                    return NoMatch;
+            if (auto* inst_param = decayed_param->dyn_cast<InstanceType>()) {
+                auto* inst_arg = decayed_arg->dyn_cast<InstanceType>();
+                if (inst_arg && inst_param->pattern_match(inst_arg, auto_bindings)) {
+                    return tiebreaker_rank();
                 }
+                return NoMatch;
             } else {
-                auto_bindings[auto_obj] = decayed_arg;
+                const AutoObject* auto_obj = decayed_param->cast<AutoObject>();
+                if (auto it = auto_bindings.find(auto_obj); it != auto_bindings.end()) {
+                    if (it->second != decayed_arg) {
+                        return NoMatch;
+                    }
+                } else {
+                    auto_bindings[auto_obj] = decayed_arg;
+                }
+                return tiebreaker_rank();
             }
-            return tiebreaker_rank();
         } else {
             // pointer conversion
             if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
@@ -979,34 +988,81 @@ private:
         }
     }
 
-    auto should_not_mangle(Symbol callee) const noexcept -> bool {
+    auto get_mangle_info(Symbol callee) const noexcept -> std::tuple<bool, Scope*, strview> {
+        auto get_func_identifier =
+            [&](GlobalMemory::Vector<FunctionOverloadDef>& overloads) -> strview {
+            FunctionOverloadDef first_overload = overloads[0];
+            if (auto* func_def = first_overload.get<const ASTFunctionDefinition*>()) {
+                return func_def->identifier;
+            } else if (first_overload.get<const ASTCtorDtorDefinition*>()) {
+                return constructor_symbol;
+            } else if (auto* op_def = first_overload.get<const ASTOperatorDefinition*>()) {
+                return GetOperatorString(op_def->opcode);
+            } else if (auto* template_def = first_overload.get<const ASTTemplateDefinition*>()) {
+                return template_def->identifier;
+            } else {
+                UNREACHABLE();
+            }
+        };
         if (auto* type = Sema::get_if<SymbolKind::Type>(callee)) {
-            return (*type)->cast<InstanceType>()->scope_->is_extern_;
+            const InstanceType* instance_type = (*type)->cast<InstanceType>();
+            return {!instance_type->scope_->is_extern_, instance_type->scope_, constructor_symbol};
         } else if (auto* term = Sema::get_if<SymbolKind::Term>(callee)) {
-            return (*term).decay()->kind_ == Kind::Function;
+            const Type* decayed = term->decay();
+            if (decayed->dyn_cast<FunctionType>()) {
+                return {false, nullptr, {}};
+            }
+            const InstanceType* instance_type = decayed->dyn_cast<InstanceType>();
+            return {
+                instance_type->scope_->is_extern_,
+                instance_type->scope_,
+                GetOperatorString(OperatorCode::Call)
+            };
         } else if (auto* function = Sema::get_if<SymbolKind::Function>(callee)) {
-            return function->first->is_extern_;
+            if (function->first->is_extern_) {
+                return {false, nullptr, {}};
+            }
+            return {
+                true,
+                function->first,
+                get_func_identifier(
+                    *function->second->get<GlobalMemory::Vector<FunctionOverloadDef>*>()
+                )
+            };
         } else if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
-            return method->scope->is_extern_;
+            if (method->scope->is_extern_) {
+                return {false, nullptr, {}};
+            }
+            return {
+                true,
+                method->scope,
+                get_func_identifier(
+                    *method->value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()
+                )
+            };
         } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(callee)) {
-            const Type* left_type = std::get<1>(*operator_fn);
-            const Type* right_type = std::get<2>(*operator_fn);
             bool both_extern = true;
-            if (auto* left_inst_type = left_type->dyn_cast<InstanceType>()) {
-                Scope* scope = left_inst_type->scope_;
-                if (scope->find(GetOperatorString(std::get<0>(*operator_fn)))) {
-                    both_extern &= scope->is_extern_;
+            const Type* left_type = std::get<1>(*operator_fn);
+            if (auto* left_instance = left_type->dyn_cast<InstanceType>()) {
+                Scope* scope = left_instance->scope_;
+                if (!scope->is_extern_) {
+                    both_extern = false;
                 }
             }
+            const Type* right_type = std::get<2>(*operator_fn);
             if (right_type && right_type->kind_ == Kind::Instance) {
                 Scope* scope = right_type->cast<InstanceType>()->scope_;
-                if (scope->find(GetOperatorString(std::get<0>(*operator_fn)))) {
-                    both_extern &= scope->is_extern_;
+                if (!scope->is_extern_) {
+                    both_extern = false;
                 }
             }
-            return both_extern;
+            if (both_extern) {
+                return {false, nullptr, {}};
+            } else {
+                return {true, nullptr, GetOperatorString(std::get<0>(*operator_fn))};
+            }
         }
-        return false;
+        return {false, nullptr, {}};
     }
 };
 
@@ -2055,14 +2111,16 @@ public:
                 );
                 return {};
             }
-            sema_.codegen_env_.map_func_call(
-                sema_.current_scope_,
-                node,
-                func_type,
-                nullptr,
-                false,
-                std::get<0>(*partial)->is_extern_
-            );
+            if (!std::get<0>(*partial)->is_extern_) {
+                sema_.codegen_env_.map_func_call(
+                    sema_.current_scope_,
+                    node,
+                    func_type,
+                    std::get<0>(*partial),
+                    std::get<1>(*partial)->identifier,
+                    nullptr
+                );
+            }
             return Term::of(func_type->return_type_);
         }
         return Sema::nonnull(sema_.call_handler_->eval_call(node, func_symbol, args_type).first);

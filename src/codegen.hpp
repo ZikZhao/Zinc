@@ -933,32 +933,25 @@ public:
 
     auto operator()(const ASTDereference* node) -> void {
         if (auto* replacement = env_.find(current_scope_, node)) {
-            const auto& [func_type, self_type, _, do_not_mangle] =
-                std::get<CodeGenEnvironment::FunctionCall>(*replacement);
-            if (!do_not_mangle) {
-                definitions_ += "_op_"sv;
-                mangler_(definitions_, OperatorCode::Deref);
-                definitions_ += "_0"sv;
-                mangler_(definitions_, func_type->parameters_[0]);
-                definitions_ += "("sv;
-                (*this)(node->operand);
-                definitions_ += ")"sv;
-                return;
-            }
+            const FunctionType* func_type =
+                std::get<CodeGenEnvironment::FunctionCall*>(*replacement)->func_type;
+            definitions_ += "_op_"sv;
+            mangler_(definitions_, OperatorCode::Deref);
+            definitions_ += "_0"sv;
+            mangler_(definitions_, func_type->parameters_[0]);
+            definitions_ += "("sv;
+            (*this)(node->operand);
+            definitions_ += ")"sv;
+        } else {
+            definitions_ += "*"sv;
+            (*this)(node->operand);
         }
-        definitions_ += "*"sv;
-        (*this)(node->operand);
     }
 
     auto operator()(const ASTIndexAccess* node) -> void {
-        const auto& [func_type, self_type, is_constructor, do_not_mangle] =
-            std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
-        if (do_not_mangle) {
-            (*this)(node->base);
-            definitions_ += "["sv;
-            (*this)(node->index);
-            definitions_ += "]"sv;
-        } else {
+        if (auto* replacement = env_.find(current_scope_, node)) {
+            const FunctionType* func_type =
+                std::get<CodeGenEnvironment::FunctionCall*>(*replacement)->func_type;
             definitions_ += "_op_"sv;
             mangler_(definitions_, OperatorCode::Index);
             definitions_ += "_0"sv;
@@ -969,6 +962,11 @@ public:
             definitions_ += ", "sv;
             (*this)(node->index);
             definitions_ += ")"sv;
+        } else {
+            (*this)(node->base);
+            definitions_ += "["sv;
+            (*this)(node->index);
+            definitions_ += "]"sv;
         }
     }
 
@@ -985,31 +983,30 @@ public:
 
     auto operator()(const ASTBinaryOp* node) -> void {
         if (auto* replacement = env_.find(current_scope_, node)) {
-            auto [func_type, self_type, _, do_not_mangle] =
-                std::get<CodeGenEnvironment::FunctionCall>(*replacement);
-            if (!do_not_mangle) {
-                definitions_ += "_op_"sv;
-                mangler_(definitions_, node->opcode);
-                definitions_ += "_0"sv;
-                mangler_(definitions_, func_type->parameters_[0]);
-                if (!holds_monostate(node->right)) {
-                    mangler_(definitions_, func_type->parameters_[1]);
-                }
-                definitions_ += "("sv;
-                (*this)(node->left);
-                if (!holds_monostate(node->right)) {
-                    definitions_ += ", "sv;
-                    (*this)(node->right);
-                }
-                definitions_ += ")"sv;
-                return;
+            const FunctionType* func_type =
+                std::get<CodeGenEnvironment::FunctionCall*>(*replacement)->func_type;
+            definitions_ += "_op_"sv;
+            mangler_(definitions_, node->opcode);
+            definitions_ += "_0"sv;
+            mangler_(definitions_, func_type->parameters_[0]);
+            if (!holds_monostate(node->right)) {
+                mangler_(definitions_, func_type->parameters_[1]);
             }
+            definitions_ += "("sv;
+            (*this)(node->left);
+            if (!holds_monostate(node->right)) {
+                definitions_ += ", "sv;
+                (*this)(node->right);
+            }
+            definitions_ += ")"sv;
+            return;
+        } else {
+            (*this)(node->left);
+            definitions_ += " "sv;
+            definitions_ += GetOperatorString(node->opcode);
+            definitions_ += " "sv;
+            (*this)(node->right);
         }
-        (*this)(node->left);
-        definitions_ += " "sv;
-        definitions_ += GetOperatorString(node->opcode);
-        definitions_ += " "sv;
-        (*this)(node->right);
     }
 
     auto operator()(const ASTStructInitialization* node) -> void {
@@ -1057,29 +1054,34 @@ public:
     }
 
     auto operator()(const ASTFunctionCall* node) -> void {
-        const auto& [func_type, self, is_constructor, do_not_mangle] =
-            std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
-        if (do_not_mangle) {
-            (*this)(node->function);
-        } else {
-            if (is_constructor) {
+        PointerChain* self_arg = nullptr;
+        if (auto* replacement = env_.find(current_scope_, node)) {
+            const auto& [func_type, scope, identifier, self] =
+                *std::get<CodeGenEnvironment::FunctionCall*>(*replacement);
+            assert(scope && !scope->is_extern_);
+            self_arg = self;
+            if (identifier == constructor_symbol) {
                 definitions_ += "_init_"sv;
                 mangler_(definitions_, func_type->return_type_);
+            } else if (identifier == GetOperatorString(OperatorCode::Call)) {
+                definitions_ += "_op_call"sv;
             } else {
-                (*this)(node->function);
+                mangler_(definitions_, scope, identifier);
             }
             definitions_ += "_0"sv;
-            for (auto* param_type : func_type->parameters_) {
+            for (const Type* param_type : func_type->parameters_) {
                 mangler_(definitions_, param_type);
             }
+        } else {
+            (*this)(node->function);
         }
         definitions_ += "("sv;
         strview sep = "";
-        if (self) {
-            if (!self->pointers.empty()) {
+        if (self_arg) {
+            if (!self_arg->pointers.empty()) {
                 definitions_ += "*"sv;
             }
-            output_pointer_chain(*self);
+            output_pointer_chain(*self_arg);
             sep = ", "sv;
         }
         for (ASTExprVariant arg : node->arguments) {
