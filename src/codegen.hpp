@@ -385,8 +385,8 @@ public:
     auto mangle_all_instantiations(CodeGenEnvironment& env) const -> void {
         for (auto& [scope, args] : env.instantiations_) {
             GlobalMemory::String qualified_name;
+            qualified_name += scope->scope_id_;
             if (scope->is_extern_) {
-                qualified_name += scope->scope_id_;
                 qualified_name += "<"sv;
                 strview sep = ""sv;
                 for (const Object* arg : args) {
@@ -401,13 +401,13 @@ public:
                 qualified_name += ">"sv;
                 scope->scope_id_ = GlobalMemory::persist(qualified_name);
             } else {
-                qualified_name += "0"sv;
+                qualified_name += "_0"sv;
                 for (const Object* arg : args) {
                     std::size_t prev_size = qualified_name.size();
                     if (auto* type = arg->dyn_type()) {
-                        ObjectCodeGen::output(qualified_name, type, type_map_);
+                        (*this)(qualified_name, type);
                     } else {
-                        ObjectCodeGen::output(qualified_name, arg->cast<Value>(), type_map_);
+                        (*this)(qualified_name, arg->cast<Value>());
                     }
                     std::format_to(
                         std::inserter(
@@ -924,6 +924,30 @@ public:
         output_pointer_chain(*std::get<PointerChain*>(*env_.find(current_scope_, node)));
         definitions_ += "->"sv;
         definitions_ += node->member;
+    }
+
+    auto operator()(const ASTAddressOfExpr* node) -> void {
+        definitions_ += "&"sv;
+        (*this)(node->operand);
+    }
+
+    auto operator()(const ASTDereference* node) -> void {
+        if (auto* replacement = env_.find(current_scope_, node)) {
+            const auto& [func_type, self_type, _, do_not_mangle] =
+                std::get<CodeGenEnvironment::FunctionCall>(*replacement);
+            if (!do_not_mangle) {
+                definitions_ += "_op_"sv;
+                mangler_(definitions_, OperatorCode::Deref);
+                definitions_ += "_0"sv;
+                mangler_(definitions_, func_type->parameters_[0]);
+                definitions_ += "("sv;
+                (*this)(node->operand);
+                definitions_ += ")"sv;
+                return;
+            }
+        }
+        definitions_ += "*"sv;
+        (*this)(node->operand);
     }
 
     auto operator()(const ASTIndexAccess* node) -> void {

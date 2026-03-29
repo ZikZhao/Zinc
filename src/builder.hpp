@@ -286,16 +286,6 @@ private:
         });
     }
 
-    auto visitRangeBasedFor(ZincParser::RangeBasedForContext* ctx) noexcept
-        -> Any<ASTNodeVariant> final {
-        return as_variant(new ASTRangeBasedForStatement{
-            loc(ctx),
-            text(ctx->identifier_),
-            visit_expr(ctx->iterable_),
-            std::get<const ASTLocalBlock*>(visit(ctx->body_)),
-        });
-    }
-
     auto visitBreak_statement(ZincParser::Break_statementContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
         return as_variant(new ASTBreakStatement{loc(ctx)});

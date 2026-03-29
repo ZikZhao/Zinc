@@ -1094,9 +1094,12 @@ fn accumulate<InputIt: type, T: type, BinaryOp: type>(
     op: BinaryOp
 ) -> T;
 
+class ratio<Num: usize, Den: usize> {}
+
 namespace chrono {
-    class duration<Rep: type> {
+    class duration<Rep: type, Period: type> {
         type rep = Rep;
+        type period = Period;
 
         init();
         init(count: rep);
@@ -1117,22 +1120,29 @@ namespace chrono {
         operator/=(self: &mut Self, value: rep) -> &mut Self;
 
         operator==(self: &Self, other: &Self) -> bool;
+        operator==<T: type>(self: &Self, other: &T) -> bool;
         operator!=(self: &Self, other: &Self) -> bool;
+        operator!=<T: type>(self: &Self, other: &T) -> bool;
         operator<(self: &Self, other: &Self) -> bool;
+        operator<<T: type>(self: &Self, other: &T) -> bool;
         operator<=(self: &Self, other: &Self) -> bool;
+        operator<=<T: type>(self: &Self, other: &T) -> bool;
         operator>(self: &Self, other: &Self) -> bool;
+        operator><T: type>(self: &Self, other: &T) -> bool;
         operator>=(self: &Self, other: &Self) -> bool;
+        operator>=<T: type>(self: &Self, other: &T) -> bool;
     }
 
-    type microseconds = duration<i64>;
-    type milliseconds = duration<i64>;
-    type seconds = duration<i64>;
+    type nanoseconds = duration<i64, ratio<1, 1000000000>>;
+    type microseconds = duration<i64, ratio<1, 1000000>>;
+    type milliseconds = duration<i64, ratio<1, 1000>>;
+    type seconds = duration<i64, ratio<1, 1>>;
 
-    fn duration_cast<ToDuration: type, Rep: type>(d: duration<Rep>) -> ToDuration;
+    fn duration_cast<ToDuration: type, FromDuration: type>(d: FromDuration) -> ToDuration;
 
-    class time_point<Clock: type, Duration: type> {
+    class time_point<Clock: type> {
         type clock = Clock;
-        type duration_type = Duration;
+        type duration_type = Clock.duration;
 
         init();
         init(d: duration_type);
@@ -1154,15 +1164,15 @@ namespace chrono {
     }
 
     class steady_clock {
-        type duration = chrono.duration<i64>;
-        type time_point = chrono.time_point<steady_clock, duration>;
+        type duration = chrono.nanoseconds;
+        type time_point = chrono.time_point<steady_clock>;
 
         static fn now() -> time_point;
     }
 
     class system_clock {
-        type duration = chrono.duration<i64>;
-        type time_point = chrono.time_point<system_clock, duration>;
+        type duration = chrono.nanoseconds;
+        type time_point = chrono.time_point<system_clock>;
 
         static fn now() -> time_point;
     }

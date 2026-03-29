@@ -331,13 +331,12 @@ public:
         while (scope) {
             auto it = scope->identifiers_.find(identifier);
             if (it != scope->identifiers_.end()) {
-                if (scope->parent_ && scope->parent_->is_instantiating_template_ &&
-                    scope->self_id_ == identifier) {
-                    // accessing injected class name from template during template instantiation,
-                    // return the template instead of the class
-                    continue;
+                // accessing injected class name from template during template instantiation,
+                // return the template instead of the class
+                if (!(scope->is_instantiating_template_ &&
+                      scope->children_.begin()->second->self_id_ == identifier)) {
+                    return {scope, &it->second};
                 }
-                return {scope, &it->second};
             }
             scope = scope->parent_;
         }
@@ -1021,6 +1020,8 @@ public:
     auto eval_access(const ASTMemberAccess* node) noexcept -> Symbol;
 
     auto eval_pointer(const ASTPointerAccess* node) noexcept -> Symbol;
+
+    auto eval_deref(const ASTDereference* node) noexcept -> Symbol;
 
     auto eval_index(const ASTIndexAccess* node) noexcept -> Symbol;
 
@@ -1848,18 +1849,7 @@ public:
     }
 
     auto operator()(const ASTDereference* node) noexcept -> Symbol {
-        Symbol operand_symbol = ValueContextEvaluator{*this, nullptr}(node->operand);
-        if (!Sema::expect(operand_symbol, SymbolKind::Term)) {
-            return {};
-        }
-        Term operand_term = Sema::get<SymbolKind::Term>(operand_symbol);
-        if (auto* pointer_type = operand_term.effective_type()->dyn_cast<PointerType>()) {
-            return Term::lvalue(pointer_type->target_type_);
-        }
-        Diagnostic::error_operation_not_defined(
-            GetOperatorString(OperatorCode::Deref), operand_term.effective_type()->repr()
-        );
-        return {};
+        return sema_.access_handler_->eval_deref(node);
     }
 
     auto operator()(const ASTUnaryOp* node) noexcept -> Symbol {
@@ -2534,9 +2524,9 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
 inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init) noexcept
     -> Symbol {
     assert(!holds_monostate(init.type) || !holds_monostate(init.value));
+    Guard guard(*this, scope);
     TypeResolution type{};
     if (!holds_monostate(init.type)) {
-        Guard guard(*this, scope);
         TypeContextEvaluator{*this, type}(init.type);
         if (!type.get()) return {};
     }
@@ -3073,6 +3063,27 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
         }
     }
     return {};
+}
+
+inline auto AccessHandler::eval_deref(const ASTDereference* node) noexcept -> Symbol {
+    Symbol base_symbol = ValueContextEvaluator{sema_, nullptr, false}(node->operand);
+    if (!Sema::expect(base_symbol, SymbolKind::Term)) {
+        return {};
+    }
+    Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
+    const Type* decayed = base_term.decay();
+    if (auto* pointer_type = decayed->dyn_cast<PointerType>()) {
+        return Sema::nonnull(Term::lvalue(pointer_type->target_type_));
+    } else if (decayed->dyn_cast<InstanceType>()) {
+        auto result =
+            sema_.operation_handler_->eval_overloaded_op(node, OperatorCode::Deref, base_term);
+        return Sema::nonnull(result.first);
+    } else {
+        Diagnostic::error_operation_not_defined(
+            GetOperatorString(OperatorCode::Deref), base_term->repr()
+        );
+        return {};
+    }
 }
 
 inline auto AccessHandler::eval_index(const ASTIndexAccess* node) noexcept -> Symbol {

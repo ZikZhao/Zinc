@@ -14,9 +14,11 @@ class InplaceVector<T: type, N: usize> {
     }
 
     init(values: [T]) {
-        for (item : values) {
-            push_back(item);
+        let mut inst = Self{};
+        for (let mut it = values.begin(); it != values.end(); ++it) {
+            inst.push_back(*it);
         }
+        return inst;
     }
 
     fn size(self: &Self) -> usize { return self.size_; }

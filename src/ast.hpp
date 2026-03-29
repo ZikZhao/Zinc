@@ -93,7 +93,6 @@ struct ASTIfStatement;
 struct ASTSwitchCase;
 struct ASTSwitchStatement;
 struct ASTForStatement;
-struct ASTRangeBasedForStatement;
 struct ASTContinueStatement;
 struct ASTBreakStatement;
 struct ASTReturnStatement;
@@ -125,7 +124,6 @@ using ASTNodeVariant = std::variant<
     const ASTIfStatement*,
     const ASTSwitchStatement*,
     const ASTForStatement*,
-    const ASTRangeBasedForStatement*,
     const ASTContinueStatement*,
     const ASTBreakStatement*,
     const ASTReturnStatement*,
@@ -401,12 +399,6 @@ struct ASTForStatement final : public ASTNode {
     std::variant<const ASTDeclaration*, ASTExprVariant> initializer;
     ASTExprVariant condition;
     ASTExprVariant increment;
-    const ASTLocalBlock* body;
-};
-
-struct ASTRangeBasedForStatement final : public ASTNode {
-    strview identifier;
-    ASTExprVariant iterable;
     const ASTLocalBlock* body;
 };
 

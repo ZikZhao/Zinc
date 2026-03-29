@@ -237,7 +237,8 @@ class World {
         let mut world = Self{};
         // Scene ingestion: load HDR environment, OBJ models or text scenes; then merge into a single
         // geometry store
-        for (filename : filenames) {
+        for (let mut it = filenames.begin(); it != filenames.end(); ++it) {
+            let filename = *it;
             let path = std.filesystem.path(filename);
             if (std.filesystem.is_directory(path)) {
                 throw std.runtime_error(std.string("File does not exist: ") + std.string(filename));
@@ -674,8 +675,10 @@ class World {
     }
 
     fn compute_all_face_normals(model: &mut Model) {
-        for (obj : model.objects) {
-            for (f : obj.faces) {
+        for (let mut it = model.objects.begin(); it != model.objects.end(); ++it) {
+            let obj = *it;
+            for (let mut it = obj.faces.begin(); it != obj.faces.end(); ++it) {
+                let f = *it;
                 let v0: &glm.vec3 = model.vertices[f.v_indices[0] as usize];
                 let v1: &glm.vec3 = model.vertices[f.v_indices[1] as usize];
                 let v2: &glm.vec3 = model.vertices[f.v_indices[2] as usize];
@@ -693,15 +696,16 @@ class World {
             (sum: usize, obj: &Object): usize => sum + obj.faces.size()
         ));
 
-        for (object : model.objects) {
+        for (let mut it = model.objects.begin(); it != model.objects.end(); ++it) {
+            let object = *it;
             model.all_faces.insert(model.all_faces.end(), object.faces.begin(), object.faces.end());
         }
     }
 
     fn merge_models(self: &mut Self) {
         self.reserve_global_buffers();
-        for (model : self.models_) {
-            self.append_model_data(model);
+        for (let mut it = self.models_.begin(); it != self.models_.end(); ++it) {
+            self.append_model_data(*it);
         }
 
         std.cout << std.format(
@@ -721,12 +725,13 @@ class World {
         self.all_vertex_normals_by_vertex_.clear();
         self.all_faces_.clear();
 
-        let num_v: usize = 0;
-        let num_vt: usize = 0;
-        let num_vn: usize = 0;
-        let num_vnbv: usize = 0;
-        let num_f: usize = 0;
-        for (m : self.models_) {
+        let mut num_v: usize = 0;
+        let mut num_vt: usize = 0;
+        let mut num_vn: usize = 0;
+        let mut num_vnbv: usize = 0;
+        let mut num_f: usize = 0;
+        for (let mut it = self.models_.begin(); it != self.models_.end(); ++it) {
+            let m = *it;
             num_v += m.vertices.size();
             num_vt += m.texture_coords.size();
             num_vn += m.vertex_normals.size();
@@ -759,16 +764,17 @@ class World {
             model.vertex_normals_by_vertex.end()
         );
 
-        for (local_face : model.all_faces) {
-            let global_face = local_face;
+        for (let mut it = model.all_faces.begin(); it != model.all_faces.end(); ++it) {
+            let local_face = *it;
+            let mut global_face = local_face;
 
             for (let k = 0; k < 3; ++k) {
-                global_face.v_indices[k] += v_offset;
-                if (global_face.vt_indices[k] != std.numeric_limits<u32>.max()) {
-                    global_face.vt_indices[k] += vt_offset;
+                global_face.v_indices[k as usize] += v_offset;
+                if (global_face.vt_indices[k as usize] != std.numeric_limits<u32>.max()) {
+                    global_face.vt_indices[k as usize] += vt_offset;
                 }
-                if (global_face.vn_indices[k] != std.numeric_limits<u32>.max()) {
-                    global_face.vn_indices[k] += vn_offset;
+                if (global_face.vn_indices[k as usize] != std.numeric_limits<u32>.max()) {
+                    global_face.vn_indices[k as usize] += vn_offset;
                 }
             }
             self.all_faces_.push_back(move global_face);

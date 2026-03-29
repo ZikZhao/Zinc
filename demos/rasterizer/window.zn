@@ -200,7 +200,8 @@ class Window {
                 let b = event.button.button;
                 self.mouse_buttons_this_frame_.insert(b as i32);
                 self.mouse_buttons_updated_this_frame_.insert(b as i32);
-                for (mb : self.mouse_bindings_) {
+                for (let mut it = self.mouse_bindings_.begin(); it != self.mouse_bindings_.end(); ++it) {
+                    let mut mb = *it;
                     if (mb.button == b) { mb.first_motion = true; }
                 }
             }
@@ -227,7 +228,8 @@ class Window {
         self.process_mouse_bindings();
 
         if (self.mouse_scroll_ != 0) {
-            for (handler : self.scroll_handlers_) {
+            for (let mut it = self.scroll_handlers_.begin(); it != self.scroll_handlers_.end(); ++it) {
+                let handler = *it;
                 handler(self.mouse_scroll_);
             }
         }
@@ -272,14 +274,16 @@ class Window {
     /// Processes registered key bindings based on current state.
     fn process_key_bindings(self: &mut Self) {
         let now = std.chrono.steady_clock.now();
-        for (binding : self.key_bindings_) {
+        for (let mut it = self.key_bindings_.begin(); it != self.key_bindings_.end(); ++it) {
+            let binding = *it;
             // Continuous trigger (ANY_PRESSED) needs delta time tracking
             if (binding.trigger == Trigger.ANY_PRESSED) {
                 if (!self.check_key_trigger(binding)) { continue; }
 
                 // Check if any key was just pressed this frame
                 let mut just_pressed = false;
-                for (k : binding.keys) {
+                for (let mut it = binding.keys.begin(); it != binding.keys.end(); ++it) {
+                    let k = *it;
                     if (self.keys_pressed_this_frame_.count(k)) {
                         just_pressed = true;
                         break;
@@ -295,7 +299,8 @@ class Window {
                     binding.last_time = now;
                 }
 
-                let dt = std.chrono.duration<float>(now - *binding.last_time).count();
+                let dt = std.chrono.duration_cast::<
+                    std.chrono.duration::<f32, std.ratio<1, 1>>>(now - *binding.last_time).count();
                 binding.handler(self.keys_this_frame_, dt);
                 binding.last_time = now;
             } else {
@@ -304,9 +309,10 @@ class Window {
 
                 // Ensure handler sees keys pressed this frame even if already released
                 let mut effective_keys = self.keys_this_frame_;
-                for (k : self.keys_pressed_this_frame_) {
+                for (let mut it = self.keys_pressed_this_frame_.begin(); it != self.keys_pressed_this_frame_.end(); ++it) {
+                    let k = *it;
                     if (k >= 0 && k < sdl.SDL_NUM_SCANCODES) {
-                        effective_keys[k] = true;
+                        effective_keys[k as usize] = true;
                     }
                 }
                 binding.handler(effective_keys, 0.0f);
@@ -317,9 +323,10 @@ class Window {
     /// Processes registered mouse bindings based on current state.
     fn process_mouse_bindings(self: &mut Self) {
         let now = std.chrono.steady_clock.now();
-        for (binding : self.mouse_bindings_) {
-            let down = self.mouse_buttons_this_frame_.count(binding.button) > 0;
-            let just_pressed = self.mouse_buttons_updated_this_frame_.count(binding.button) > 0 && down;
+        for (let mut it = self.mouse_bindings_.begin(); it != self.mouse_bindings_.end(); ++it) {
+            let mut binding = *it;
+            let down = self.mouse_buttons_this_frame_.count(binding.button as i32) > 0;
+            let just_pressed = self.mouse_buttons_updated_this_frame_.count(binding.button as i32) > 0 && down;
             switch (binding.trigger) {
             case Trigger.ANY_JUST_PRESSED: {
                 if (just_pressed) { binding.handler(0, 0, 0.0f); }
@@ -334,7 +341,8 @@ class Window {
                         if (!binding.last_time) {
                             binding.last_time = now;
                         }
-                        let dt = std.chrono.duration<float>(now - *binding.last_time).count();
+                        let dt = std.chrono.duration_cast::<
+                            std.chrono.duration::<f32, std.ratio<1, 1>>>(now - *binding.last_time).count();
                         binding.handler(self.mouse_xrel_, self.mouse_yrel_, dt);
                         binding.last_time = now;
                     }
@@ -368,15 +376,17 @@ class Window {
         switch (binding.trigger) {
         case Trigger.ANY_PRESSED: {
             if (self.is_modifier_key_pressed()) { return false; }
-            for (key : binding.keys) {
-                if (self.keys_this_frame_[key]) { return true; }
+            for (let mut it = binding.keys.begin(); it != binding.keys.end(); ++it) {
+                let key = *it;
+                if (self.keys_this_frame_[key as usize]) { return true; }
             }
             return false;
         }
 
         case Trigger.ANY_JUST_PRESSED: {
             if (self.is_modifier_key_pressed()) { return false; }
-            for (key : binding.keys) {
+            for (let mut it = binding.keys.begin(); it != binding.keys.end(); ++it) {
+                let key = *it;
                 if (self.keys_pressed_this_frame_.count(key)) { return true; }
             }
             return false;
@@ -384,8 +394,9 @@ class Window {
 
         case Trigger.ALL_JUST_PRESSED: {
             let mut exists_pressed_this_frame = false;  // at least one key must be just pressed
-            for (key : binding.keys) {
-                if (!(self.keys_this_frame_[key] || self.keys_pressed_this_frame_.count(key))) { return false; }
+            for (let mut it = binding.keys.begin(); it != binding.keys.end(); ++it) {
+                let key = *it;
+                if (!(self.keys_this_frame_[key as usize] || self.keys_pressed_this_frame_.count(key) != 0)) { return false; }
                 if (self.keys_pressed_this_frame_.count(key)) { exists_pressed_this_frame = true; }
             }
             return exists_pressed_this_frame;

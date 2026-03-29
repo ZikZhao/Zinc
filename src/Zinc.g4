@@ -68,9 +68,7 @@ for_statement:
 		| init_expr_ = expr_statement OP_SEMICOLON
 		| OP_SEMICOLON
 	) condition_ = expr? OP_SEMICOLON update_ = expr? OP_RPAREN body_ = local_block	# CStyleFor
-	| KW_FOR OP_LPAREN condition_ = expr OP_RPAREN body_ = local_block				# WhileStyleFor
-	| KW_FOR OP_LPAREN identifier_ = T_IDENTIFIER OP_COLON iterable_ = expr OP_RPAREN body_ =
-		local_block # RangeBasedFor;
+	| KW_FOR OP_LPAREN condition_ = expr OP_RPAREN body_ = local_block				# WhileStyleFor;
 
 break_statement: KW_BREAK OP_SEMICOLON;
 

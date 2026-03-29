@@ -189,8 +189,8 @@ class Rasterizer {
     }
 
     fn wireframe(self: &mut Self, camera: &World.Camera, faces: &std.vector<World.Face>, vertices: &std.vector<glm.vec3>) {
-        for (face : faces) {
-            self.face_wireframe(camera, face, vertices, std.vector<glm.vec2>());
+        for (let mut it = faces.begin(); it != faces.end(); ++it) {
+            self.face_wireframe(camera, *it, vertices, std.vector<glm.vec2>());
         }
     }
 
@@ -201,8 +201,8 @@ class Rasterizer {
         vertices: &std.vector<glm.vec3>,
         texcoords: &std.vector<glm.vec2>
     ) {
-        for (face : faces) {
-            self.face_rasterized(camera, face, vertices, texcoords);
+        for (let mut it = faces.begin(); it != faces.end(); ++it) {
+            self.face_rasterized(camera, *it, vertices, texcoords);
         }
     }
 
