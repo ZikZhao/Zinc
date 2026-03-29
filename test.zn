@@ -1,9 +1,6 @@
-type A = {
-    x: i32,
-    y: i32,
-};
+import "sdl.d.zn" as sdl;
 
 fn main(args: [strview]) {
-    std.cout << "Hello, world!";
+    let a: sdl.SDL_Window;
 }
 

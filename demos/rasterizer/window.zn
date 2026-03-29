@@ -69,7 +69,7 @@ class Window {
         let mut flags = sdl.SDL_WINDOW_OPENGL;
 
         let anywhere = sdl.SDL_WINDOWPOS_UNDEFINED;
-        let window = sdl.SDL_CreateWindow("COMS30020", anywhere, anywhere, width, height, flags);
+        let window = sdl.SDL_CreateWindow(("COMS30020").data(), anywhere, anywhere, width, height, flags);
         if (window == nullptr) {
             throw std.runtime_error(std.format("[SDL] Could not set video mode: {}\n", sdl.SDL_GetError()));
         }
@@ -82,7 +82,7 @@ class Window {
                 std.format("[SDL] Could not create renderer: {}\n", sdl.SDL_GetError())
             );
         }
-        sdl.SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "linear");
+        sdl.SDL_SetHint(("SDL_RENDER_SCALE_QUALITY").data(), ("linear").data());
         sdl.SDL_RenderSetLogicalSize(renderer, width, height);
 
         // Backbuffer texture receiving ARGB pixels
@@ -265,7 +265,7 @@ class Window {
             (0xFF << 0) as u32,
             (0xFF << 24) as u32
         );
-        sdl.SDL_SaveBMP(surface, filename);
+        sdl.SDL_SaveBMP(surface, filename.data());
         sdl.SDL_FreeSurface(surface);
     }
 

@@ -6,6 +6,18 @@
 
 using TypeMap = GlobalMemory::FlatMap<const Type*, std::size_t>;
 
+auto flush_without_sdl_prefix(strview code, std::ostream& out) -> void {
+    while (true) {
+        std::size_t sdl_pos = code.find("sdl::SDL", 0);
+        if (sdl_pos == strview::npos) {
+            out.write(code.data(), static_cast<std::streamsize>(code.size()));
+            break;
+        }
+        out.write(code.data(), static_cast<std::streamsize>(sdl_pos));
+        code = code.substr(sdl_pos + 5);
+    }
+}
+
 class TypeSorter final {
 private:
     struct Edge {
@@ -301,11 +313,9 @@ public:
             }
         }
         stream << "// ----- Type Forward Declarations -----\n"sv;
-        stream.write(
-            forward_declarations_.data(), static_cast<std::streamsize>(forward_declarations_.size())
-        );
+        flush_without_sdl_prefix(forward_declarations_, stream);
         stream << "\n// ----- Type Definitions -----\n"sv;
-        stream.write(definitions_.data(), static_cast<std::streamsize>(definitions_.size()));
+        flush_without_sdl_prefix(definitions_, stream);
     }
 
 private:
@@ -343,7 +353,7 @@ private:
             }
             forward_declarations_ += qualified_name;
             if (!type->primary_template_) {
-                forward_declarations_ += "::"sv;
+                forward_declarations_ += sep;
                 forward_declarations_ += type->identifier_;
             }
             forward_declarations_ += "\n"sv;
@@ -718,14 +728,13 @@ public:
             }
             newline(false);
         }
-        stream << "// ----- Constants -----\n"sv;
-        stream.write(constants_.data(), static_cast<std::streamsize>(constants_.size()));
+        stream << "\n// ----- Constants -----\n"sv;
+        // stream.write(constants_.data(), static_cast<std::streamsize>(constants_.size()));
+        flush_without_sdl_prefix(constants_, stream);
         stream << "\n// ----- Function Forward Declarations -----\n"sv;
-        stream.write(
-            forward_declarations_.data(), static_cast<std::streamsize>(forward_declarations_.size())
-        );
+        flush_without_sdl_prefix(forward_declarations_, stream);
         stream << "\n// ----- Function Definitions -----\n"sv;
-        stream.write(definitions_.data(), static_cast<std::streamsize>(definitions_.size() - 1));
+        flush_without_sdl_prefix(definitions_, stream);
     }
 
     auto operator()(ASTNodeVariant variant) -> void { return std::visit(*this, variant); }
@@ -912,26 +921,9 @@ public:
     }
 
     auto operator()(const ASTPointerAccess* node) -> void {
-        if (auto* replacement = env_.find(current_scope_, node)) {
-            auto [base, pointers] = *std::get<PointerChain*>(*replacement);
-            for (const auto& [inst_type, func_type] : pointers | std::views::reverse) {
-                definitions_ += "_op_"sv;
-                mangler_(definitions_, OperatorCode::Pointer);
-                definitions_ += "_0"sv;
-                mangler_(definitions_, func_type->parameters_[0]);
-                definitions_ += "(*"sv;
-            }
-            (*this)(base);
-            for (std::size_t i = 0; i < pointers.size(); i++) {
-                definitions_ += ")"sv;
-            }
-            definitions_ += "->"sv;
-            definitions_ += node->member;
-        } else {
-            (*this)(node->base);
-            definitions_ += "->"sv;
-            definitions_ += node->member;
-        }
+        output_pointer_chain(*std::get<PointerChain*>(*env_.find(current_scope_, node)));
+        definitions_ += "->"sv;
+        definitions_ += node->member;
     }
 
     auto operator()(const ASTIndexAccess* node) -> void {
@@ -997,18 +989,32 @@ public:
     }
 
     auto operator()(const ASTStructInitialization* node) -> void {
-        if (!holds_monostate(node->struct_type)) {
-            auto* variant = env_.find(current_scope_, node);
-            const Type* struct_type = std::get<const Type*>(*variant);
-            ObjectCodeGen::output(definitions_, struct_type, type_map_);
+        auto* variant = env_.find(current_scope_, node);
+        const Type* type = std::get<const Type*>(*variant);
+        ObjectCodeGen::output(definitions_, type, type_map_);
+        GlobalMemory::Vector<strview> order;
+        if (auto* struct_type = type->dyn_cast<StructType>()) {
+            for (const auto& [field_name, _] : struct_type->fields_) {
+                order.push_back(field_name);
+            }
+        } else if (auto* instance_type = type->dyn_cast<InstanceType>()) {
+            for (const auto& [attr_name, _] : instance_type->attrs_) {
+                order.push_back(attr_name);
+            }
+        } else {
+            UNREACHABLE();
         }
         definitions_ += "{"sv;
         indent_level_++;
-        for (const ASTFieldInitialization& field_init : node->field_inits) {
-            newline();
-            std::format_to(std::back_inserter(definitions_), ".{} = "sv, field_init.identifier);
-            (*this)(field_init.value);
-            definitions_ += ","sv;
+        for (strview field : order) {
+            auto it =
+                std::ranges::find(node->field_inits, field, &ASTFieldInitialization::identifier);
+            if (it != node->field_inits.end()) {
+                newline();
+                std::format_to(std::back_inserter(definitions_), ".{} = "sv, field);
+                (*this)(it->value);
+                definitions_ += ","sv;
+            }
         }
         indent_level_--;
         newline();
@@ -1027,7 +1033,7 @@ public:
     }
 
     auto operator()(const ASTFunctionCall* node) -> void {
-        const auto& [func_type, self_node, is_constructor, do_not_mangle] =
+        const auto& [func_type, self, is_constructor, do_not_mangle] =
             std::get<CodeGenEnvironment::FunctionCall>(*env_.find(current_scope_, node));
         if (do_not_mangle) {
             (*this)(node->function);
@@ -1045,8 +1051,11 @@ public:
         }
         definitions_ += "("sv;
         strview sep = "";
-        if (self_node) {
-            output_self(*self_node);
+        if (self) {
+            if (!self->pointers.empty()) {
+                definitions_ += "*"sv;
+            }
+            output_pointer_chain(*self);
             sep = ", "sv;
         }
         for (ASTExprVariant arg : node->arguments) {
@@ -1229,18 +1238,24 @@ private:
         }
     }
 
-    auto output_self(const PointerChain& self_resolution) -> void {
-        for (auto [base, func] : self_resolution.pointers | std::views::reverse) {
-            definitions_ += "_op_t"sv;
-            std::format_to(std::back_inserter(definitions_), "{}"sv, type_map_.at(base));
-            mangler_(definitions_, OperatorCode::Pointer);
-            mangler_(definitions_, func->parameters_[0]);
-            definitions_ += "(*"sv;
+    auto output_pointer_chain(const PointerChain& pointer_chain) -> void {
+        const auto& [base, pointers] = pointer_chain;
+        GlobalMemory::String temp;
+        (*this)(base);
+        for (const auto& [inst_type, func_type] : pointers) {
+            if (inst_type->scope_->is_extern_) {
+                temp += ".operator->()"sv;
+            } else {
+                GlobalMemory::String op_name = "_op_";
+                mangler_(op_name, OperatorCode::Pointer);
+                op_name += "_0"sv;
+                mangler_(op_name, func_type->parameters_[0]);
+                op_name += "("sv;
+                temp.insert(0, op_name);
+                temp += ")"sv;
+            }
         }
-        (*this)(self_resolution.base);
-        for (size_t i = 0; i < self_resolution.pointers.size(); i++) {
-            definitions_ += ")"sv;
-        }
+        definitions_ += temp;
     }
 };
 

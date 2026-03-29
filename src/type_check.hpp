@@ -1926,6 +1926,7 @@ public:
             sema_.codegen_env_.map_type(sema_.current_scope_, node, struct_type);
         } else if (auto* self = sema_.get_self_type()) {
             type = self;
+            sema_.codegen_env_.map_type(sema_.current_scope_, node, self);
         } else {
             Diagnostic::error_cannot_deduce_struct_type(node->location);
             return {};
@@ -2065,7 +2066,12 @@ public:
                 return {};
             }
             sema_.codegen_env_.map_func_call(
-                sema_.current_scope_, node, func_type, nullptr, false, false
+                sema_.current_scope_,
+                node,
+                func_type,
+                nullptr,
+                false,
+                std::get<0>(*partial)->is_extern_
             );
             return Term::of(func_type->return_type_);
         }
