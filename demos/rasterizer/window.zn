@@ -194,8 +194,8 @@ class Window {
                 let b = event.button.button;
                 self.mouse_buttons_this_frame_.insert(b as i32);
                 self.mouse_buttons_updated_this_frame_.insert(b as i32);
-                for (let mut it = self.mouse_bindings_.begin(); it != self.mouse_bindings_.end(); ++it) {
-                    let mut mb = *it;
+                for (let mut i: usize = 0; i < self.mouse_bindings_.size(); ++i) {
+                    let mb: &mut MouseBinding = self.mouse_bindings_[i];
                     if (mb.button == b) { mb.first_motion = true; }
                 }
             }
@@ -268,8 +268,8 @@ class Window {
     /// Processes registered key bindings based on current state.
     fn process_key_bindings(self: &mut Self) {
         let now = std.chrono.steady_clock.now();
-        for (let mut it = self.key_bindings_.begin(); it != self.key_bindings_.end(); ++it) {
-            let mut binding = *it;
+        for (let mut i: usize = 0; i < self.key_bindings_.size(); ++i) {
+            let binding: &mut KeyBinding = self.key_bindings_[i];
             // Continuous trigger (ANY_PRESSED) needs delta time tracking
             if (binding.trigger == Trigger.ANY_PRESSED) {
                 if (!self.check_key_trigger(binding)) { continue; }
@@ -317,8 +317,8 @@ class Window {
     /// Processes registered mouse bindings based on current state.
     fn process_mouse_bindings(self: &mut Self) {
         let now = std.chrono.steady_clock.now();
-        for (let mut it = self.mouse_bindings_.begin(); it != self.mouse_bindings_.end(); ++it) {
-            let mut binding = *it;
+        for (let mut i: usize = 0; i < self.mouse_bindings_.size(); ++i) {
+            let binding: &mut MouseBinding = self.mouse_bindings_[i];
             let down = self.mouse_buttons_this_frame_.count(binding.button as i32) > 0;
             let just_pressed = self.mouse_buttons_updated_this_frame_.count(binding.button as i32) > 0 && down;
             switch (binding.trigger) {

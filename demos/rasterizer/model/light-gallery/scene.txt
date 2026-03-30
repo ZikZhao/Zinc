@@ -1,0 +1,198 @@
+Environ ../qwantani_dusk_2_puresky_4k.hdr
+
+Material light
+    Colour 1.0 1.0 1.0
+    Emission 25 25 25
+
+Material wall_matte
+    Colour 0.9 0.9 0.9
+    Shininess 10.0
+    Metallic 0.0
+
+Material floor_matte
+    Colour 0.5 0.5 0.5
+    Shininess 30.0
+    Metallic 0.0
+
+Material mirror_surface
+    Colour 0.9 0.9 0.9
+    Metallic 1.0
+    Shininess 2048
+
+Material yellow_light
+    Colour 1.0 0.9 0.5
+    Emission 10 9 4
+
+Material coral_light
+    Colour 1.0 0.6 0.5
+    Emission 9 4 3
+
+Object # ceiling_light
+    Use light
+    Vertex -1.5 2.99  1.0
+    Vertex -1.5 2.99 -1.0
+    Vertex  1.5 2.99 -1.0
+    Vertex  1.5 2.99  1.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # floor
+    Use floor_matte
+    Vertex -5.0 -3.0  4.0
+    Vertex  5.0 -3.0  4.0
+    Vertex  5.0 -3.0 -4.0
+    Vertex -5.0 -3.0 -4.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # ceiling
+    Use wall_matte
+    Vertex -5.0  3.0  4.0
+    Vertex -5.0  3.0 -4.0
+    Vertex  5.0  3.0 -4.0
+    Vertex  5.0  3.0  4.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # back_wall
+    Use wall_matte
+    Vertex -5.0 -3.0 -4.0
+    Vertex  5.0 -3.0 -4.0
+    Vertex  5.0  3.0 -4.0
+    Vertex -5.0  3.0 -4.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # left_wall
+    Use wall_matte
+    Vertex -5.0 -3.0  4.0
+    Vertex -5.0 -3.0 -4.0
+    Vertex -5.0  3.0 -4.0
+    Vertex -5.0  3.0  4.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # right_wall
+    Use wall_matte
+    Vertex  5.0 -3.0 -4.0
+    Vertex  5.0 -3.0  4.0
+    Vertex  5.0  3.0  4.0
+    Vertex  5.0  3.0 -4.0
+    Face 0 1 2
+    Face 0 2 3
+
+# Left pillar (x = -2.0 center)
+# Inner face (facing right, mirror), Outer face (facing left, yellow light)
+# Pillar dimensions: 1.0 wide (x), 5.0 tall (y: -3.0 to 2.0), 3.0 deep (z: -1.5 to 1.5)
+
+Object # left_pillar_inner_face (mirror, facing right toward the other pillar)
+    Use mirror_surface
+    Vertex -1.5 -3.0  1.5
+    Vertex -1.5 -3.0 -1.5
+    Vertex -1.5  2.0 -1.5
+    Vertex -1.5  2.0  1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # left_pillar_outer_face (yellow light, facing left)
+    Use yellow_light
+    Vertex -2.5 -3.0 -1.5
+    Vertex -2.5 -3.0  1.5
+    Vertex -2.5  2.0  1.5
+    Vertex -2.5  2.0 -1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # left_pillar_front_face
+    Use wall_matte
+    Vertex -2.5 -3.0  1.5
+    Vertex -1.5 -3.0  1.5
+    Vertex -1.5  2.0  1.5
+    Vertex -2.5  2.0  1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # left_pillar_back_face
+    Use wall_matte
+    Vertex -1.5 -3.0 -1.5
+    Vertex -2.5 -3.0 -1.5
+    Vertex -2.5  2.0 -1.5
+    Vertex -1.5  2.0 -1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # left_pillar_top_face
+    Use wall_matte
+    Vertex -2.5  2.0  1.5
+    Vertex -1.5  2.0  1.5
+    Vertex -1.5  2.0 -1.5
+    Vertex -2.5  2.0 -1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # left_pillar_bottom_face
+    Use wall_matte
+    Vertex -2.5 -3.0 -1.5
+    Vertex -1.5 -3.0 -1.5
+    Vertex -1.5 -3.0  1.5
+    Vertex -2.5 -3.0  1.5
+    Face 0 1 2
+    Face 0 2 3
+
+# Right pillar (x = 2.0 center)
+# Inner face (facing left, mirror), Outer face (facing right, coral/red light)
+# Pillar dimensions: 1.0 wide (x), 5.0 tall (y: -3.0 to 2.0), 3.0 deep (z: -1.5 to 1.5)
+
+Object # right_pillar_inner_face (mirror, facing left toward the other pillar)
+    Use mirror_surface
+    Vertex  1.5 -3.0 -1.5
+    Vertex  1.5 -3.0  1.5
+    Vertex  1.5  2.0  1.5
+    Vertex  1.5  2.0 -1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # right_pillar_outer_face (coral light, facing right)
+    Use coral_light
+    Vertex  2.5 -3.0  1.5
+    Vertex  2.5 -3.0 -1.5
+    Vertex  2.5  2.0 -1.5
+    Vertex  2.5  2.0  1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # right_pillar_front_face
+    Use wall_matte
+    Vertex  1.5 -3.0  1.5
+    Vertex  2.5 -3.0  1.5
+    Vertex  2.5  2.0  1.5
+    Vertex  1.5  2.0  1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # right_pillar_back_face
+    Use wall_matte
+    Vertex  2.5 -3.0 -1.5
+    Vertex  1.5 -3.0 -1.5
+    Vertex  1.5  2.0 -1.5
+    Vertex  2.5  2.0 -1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # right_pillar_top_face
+    Use wall_matte
+    Vertex  1.5  2.0  1.5
+    Vertex  2.5  2.0  1.5
+    Vertex  2.5  2.0 -1.5
+    Vertex  1.5  2.0 -1.5
+    Face 0 1 2
+    Face 0 2 3
+
+Object # right_pillar_bottom_face
+    Use wall_matte
+    Vertex  1.5 -3.0 -1.5
+    Vertex  2.5 -3.0 -1.5
+    Vertex  2.5 -3.0  1.5
+    Vertex  1.5 -3.0  1.5
+    Face 0 1 2
+    Face 0 2 3

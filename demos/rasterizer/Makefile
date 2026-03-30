@@ -1,7 +1,7 @@
 # Rasterizer demo Makefile (GCC + SDL2 + GLM)
 
 CC := gcc
-TARGET := rasterizer_demo
+TARGET := main
 SRC := main.zn.cpp
 BUILD_DIR := build
 OBJ := $(BUILD_DIR)/main.zn.o
@@ -20,7 +20,7 @@ CFLAGS += -O2 -Wall -Wextra -MMD -MP -funsigned-char -fpermissive
 CXXFLAGS += -x c++ -std=gnu++23
 CPPFLAGS += $(SDL2_CFLAGS) $(GLM_CFLAGS) -DGLM_FORCE_PURE
 LDFLAGS += $(SDL2_LIBS)
-LDLIBS += -lstdc++
+LDLIBS += -lstdc++ -lm
 
 .PHONY: all clean run
 

@@ -1,0 +1,47 @@
+Material light
+    Colour 1.000000 1.000000 1.000000
+    Emission 30 30 30
+
+Material white
+    Colour 1.000000 1.000000 1.000000
+
+Material grey
+    Colour 0.700000 0.700000 0.700000
+
+Material brass
+    Metallic 1.0
+    Colour 0.91 0.78 0.34
+    Shininess 512
+
+Material red
+    Colour 1.000000 0.000000 0.000000
+
+Material green
+    Colour 0.000000 1.000000 0.000000
+
+Material blue
+    Colour 0.000000 0.000000 1.000000
+
+Material yellow
+    Colour 1.000000 1.000000 0.000000
+
+Material magenta
+    Colour 1.000000 0.000000 1.000000
+
+Material cyan
+    Colour 0.000000 1.000000 1.000000
+
+Material cobbles
+    Colour 1.000000 1.000000 1.000000
+    Texture granite_tile_diff_4k.ppm
+    NormalMap granite_tile_nor_gl_4k.hdr
+
+Material mirror
+    Metallic 1.0
+    Colour 1.000000 1.000000 1.000000
+
+Material light_blue_glass
+    Colour 0.7 0.95 0.98
+    AtDistance 1.0
+    TransmissionWeight 0.9
+    IOR 1.5

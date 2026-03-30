@@ -1,0 +1,51 @@
+newmtl White
+Kd 1.000000 1.000000 1.000000
+
+newmtl Light
+Kd 1.000000 1.000000 1.000000
+Ke 30 30 30
+
+newmtl Grey
+Kd 0.700000 0.700000 0.700000
+
+newmtl GreyMetallic
+Mt 1.0
+Kd 0.700000 0.700000 0.700000
+
+newmtl Red
+Kd 1.000000 0.000000 0.000000
+
+newmtl Green
+Kd 0.000000 1.000000 0.000000
+
+newmtl Blue
+Kd 0.000000 0.000000 1.000000
+
+newmtl Yellow
+Kd 1.000000 1.000000 0.000000
+
+newmtl Magenta
+Kd 1.000000 0.000000 1.000000
+
+newmtl Cyan
+Kd 0.000000 1.000000 1.000000
+
+newmtl Cobbles
+Kd 1.000000 1.000000 1.000000
+map_Kd granite_tile_diff_4k.ppm
+map_Bump granite_tile_nor_gl_4k.hdr
+
+newmtl Mirror
+Kd 1.000000 1.000000 1.000000
+Mt 1.0
+
+newmtl Brass
+Kd 0.91 0.78 0.34
+Mt 1.0
+Ns 512
+
+newmtl LightBlueGlass
+Kd 0.7 0.95 0.98
+td 1.0
+tw 0.9
+ior 1.5

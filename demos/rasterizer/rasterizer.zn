@@ -104,7 +104,7 @@ class Rasterizer {
     static fn ClipAgainstPlane(
         input: &Utils.InplaceVector<World.ClipVertex, 9>, plane: i32
     ) -> Utils.InplaceVector<World.ClipVertex, 9> {
-        let mut output: Utils.InplaceVector<World.ClipVertex, 9>;
+        let mut output = Utils.InplaceVector::<World.ClipVertex, 9>();
 
         if (input.size() == 0) { return output; }
 
@@ -285,7 +285,7 @@ class Rasterizer {
     
         // Project to NDC and convert to screen space, tracking 1/w for perspective-correct
         // interpolation
-        let mut screen_verts: Utils.InplaceVector::<World.ScreenNdcCoord, 9>;
+        let mut screen_verts = Utils.InplaceVector::<World.ScreenNdcCoord, 9>();
         for (let mut i: usize = 0; i < clipped.size(); i++) {
             let ndc = camera.clip_to_ndc(clipped[i].position_clip);
             screen_verts.push_back(self.ndc_to_screen(ndc, clipped[i].uv, clipped[i].position_clip.w));
@@ -426,7 +426,7 @@ class Rasterizer {
         }
 
         // Transform to clip space (homogeneous); attributes travel with the polygon
-        let mut polygon: Utils.InplaceVector::<World.ClipVertex, 9>;
+        let mut polygon = Utils.InplaceVector::<World.ClipVertex, 9>();
         polygon.push_back(
             World.ClipVertex{
                 position_clip: camera.world_to_clip(v0),

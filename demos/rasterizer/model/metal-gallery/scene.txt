@@ -1,0 +1,74 @@
+Environ ../qwantani_dusk_2_puresky_4k.hdr
+
+Material light
+    Colour 1.0 1.0 1.0
+    Emission 25 25 25
+
+Material wall_matte
+    Colour 0.9 0.9 0.9
+    Shininess 10.0
+    Metallic 0.0
+
+Material floor_matte
+    Colour 0.7 0.7 0.7
+    Shininess 30.0
+    Metallic 0.0
+
+Object # ceiling_light
+    Use light
+    Vertex -3.0 2.99  1.0
+    Vertex -3.0 2.99 -1.0
+    Vertex  3.0 2.99 -1.0
+    Vertex  3.0 2.99  1.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # floor
+    Use floor_matte
+    Vertex -8.0 -3.0  4.0
+    Vertex  8.0 -3.0  4.0
+    Vertex  8.0 -3.0 -4.0
+    Vertex -8.0 -3.0 -4.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # ceiling
+    Use wall_matte
+    Vertex -8.0  3.0  4.0
+    Vertex -8.0  3.0 -4.0
+    Vertex  8.0  3.0 -4.0
+    Vertex  8.0  3.0  4.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # back_wall
+    Use wall_matte
+    Vertex -8.0 -3.0 -4.0
+    Vertex  8.0 -3.0 -4.0
+    Vertex  8.0  3.0 -4.0
+    Vertex -8.0  3.0 -4.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # left_wall
+    Use wall_matte
+    Vertex -8.0 -3.0  4.0
+    Vertex -8.0 -3.0 -4.0
+    Vertex -8.0  3.0 -4.0
+    Vertex -8.0  3.0  4.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # right_wall
+    Use wall_matte
+    Vertex  8.0 -3.0 -4.0
+    Vertex  8.0 -3.0  4.0
+    Vertex  8.0  3.0  4.0
+    Vertex  8.0  3.0 -4.0
+    Face 0 1 2
+    Face 0 2 3
+
+Include sphere_chrome.txt
+Include sphere_gold.txt
+Include sphere_copper.txt
+Include sphere_iron.txt

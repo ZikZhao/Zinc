@@ -165,10 +165,12 @@ fn main(args: [strview]) {
         let now = std.chrono.steady_clock.now();
         let elapsed = now - last_print;
         if (elapsed >= std.chrono.seconds(1 as i64)) {
+            let elapsed_ms = std.chrono.duration_cast::<std.chrono.milliseconds>(elapsed).count();
+            let elapsed_sec = elapsed_ms as f64 / 1000.0;
             std.cout << std.format(
                 "[Renderer] FPS: {:#.3g} | Avg Frame Time: {:#.4g} ms\n",
-                fps as f64 / elapsed.count() as f64,
-                (elapsed.count() * 1000) as f64 / fps as f64
+                fps as f64 / elapsed_sec,
+                elapsed_ms as f64 / fps as f64
             );
             fps = 0;
             last_print = now;

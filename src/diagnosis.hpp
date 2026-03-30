@@ -604,6 +604,16 @@ public:
             }
         );
     }
+
+    static auto error_redeclaration(Location location, strview name) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format("Redeclaration of '{}'", name)
+            }
+        );
+    }
 };
 
 inline thread_local std::optional<Diagnostic> Diagnostic::instance;

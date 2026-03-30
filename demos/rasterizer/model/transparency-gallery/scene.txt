@@ -1,0 +1,172 @@
+Environ ../qwantani_dusk_2_puresky_4k.hdr
+
+Material light
+    Colour 1.0 1.0 1.0
+    Emission 100 100 100
+
+Material wall_matte
+    Colour 0.9 0.9 0.9
+    Shininess 10.0
+    Metallic 0.0
+
+Material floor_matte
+    Colour 0.3 0.3 0.3
+    Shininess 30.0
+    Metallic 0.0
+
+Material mirror_surface
+    Colour 1.0 1.0 1.0
+    Metallic 1.0
+    Shininess 2048
+
+Material glass_clear
+    Colour 1.0 1.0 1.0
+    IOR 1.5
+    TransmissionWeight 1.0
+    AtDistance 5.0
+
+Material glass_ruby
+    Colour 1.0 0.1 0.1
+    IOR 1.6
+    TransmissionWeight 0.95
+    AtDistance 1.5
+
+Material diamond
+    Colour 1.0 1.0 1.0
+    IOR 2.417
+    TransmissionWeight 1.0
+    AtDistance 10.0
+    Shininess 1024
+
+Material glass_dense_teal
+    Colour 0.1 0.8 0.8
+    IOR 1.4
+    TransmissionWeight 0.9
+    AtDistance 0.5
+
+Object # ceiling_light
+    Use light
+    Vertex -2.0 2.99  1.0
+    Vertex -2.0 2.99 -1.0
+    Vertex  2.0 2.99 -1.0
+    Vertex  2.0 2.99  1.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # floor
+    Use floor_matte
+    Vertex -8.0 -3.0  6.0
+    Vertex  8.0 -3.0  6.0
+    Vertex  8.0 -3.0 -6.0
+    Vertex -8.0 -3.0 -6.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # ceiling
+    Use wall_matte
+    Vertex -8.0  3.0  6.0
+    Vertex -8.0  3.0 -6.0
+    Vertex  8.0  3.0 -6.0
+    Vertex  8.0  3.0  6.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # left_wall
+    Use wall_matte
+    Vertex -8.0 -3.0  6.0
+    Vertex -8.0 -3.0 -6.0
+    Vertex -8.0  3.0 -6.0
+    Vertex -8.0  3.0  6.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # right_wall
+    Use wall_matte
+    Vertex  8.0 -3.0 -6.0
+    Vertex  8.0 -3.0  6.0
+    Vertex  8.0  3.0  6.0
+    Vertex  8.0  3.0 -6.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # back_wall_outer
+    Use wall_matte
+    Vertex -8.0 -3.0 -6.0
+    Vertex  8.0 -3.0 -6.0
+    Vertex  8.0  3.0 -6.0
+    Vertex -8.0  3.0 -6.0
+    Face 0 1 2
+    Face 0 2 3
+
+Object # back_wall_inner
+    Use mirror_surface
+    Vertex -8.0 -3.0 -5.95
+    Vertex  8.0 -3.0 -5.95
+    Vertex  8.0  3.0 -5.95
+    Vertex -8.0  3.0 -5.95
+    Face 0 1 2
+    Face 0 2 3
+
+Object # ruby_cube
+    Use glass_ruby
+    # Center at -4.5, -1.5, 0.0. Size 2.5
+    Vertex -5.75 -2.75  1.25
+    Vertex -3.25 -2.75  1.25
+    Vertex -3.25 -2.75 -1.25
+    Vertex -5.75 -2.75 -1.25
+    Vertex -5.75 -0.25  1.25
+    Vertex -3.25 -0.25  1.25
+    Vertex -3.25 -0.25 -1.25
+    Vertex -5.75 -0.25 -1.25
+    # Bottom
+    Face 0 2 1
+    Face 0 3 2
+    # Top
+    Face 4 5 6
+    Face 4 6 7
+    # Front
+    Face 0 1 5
+    Face 0 5 4
+    # Right
+    Face 1 2 6
+    Face 1 6 5
+    # Back
+    Face 2 3 7
+    Face 2 7 6
+    # Left
+    Face 3 0 4
+    Face 3 4 7
+
+Include sphere_clear.txt
+
+Include sphere_diamond.txt
+
+Object # teal_cube
+    Use glass_dense_teal
+    # Center at 4.5, -1.5, 0.0. Size 2.5
+    Vertex  3.25 -2.75  1.25
+    Vertex  5.75 -2.75  1.25
+    Vertex  5.75 -2.75 -1.25
+    Vertex  3.25 -2.75 -1.25
+    Vertex  3.25 -0.25  1.25
+    Vertex  5.75 -0.25  1.25
+    Vertex  5.75 -0.25 -1.25
+    Vertex  3.25 -0.25 -1.25
+    # Bottom
+    Face 0 2 1
+    Face 0 3 2
+    # Top
+    Face 4 5 6
+    Face 4 6 7
+    # Front
+    Face 0 1 5
+    Face 0 5 4
+    # Right
+    Face 1 2 6
+    Face 1 6 5
+    # Back
+    Face 2 3 7
+    Face 2 7 6
+    # Left
+    Face 3 0 4
+    Face 3 4 7

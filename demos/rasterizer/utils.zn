@@ -7,14 +7,14 @@ import "glm.d.zn" as glm;
 /// to `N`. Intended for hot paths where heap allocation is undesirable.
 class InplaceVector<T: type, N: usize> {
     let data_: [T; N];
-    let size_: usize = 0;
+    let size_: usize;
 
     init() {
-        return Self{};
+        return Self{size_: 0 as usize};
     }
 
     init(values: [T]) {
-        let mut inst = Self{};
+        let mut inst = Self{size_: 0 as usize};
         for (let mut it = values.begin(); it != values.end(); ++it) {
             inst.push_back(*it);
         }

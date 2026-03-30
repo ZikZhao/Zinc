@@ -1084,7 +1084,9 @@ private:
 
     auto eval_struct_access(Term object, strview member) -> Term {
         const StructType* struct_type = object.decay()->cast<StructType>();
-        auto attr_it = struct_type->fields_.find(member);
+        auto attr_it = std::ranges::find(
+            struct_type->fields_, member, &std::pair<strview, const Type*>::first
+        );
         if (attr_it != struct_type->fields_.end()) {
             return Term::of(Type::forward_like(object.effective_type(), attr_it->second));
         }
@@ -1094,7 +1096,9 @@ private:
 
     auto eval_instance_access(Term object, strview member) -> Symbol {
         const InstanceType* instance_type = object.decay()->cast<InstanceType>();
-        auto attr_it = instance_type->attrs_.find(member);
+        auto attr_it = std::ranges::find(
+            instance_type->attrs_, member, &std::pair<strview, const Type*>::first
+        );
         if (attr_it != instance_type->attrs_.end()) {
             return Term::of(Type::forward_like(object.effective_type(), attr_it->second));
         }
@@ -1667,20 +1671,27 @@ public:
     void operator()(const ASTStructType* node) noexcept {
         out_ = std::type_identity<StructType>();
         bool has_error = false;
-        GlobalMemory::FlatMap<strview, const Type*> field_map;
+        GlobalMemory::Vector<std::pair<strview, const Type*>> fields;
         for (const ASTFieldDeclaration& decl : node->fields) {
+            if (std::ranges::contains(
+                    fields, decl.identifier, &std::pair<strview, const Type*>::first
+                )) {
+                Diagnostic::error_redeclaration(decl.location, decl.identifier);
+                has_error = true;
+                continue;
+            }
             TypeResolution field_type;
             TypeContextEvaluator{sema_, field_type}(decl.type);
             if (!field_type.get()) {
                 has_error = true;
             }
-            field_map.insert({decl.identifier, field_type.get()});
+            fields.push_back({decl.identifier, field_type.get()});
         }
         if (has_error) {
             out_ = nullptr;
             return;
         }
-        TypeRegistry::get_at<StructType>(out_, field_map);
+        TypeRegistry::get_at<StructType>(out_, fields | GlobalMemory::collect<std::span>());
     }
 
     void operator()(const ASTArrayType* node) noexcept;
@@ -1731,10 +1742,17 @@ public:
             has_error |= !result.get();
             interfaces.push_back(result.get());
         }
-        GlobalMemory::FlatMap<strview, const Type*> attrs;
+        GlobalMemory::Vector<std::pair<strview, const Type*>> attrs;
         for (ASTNodeVariant decl_variant : node->fields) {
             const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
             if (decl->declared_static) continue;
+            if (std::ranges::contains(
+                    attrs, decl->identifier, &std::pair<strview, const Type*>::first
+                )) {
+                Diagnostic::error_redeclaration(decl->location, decl->identifier);
+                has_error = true;
+                continue;
+            }
             TypeResolution field_type;
             if (holds_monostate(decl->declared_type)) {
                 Diagnostic::error_missing_type_annotation(decl->location);
@@ -1743,14 +1761,19 @@ public:
             }
             TypeContextEvaluator{sema_, field_type}(decl->declared_type);
             has_error |= !field_type.get();
-            attrs.insert({decl->identifier, field_type.get()});
+            attrs.push_back({decl->identifier, field_type.get()});
         }
         if (has_error) {
             out_ = nullptr;
             return;
         }
         TypeRegistry::get_at<InstanceType>(
-            out_, sema_.current_scope_, node->identifier, base, interfaces, std::move(attrs)
+            out_,
+            sema_.current_scope_,
+            node->identifier,
+            base,
+            interfaces,
+            attrs | GlobalMemory::collect<std::span>()
         );
     }
 
@@ -2205,9 +2228,9 @@ private:
     ) noexcept -> bool {
         GlobalMemory::FlatMap<strview, const Type*> field_types;
         if (auto struct_type = type->dyn_cast<StructType>()) {
-            field_types = struct_type->fields_;
+            field_types = decltype(field_types)(std::from_range, struct_type->fields_);
         } else if (auto instance_type = type->dyn_cast<InstanceType>()) {
-            field_types = instance_type->attrs_;
+            field_types = decltype(field_types)(std::from_range, instance_type->attrs_);
         } else {
             Diagnostic::error_type_mismatch("struct or class", type->repr());
             return false;

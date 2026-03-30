@@ -441,11 +441,11 @@ public:
     static constexpr Kind kind = Kind::Struct;
 
 public:
-    GlobalMemory::FlatMap<strview, const Type*> fields_;
+    std::span<std::pair<strview, const Type*>> fields_;
 
 public:
-    StructType(GlobalMemory::FlatMap<strview, const Type*> fields) noexcept
-        : Type(kind, any_pattern(fields | std::views::values)), fields_(std::move(fields)) {}
+    StructType(std::span<std::pair<strview, const Type*>> fields) noexcept
+        : Type(kind, any_pattern(fields | std::views::values)), fields_(fields) {}
 
     GlobalMemory::String repr() const final {
         GlobalMemory::String str;
@@ -461,8 +461,8 @@ public:
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
         bool has_incomplete_child = false;
-        for (auto field : fields_) {
-            if (!graph.check_dependency(this, field.second)) {
+        for (auto& [_, type] : fields_) {
+            if (!graph.check_dependency(this, type)) {
                 has_incomplete_child = true;
             }
         }
@@ -479,13 +479,13 @@ protected:
         if (fields_.size() != other_struct->fields_.size()) {
             return fields_.size() <=> other_struct->fields_.size();
         }
-        auto it1 = fields_.begin();
-        auto it2 = other_struct->fields_.begin();
-        for (; it1 != fields_.end() && it2 != other_struct->fields_.end(); ++it1, ++it2) {
-            if (it1->first != it2->first) {
-                return it1->first <=> it2->first;
+        for (std::size_t i = 0; i < fields_.size(); ++i) {
+            const auto& [this_name, this_type] = fields_[i];
+            const auto& [other_name, other_type] = other_struct->fields_[i];
+            if (this_name != other_name) {
+                return this_name <=> other_name;
             }
-            auto cmp = it1->second->compare(it2->second, assumed_equal);
+            auto cmp = this_type->compare(other_type, assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
             }
@@ -498,10 +498,16 @@ protected:
         if (!other_struct) {
             return false;
         }
-        for (const auto& [name, type] : fields_) {
-            auto it = other_struct->fields_.find(name);
-            if (it == other_struct->fields_.end() ||
-                !type->pattern_match((*it).second, auto_bindings)) {
+        if (fields_.size() != other_struct->fields_.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < fields_.size(); ++i) {
+            const auto& [this_name, this_type] = fields_[i];
+            const auto& [other_name, other_type] = other_struct->fields_[i];
+            if (this_name != other_name) {
+                return false;
+            }
+            if (!this_type->pattern_match(other_type, auto_bindings)) {
                 return false;
             }
         }
@@ -549,7 +555,7 @@ public:
     strview identifier_;
     const Type* extends_;
     std::span<const Type*> implements_;
-    GlobalMemory::FlatMap<strview, const Type*> attrs_;
+    std::span<std::pair<strview, const Type*>> attrs_;
     mutable const void* primary_template_;
     mutable std::span<const Object*> template_args_;
 
@@ -569,14 +575,14 @@ public:
         strview identifier,
         const Type* extends,
         std::span<const Type*> interfaces,
-        GlobalMemory::FlatMap<strview, const Type*> attrs
+        std::span<std::pair<strview, const Type*>> attrs
     ) noexcept
         : Type(kind, false),
           scope_(scope),
           identifier_(identifier),
           extends_(extends),
           implements_(interfaces),
-          attrs_(std::move(attrs)) {}
+          attrs_(attrs) {}
 
     GlobalMemory::String repr() const override {
         GlobalMemory::String str = GlobalMemory::format("{}", identifier_);

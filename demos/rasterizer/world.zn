@@ -98,6 +98,18 @@ class Camera {
     let orbit_radius_: f32;
     let aspect_ratio_: f32;
 
+    init() {
+        return Self{
+            position_: glm.vec3(0.0f, 0.0f, 12.0f),
+            yaw_: 0.0f,
+            pitch_: 0.0f,
+            roll_: 0.0f,
+            is_orbiting_: false,
+            orbit_radius_: 0.0f,
+            aspect_ratio_: 1.0f,
+        };
+    }
+
     fn set_aspect_ratio(self: &mut Self, aspect_ratio: f32) { self.aspect_ratio_ = aspect_ratio; }
     fn aspect_ratio(self: &Self) -> f32 { return self.aspect_ratio_; }
 
@@ -234,7 +246,7 @@ class World {
     let camera_: Camera;
 
     init(filenames: [strview]) {
-        let mut world = Self{};
+        let mut world = Self{camera_: Camera()};
         // Scene ingestion: load HDR environment, OBJ models or text scenes; then merge into a single
         // geometry store
         for (let mut it = filenames.begin(); it != filenames.end(); ++it) {
@@ -271,7 +283,7 @@ class World {
 
     static fn parse_index_token(token: &std.string) -> [i32; 3] {
         // Parses an OBJ index token of the form "v", "v/vt", "v//vn", or "v/vt/vn"
-        let mut idx: [i32; 3] = [0, 0, 0];
+        let mut idx: [i32; 3] = [-1, -1, -1];
 
         let first_slash = token.find('/');
         if (first_slash == std.string.npos) {
