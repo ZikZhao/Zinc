@@ -1,18 +1,8 @@
-class A<T: type> {
-    init(t: T) {
-        return Self{};
-    }
-    fn foo(self: &Self, t: T) {
-        return;
-    }
-    fn bar<U: type>(self: &Self, other: A<U>) {
-        return;
-    }
-}
+type A = {
+    c: i32,
+    b: strview,
+};
 
 fn main(args: [strview]) {
-    let a = A<i32>(42);
-    let b = A<f32>(3.14f);
-    a.bar(b);
 }
 

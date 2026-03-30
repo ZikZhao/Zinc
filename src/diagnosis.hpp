@@ -594,6 +594,16 @@ public:
             }
         );
     }
+
+    static auto error_missing_type_annotation(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Missing type annotation"sv)
+            }
+        );
+    }
 };
 
 inline thread_local std::optional<Diagnostic> Diagnostic::instance;

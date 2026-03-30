@@ -71,12 +71,6 @@ public:
             }
             break;
         }
-        case Kind::Mutable:
-            if (!is_forward_declared(type->cast<MutableType>()->target_type_)) {
-                edges_.insert({.child = type->cast<MutableType>()->target_type_, .parent = type});
-            }
-            add(type->cast<MutableType>()->target_type_);
-            break;
         case Kind::Reference:
             if (!is_forward_declared(type->cast<ReferenceType>()->target_type_)) {
                 edges_.insert({.child = type->cast<ReferenceType>()->target_type_, .parent = type});
@@ -171,19 +165,20 @@ public:
         case Kind::Interface:
             /// TODO:
             break;
-        case Kind::Mutable:
-            output(out, type->cast<MutableType>()->target_type_, type_map);
-            break;
         case Kind::Reference:
             output(out, type->cast<ReferenceType>()->target_type_, type_map);
-            if (!type->cast<ReferenceType>()->target_type_->dyn_cast<MutableType>()) {
-                out += " const"sv;
+            if (type->cast<ReferenceType>()->is_moved_) {
+                out += "&&"sv;
+            } else {
+                if (!type->cast<ReferenceType>()->is_mutable_) {
+                    out += " const"sv;
+                }
+                out += "&"sv;
             }
-            out += "&"sv;
             break;
         case Kind::Pointer:
             output(out, type->cast<PointerType>()->target_type_, type_map);
-            if (!type->cast<PointerType>()->target_type_->dyn_cast<MutableType>()) {
+            if (!type->cast<PointerType>()->is_mutable_) {
                 out += " const"sv;
             }
             out += "*"sv;
@@ -488,16 +483,20 @@ public:
             }
             break;
         }
-        case Kind::Mutable:
-            out += "m"sv;
-            (*this)(out, type->cast<MutableType>()->target_type_);
-            break;
         case Kind::Reference:
             out += "r"sv;
+            if (type->cast<ReferenceType>()->is_moved_) {
+                out += "M"sv;
+            } else if (type->cast<ReferenceType>()->is_mutable_) {
+                out += "m"sv;
+            }
             (*this)(out, type->cast<ReferenceType>()->target_type_);
             break;
         case Kind::Pointer:
             out += "p"sv;
+            if (!type->cast<PointerType>()->is_mutable_) {
+                out += "m"sv;
+            }
             (*this)(out, type->cast<PointerType>()->target_type_);
             break;
         case Kind::Struct:
@@ -766,6 +765,9 @@ public:
                     out += sep;
                     const ASTFunctionParameter& param = node->parameters[i];
                     ObjectCodeGen::output(out, func_type->parameters_[i], type_map_);
+                    if (!param.is_mutable && func_type->parameters_[i]->kind_ != Kind::Reference) {
+                        out += " const"sv;
+                    }
                     out += " "sv;
                     out += param.identifier;
                     sep = ", "sv;
@@ -781,9 +783,9 @@ public:
         indent_level_++;
         if (is_main) {
             newline();
-            definitions_ += "const std::vector<std::string_view> $args_vec{$argv, $argv + $argc};";
+            definitions_ += "std::vector<std::string_view> $args_vec{$argv, $argv + $argc};";
             newline();
-            definitions_ += "const std::span<const std::string_view> args{$args_vec};"sv;
+            definitions_ += "const std::span<std::string_view> args{$args_vec};"sv;
         }
         for (const ASTNodeVariant& child : node->body) {
             newline();
@@ -809,6 +811,9 @@ public:
                 out += sep;
                 const ASTFunctionParameter& param = node->parameters[i];
                 ObjectCodeGen::output(out, func_type->parameters_[i], type_map_);
+                if (!param.is_mutable && func_type->parameters_[i]->kind_ != Kind::Reference) {
+                    out += " const"sv;
+                }
                 out += " "sv;
                 out += param.identifier;
                 sep = ", "sv;
@@ -841,11 +846,18 @@ public:
             }
             out += "("sv;
             ObjectCodeGen::output(out, func_type->parameters_[0], type_map_);
+            if (!node->left.is_mutable && func_type->parameters_[0]->kind_ != Kind::Reference) {
+                out += " const"sv;
+            }
             out += " "sv;
             out += node->left.identifier;
             if (node->right) {
                 out += ", "sv;
                 ObjectCodeGen::output(out, func_type->parameters_[1], type_map_);
+                if (!node->right->is_mutable &&
+                    func_type->parameters_[1]->kind_ != Kind::Reference) {
+                    out += " const"sv;
+                }
                 out += " "sv;
                 out += node->right->identifier;
             }
@@ -1146,7 +1158,12 @@ public:
     auto operator()(const ASTDeclaration* node) -> void {
         const Type* type = std::get<const Type*>(*env_.find(current_scope_, node));
         ObjectCodeGen::output(definitions_, type, type_map_);
-        std::format_to(std::back_inserter(definitions_), " {}", node->identifier);
+        if (current_scope_->self_id_.empty() && !node->is_mutable &&
+            type->kind_ != Kind::Reference) {
+            definitions_ += " const"sv;
+        }
+        definitions_ += " "sv;
+        definitions_ += node->identifier;
         if (!holds_monostate(node->expr)) {
             definitions_ += " = "sv;
             (*this)(node->expr);

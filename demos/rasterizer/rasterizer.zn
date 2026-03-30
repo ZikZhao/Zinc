@@ -108,7 +108,7 @@ class Rasterizer {
 
         if (input.size() == 0) { return output; }
 
-        for (let i: usize = 0; i < input.size(); i++) {
+        for (let mut i: usize = 0; i < input.size(); i++) {
             let current = input[i];
             let next = input[(i + 1) % input.size()];
 
@@ -167,10 +167,10 @@ class Rasterizer {
         };
     }
 
-    let window_: &Window.Window;
+    let window_: &mut Window.Window;
     let mut z_buffer_: std.vector<f32>;
 
-    init(window: &Window.Window) {
+    init(window: &mut Window.Window) {
         return Self{
             window_: window,
             z_buffer_: std.vector<f32>(window.width_ * window.height_, 0.0f)
@@ -219,7 +219,7 @@ class Rasterizer {
 
         // Project clipped polygon to NDC and convert to screen; carry 1/w for depth
         let mut screen_verts: std.vector<World.ScreenNdcCoord>;
-        for (let i: usize = 0; i < clipped.size(); i++) {
+        for (let mut i: usize = 0; i < clipped.size(); i++) {
             let ndc = camera.clip_to_ndc(clipped[i].position_clip);
             screen_verts.push_back(self.ndc_to_screen(ndc, clipped[i].uv, clipped[i].position_clip.w));
         }
@@ -229,14 +229,14 @@ class Rasterizer {
         let width = self.window_.width_;
         let height = self.window_.height_;
 
-        for (let i: usize = 0; i < screen_verts.size(); i++) {
+        for (let mut i: usize = 0; i < screen_verts.size(); i++) {
             let from = screen_verts[i];
             let to = screen_verts[(i + 1) % screen_verts.size()];
             if (std.abs(to.x - from.x) >= std.abs(to.y - from.y)) {
                 // Iterate over x
                 let from_x = std.max(std.floor(std.min(from.x, to.x)) as isize, 0 as isize);
                 let to_x = std.min(std.ceil(std.max(from.x, to.x)) as isize, (width as isize) - 1);
-                for (let x: isize = from_x; x <= to_x; x++) {
+                for (let mut x: isize = from_x; x <= to_x; x++) {
                     let y = std.round(from.y + (to.y - from.y) * ((x as f32) - from.x) / (to.x - from.x)) as isize;
                     if (x < 0 || x >= width as isize || y < 0 || y >= height as isize) {
                         continue;
@@ -253,7 +253,7 @@ class Rasterizer {
                 // Iterate over y
                 let from_y = std.max(std.floor(std.min(from.y, to.y)) as isize, 0 as isize);
                 let to_y = std.min(std.ceil(std.max(from.y, to.y)) as isize, (height as isize) - 1);
-                for (let y: isize = from_y; y <= to_y; y++) {
+                for (let mut y: isize = from_y; y <= to_y; y++) {
                     let x = (std.round(from.x + (to.x - from.x) * ((y as f32) - from.y) / (to.y - from.y))) as isize;
                     if (x < 0 || x >= width as isize || y < 0 || y >= height as isize) {
                         continue;
@@ -286,7 +286,7 @@ class Rasterizer {
         // Project to NDC and convert to screen space, tracking 1/w for perspective-correct
         // interpolation
         let mut screen_verts: Utils.InplaceVector::<World.ScreenNdcCoord, 9>;
-        for (let i: usize = 0; i < clipped.size(); i++) {
+        for (let mut i: usize = 0; i < clipped.size(); i++) {
             let ndc = camera.clip_to_ndc(clipped[i].position_clip);
             screen_verts.push_back(self.ndc_to_screen(ndc, clipped[i].uv, clipped[i].position_clip.w));
         }
@@ -294,7 +294,7 @@ class Rasterizer {
         // Triangulate convex polygon fan-wise and perform two-pass scanline fill (top/bottom)
         let width = self.window_.width_;
         let height = self.window_.height_;
-        for (let i: usize = 1; i + 1 < clipped.size(); i++) {
+        for (let mut i: usize = 1; i + 1 < clipped.size(); i++) {
             let mut v0 = screen_verts[0 as usize];
             let mut v1 = screen_verts[i];
             let mut v2 = screen_verts[i + 1];
@@ -323,13 +323,13 @@ class Rasterizer {
             let inv_slope_v1v2 = (v2.y - v1.y) == 0.0f ? 0.0f : (v2.x - v1.x) / (v2.y - v1.y);
 
             // Upper half scanlines: barycentrics, perspective-correct texture, depth test
-            for (let y: isize = from_y; y < mid_y; y++) {
+            for (let mut y: isize = from_y; y < mid_y; y++) {
                 let y_center = y as f32 + 0.5f;
                 let x01 = inv_slope_v0v1 * (y_center - v0.y) + v0.x;
                 let x02 = inv_slope_v0v2 * (y_center - v0.y) + v0.x;
                 let start_x = std.max(std.floor(std.min(x01, x02)) as isize, 0 as isize);
                 let end_x = std.min(std.ceil(std.max(x01, x02)) as isize, width as isize - 1);
-                for (let x: isize = start_x; x <= end_x; x++) {
+                for (let mut x: isize = start_x; x <= end_x; x++) {
                     let x_center = x as f32 + 0.5f;
                     let bary = Utils.Barycentric(
                         glm.vec2(v0.x, v0.y), glm.vec2(v1.x, v1.y), glm.vec2(v2.x, v2.y), glm.vec2(x_center, y_center)
@@ -353,7 +353,7 @@ class Rasterizer {
             }
 
             // Lower half scanlines: same process with bottom edges
-            for (let y: isize = mid_y; y <= to_y; y++) {
+            for (let mut y: isize = mid_y; y <= to_y; y++) {
                 let y_center = y as f32 + 0.5f;
                 let x12 = inv_slope_v1v2 * (y_center - v1.y) + v1.x;
                 let x02 = inv_slope_v0v2 * (y_center - v0.y) + v0.x;
@@ -362,7 +362,7 @@ class Rasterizer {
                     std.ceil(std.max(x12, x02)) as isize,
                     width as isize - 1
                 );
-                for (let x: isize = start_x; x <= end_x; x++) {
+                for (let mut x: isize = start_x; x <= end_x; x++) {
                     let x_center = x as f32 + 0.5f;
                     let bary = Utils.Barycentric(
                         glm.vec2(v0.x, v0.y), glm.vec2(v1.x, v1.y), glm.vec2(v2.x, v2.y), glm.vec2(x_center, y_center)

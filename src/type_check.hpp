@@ -278,18 +278,6 @@ public:
         return str;
     }
 
-    static auto ref_to_value_category(Term term) -> Term {
-        if (!term) return term;
-        if (auto ref_type = term->dyn_cast<ReferenceType>()) {
-            if (ref_type->is_moved_) {
-                return Term::xvalue(ref_type->target_type_);
-            } else {
-                return Term::lvalue(ref_type->target_type_);
-            }
-        }
-        return term;
-    }
-
 private:
     GlobalMemory::Map<std::pair<const Scope*, const ScopeValue*>, TypeResolution> type_cache_;
 
@@ -876,14 +864,11 @@ private:
                 // (lvalue) &T -> &T / &mut T / T, &mut T -> &mut T / &T / T
                 if (param_ref == nullptr) return Copy;
                 if (param_ref->is_moved_) return NoMatch;
-                return (arg_ref->target_type_->kind_ == Kind::Mutable) ^
-                               (param_ref->target_type_->kind_ == Kind::Mutable)
-                           ? Qualified
-                           : Exact;
+                return (arg_ref->is_mutable_) ^ (param_ref->is_mutable_) ? Qualified : Exact;
             } else {
                 // (xvalue) move &T -> move &T / &mut T / &T / T
                 if (!param_ref) return Copy;
-                if (param_ref->target_type_->kind_ == Kind::Mutable) return Referenced;
+                if (param_ref->is_mutable_) return Referenced;
                 return param_ref->is_moved_ ? Exact : QualifiedReferenced;
             }
         };
@@ -1381,6 +1366,10 @@ public:
                 break;
             case OperatorGroup::UnaryArithmetic:
                 assert(!right);
+                if (!Type::is_mutable(left.effective_type()) &&
+                    (opcode == OperatorCode::Increment || opcode == OperatorCode::PostIncrement ||
+                     opcode == OperatorCode::Decrement || opcode == OperatorCode::PostDecrement))
+                    break;
                 if (left_kind == Kind::Integer) {
                     return Term::of(integer_op(opcode, left_value));
                 } else if (left_kind == Kind::Float) {
@@ -1433,6 +1422,11 @@ public:
                 }
                 break;
             case OperatorGroup::UnaryArithmetic:
+                assert(!right);
+                if (!Type::is_mutable(left.effective_type()) &&
+                    (opcode == OperatorCode::Increment || opcode == OperatorCode::PostIncrement ||
+                     opcode == OperatorCode::Decrement || opcode == OperatorCode::PostDecrement))
+                    break;
                 if (left_kind == Kind::Integer || left_kind == Kind::Float) {
                     return Term::of(result_type);
                 }
@@ -1451,6 +1445,7 @@ public:
                 }
                 break;
             case OperatorGroup::UnaryLogical:
+                assert(!right);
                 if (left_kind == Kind::Boolean) {
                     return Term::of(&BooleanType::instance);
                 }
@@ -1461,6 +1456,7 @@ public:
                 }
                 break;
             case OperatorGroup::UnaryBitwise:
+                assert(!right);
                 if (left_kind == Kind::Integer) {
                     return Term::of(result_type);
                 }
@@ -1471,10 +1467,10 @@ public:
                 if ((left_kind == Kind::Integer && right_kind == Kind::Integer) ||
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
-                    return Term::lvalue(result_type);
+                    return Term::lvalue(result_type, true);
                 } else {
                     if (decayed_left == decayed_right) {
-                        return Term::lvalue(result_type);
+                        return Term::lvalue(result_type, true);
                     }
                 }
                 break;
@@ -1498,7 +1494,7 @@ public:
         const Type* right_base_type = Type::decay(right_type);
         if (opcode == OperatorCode::Assign && left_base_type == right_base_type) {
             if (Type::is_mutable(left_type)) {
-                return {Term::lvalue(left_type), nullptr};
+                return {Term::lvalue(left_type, true), nullptr};
             }
         }
         if (left_base_type->kind_ != Kind::Instance && right_base_type &&
@@ -1618,17 +1614,19 @@ public:
     }
 
     void operator()(const ASTUnaryOp* node) noexcept {
-        TypeResolution expr_result;
-        TypeContextEvaluator{sema_, expr_result, false}(node->expr);
-        out_ = TypeResolution(sema_.operation_handler_->eval_type_op(node->opcode, expr_result));
+        /// TODO: type operation
+        // TypeResolution expr_result;
+        // TypeContextEvaluator{sema_, expr_result, false}(node->expr);
+        // out_ = TypeResolution(sema_.operation_handler_->eval_type_op(node->opcode, expr_result));
     }
 
     void operator()(const ASTBinaryOp* node) noexcept {
-        TypeResolution left_result;
-        TypeContextEvaluator{sema_, left_result}(node->left);
-        TypeResolution right_result;
-        TypeContextEvaluator{sema_, right_result}(node->right);
-        out_ = sema_.operation_handler_->eval_type_op(node->opcode, left_result, right_result);
+        /// TODO: type operation
+        // TypeResolution left_result;
+        // TypeContextEvaluator{sema_, left_result}(node->left);
+        // TypeResolution right_result;
+        // TypeContextEvaluator{sema_, right_result}(node->right);
+        // out_ = sema_.operation_handler_->eval_type_op(node->opcode, left_result, right_result);
     }
 
     void operator()(const ASTStructInitialization* node) noexcept {
@@ -1687,20 +1685,6 @@ public:
 
     void operator()(const ASTArrayType* node) noexcept;
 
-    void operator()(const ASTMutableType* node) noexcept {
-        out_ = std::type_identity<MutableType>();
-        TypeResolution expr_type;
-        TypeContextEvaluator{sema_, expr_type, false}(node->inner);
-        if (!expr_type.get()) {
-            out_ = nullptr;
-            return;
-        }
-        if (!expr_type.is_sized()) {
-            TypeRegistry::add_ref_dependency(out_, expr_type);
-        }
-        TypeRegistry::get_at<MutableType>(out_, expr_type);
-    }
-
     void operator()(const ASTReferenceType* node) noexcept {
         out_ = std::type_identity<ReferenceType>();
         TypeResolution expr_type;
@@ -1712,7 +1696,7 @@ public:
         if (!expr_type.is_sized()) {
             TypeRegistry::add_ref_dependency(out_, expr_type);
         }
-        TypeRegistry::get_at<ReferenceType>(out_, expr_type, node->is_moved);
+        TypeRegistry::get_at<ReferenceType>(out_, expr_type, node->is_mutable, node->is_moved);
     }
 
     void operator()(const ASTPointerType* node) noexcept {
@@ -1726,7 +1710,7 @@ public:
         if (!expr_type.is_sized()) {
             TypeRegistry::add_ref_dependency(out_, expr_type);
         }
-        TypeRegistry::get_at<PointerType>(out_, expr_type);
+        TypeRegistry::get_at<PointerType>(out_, expr_type, node->is_mutable);
     }
 
     void operator()(const ASTClassDefinition* node) noexcept {
@@ -1753,7 +1737,9 @@ public:
             if (decl->declared_static) continue;
             TypeResolution field_type;
             if (holds_monostate(decl->declared_type)) {
-                throw;
+                Diagnostic::error_missing_type_annotation(decl->location);
+                has_error = true;
+                continue;
             }
             TypeContextEvaluator{sema_, field_type}(decl->declared_type);
             has_error |= !field_type.get();
@@ -1901,7 +1887,11 @@ public:
             return {};
         }
         Term operand_term = Sema::get<SymbolKind::Term>(operand_symbol);
-        return Term::of(TypeRegistry::get<PointerType>(operand_term.effective_type()));
+        return Term::of(
+            TypeRegistry::get<PointerType>(
+                operand_term.effective_type(), Type::is_mutable(operand_term.effective_type())
+            )
+        );
     }
 
     auto operator()(const ASTDereference* node) noexcept -> Symbol {
@@ -2077,7 +2067,7 @@ public:
                 Diagnostic::error_double_move(node->location);
                 return {};
             }
-            return Term::of(TypeRegistry::get<ReferenceType>(ref_type->target_type_, true));
+            return Term::of(TypeRegistry::get<ReferenceType>(ref_type->target_type_, true, true));
         }
         Diagnostic::error_move_non_reference(node->location, inner_term.effective_type()->repr());
         return {};
@@ -2607,9 +2597,9 @@ inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init
         if (Type::category(type.get()) != ValueCategory::Right) {
             return {};
         }
-        return Term::lvalue(TypeRegistry::get<MutableType>(type.get()));
+        return Term::lvalue(type.get(), true);
     }
-    return Term::lvalue(type.get());
+    return Term::lvalue(type.get(), false);
 }
 
 inline auto TemplateHandler::inference(
@@ -3084,7 +3074,7 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
             return {};
         }
         if (auto* pointer_type = decayed->dyn_cast<PointerType>()) {
-            Term dereferenced = Term::lvalue(pointer_type->target_type_);
+            Term dereferenced = Term::lvalue(pointer_type->target_type_, pointer_type->is_mutable_);
             const Type* decayed_dereferenced = dereferenced.decay();
             if (decayed_dereferenced->dyn_cast<StructType>()) {
                 sema_.codegen_env_.map_pointer_access(
@@ -3131,7 +3121,7 @@ inline auto AccessHandler::eval_deref(const ASTDereference* node) noexcept -> Sy
     Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
     const Type* decayed = base_term.decay();
     if (auto* pointer_type = decayed->dyn_cast<PointerType>()) {
-        return Sema::nonnull(Term::lvalue(pointer_type->target_type_));
+        return Sema::nonnull(Term::lvalue(pointer_type->target_type_, pointer_type->is_mutable_));
     } else if (decayed->dyn_cast<InstanceType>()) {
         auto result =
             sema_.operation_handler_->eval_overloaded_op(node, OperatorCode::Deref, base_term);

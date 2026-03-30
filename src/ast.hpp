@@ -247,7 +247,6 @@ struct ASTParenExpr final : public ASTExpression {
 
 struct ASTAddressOfExpr final : public ASTExpression {
     ASTExprVariant operand;
-    bool is_mutable;
 };
 
 struct ASTDereference final : public ASTExpression {
@@ -343,11 +342,13 @@ struct ASTMutableType final : public ASTExplicitTypeExpr {
 
 struct ASTReferenceType final : public ASTExplicitTypeExpr {
     ASTExprVariant inner;
+    bool is_mutable;
     bool is_moved;
 };
 
 struct ASTPointerType final : public ASTExplicitTypeExpr {
     ASTExprVariant inner;
+    bool is_mutable;
 };
 
 // struct ASTTemplateInstantiation final : public ASTExpression {

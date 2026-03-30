@@ -224,7 +224,7 @@ expr:
 		| op_ = OP_SUB
 		| op_ = OP_NOT
 		| op_ = OP_BITNOT
-		| op_ = OP_BITAND KW_MUT?
+		| op_ = OP_BITAND
 		| op_ = OP_MUL
 	) expr_ = expr											# UnaryExpr
 	| <assoc = right> expr_ = expr op_ = (OP_INC | OP_DEC)	# PostfixUnaryExpr
@@ -318,9 +318,8 @@ type:
 	| OP_LPAREN (
 		parameters_ += type (OP_COMMA parameters_ += type)*
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
-	| KW_MUT inner_type_ = type						# MutableType
-	| KW_MOVE? OP_BITAND inner_type_ = type			# ReferenceType
-	| OP_MUL inner_type_ = type						# PointerType
+	| KW_MOVE? OP_BITAND KW_MUT? inner_type_ = type	# ReferenceType
+	| OP_MUL KW_MUT? inner_type_ = type				# PointerType
 	| inner_type_ = type OP_QUESTION				# OptionalType
 	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
 

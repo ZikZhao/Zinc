@@ -243,7 +243,7 @@ class World {
             if (std.filesystem.is_directory(path)) {
                 throw std.runtime_error(std.string("File does not exist: ") + std.string(filename));
             }
-            let ext = path.extension().string();
+            let mut ext = path.extension().string();
             std.transform(ext.begin(), ext.end(), ext.begin(), (ch: u8): u8 => std.tolower(ch));
 
             if (ext == ".hdr") {
@@ -591,7 +591,7 @@ class World {
                 let mut vi_out: [i32; 3] = [0, 0, 0];
                 let mut vn_out: [i32; 3] = [-1, -1, -1];
                 let mut has_vn = false;
-                for (let i: usize = 0; i < 3; ++i) {
+                for (let mut i: usize = 0; i < 3; ++i) {
                     let t: &std.string = tok[i];
                     let indice = Self.parse_index_token(t);
                     let v_i = indice[0];
@@ -613,7 +613,7 @@ class World {
                 // If normals are absent, defer to per-vertex cached normals when available; mark
                 // missing as -1
                 if (!has_vn) {
-                    for (let i: usize = 0; i < 3; ++i) {
+                    for (let mut i: usize = 0; i < 3; ++i) {
                         let vidx = vi_out[i];
                         if (vidx >= 0 &&
                             vidx as usize < model.vertex_normals_by_vertex.size()) {
@@ -622,7 +622,7 @@ class World {
                             }
                         }
                     }
-                    for (let i: usize = 0; i < 3; ++i) {
+                    for (let mut i: usize = 0; i < 3; ++i) {
                         if (vn_out[i] < 0) {
                             vn_out[i] = -1;
                         }
@@ -655,7 +655,7 @@ class World {
         let mut ppm = Utils.ReadPPM(path);
         let mut texture_data: std.vector<Colour>;
         texture_data.resize(ppm.width * ppm.height);
-        for (let i: usize = 0; i < ppm.width * ppm.height; i++) {
+        for (let mut i: usize = 0; i < ppm.width * ppm.height; ++i) {
             let red = ppm.stream.get();
             let green = ppm.stream.get();
             let blue = ppm.stream.get();
@@ -754,7 +754,7 @@ class World {
             let local_face = *it;
             let mut global_face = local_face;
 
-            for (let k = 0; k < 3; ++k) {
+            for (let mut k = 0; k < 3; ++k) {
                 global_face.v_indices[k as usize] += v_offset;
                 if (global_face.vt_indices[k as usize] != std.numeric_limits<u32>.max()) {
                     global_face.vt_indices[k as usize] += vt_offset;

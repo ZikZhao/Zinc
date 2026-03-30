@@ -120,10 +120,6 @@ auto is_compound(const Type* type) -> bool { return !is_scalar(type); }
 //            Kind::Instance);
 // }
 
-auto is_mut(const Type* type) -> bool { return type->kind_ == Kind::Mutable; }
-
-auto is_const(const Type* type) -> bool { return !is_mut(type); }
-
 auto get_metas() -> std::generator<std::pair<strview, MetaFunction>> {
     // scope.add_meta("is_void", MetaWrapper<is_void>{});
     co_yield {"is_integral", MetaWrapper<is_integral>::invoke};
@@ -143,7 +139,5 @@ auto get_metas() -> std::generator<std::pair<strview, MetaFunction>> {
     co_yield {"is_scalar", MetaWrapper<is_scalar>::invoke};
     co_yield {"is_object", MetaWrapper<is_object>::invoke};
     co_yield {"is_compound", MetaWrapper<is_compound>::invoke};
-    co_yield {"is_mut", MetaWrapper<is_mut>::invoke};
-    co_yield {"is_const", MetaWrapper<is_const>::invoke};
 }
 }  // namespace Meta

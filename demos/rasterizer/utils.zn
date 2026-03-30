@@ -100,7 +100,7 @@ fn WritePPM(
     output_stream << width << " " << height << "\n";
     output_stream << max << "\n";
 
-    for (let i: usize = 0; i < width * height; i++) {
+    for (let mut i: usize = 0; i < width * height; i++) {
         let rgb: [u8; 3] = [
             ((pixels[i] >> 16) & 0xFF) as u8,
             ((pixels[i] >> 8) & 0xFF) as u8,

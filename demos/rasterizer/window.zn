@@ -120,12 +120,6 @@ class Window {
         return self.pixel_buffer_[y * self.width_ + x];
     }
 
-    /*operator[](self: &Self, xy: std.pair<i32, i32>) -> u32 {
-        let x = xy.first as usize;
-        let y = xy.second as usize;
-        return self.pixel_buffer_[y * self.width_ + x];
-    }*/
-
     fn get_pixel_buffer(self: &Self) -> &std.vector<u32> {
         return self.pixel_buffer_;
     }
@@ -173,7 +167,7 @@ class Window {
         self.mouse_xrel_ = 0;
         self.mouse_yrel_ = 0;
         self.mouse_scroll_ = 0;
-        for (sdl.SDL_PollEvent(&mut event)) {
+        for (sdl.SDL_PollEvent(&event)) {
             if (event.type == sdl.SDL_QUIT ||
                 (event.type == sdl.SDL_WINDOWEVENT && event.window.event == sdl.SDL_WINDOWEVENT_CLOSE) ||
                 (event.type == sdl.SDL_KEYDOWN && event.key.keysym.sym == sdl.SDLK_ESCAPE)) {

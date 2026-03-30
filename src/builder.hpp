@@ -724,9 +724,7 @@ private:
         case ZincParser::OP_BITNOT:
             return as_variant(new ASTUnaryOp{loc(ctx), OperatorCode::BitwiseNot, expr});
         case ZincParser::OP_BITAND:
-            return as_variant(
-                new ASTAddressOfExpr{loc(ctx), visit_expr(ctx->expr_), ctx->KW_MUT() != nullptr}
-            );
+            return as_variant(new ASTAddressOfExpr{loc(ctx), visit_expr(ctx->expr_)});
         case ZincParser::OP_MUL:
             return as_variant(new ASTDereference{loc(ctx), visit_expr(ctx->expr_)});
         default:
@@ -986,21 +984,21 @@ private:
         });
     }
 
-    auto visitMutableType(ZincParser::MutableTypeContext* ctx) noexcept
-        -> Any<ASTExprVariant> final {
-        return as_variant(new ASTMutableType{loc(ctx), visit_expr(ctx->inner_type_)});
-    }
-
     auto visitReferenceType(ZincParser::ReferenceTypeContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
-        return as_variant(
-            new ASTReferenceType{loc(ctx), visit_expr(ctx->inner_type_), ctx->KW_MOVE() != nullptr}
-        );
+        return as_variant(new ASTReferenceType{
+            loc(ctx),
+            visit_expr(ctx->inner_type_),
+            ctx->KW_MUT() != nullptr,
+            ctx->KW_MOVE() != nullptr
+        });
     }
 
     auto visitPointerType(ZincParser::PointerTypeContext* ctx) noexcept
         -> Any<ASTExprVariant> final {
-        return as_variant(new ASTPointerType{loc(ctx), visit_expr(ctx->inner_type_)});
+        return as_variant(
+            new ASTPointerType{loc(ctx), visit_expr(ctx->inner_type_), ctx->KW_MUT() != nullptr}
+        );
     }
 
     auto visitInstantiatedType(ZincParser::InstantiatedTypeContext* ctx) noexcept

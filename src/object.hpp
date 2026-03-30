@@ -16,7 +16,6 @@ enum class Kind : std::uint8_t {
     Struct,
     Interface,
     Instance,
-    Mutable,
     Reference,
     Pointer,
     Union,
@@ -42,7 +41,6 @@ class FunctionType;
 class StructType;
 class InterfaceType;
 class InstanceType;
-class MutableType;
 class ReferenceType;
 class PointerType;
 class UnionType;
@@ -633,54 +631,30 @@ protected:
     }
 };
 
-class MutableType final : public Type {
-public:
-    static constexpr Kind kind = Kind::Mutable;
-
-public:
-    const Type* target_type_;
-
-public:
-    MutableType(const Type* target_type) noexcept
-        : Type(kind, target_type->is_pattern()), target_type_(target_type) {}
-
-    GlobalMemory::String repr() const final {
-        return GlobalMemory::format("mut {}", target_type_->repr());
-    }
-
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
-        return !graph.is_parent(this) && graph.check_dependency(this, target_type_);
-    }
-
-    auto default_construct() const noexcept -> bool final { return false; }
-
-protected:
-    std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
-    ) const noexcept final {
-        const MutableType* other_mut = other->cast<MutableType>();
-        return target_type_->compare(other_mut->target_type_, assumed_equal);
-    }
-
-    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
-        const MutableType* other_mut = target->dyn_cast<MutableType>();
-        return other_mut && target_type_->pattern_match(other_mut->target_type_, auto_bindings);
-    }
-};
-
 class ReferenceType final : public Type {
 public:
     static constexpr Kind kind = Kind::Reference;
 
 public:
     const Type* target_type_;
+    bool is_mutable_;
     bool is_moved_;
 
 public:
-    ReferenceType(const Type* target_type, bool is_moved) noexcept
-        : Type(kind, target_type->is_pattern()), target_type_(target_type), is_moved_(is_moved) {}
+    ReferenceType(const Type* target_type, bool is_mutable, bool is_moved) noexcept
+        : Type(kind, target_type->is_pattern()),
+          target_type_(target_type),
+          is_mutable_(is_mutable),
+          is_moved_(is_moved) {
+        assert(!is_moved_ || is_mutable_);
+    }
     GlobalMemory::String repr() const final {
-        return GlobalMemory::format("{}&{}", is_moved_ ? "move " : "", target_type_->repr());
+        return GlobalMemory::format(
+            "{}&{}{}",
+            is_moved_ ? "move " : "",
+            (is_mutable_ && !is_moved_) ? "mut " : "",
+            target_type_->repr()
+        );
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -694,6 +668,9 @@ protected:
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const ReferenceType* other_ref = other->cast<ReferenceType>();
+        if (is_mutable_ != other_ref->is_mutable_) {
+            return is_mutable_ <=> other_ref->is_mutable_;
+        }
         if (is_moved_ != other_ref->is_moved_) {
             return is_moved_ <=> other_ref->is_moved_;
         }
@@ -702,7 +679,8 @@ protected:
 
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const ReferenceType* other_ref = target->dyn_cast<ReferenceType>();
-        return other_ref && (is_moved_ == other_ref->is_moved_) &&
+        return other_ref && (is_mutable_ == other_ref->is_mutable_) &&
+               (is_moved_ == other_ref->is_moved_) &&
                target_type_->pattern_match(other_ref->target_type_, auto_bindings);
     }
 };
@@ -713,12 +691,15 @@ public:
 
 public:
     const Type* target_type_;
+    bool is_mutable_;
 
 public:
-    PointerType(const Type* target_type) noexcept
-        : Type(kind, target_type->is_pattern()), target_type_(target_type) {}
+    PointerType(const Type* target_type, bool is_mutable) noexcept
+        : Type(kind, target_type->is_pattern()),
+          target_type_(target_type),
+          is_mutable_(is_mutable) {}
     GlobalMemory::String repr() const final {
-        return GlobalMemory::format("*{}", target_type_->repr());
+        return GlobalMemory::format("*{}{}", is_mutable_ ? "mut " : "", target_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -732,12 +713,16 @@ protected:
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const PointerType* other_ptr = other->cast<PointerType>();
+        if (is_mutable_ != other_ptr->is_mutable_) {
+            return is_mutable_ <=> other_ptr->is_mutable_;
+        }
         return target_type_->compare(other_ptr->target_type_, assumed_equal);
     }
 
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const PointerType* other_ptr = target->dyn_cast<PointerType>();
-        return other_ptr && target_type_->pattern_match(other_ptr->target_type_, auto_bindings);
+        return other_ptr && (is_mutable_ == other_ptr->is_mutable_) &&
+               target_type_->pattern_match(other_ptr->target_type_, auto_bindings);
     }
 };
 
@@ -1345,7 +1330,6 @@ private:
     std::tuple<
         TypeSet<FunctionType>,
         TypeSet<StructType>,
-        TypeSet<MutableType>,
         TypeSet<ReferenceType>,
         TypeSet<PointerType>,
         TypeSet<UnionType>>
@@ -1390,11 +1374,6 @@ private:
         case Kind::Instance:
             // std::get<TypeSet<ClassType>>(types_).insert(type->cast<ClassType>());
             return {nullptr, false};
-        case Kind::Mutable: {
-            auto [it, inserted] =
-                std::get<TypeSet<MutableType>>(types_).insert(type->cast<MutableType>());
-            return {*it, inserted};
-        }
         case Kind::Reference: {
             auto [it, inserted] =
                 std::get<TypeSet<ReferenceType>>(types_).insert(type->cast<ReferenceType>());
@@ -1470,18 +1449,24 @@ class Term : public GlobalMemory::MonotonicAllocated {
 public:
     static auto of(const Type* type) noexcept -> Term { return Term(type); }
     static auto of(const Value* value) noexcept -> Term { return Term(value); }
-    static auto lvalue(const Type* type) noexcept -> Term {
+    static auto lvalue(const Type* type, bool is_mutable) noexcept -> Term {
         if (auto* ref = type->dyn_cast<ReferenceType>()) {
-            return Term(TypeRegistry::get<ReferenceType>(ref->target_type_, false));
+            if (ref->is_moved_) {
+                return Term(TypeRegistry::get<ReferenceType>(ref->target_type_, true, false));
+            } else {
+                return Term(
+                    TypeRegistry::get<ReferenceType>(ref->target_type_, ref->is_mutable_, false)
+                );
+            }
         } else {
-            return Term(TypeRegistry::get<ReferenceType>(type, false));
+            return Term(TypeRegistry::get<ReferenceType>(type, is_mutable, false));
         }
     }
     static auto xvalue(const Type* type) noexcept -> Term {
         if (auto* ref = type->dyn_cast<ReferenceType>()) {
-            return Term(TypeRegistry::get<ReferenceType>(ref->target_type_, true));
+            return Term(TypeRegistry::get<ReferenceType>(ref->target_type_, true, true));
         } else {
-            return Term(TypeRegistry::get<ReferenceType>(Type::decay(type), true));
+            return Term(TypeRegistry::get<ReferenceType>(Type::decay(type), true, true));
         }
     }
     static auto forward_like(Term term, const Type* type) noexcept -> Term {
@@ -1490,7 +1475,7 @@ public:
         case ValueCategory::Right:
             return of(decayed);
         case ValueCategory::Left:
-            return lvalue(decayed);
+            return lvalue(decayed, Type::is_mutable(term.effective_type()));
         case ValueCategory::Expiring:
             return xvalue(decayed);
         }
@@ -1550,10 +1535,7 @@ public:
 
 inline auto Type::decay(const Type* type) noexcept -> const Type* {
     if (type == nullptr) return nullptr;
-    if (auto mut = type->dyn_cast<MutableType>()) {
-        assert(mut->target_type_ == Type::decay(mut->target_type_));
-        return mut->target_type_;
-    } else if (auto ref = type->dyn_cast<ReferenceType>()) {
+    if (auto ref = type->dyn_cast<ReferenceType>()) {
         return decay(ref->target_type_);
     } else {
         return type;
@@ -1561,29 +1543,22 @@ inline auto Type::decay(const Type* type) noexcept -> const Type* {
 }
 
 inline auto Type::is_mutable(const Type* type) noexcept -> bool {
-    if (type->kind_ == Kind::Mutable) {
-        return true;
-    } else if (auto ref = type->dyn_cast<ReferenceType>()) {
-        return is_mutable(ref->target_type_);
+    if (auto ref = type->dyn_cast<ReferenceType>()) {
+        return ref->is_mutable_;
     } else {
         return false;
     }
 }
 
 inline auto Type::forward_like(const Type* source, const Type* target) noexcept -> const Type* {
+    if (target->kind_ == Kind::Reference) {
+        return target;
+    }
     const Type* decayed_target = decay(target);
     if (auto ref = source->dyn_cast<ReferenceType>()) {
-        if (ref->target_type_->dyn_cast<MutableType>()) {
-            return TypeRegistry::get<ReferenceType>(
-                TypeRegistry::get<MutableType>(decayed_target), ref->is_moved_
-            );
-        } else {
-            return TypeRegistry::get<ReferenceType>(decayed_target, ref->is_moved_);
-        }
-    } else if (source->dyn_cast<MutableType>()) {
-        return TypeRegistry::get<MutableType>(decayed_target);
+        return TypeRegistry::get<ReferenceType>(decayed_target, ref->is_mutable_, ref->is_moved_);
     } else {
-        return TypeRegistry::get<ReferenceType>(decayed_target, true);
+        return TypeRegistry::get<ReferenceType>(decayed_target, true, true);
     }
 }
 

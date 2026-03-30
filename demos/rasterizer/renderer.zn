@@ -9,13 +9,13 @@ enum Mode {
 
 class Renderer {
     let world_: &World.World;
-    let mut rasterizer_: std.unique_ptr<mut Rasterizer.Rasterizer>;
+    let rasterizer_: std.unique_ptr<Rasterizer.Rasterizer>;
     let mode_: i32;
 
-    init(world: &World.World, window: &Window.Window) {
+    init(world: &World.World, window: &mut Window.Window) {
         return Self{
             world_: world,
-            rasterizer_: std.make_unique::<mut Rasterizer.Rasterizer>(window),
+            rasterizer_: std.make_unique::<Rasterizer.Rasterizer>(window),
             mode_: Mode.RASTERIZED
         };
     }

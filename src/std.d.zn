@@ -1309,7 +1309,9 @@ class unique_ptr<T: type> {
     fn reset(self: &mut Self, ptr: pointer);
 
     operator*(self: &Self) -> &T;
+    operator*(self: &mut Self) -> &mut T;
     operator->(self: &Self) -> pointer;
+    operator->(self: &mut Self) -> *mut T;
     operator=(self: &mut Self, other: &Self) -> &mut Self;
     operator=<U: type>(self: &mut Self, other: unique_ptr<U>) -> &mut Self;
 }
@@ -1330,7 +1332,9 @@ class shared_ptr<T: type> {
     fn use_count(self: &Self) -> i64;
 
     operator*(self: &Self) -> &T;
+    operator*(self: &mut Self) -> &mut T;
     operator->(self: &Self) -> pointer;
+    operator->(self: &mut Self) -> *mut T;
     operator=(self: &mut Self, other: &Self) -> &mut Self;
     operator=<U: type>(self: &mut Self, other: shared_ptr<U>) -> &mut Self;
 }
