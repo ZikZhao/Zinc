@@ -257,6 +257,32 @@ private:
         }
     }
 
+    auto visitMatch_statement(ZincParser::Match_statementContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTMatchStatement{
+            loc(ctx), visit_expr(ctx->condition_), visit_list<ASTMatchCase>(ctx->cases_)
+        });
+    }
+
+    auto visitNormalMatchCase(ZincParser::NormalMatchCaseContext* ctx) noexcept
+        -> Any<ASTMatchCase> final {
+        ASTNodeVariant body = visit(ctx->body_);
+        return ASTMatchCase{
+            loc(ctx),
+            text(ctx->identifier_),
+            visit_expr(ctx->type_),
+            std::get<const ASTLocalBlock*>(body)->statements
+        };
+    }
+
+    auto visitDefaultMatchCase(ZincParser::DefaultMatchCaseContext* ctx) noexcept
+        -> Any<ASTMatchCase> final {
+        ASTNodeVariant body = visit(ctx->body_);
+        return ASTMatchCase{
+            loc(ctx), {}, std::monostate{}, std::get<const ASTLocalBlock*>(body)->statements
+        };
+    }
+
     auto visitCStyleFor(ZincParser::CStyleForContext* ctx) noexcept -> Any<ASTNodeVariant> final {
         if (ctx->init_decl_) {
             return as_variant(new ASTForStatement{
@@ -981,6 +1007,16 @@ private:
         return as_variant(
             new ASTPointerType{loc(ctx), visit_expr(ctx->inner_type_), ctx->KW_MUT() != nullptr}
         );
+    }
+
+    auto visitUnionType(ZincParser::UnionTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        return as_variant(
+            new ASTUnionType{loc(ctx), visit_expr(ctx->left_), visit_expr(ctx->right_)}
+        );
+    }
+
+    auto visitParenType(ZincParser::ParenTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        return visit_expr(ctx->inner_type_);
     }
 
     auto visitInstantiatedType(ZincParser::InstantiatedTypeContext* ctx) noexcept

@@ -1,6 +1,7 @@
 #include <random>
 #include <set>
 #include <type_traits>
+#include <vector>
 
 #include "gtest/gtest.h"
 
@@ -125,6 +126,26 @@ protected:
             s_set.emplace(key(2));
             f_set.emplace(key(3));
             s_set.emplace(key(3));
+            check_consistency(f_set, s_set);
+        }
+    }
+
+    // insert(InputIt first, InputIt last) -> void
+    void test_insert_range() {
+        std::vector<Key> values = {key(3), key(1), key(2), key(2), key(1)};
+
+        if constexpr (!requires(Impl& s, const std::vector<Key>& v) {
+                          s.insert(v.begin(), v.end());
+                      }) {
+            GTEST_SKIP() << "insert(first, last) not implemented";
+        } else {
+            f_set.insert(values.begin(), values.end());
+            s_set.insert(values.begin(), values.end());
+            check_consistency(f_set, s_set);
+
+            std::vector<Key> more_values = {key(4), key(0), key(4)};
+            f_set.insert(more_values.begin(), more_values.end());
+            s_set.insert(more_values.begin(), more_values.end());
             check_consistency(f_set, s_set);
         }
     }
@@ -641,7 +662,9 @@ public:
     auto operator<=>(const ComparableUniquePtr& other) const -> std::strong_ordering {
         return *this->get() <=> *other.get();
     }
-    auto operator==(const ComparableUniquePtr& other) const -> bool { return *this->get() == *other.get(); }
+    auto operator==(const ComparableUniquePtr& other) const -> bool {
+        return *this->get() == *other.get();
+    }
 };
 
 using SetTestTypes = ::testing::Types<
@@ -653,6 +676,7 @@ TYPED_TEST_SUITE(FlatSetTest, SetTestTypes);
 
 TYPED_TEST(FlatSetTest, InsertBasic) { this->test_insert_basic(); }
 TYPED_TEST(FlatSetTest, Emplace) { this->test_emplace(); }
+TYPED_TEST(FlatSetTest, InsertRange) { this->test_insert_range(); }
 TYPED_TEST(FlatSetTest, EraseByKey) { this->test_erase_by_key(); }
 TYPED_TEST(FlatSetTest, EraseByIterator) { this->test_erase_by_iterator(); }
 TYPED_TEST(FlatSetTest, Clear) { this->test_clear(); }

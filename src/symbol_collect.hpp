@@ -17,10 +17,10 @@ struct TypeProvider final : public GlobalMemory::MonotonicAllocated {
 };
 
 struct VariableInitialization : public GlobalMemory::MonotonicAllocated {
-    bool is_comptime;
-    bool is_mutable;
     ASTExprVariant type;
     ASTExprVariant value;
+    bool is_mutable;
+    bool is_comptime;
 };
 
 using FunctionOverloadDef = PointerVariant<
@@ -261,10 +261,10 @@ public:
         current_scope_->add_variable(
             node->identifier,
             new VariableInitialization{
-                .is_comptime = node->is_constant,
-                .is_mutable = node->is_mutable,
                 .type = node->declared_type,
-                .value = node->expr
+                .value = node->expr,
+                .is_mutable = node->is_mutable,
+                .is_comptime = node->is_constant,
             }
         );
     }
@@ -292,6 +292,29 @@ public:
                 (*this)(switch_case.value);
             }
             (*this)(switch_case.body);
+        }
+    }
+
+    void operator()(const ASTMatchStatement* node) noexcept {
+        (*this)(node->value);
+        for (const ASTMatchCase& match_case : node->cases) {
+            Scope& match_scope = Scope::make(*current_scope_, &match_case);
+            SymbolCollector match_visitor(std_scope_, &match_scope);
+            if (!match_case.identifier.empty()) {
+                match_scope.add_variable(
+                    match_case.identifier,
+                    new VariableInitialization{
+                        .type = &match_case,  // special trick to cast enum types to their
+                                              // data type
+                        .value = std::monostate{},
+                        .is_mutable = false,
+                        .is_comptime = false,
+                    }
+                );
+            }
+            for (ASTNodeVariant stmt : match_case.body) {
+                match_visitor(stmt);
+            }
         }
     }
 
@@ -324,10 +347,10 @@ public:
             local_scope.add_variable(
                 param.identifier,
                 new VariableInitialization{
-                    .is_comptime = false,
-                    .is_mutable = param.is_mutable,
                     .type = param.type,
-                    .value = std::monostate{}
+                    .value = std::monostate{},
+                    .is_mutable = param.is_mutable,
+                    .is_comptime = false,
                 }
             );
         }
@@ -350,10 +373,10 @@ public:
             local_scope.add_variable(
                 param.identifier,
                 new VariableInitialization{
-                    .is_comptime = false,
-                    .is_mutable = param.is_mutable,
                     .type = param.type,
-                    .value = std::monostate{}
+                    .value = std::monostate{},
+                    .is_mutable = param.is_mutable,
+                    .is_comptime = false,
                 }
             );
         }
@@ -375,10 +398,10 @@ public:
         local_scope.add_variable(
             node->left.identifier,
             new VariableInitialization{
-                .is_comptime = node->declared_const,
-                .is_mutable = node->left.is_mutable,
                 .type = node->left.type,
-                .value = std::monostate{}
+                .value = std::monostate{},
+                .is_mutable = node->left.is_mutable,
+                .is_comptime = node->declared_const,
             }
         );
         if (node->right) {
@@ -390,10 +413,10 @@ public:
             local_scope.add_variable(
                 node->right->identifier,
                 new VariableInitialization{
-                    .is_comptime = node->declared_const,
-                    .is_mutable = node->right->is_mutable,
                     .type = node->right->type,
-                    .value = std::monostate{}
+                    .value = std::monostate{},
+                    .is_mutable = node->right->is_mutable,
+                    .is_comptime = node->declared_const,
                 }
             );
         }
@@ -422,10 +445,10 @@ public:
                 class_scope.add_variable(
                     decl->identifier,
                     new VariableInitialization{
-                        .is_comptime = decl->is_constant,
-                        .is_mutable = decl->is_mutable,
                         .type = decl->declared_type,
-                        .value = std::monostate{}
+                        .value = std::monostate{},
+                        .is_mutable = decl->is_mutable,
+                        .is_comptime = decl->is_constant,
                     }
                 );
             }
@@ -484,10 +507,10 @@ public:
             lambda_scope.add_variable(
                 param.identifier,
                 new VariableInitialization{
-                    .is_comptime = false,
-                    .is_mutable = param.is_mutable,
                     .type = param.type,
-                    .value = std::monostate{}
+                    .value = std::monostate{},
+                    .is_mutable = param.is_mutable,
+                    .is_comptime = false,
                 }
             );
         }

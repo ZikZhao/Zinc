@@ -1,8 +1,10 @@
-type A = {
-    c: i32,
-    b: strview,
-};
+type A = i32 | f32;
 
 fn main(args: [strview]) {
+    let x: A = 42;
+    match (x) {
+        : i32 => { println("It's an integer!"); }
+        _ => { println("It's something else!"); }
+    }
 }
 

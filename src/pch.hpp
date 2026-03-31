@@ -602,6 +602,12 @@ public:
         }
         return {keys_.emplace(it, key), true};
     }
+    template <std::input_iterator It, std::sentinel_for<It> Sent>
+    auto insert(It first, Sent last) -> void {
+        for (; first != last; ++first) {
+            this->insert(*first);
+        }
+    }
     auto emplace(auto&&... args) -> std::pair<iterator, bool> {
         Key key = Key(std::forward<decltype(args)>(args)...);
         return this->insert(std::move(key));

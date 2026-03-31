@@ -137,8 +137,8 @@ private:
 class Object : public GlobalMemory::MonotonicAllocated {
 public:
     static auto any_pattern(auto&& elements) noexcept -> bool {
-        return std::ranges::any_of(
-            std::forward<decltype(elements)>(elements), std::identity{}, &Object::is_pattern
+        return std::ranges::contains(
+            std::forward<decltype(elements)>(elements), true, &Object::is_pattern
         );
     }
 
@@ -737,45 +737,33 @@ class UnionType final : public Type {
 public:
     static constexpr Kind kind = Kind::Union;
 
-private:
-    static std::span<const Type*> flatten(std::span<const Type*> unflattened_types) {
-        std::size_t size = 0;
-        for (const Type* type : unflattened_types) {
-            if (const UnionType* union_type = type->dyn_cast<UnionType>()) {
-                size += union_type->types_.size();
-            } else {
-                size++;
-            }
-        }
-        std::span<const Type*> buffer = GlobalMemory::alloc_array<const Type*>(size);
-        std::size_t index = 0;
-        for (const Type* type : unflattened_types) {
-            if (const UnionType* union_type = type->dyn_cast<UnionType>()) {
-                for (const Type* inner_type : union_type->types_) {
-                    buffer[index++] = inner_type;
-                }
-            } else {
-                buffer[index++] = type;
-            }
-        }
-        return buffer;
-    }
-    static std::span<const Type*> flatten(const Type* left, const Type* right) {
-        std::array types = {left, right};
-        return flatten(std::span<const Type*>(types));
-    }
+public:
+    GlobalMemory::FlatSet<const Type*> types_;
 
 public:
-    std::span<const Type*> types_;
-
-public:
-    UnionType(auto&&... unflattened_types) noexcept
-        : Type(kind, any_pattern(std::tuple{unflattened_types...})),
-          types_(flatten(unflattened_types...)) {}
+    UnionType(const Type* left, const Type* right) noexcept
+        : Type(kind, any_pattern(std::array{left, right})) {
+        if (auto* union_left = left->dyn_cast<UnionType>()) {
+            types_.insert(union_left->types_.begin(), union_left->types_.end());
+        } else {
+            types_.insert(left);
+        }
+        if (auto* union_right = right->dyn_cast<UnionType>()) {
+            types_.insert(union_right->types_.begin(), union_right->types_.end());
+        } else {
+            types_.insert(right);
+        }
+    }
 
     GlobalMemory::String repr() const final {
-        // TODO
-        return {};
+        GlobalMemory::String str;
+        std::string_view sep = ""sv;
+        for (const Type* type : types_) {
+            str += sep;
+            str += type->repr();
+            sep = " | "sv;
+        }
+        return str;
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -800,9 +788,12 @@ protected:
         if (types_.size() != other_union->types_.size()) {
             return types_.size() <=> other_union->types_.size();
         }
-        for (std::size_t i = 0; i < types_.size(); ++i) {
-            assumed_equal.insert({types_[i], other_union->types_[i]});
-            auto cmp = types_[i]->compare(other_union->types_[i], assumed_equal);
+        auto this_it = types_.begin();
+        auto other_it = other_union->types_.begin();
+        for (; this_it != types_.end() && other_it != other_union->types_.end();
+             ++this_it, ++other_it) {
+            assumed_equal.insert({*this_it, *other_it});
+            auto cmp = (*this_it)->compare(*other_it, assumed_equal);
             if (cmp != std::strong_ordering::equal) {
                 return cmp;
             }

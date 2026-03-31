@@ -604,7 +604,6 @@ public:
                 node->location, Sema::args_repr(std::span{combined_args})
             );
             error_trap.conclude();
-            resolve_overload(callee, combined_args);  // for debugging
             return {};
         }
 
@@ -895,6 +894,14 @@ private:
                 }
                 return tiebreaker_rank();
             }
+        } else if (auto* union_param = decayed_param->dyn_cast<UnionType>()) {
+            // assignment to union field
+            if (decayed_arg->kind_ == Kind::Union) {
+                if (union_param != decayed_arg) return NoMatch;
+                return tiebreaker_rank();
+            }
+            if (!union_param->types_.contains(decayed_arg)) return NoMatch;
+            return tiebreaker_rank();
         } else {
             // pointer conversion
             if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
@@ -1724,6 +1731,19 @@ public:
         TypeRegistry::get_at<PointerType>(out_, expr_type, node->is_mutable);
     }
 
+    void operator()(const ASTUnionType* node) noexcept {
+        out_ = std::type_identity<UnionType>();
+        TypeResolution left_type;
+        TypeContextEvaluator{sema_, left_type}(node->left);
+        TypeResolution right_type;
+        TypeContextEvaluator{sema_, right_type}(node->right);
+        if (!left_type.get() || !right_type.get()) {
+            out_ = nullptr;
+            return;
+        }
+        TypeRegistry::get_at<UnionType>(out_, left_type.get(), right_type.get());
+    }
+
     void operator()(const ASTClassDefinition* node) noexcept {
         out_ = new InstanceType(node->identifier);
         Sema::Guard guard(sema_, node);
@@ -1782,6 +1802,12 @@ public:
         if (Sema::expect(result, SymbolKind::Type)) {
             out_ = Sema::get<SymbolKind::Type>(result);
         }
+    }
+
+    void operator()(const ASTMatchCase* node) noexcept {
+        TypeResolution type;
+        TypeContextEvaluator{sema_, type}(node->type);
+        /// TODO: check if pattern type is a enum type
     }
 
     void operator()(const auto* node) noexcept { UNREACHABLE(); }
@@ -2371,6 +2397,48 @@ public:
                 ValueContextEvaluator{sema_, nullptr, false}(switch_case.value);
             }
             (*this)(switch_case.body);
+        }
+    }
+
+    void operator()(const ASTMatchStatement* node) noexcept {
+        Symbol value = ValueContextEvaluator{sema_, nullptr, false}(node->value);
+        if (!Sema::expect(value, SymbolKind::Term)) {
+            return;
+        }
+        Term value_term = Sema::get<SymbolKind::Term>(value);
+        const Type* value_type = value_term.effective_type();
+        if (auto* ptr_type = value_type->dyn_cast<PointerType>()) {
+            /// TODO:
+        } else if (auto* union_type = value_type->dyn_cast<UnionType>()) {
+            GlobalMemory::FlatSet<const Type*> remaining_types = union_type->types_;
+            for (const ASTMatchCase& match_case : node->cases) {
+                TypeResolution type;
+                if (!holds_monostate(match_case.type)) {
+                    TypeContextEvaluator{sema_, type}(match_case.type);
+                    if (!type.get()) continue;
+                } else {
+                    remaining_types.clear();
+                    continue;
+                }
+                if (!remaining_types.contains(type.get())) {
+                    if (!union_type->types_.contains(type.get())) {
+                        Diagnostic::error_invalid_match_case(
+                            match_case.location, type.get()->repr()
+                        );
+                    } else {
+                        Diagnostic::warning_unreachable_match_case(
+                            match_case.location, type.get()->repr()
+                        );
+                    }
+                    continue;
+                }
+                Sema::Guard guard(sema_, &match_case);
+                for (ASTNodeVariant stmt : match_case.body) {
+                    (*this)(stmt);
+                }
+            }
+        } else {
+            Diagnostic::error_invalid_match(node->location, value_term->repr());
         }
     }
 

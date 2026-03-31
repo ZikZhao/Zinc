@@ -614,6 +614,37 @@ public:
             }
         );
     }
+
+    static auto error_invalid_match(Location location, strview value_repr) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format("Invalid match value: '{}'", value_repr)
+            }
+        );
+    }
+
+    static auto error_invalid_match_case(Location location, strview case_repr) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format("Invalid match case: '{}'", case_repr)
+            }
+        );
+    }
+
+    static auto warning_unreachable_match_case(Location location, strview case_repr) noexcept
+        -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Warning,
+                .location = location,
+                .message = GlobalMemory::format("Unreachable match case: '{}'", case_repr)
+            }
+        );
+    }
 };
 
 inline thread_local std::optional<Diagnostic> Diagnostic::instance;

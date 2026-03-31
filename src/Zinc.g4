@@ -23,6 +23,7 @@ statement:
 	| declaration_statement
 	| if_statement
 	| switch_statement
+	| match_statement
 	| for_statement
 	| break_statement
 	| continue_statement
@@ -58,6 +59,15 @@ switch_case:
 	KW_CASE value_ = expr OP_COLON body_ = local_block
 	| KW_DEFAULT OP_COLON body_ = local_block;
 
+match_statement:
+	KW_MATCH OP_LPAREN condition_ = expr OP_RPAREN OP_LBRACE (
+		cases_ += match_case
+	)* OP_RBRACE;
+
+match_case: (identifier_ = T_IDENTIFIER)? OP_COLON type_ = type OP_LAMBDA body_ = local_block #
+		NormalMatchCase
+	| identifier_ = T_IDENTIFIER OP_LAMBDA body_ = local_block # DefaultMatchCase;
+
 for_statement:
 	KW_FOR OP_LPAREN (
 		init_decl_ = declaration_statement
@@ -78,7 +88,7 @@ type_alias:
 	)? OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
-	KW_STATIC? KW_CONST? KW_FUNC identifier_ = T_IDENTIFIER (
+	KW_STATIC? KW_CONST? KW_VIRTUAL? KW_FUNC identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
 	)? OP_LPAREN (
 		parameters_ += parameter (
@@ -303,7 +313,7 @@ type:
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
 	| KW_MOVE? OP_BITAND KW_MUT? inner_type_ = type	# ReferenceType
 	| OP_MUL KW_MUT? inner_type_ = type				# PointerType
-	| inner_type_ = type OP_QUESTION				# OptionalType
+	| left_ = type OP_BITOR right_ = type			# UnionType
 	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
 
 field_decl: identifier_ = any_identifier OP_COLON type_ = type;
@@ -384,6 +394,7 @@ KW_IF: 'if';
 KW_ELSE: 'else';
 KW_SWITCH: 'switch';
 KW_CASE: 'case';
+KW_MATCH: 'match';
 KW_DEFAULT: 'default';
 KW_FOR: 'for';
 KW_FUNC: 'fn';
@@ -407,6 +418,7 @@ KW_OPERATOR: 'operator';
 KW_AS: 'as';
 KW_IMPORT: 'import';
 KW_THROW: 'throw';
+KW_VIRTUAL: 'virtual';
 
 OP_DOT: '.';
 OP_QUESTION: '?';

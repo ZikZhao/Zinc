@@ -85,6 +85,7 @@ struct ASTArrayType;
 struct ASTMutableType;
 struct ASTReferenceType;
 struct ASTPointerType;
+struct ASTUnionType;
 struct ASTExpressionStatement;
 struct ASTDeclaration;
 struct ASTFieldDeclaration;
@@ -92,6 +93,8 @@ struct ASTTypeAlias;
 struct ASTIfStatement;
 struct ASTSwitchCase;
 struct ASTSwitchStatement;
+struct ASTMatchCase;
+struct ASTMatchStatement;
 struct ASTForStatement;
 struct ASTContinueStatement;
 struct ASTBreakStatement;
@@ -121,6 +124,7 @@ using ASTNodeVariant = std::variant<
     const ASTTypeAlias*,
     const ASTIfStatement*,
     const ASTSwitchStatement*,
+    const ASTMatchStatement*,
     const ASTForStatement*,
     const ASTContinueStatement*,
     const ASTBreakStatement*,
@@ -174,7 +178,10 @@ using ASTExprVariant = std::variant<
     const ASTStructType*,
     const ASTMutableType*,
     const ASTReferenceType*,
-    const ASTPointerType*>;
+    const ASTPointerType*,
+    const ASTUnionType*,
+    // Match case types
+    const ASTMatchCase*>;
 
 struct ASTNodePtrGetter {
     auto operator()(ASTNodeVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
@@ -347,16 +354,10 @@ struct ASTPointerType final : public ASTExplicitTypeExpr {
     bool is_mutable;
 };
 
-// struct ASTTemplateInstantiation final : public ASTExpression {
-//     strview template_identifier;
-//     std::span<ASTExprVariant> arguments;
-// };
-
-// struct ASTTemplateMemberAccessInstantiation final : public ASTExpression {
-//     ASTExprVariant target;
-//     strview member;
-//     std::span<ASTExprVariant> arguments;
-// };
+struct ASTUnionType final : public ASTExplicitTypeExpr {
+    ASTExprVariant left;
+    ASTExprVariant right;
+};
 
 struct ASTExpressionStatement final : public ASTNode {
     ASTExprVariant expr;
@@ -390,6 +391,17 @@ struct ASTSwitchCase final : public ASTNode {
 struct ASTSwitchStatement final : public ASTNode {
     ASTExprVariant condition;
     std::span<ASTSwitchCase> cases;
+};
+
+struct ASTMatchCase final : public ASTExplicitTypeExpr {
+    strview identifier;
+    ASTExprVariant type;
+    std::span<ASTNodeVariant> body;
+};
+
+struct ASTMatchStatement final : public ASTNode {
+    ASTExprVariant value;
+    std::span<ASTMatchCase> cases;
 };
 
 struct ASTForStatement final : public ASTNode {
