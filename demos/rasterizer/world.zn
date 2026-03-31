@@ -2,13 +2,13 @@ import "glm.d.zn" as glm;
 import "constants.zn" as Constant;
 import "utils.zn" as Utils;
 
-enum ClipPlane {
-    LEFT,    ///< x >= -w
-    RIGHT,   ///< x <= w
-    BOTTOM,  ///< y >= -w
-    TOP,     ///< y <= w
-    NEAR,    ///< z >= 0
-    FAR      ///< z <= w
+namespace ClipPlane {
+    const LEFT: i32 = 0;    ///< x >= -w
+    const RIGHT: i32 = 1;   ///< x <= w
+    const BOTTOM: i32 = 2;  ///< y >= -w
+    const TOP: i32 = 3;     ///< y <= w
+    const NEAR: i32 = 4;    ///< z >= 0
+    const FAR: i32 = 5;     ///< z <= w
 }
 
 type Colour = {
@@ -56,10 +56,10 @@ class ImageBuffer<T: type> {
 
 type Texture = ImageBuffer<Colour>;
 
-enum Shading {
-    FLAT,
-    GOURAUD,
-    PHONG
+namespace Shading {
+    const FLAT: i32 = 0;
+    const GOURAUD: i32 = 1;
+    const PHONG: i32 = 2;
 }
 
 type Material = {

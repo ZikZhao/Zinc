@@ -4,18 +4,18 @@ options {
 	language = Cpp;
 }
 
-program: statements_ += top_level_statement* EOF;
+program: (
+		statements_ += top_level_statement
+		| cpp_blocks_ += cpp_block
+	)* EOF;
 
 top_level_statement:
 	declaration_statement
 	| type_alias
 	| function_definition
 	| class_definition
-	| enum_definition
 	| namespace_definition
-	| static_assert_statement
-	| import_statement
-	| cpp_block;
+	| import_statement;
 
 statement:
 	local_block
@@ -28,11 +28,7 @@ statement:
 	| continue_statement
 	| return_statement
 	| type_alias
-	| function_definition
-	| class_definition
-	| enum_definition
-	| throw_statement
-	| static_assert_statement;
+	| throw_statement;
 
 local_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 
@@ -167,22 +163,10 @@ class_definition:
 		| operators_ += operator_overload_definition
 	)* OP_RBRACE;
 
-enum_definition:
-	KW_ENUM identifier_ = T_IDENTIFIER OP_LBRACE (
-		enumerators_ += T_IDENTIFIER (
-			OP_COMMA enumerators_ += T_IDENTIFIER
-		)* OP_COMMA?
-	)? OP_RBRACE;
-
 namespace_definition:
 	KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ += top_level_statement* OP_RBRACE;
 
 throw_statement: KW_THROW expr_ = expr OP_SEMICOLON;
-
-static_assert_statement:
-	KW_STATIC_ASSERT OP_LPAREN condition_ = expr (
-		OP_COMMA message_ = expr
-	)? OP_RPAREN OP_SEMICOLON;
 
 import_statement:
 	KW_IMPORT path_ = T_STRING KW_AS identifier_ = T_IDENTIFIER OP_SEMICOLON;
@@ -272,7 +256,6 @@ any_identifier:
 	T_IDENTIFIER
 	| KW_CLASS
 	| KW_FUNC
-	| KW_ENUM
 	| KW_NAMESPACE
 	| KW_TYPE;
 
@@ -420,11 +403,9 @@ KW_NAMESPACE: 'namespace';
 KW_MOVE: 'move';
 KW_FORWARD: 'forward';
 KW_SPECIALIZE: 'specialize';
-KW_STATIC_ASSERT: 'static_assert';
 KW_OPERATOR: 'operator';
 KW_AS: 'as';
 KW_IMPORT: 'import';
-KW_ENUM: 'enum';
 KW_THROW: 'throw';
 
 OP_DOT: '.';

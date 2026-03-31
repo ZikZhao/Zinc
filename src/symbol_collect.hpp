@@ -12,7 +12,6 @@ struct TypeProvider final : public GlobalMemory::MonotonicAllocated {
     enum class Kind {
         Alias,
         Class,
-        Enum,
     } kind;
     const ASTNode* node;
 };
@@ -75,6 +74,7 @@ public:
     strview self_id_;  // only set for class scopes
     bool is_extern_ = false;
     bool is_instantiating_template_ = false;
+    bool is_namespace_ = parent_ ? parent_->is_namespace_ : true;  // false for function scopes
 
 private:
     Scope(Scope* parent, strview scope_id) noexcept : parent_(parent), scope_id_(scope_id) {
@@ -314,6 +314,7 @@ public:
         Diagnostic::ErrorTrap trap{node->location};
         current_scope_->add_function(node->identifier, node);
         Scope& local_scope = Scope::make(*current_scope_, node);
+        local_scope.is_namespace_ = false;
         for (std::size_t i = 0; i < node->parameters.size(); ++i) {
             const auto& param = node->parameters[i];
             Diagnostic::ErrorTrap param_trap{param.location};
@@ -342,6 +343,7 @@ public:
             node->is_constructor ? constructor_symbol : destructor_symbol, node
         );
         Scope& local_scope = Scope::make(*current_scope_, node);
+        local_scope.is_namespace_ = false;
         for (std::size_t i = 0; i < node->parameters.size(); ++i) {
             const auto& param = node->parameters[i];
             Diagnostic::ErrorTrap param_trap{param.location};
@@ -365,6 +367,7 @@ public:
         Diagnostic::ErrorTrap trap{node->location};
         current_scope_->add_function(GetOperatorString(node->opcode), node);
         Scope& local_scope = Scope::make(*current_scope_, node);
+        local_scope.is_namespace_ = false;
         if (node->left.is_variadic) {
             Diagnostic::error_variadic_parameter_in_operator(node->left.location);
             return;
@@ -426,27 +429,6 @@ public:
                     }
                 );
             }
-        }
-    }
-
-    // Enums
-    void operator()(const ASTEnumDefinition* node) noexcept {
-        Diagnostic::ErrorTrap trap{node->location};
-        Scope& enum_scope = Scope::make(*current_scope_, node, node->identifier);
-        current_scope_->add_namespace(node->identifier, enum_scope);
-        SymbolCollector enum_visitor(std_scope_, &enum_scope);
-        for (size_t i = 0; i < node->enumerators.size(); ++i) {
-            enum_scope.add_variable(
-                node->enumerators[i],
-                new VariableInitialization{
-                    .is_comptime = true,
-                    .is_mutable = false,
-                    .type = std::monostate{},
-                    .value = ASTExprVariant{new ASTConstant{
-                        Location{}, new IntegerValue(&IntegerType::untyped_instance, i)
-                    }},
-                }
-            );
         }
     }
 

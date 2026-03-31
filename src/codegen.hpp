@@ -683,7 +683,7 @@ private:
     };
 
 private:
-    GlobalMemory::String constants_;
+    GlobalMemory::String statics_;
     GlobalMemory::String forward_declarations_;
     GlobalMemory::String definitions_;
     CodeGenEnvironment& env_;
@@ -697,22 +697,29 @@ public:
         : env_(env), mangler_(mangler), type_map_(type_map) {}
 
     auto operator()(std::ofstream& stream) -> void {
-        for (const auto& [scope_and_id, value] : env_.constants_) {
+        for (const auto& [scope_and_id, obj] : env_.statics_) {
             const Scope* scope = scope_and_id.first;
+            GlobalMemory::String type_name = "auto";
             strview identifier = scope_and_id.second;
+            if (auto* type = obj->dyn_type()) {
+                type_name = type->repr();
+            }
             if (scope->is_extern_) {
                 std::format_to(
-                    std::back_inserter(constants_), "constexpr auto {} = "sv, identifier
+                    std::back_inserter(statics_), "constexpr {} {}"sv, type_name, identifier
                 );
             } else {
                 GlobalMemory::String mangled_path;
                 CodeGenEnvironment::mangle_path(mangled_path, scope, identifier);
                 std::format_to(
-                    std::back_inserter(constants_), "constexpr auto {} = "sv, mangled_path
+                    std::back_inserter(statics_), "constexpr {} {}"sv, type_name, mangled_path
                 );
             }
-            ObjectCodeGen::output(constants_, value, type_map_);
-            constants_ += ";\n"sv;
+            if (auto* value = obj->dyn_value()) {
+                statics_ += " = "sv;
+                ObjectCodeGen::output(statics_, value, type_map_);
+            }
+            statics_ += ";\n"sv;
         }
         for (const auto& [scope, node, func_obj] : env_.functions_) {
             current_scope_ = scope;
@@ -728,8 +735,7 @@ public:
             newline(false);
         }
         stream << "\n// ----- Constants -----\n"sv;
-        // stream.write(constants_.data(), static_cast<std::streamsize>(constants_.size()));
-        flush_without_sdl_prefix(constants_, stream);
+        flush_without_sdl_prefix(statics_, stream);
         stream << "\n// ----- Function Forward Declarations -----\n"sv;
         flush_without_sdl_prefix(forward_declarations_, stream);
         stream << "\n// ----- Function Definitions -----\n"sv;

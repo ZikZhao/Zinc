@@ -2,10 +2,10 @@ import "sdl.d.zn" as sdl;
 import "utils.zn" as Utils;
 
 /// Event trigger types.
-enum Trigger {
-    ANY_PRESSED,       ///< Non-modifier keys: blocked when modifiers pressed
-    ANY_JUST_PRESSED,  ///< Non-modifier keys: blocked when modifiers pressed
-    ALL_JUST_PRESSED   ///< Modifier combo: triggers on just-pressed when ALL keys held
+namespace Trigger {
+    const ANY_PRESSED: i32 = 0;       ///< Non-modifier keys: blocked when modifiers pressed
+    const ANY_JUST_PRESSED: i32 = 1;  ///< Non-modifier keys: blocked when modifiers pressed
+    const ALL_JUST_PRESSED: i32 = 2;  ///< Modifier combo: triggers on just-pressed when ALL keys held
 }
 
 type KeyState = [bool; sdl.SDL_NUM_SCANCODES];

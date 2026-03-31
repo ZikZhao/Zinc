@@ -101,13 +101,11 @@ struct ASTFunctionDefinition;
 struct ASTCtorDtorDefinition;
 struct ASTOperatorDefinition;
 struct ASTClassDefinition;
-struct ASTEnumDefinition;
 struct ASTNamespaceDefinition;
 struct ASTTemplateParameter;
 struct ASTTemplateDefinition;
 struct ASTTemplateSpecialization;
 struct ASTThrowStatement;
-struct ASTStaticAssertStatement;
 struct ASTImportStatement;
 struct ASTCppBlock;
 
@@ -132,13 +130,10 @@ using ASTNodeVariant = std::variant<
     const ASTCtorDtorDefinition*,
     const ASTOperatorDefinition*,
     const ASTClassDefinition*,
-    const ASTEnumDefinition*,
     const ASTNamespaceDefinition*,
     // Templates
     const ASTTemplateDefinition*,
     const ASTTemplateSpecialization*,
-    // Static asserts
-    const ASTStaticAssertStatement*,
     // Error handling
     const ASTThrowStatement*,
     // Import
@@ -202,6 +197,7 @@ struct ASTLocalBlock final : public ASTNode {
 
 struct ASTRoot final : public ASTNode {
     std::span<ASTNodeVariant> statements;
+    std::span<ASTNodeVariant> cpp_blocks;
     mutable Scope* scope = nullptr;
     mutable bool type_checked = false;
 };
@@ -452,11 +448,6 @@ struct ASTClassDefinition final : public ASTNode {
     std::span<ASTNodeVariant> scope_items;
 };
 
-struct ASTEnumDefinition final : public ASTNode {
-    strview identifier;
-    std::span<strview> enumerators;
-};
-
 struct ASTNamespaceDefinition final : public ASTNode {
     strview identifier;
     std::span<ASTNodeVariant> items;
@@ -485,11 +476,6 @@ struct ASTTemplateSpecialization final : public ASTNode {
 
 struct ASTThrowStatement final : public ASTNode {
     ASTExprVariant expr;
-};
-
-struct ASTStaticAssertStatement final : public ASTNode {
-    ASTExprVariant condition;
-    ASTExprVariant message;
 };
 
 struct ASTImportStatement final : public ASTNode {

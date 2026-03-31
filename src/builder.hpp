@@ -172,7 +172,9 @@ public:
 
 private:
     auto visitProgram(ZincParser::ProgramContext* ctx) noexcept -> Any<ASTNodeVariant> final {
-        return as_variant(new ASTRoot{loc(ctx), visit_list(ctx->statements_)});
+        return as_variant(
+            new ASTRoot{loc(ctx), visit_list(ctx->statements_), visit_list(ctx->cpp_blocks_)}
+        );
     }
 
     auto visitTop_level_statement(ZincParser::Top_level_statementContext* ctx) noexcept
@@ -571,17 +573,6 @@ private:
         }
     }
 
-    auto visitEnum_definition(ZincParser::Enum_definitionContext* ctx) noexcept
-        -> Any<ASTNodeVariant> final {
-        return as_variant(new ASTEnumDefinition{
-            loc(ctx),
-            text(ctx->identifier_),
-            ctx->enumerators_ | std::views::transform([this](auto& enumerator) {
-                return text(enumerator);
-            }) | GlobalMemory::collect<std::span>()
-        });
-    }
-
     auto visitNamespace_definition(ZincParser::Namespace_definitionContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
         return as_variant(new ASTNamespaceDefinition{
@@ -592,15 +583,6 @@ private:
     auto visitThrow_statement(ZincParser::Throw_statementContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
         return as_variant(new ASTThrowStatement{loc(ctx), visit_expr(ctx->expr_)});
-    }
-
-    auto visitStatic_assert_statement(ZincParser::Static_assert_statementContext* ctx) noexcept
-        -> Any<ASTNodeVariant> final {
-        return as_variant(new ASTStaticAssertStatement{
-            loc(ctx),
-            visit_expr(ctx->condition_),
-            visit_expr(ctx->message_),
-        });
     }
 
     auto visitImport_statement(ZincParser::Import_statementContext* ctx) noexcept

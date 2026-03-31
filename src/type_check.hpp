@@ -99,15 +99,15 @@ public:
     }
 
 public:
-    GlobalMemory::FlatMap<std::pair<const Scope*, strview>, const Value*> constants_;
+    GlobalMemory::FlatMap<std::pair<const Scope*, strview>, const Object*> statics_;
     GlobalMemory::Vector<FunctionDef> functions_;
     GlobalMemory::Vector<std::pair<Scope*, std::span<const Object*>>> instantiations_;
     GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
     GlobalMemory::Vector<strview> cpp_blocks_;
 
 public:
-    auto add_global(const Scope* scope, strview identifier, const Value* value) -> void {
-        constants_.insert({{scope, identifier}, value});
+    auto add_static(const Scope* scope, strview identifier, const Object* obj) -> void {
+        statics_.insert({{scope, identifier}, obj});
     }
 
     auto add_function_output(
@@ -1777,8 +1777,6 @@ public:
         );
     }
 
-    void operator()(const ASTEnumDefinition* node) noexcept { out_ = &IntegerType::i32_instance; }
-
     void operator()(const ASTTemplateInstantiation* node) noexcept {
         Symbol result = sema_.template_handler_->instantiate(node);
         if (Sema::expect(result, SymbolKind::Type)) {
@@ -2285,6 +2283,10 @@ public:
         for (auto stmt : node->statements) {
             (*this)(stmt);
         }
+        for (auto cpp_block_variant : node->cpp_blocks) {
+            const ASTCppBlock* cpp_block = std::get<const ASTCppBlock*>(cpp_block_variant);
+            sema_.codegen_env_.add_cpp_block(cpp_block->code);
+        }
     }
 
     void operator()(const ASTLocalBlock* node) noexcept {
@@ -2307,6 +2309,8 @@ public:
         if (is_global && node->is_mutable) {
             Diagnostic::error_mutable_global_variable(node->location);
         }
+        bool is_static = !sema_.current_scope_->is_extern_ && sema_.current_scope_->is_namespace_ &&
+                         (sema_.current_scope_->self_id_.empty() ? true : node->declared_static);
         TypeResolution type;
         if (!holds_monostate(node->declared_type)) {
             TypeContextEvaluator{sema_, type}(node->declared_type);
@@ -2330,8 +2334,8 @@ public:
             if (node->is_constant && !init_term.is_comptime()) {
                 Diagnostic::error_not_constant_expression(node->location);
             }
-            if (is_global && !sema_.current_scope_->is_extern_) {
-                sema_.codegen_env_.add_global(
+            if (is_static) {
+                sema_.codegen_env_.add_static(
                     sema_.current_scope_, node->identifier, init_term.get_comptime()
                 );
             }
@@ -2342,6 +2346,9 @@ public:
             );
         }
         if (type.get()) {
+            if (is_static) {
+                sema_.codegen_env_.add_static(sema_.current_scope_, node->identifier, type.get());
+            }
             sema_.codegen_env_.map_type(sema_.current_scope_, node, type);
         }
     }
@@ -2439,30 +2446,10 @@ public:
         }
     }
 
-    void operator()(const ASTEnumDefinition* node) noexcept {
-        Sema::Guard guard(sema_, node);
-        for (std::size_t i = 0; i < node->enumerators.size(); ++i) {
-            sema_.codegen_env_.add_global(
-                sema_.current_scope_,
-                node->enumerators[i],
-                new IntegerValue(&IntegerType::i32_instance, i)
-            );
-        }
-    }
-
     void operator()(const ASTNamespaceDefinition* node) noexcept {
         Sema::Guard guard(sema_, node);
         for (const auto& item : node->items) {
             (*this)(item);
-        }
-    }
-
-    void operator()(const ASTStaticAssertStatement* node) noexcept {
-        Symbol result = ValueContextEvaluator{sema_, &BooleanType::instance, true}(node->condition);
-        if (holds_monostate(result) ||
-            !std::get<Term>(result).get_comptime()->cast<BooleanValue>()->value_) {
-            // Diagnostic::report(StaticAssertFailedError(node->location, node->message));
-            throw;
         }
     }
 
@@ -2500,10 +2487,6 @@ public:
     void operator()(const ASTImportStatement* node) noexcept {
         Sema::Guard guard{sema_, *node->module_root->scope};
         (*this)(node->module_root);
-    }
-
-    void operator()(const ASTCppBlock* node) noexcept {
-        sema_.codegen_env_.add_cpp_block(node->code);
     }
 };
 
@@ -2548,9 +2531,6 @@ inline auto Sema::eval_type(Scope& scope, const ScopeValue& value) noexcept -> T
             break;
         case TypeProvider::Kind::Class:
             evaluator(static_cast<const ASTClassDefinition*>(type_provider->node));
-            break;
-        case TypeProvider::Kind::Enum:
-            evaluator(static_cast<const ASTEnumDefinition*>(type_provider->node));
             break;
         }
     } else {

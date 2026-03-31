@@ -2,9 +2,9 @@ import "world.zn" as World;
 import "window.zn" as Window;
 import "rasterizer.zn" as Rasterizer;
 
-enum Mode {
-    WIREFRAME,
-    RASTERIZED,
+namespace Mode {
+    const WIREFRAME: i32 = 0;
+    const RASTERIZED: i32 = 1;
 }
 
 class Renderer {
