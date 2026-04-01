@@ -1073,9 +1073,6 @@ let mut cout: ostream;
 let mut cerr: ostream;
 let mut clog: ostream;
 
-fn endl(out: &mut ostream) -> &mut ostream;
-fn flush(out: &mut ostream) -> &mut ostream;
-
 fn advance<Iter: type>(it: &mut Iter, n: isize);
 
 fn next<Iter: type>(it: Iter) -> Iter;

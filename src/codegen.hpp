@@ -183,6 +183,17 @@ public:
             }
             out += "*"sv;
             break;
+        case Kind::Union: {
+            out += "std::variant<"sv;
+            strview sep = ""sv;
+            for (const Type* variant_type : type->cast<UnionType>()->types_) {
+                out += sep;
+                output(out, variant_type, type_map);
+                sep = ", "sv;
+            }
+            out += ">"sv;
+            break;
+        }
         default:
             UNREACHABLE();
         }
@@ -1209,6 +1220,68 @@ public:
         definitions_ += "}"sv;
     }
 
+    auto operator()(const ASTMatchStatement* node) -> void {
+        const Type* value_type = std::get<const Type*>(*env_.find(current_scope_, node));
+        strview qualifier;
+        switch (Type::category(value_type)) {
+        case ValueCategory::Right:
+            qualifier = ""sv;
+            break;
+        case ValueCategory::Left:
+            qualifier = " const&"sv;
+            break;
+        case ValueCategory::Expiring:
+            qualifier = " &&"sv;
+            break;
+        }
+        value_type = Type::decay(value_type);
+        definitions_ += "{"sv;
+        indent_level_++;
+        newline();
+        ObjectCodeGen::output(definitions_, value_type, type_map_);
+        definitions_ += qualifier;
+        definitions_ += " $match_value = "sv;
+        (*this)(node->value);
+        definitions_ += ";"sv;
+        if (value_type->kind_ == Kind::Union) {
+            for (const ASTMatchCase& match_case : node->cases) {
+                newline();
+                if (!holds_monostate(match_case.type)) {
+                    const Type* case_type =
+                        std::get<const Type*>(*env_.find(current_scope_, &match_case));
+                    definitions_ += "if (std::holds_alternative<"sv;
+                    ObjectCodeGen::output(definitions_, case_type, type_map_);
+                    definitions_ += ">($match_value)) {"sv;
+                    indent_level_++;
+                    if (!match_case.identifier.empty()) {
+                        newline();
+                        ObjectCodeGen::output(definitions_, case_type, type_map_);
+                        definitions_ += qualifier;
+                        definitions_ += " "sv;
+                        definitions_ += match_case.identifier;
+                        definitions_ += " = std::get<"sv;
+                        ObjectCodeGen::output(definitions_, case_type, type_map_);
+                        definitions_ += ">($match_value);"sv;
+                    }
+                } else {
+                    definitions_ += "else {"sv;
+                    indent_level_++;
+                }
+                Guard guard{*this, &match_case};
+                for (const ASTNodeVariant& child : match_case.body) {
+                    newline();
+                    (*this)(child);
+                }
+                indent_level_--;
+                newline();
+                definitions_ += "}"sv;
+            }
+        }
+        indent_level_--;
+        newline();
+        definitions_ += "}"sv;
+    }
+
     auto operator()(const ASTForStatement* node) -> void {
         Guard guard{*this, node};
         definitions_ += "for ("sv;
@@ -1346,6 +1419,7 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
            "#include <unordered_map>\n"
            "#include <unordered_set>\n"
            "#include <utility>\n"
+           "#include <variant>\n"
            "#include <vector>\n"
            "using namespace std::literals;\n\n";
 

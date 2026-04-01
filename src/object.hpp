@@ -822,29 +822,26 @@ public:
     }
 
     GlobalMemory::String repr() const final {
-        GlobalMemory::String str;
+        GlobalMemory::String str = "(";
         std::string_view sep = ""sv;
         for (const Type* type : types_) {
             str += sep;
             str += type->repr();
             sep = " | "sv;
         }
+        str += ")"sv;
         return str;
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
+        bool has_incomplete_child = false;
         for (const Type*& type : types_) {
-            if (!graph.check_dependency(this, type)) {
-                return false;
-            }
+            has_incomplete_child |= !graph.check_dependency(this, type);
         }
-        return true;
+        return !has_incomplete_child;
     }
 
-    auto default_construct() const noexcept -> bool final {
-        /// TODO:
-        assert(false);
-    }
+    auto default_construct() const noexcept -> bool final { return false; }
 
 protected:
     std::strong_ordering do_compare(
@@ -868,7 +865,7 @@ protected:
     }
 
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
-        throw;
+        return false;
     }
 };
 
@@ -910,7 +907,7 @@ public:
     static constexpr Kind kind = Kind::Integer;
 
 public:
-    const IntegerType* const type_;  // nullptr for integer literals without a specific type
+    const IntegerType* type_;
     union {
         std::int64_t signed_value_;
         std::uint64_t unsigned_value_;
@@ -1001,7 +998,7 @@ public:
     static constexpr Kind kind = Kind::Float;
 
 public:
-    const FloatType* const type_;
+    const FloatType* type_;
     double value_;
 
 public:

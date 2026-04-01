@@ -2333,9 +2333,6 @@ public:
         }
     }
 
-    // Expressions
-    void operator()(const ASTExpression* node) noexcept { UNREACHABLE(); }
-
     // Statements
     void operator()(const ASTExpressionStatement* node) noexcept {
         ValueContextEvaluator{sema_, nullptr, false}(node->expr);
@@ -2416,7 +2413,8 @@ public:
             return;
         }
         Term value_term = Sema::get<SymbolKind::Term>(value);
-        const Type* value_type = value_term.effective_type();
+        sema_.codegen_env_.map_type(sema_.current_scope_, node, value_term.effective_type());
+        const Type* value_type = value_term.decay();
         if (auto* ptr_type = value_type->dyn_cast<PointerType>()) {
             /// TODO:
         } else if (auto* union_type = value_type->dyn_cast<UnionType>()) {
@@ -2426,21 +2424,21 @@ public:
                 if (!holds_monostate(match_case.type)) {
                     TypeContextEvaluator{sema_, type}(match_case.type);
                     if (!type.get()) continue;
+                    if (!remaining_types.contains(type.get())) {
+                        if (!union_type->types_.contains(type.get())) {
+                            Diagnostic::error_invalid_match_case(
+                                match_case.location, type.get()->repr()
+                            );
+                        } else {
+                            Diagnostic::warning_unreachable_match_case(
+                                match_case.location, type.get()->repr()
+                            );
+                        }
+                        continue;
+                    }
+                    sema_.codegen_env_.map_type(sema_.current_scope_, &match_case, type);
                 } else {
                     remaining_types.clear();
-                    continue;
-                }
-                if (!remaining_types.contains(type.get())) {
-                    if (!union_type->types_.contains(type.get())) {
-                        Diagnostic::error_invalid_match_case(
-                            match_case.location, type.get()->repr()
-                        );
-                    } else {
-                        Diagnostic::warning_unreachable_match_case(
-                            match_case.location, type.get()->repr()
-                        );
-                    }
-                    continue;
                 }
                 Sema::Guard guard(sema_, &match_case);
                 for (ASTNodeVariant stmt : match_case.body) {
