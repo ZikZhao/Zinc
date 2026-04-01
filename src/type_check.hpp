@@ -1880,11 +1880,7 @@ public:
         }
     }
 
-    void operator()(const ASTMatchCase* node) noexcept {
-        TypeResolution type;
-        TypeContextEvaluator{sema_, type}(node->type);
-        /// TODO: check if pattern type is a enum type
-    }
+    void operator()(const MatchCaseVarType* node) noexcept { out_ = node->type; }
 
     void operator()(const auto* node) noexcept { UNREACHABLE(); }
 };
@@ -1911,7 +1907,7 @@ public:
         Diagnostic::ErrorTrap trap{ASTNodePtrGetter{}(variant)->location};
         if (std::visit(
                 [](auto node) -> bool {
-                    return std::is_convertible_v<decltype(node), const ASTExplicitTypeExpr*>;
+                    return std::is_convertible_v<decltype(node), const ASTTypeExpr*>;
                 },
                 variant
             )) {
@@ -1926,7 +1922,7 @@ public:
 
     auto operator()(const ASTExpression* node) noexcept -> Symbol { UNREACHABLE(); }
 
-    auto operator()(const ASTExplicitTypeExpr* node) noexcept -> Symbol { UNREACHABLE(); }
+    auto operator()(const ASTTypeExpr* node) noexcept -> Symbol { UNREACHABLE(); }
 
     auto operator()(const ASTParenExpr* node) noexcept -> Symbol { return (*this)(node->inner); }
 
@@ -2413,6 +2409,7 @@ public:
             return;
         }
         Term value_term = Sema::get<SymbolKind::Term>(value);
+        ValueCategory value_category = Type::category(value_term.effective_type());
         sema_.codegen_env_.map_type(sema_.current_scope_, node, value_term.effective_type());
         const Type* value_type = value_term.decay();
         if (auto* ptr_type = value_type->dyn_cast<PointerType>()) {
@@ -2437,6 +2434,12 @@ public:
                         continue;
                     }
                     sema_.codegen_env_.map_type(sema_.current_scope_, &match_case, type);
+                    if (!match_case.identifier.empty()) {
+                        Sema::Guard guard(sema_, &match_case);
+                        sema_.current_scope_->add_case_variable(
+                            match_case.identifier, Type::forward_like(value_type, type.get())
+                        );
+                    }
                 } else {
                     remaining_types.clear();
                 }

@@ -2,9 +2,9 @@ type A = i32 | f32;
 
 fn main(args: [strview]) {
     std.cout << "Hello, world!";
-    let x: A = 42;
+    let mut x: A = 42;
     match (x) {
-        : i32 => { std.cout << "It's an integer!"; }
+        a: i32 => { std.cout << a; }
         _ => { std.cout << "It's something else!"; }
     }
 }

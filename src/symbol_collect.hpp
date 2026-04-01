@@ -120,6 +120,21 @@ public:
         }
     }
 
+    void add_case_variable(strview identifier, const Type* var_type) noexcept {
+        auto [_, inserted] = identifiers_.insert(
+            {identifier,
+             new VariableInitialization{
+                 .type = new MatchCaseVarType{Location{}, var_type},
+                 .value = std::monostate{},
+                 .is_mutable = false,
+                 .is_comptime = false,
+             }}
+        );
+        if (!inserted) {
+            Diagnostic::error_redeclared_identifier(identifier);
+        }
+    }
+
     void add_function(strview identifier, const auto* func) noexcept {
         if (auto it = identifiers_.find(identifier); it == identifiers_.end()) {
             auto overloads = GlobalMemory::alloc<GlobalMemory::Vector<FunctionOverloadDef>>();
@@ -300,18 +315,6 @@ public:
         for (const ASTMatchCase& match_case : node->cases) {
             Scope& match_scope = Scope::make(*current_scope_, &match_case);
             SymbolCollector match_visitor(std_scope_, &match_scope);
-            if (!match_case.identifier.empty()) {
-                match_scope.add_variable(
-                    match_case.identifier,
-                    new VariableInitialization{
-                        .type = &match_case,  // special trick to cast enum types to their
-                                              // data type
-                        .value = std::monostate{},
-                        .is_mutable = false,
-                        .is_comptime = false,
-                    }
-                );
-            }
             for (ASTNodeVariant stmt : match_case.body) {
                 match_visitor(stmt);
             }

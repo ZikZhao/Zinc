@@ -1228,14 +1228,18 @@ public:
             qualifier = ""sv;
             break;
         case ValueCategory::Left:
-            qualifier = " const&"sv;
+            if (Type::is_mutable(value_type)) {
+                qualifier = "&"sv;
+            } else {
+                qualifier = " const&"sv;
+            }
             break;
         case ValueCategory::Expiring:
-            qualifier = " &&"sv;
+            qualifier = "&&"sv;
             break;
         }
         value_type = Type::decay(value_type);
-        definitions_ += "{"sv;
+        definitions_ += "{  // match statement"sv;
         indent_level_++;
         newline();
         ObjectCodeGen::output(definitions_, value_type, type_map_);

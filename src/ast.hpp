@@ -54,7 +54,7 @@ struct ASTRoot;
 struct ASTLocalBlock;
 
 struct ASTExpression;
-struct ASTExplicitTypeExpr;
+struct ASTTypeExpr;
 struct ASTSelfExpr;
 struct ASTConstant;
 struct ASTStringConstant;
@@ -95,6 +95,7 @@ struct ASTSwitchCase;
 struct ASTSwitchStatement;
 struct ASTMatchCase;
 struct ASTMatchStatement;
+struct MatchCaseVarType;
 struct ASTForStatement;
 struct ASTContinueStatement;
 struct ASTBreakStatement;
@@ -180,18 +181,8 @@ using ASTExprVariant = std::variant<
     const ASTReferenceType*,
     const ASTPointerType*,
     const ASTUnionType*,
-    // Match case types
-    const ASTMatchCase*>;
-
-struct ASTNodePtrGetter {
-    auto operator()(ASTNodeVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
-    auto operator()(ASTExprVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
-    template <typename T>
-    auto operator()(const T* node) -> const ASTNode* {
-        return node;
-    }
-    auto operator()(std::monostate) -> const ASTNode* { return nullptr; }
-};
+    // Match case variable type
+    const MatchCaseVarType*>;
 
 struct ASTNode : public GlobalMemory::MonotonicAllocated {
     Location location;
@@ -211,7 +202,7 @@ struct ASTRoot final : public ASTNode {
 
 struct ASTExpression : public ASTNode {};
 
-struct ASTExplicitTypeExpr : public ASTExpression {};
+struct ASTTypeExpr : public ASTExpression {};
 
 struct ASTSelfExpr final : public ASTExpression {
     bool is_type;
@@ -314,13 +305,13 @@ struct ASTLambda final : public ASTExpression {
     mutable bool visited = false;
 };
 
-struct ASTPrimitiveType final : public ASTExplicitTypeExpr {
+struct ASTPrimitiveType final : public ASTTypeExpr {
     const Type* type;
 };
 
-struct ASTStringViewType final : public ASTExplicitTypeExpr {};
+struct ASTStringViewType final : public ASTTypeExpr {};
 
-struct ASTFunctionType final : public ASTExplicitTypeExpr {
+struct ASTFunctionType final : public ASTTypeExpr {
     std::span<ASTExprVariant> parameter_types;
     ASTExprVariant return_type;
 };
@@ -330,31 +321,31 @@ struct ASTFieldDeclaration final : public ASTNode {
     ASTExprVariant type;
 };
 
-struct ASTStructType final : public ASTExplicitTypeExpr {
+struct ASTStructType final : public ASTTypeExpr {
     std::span<ASTFieldDeclaration> fields;
 };
 
-struct ASTArrayType final : public ASTExplicitTypeExpr {
+struct ASTArrayType final : public ASTTypeExpr {
     ASTExprVariant element_type;
     ASTExprVariant length;
 };
 
-struct ASTMutableType final : public ASTExplicitTypeExpr {
+struct ASTMutableType final : public ASTTypeExpr {
     ASTExprVariant inner;
 };
 
-struct ASTReferenceType final : public ASTExplicitTypeExpr {
+struct ASTReferenceType final : public ASTTypeExpr {
     ASTExprVariant inner;
     bool is_mutable;
     bool is_moved;
 };
 
-struct ASTPointerType final : public ASTExplicitTypeExpr {
+struct ASTPointerType final : public ASTTypeExpr {
     ASTExprVariant inner;
     bool is_mutable;
 };
 
-struct ASTUnionType final : public ASTExplicitTypeExpr {
+struct ASTUnionType final : public ASTTypeExpr {
     ASTExprVariant left;
     ASTExprVariant right;
 };
@@ -393,7 +384,7 @@ struct ASTSwitchStatement final : public ASTNode {
     std::span<ASTSwitchCase> cases;
 };
 
-struct ASTMatchCase final : public ASTExplicitTypeExpr {
+struct ASTMatchCase final : public ASTNode {
     strview identifier;
     ASTExprVariant type;
     std::span<ASTNodeVariant> body;
@@ -402,6 +393,10 @@ struct ASTMatchCase final : public ASTExplicitTypeExpr {
 struct ASTMatchStatement final : public ASTNode {
     ASTExprVariant value;
     std::span<ASTMatchCase> cases;
+};
+
+struct MatchCaseVarType final : public ASTTypeExpr {
+    const Type* type;
 };
 
 struct ASTForStatement final : public ASTNode {
@@ -498,6 +493,16 @@ struct ASTImportStatement final : public ASTNode {
 
 struct ASTCppBlock final : public ASTNode {
     strview code;
+};
+
+struct ASTNodePtrGetter {
+    auto operator()(ASTNodeVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
+    auto operator()(ASTExprVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
+    template <typename T>
+    auto operator()(const T* node) -> const ASTNode* {
+        return node;
+    }
+    auto operator()(std::monostate) -> const ASTNode* { UNREACHABLE(); }
 };
 
 enum class OperatorGroup : std::uint8_t {
