@@ -350,8 +350,9 @@ private:
             visit_list<ASTFunctionParameter>(ctx->parameters_),
             visit_expr(ctx->return_type_),
             visit_list(ctx->body_),
-            ctx->KW_CONST() != nullptr,
-            ctx->KW_STATIC() != nullptr
+            ctx->KW_STATIC() != nullptr,
+            ctx->KW_VIRTUAL() != nullptr,
+            ctx->KW_OVERRIDE() != nullptr,
         };
         if (ctx->template_list_) {
             return as_variant(new ASTTemplateDefinition{
@@ -545,7 +546,14 @@ private:
 
     auto visitClass_definition(ZincParser::Class_definitionContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
-        std::span fields = visit_list(ctx->fields_);
+        std::span attrs = visit_list(ctx->attrs_);
+        GlobalMemory::FlatSet<strview> attr_names;
+        for (ASTNodeVariant attr : attrs) {
+            const ASTDeclaration* decl = std::get<const ASTDeclaration*>(attr);
+            if (!attr_names.insert(decl->identifier).second) {
+                Diagnostic::error_duplicate_attribute(decl->location, decl->identifier);
+            }
+        }
         std::span scope_items = GlobalMemory::alloc_array<ASTNodeVariant>(
             ctx->aliases_.size() + ctx->classes_.size() + ctx->constructors_.size() +
             ctx->destructors_.size() + ctx->functions_.size() + ctx->operators_.size()
@@ -574,7 +582,7 @@ private:
             text(ctx->identifier_),
             visit_expr(ctx->extends_),
             visit_list<ASTExprVariant>(ctx->implements_),
-            fields,
+            attrs,
             scope_items,
         };
         if (ctx->template_list_) {
@@ -972,6 +980,13 @@ private:
     }
 
     auto visitStructType(ZincParser::StructTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        std::span fields = visit_list<ASTFieldDeclaration>(ctx->fields_);
+        GlobalMemory::FlatSet<strview> field_names;
+        for (const ASTFieldDeclaration& field : fields) {
+            if (!field_names.insert(field.identifier).second) {
+                Diagnostic::error_duplicate_field(field.location, field.identifier);
+            }
+        }
         return as_variant(
             new ASTStructType{loc(ctx), visit_list<ASTFieldDeclaration>(ctx->fields_)}
         );

@@ -51,6 +51,7 @@ auto main(int argc, char* argv[]) -> int {
     }
 
     ThreadGuard guard;
+    auto start = std::chrono::steady_clock::now();
 
     SourceManager sources;
     Scope& std_scope = get_std_scope(sources);
@@ -59,13 +60,14 @@ auto main(int argc, char* argv[]) -> int {
         Diagnostic::error_module_not_found(argv[1]);
         return EXIT_FAILURE;
     }
+    Diagnostic::print_msg("Parsing...");
     const ASTRoot* root = ASTBuilder{sources, file_id}();
 
     if (root == nullptr) {
         Diagnostic::print_error_msg("Failed to parse input");
         return EXIT_FAILURE;
     }
-    Diagnostic::print_msg("Parsed input successfully");
+    Diagnostic::print_msg(GlobalMemory::format("Parsed {} modules", sources.files.size() - 1));
     Diagnostic::print_msg("Collecting symbols...");
 
     root->scope = &Scope::root(std_scope);
@@ -79,5 +81,16 @@ auto main(int argc, char* argv[]) -> int {
     if (Diagnostic::flush(sources)) return EXIT_FAILURE;
 
     Diagnostic::print_msg("Generating code...");
-    return codegen(sources, sema, codegen_env);
+    int result = codegen(sources, sema, codegen_env);
+    if (result != EXIT_SUCCESS) {
+        return result;
+    }
+
+    Diagnostic::print_msg(
+        GlobalMemory::format("Generated code to '{}.cpp'", sources[file_id].relative_path_.c_str())
+    );
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    Diagnostic::print_msg(GlobalMemory::format("Compilation time: {} ms", duration.count()));
+    return EXIT_SUCCESS;
 }

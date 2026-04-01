@@ -88,7 +88,7 @@ type_alias:
 	)? OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
-	KW_STATIC? KW_CONST? KW_VIRTUAL? KW_FUNC identifier_ = T_IDENTIFIER (
+	(KW_STATIC | KW_VIRTUAL | KW_OVERRIDE)? KW_FUNC identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
 	)? OP_LPAREN (
 		parameters_ += parameter (
@@ -156,7 +156,8 @@ parameter:
 	| KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_ELLIPSIS # VariadicParam;
 
 class_definition:
-	(specialize_list_ = specialize_parameter_list)? KW_CLASS identifier_ = T_IDENTIFIER (
+	(specialize_list_ = specialize_parameter_list)? KW_VIRTUAL? KW_CLASS identifier_ = T_IDENTIFIER
+		(
 		template_list_ = template_parameter_list
 		| instantiation_list_ = instantiation_list
 	)? (KW_EXTENDS extends_ = type)? (
@@ -166,7 +167,7 @@ class_definition:
 	)? OP_LBRACE (
 		aliases_ += type_alias
 		| classes_ += class_definition
-		| fields_ += declaration_statement
+		| attrs_ += declaration_statement
 		| constructors_ += constructor
 		| destructors_ += destructor
 		| functions_ += function_definition
@@ -419,6 +420,7 @@ KW_AS: 'as';
 KW_IMPORT: 'import';
 KW_THROW: 'throw';
 KW_VIRTUAL: 'virtual';
+KW_OVERRIDE: 'override';
 
 OP_DOT: '.';
 OP_QUESTION: '?';

@@ -83,6 +83,12 @@ public:
             }
             add(type->cast<PointerType>()->target_type_);
             break;
+        case Kind::Union:
+            for (const Type* variant_type : type->cast<UnionType>()->types_) {
+                edges_.insert({.child = variant_type, .parent = type});
+                add(variant_type);
+            }
+            break;
         default:
             break;
         }
@@ -104,7 +110,8 @@ public:
         while (!queue.empty()) {
             const Type* child = queue.back();
             queue.pop_back();
-            if (child->kind_ == Kind::Struct || child->kind_ == Kind::Instance) {
+            if (child->kind_ == Kind::Struct || child->kind_ == Kind::Instance ||
+                child->kind_ == Kind::Union) {
                 co_yield child;
             }
             auto range = std::ranges::equal_range(edges_, child, std::less{}, &Edge::child);
@@ -140,6 +147,11 @@ public:
 
     static void output(GlobalMemory::String& out, const Type* type, TypeMap& type_map) {
         switch (type->kind_) {
+        case Kind::Struct:
+        case Kind::Instance:
+        case Kind::Union:
+            std::format_to(std::back_inserter(out), "_t{}"sv, type_map.at(type));
+            break;
         case Kind::Void:
             out += "void"sv;
             break;
@@ -157,10 +169,6 @@ public:
             break;
         case Kind::Function:
             output(out, type->cast<FunctionType>(), type_map);
-            break;
-        case Kind::Struct:
-        case Kind::Instance:
-            std::format_to(std::back_inserter(out), "_t{}"sv, type_map.at(type));
             break;
         case Kind::Interface:
             /// TODO:
@@ -183,17 +191,6 @@ public:
             }
             out += "*"sv;
             break;
-        case Kind::Union: {
-            out += "std::variant<"sv;
-            strview sep = ""sv;
-            for (const Type* variant_type : type->cast<UnionType>()->types_) {
-                out += sep;
-                output(out, variant_type, type_map);
-                sep = ", "sv;
-            }
-            out += ">"sv;
-            break;
-        }
         default:
             UNREACHABLE();
         }
@@ -284,13 +281,17 @@ private:
 public:
     ObjectCodeGen(TypeMap& type_map) noexcept : type_map_(type_map) {}
 
-    void order_types() {
+    void sort_types() {
         TypeSorter sorter;
         for (const StructType* type :
              std::get<TypeRegistry::TypeSet<StructType>>(TypeRegistry::instance->types_)) {
             sorter.add(type);
         }
         for (const InstanceType* type : TypeRegistry::instance->instance_types_) {
+            sorter.add(type);
+        }
+        for (const UnionType* type :
+             std::get<TypeRegistry::TypeSet<UnionType>>(TypeRegistry::instance->types_)) {
             sorter.add(type);
         }
         types_.reserve(
@@ -310,6 +311,9 @@ public:
                 break;
             case Kind::Instance:
                 generate_class(type->cast<InstanceType>());
+                break;
+            case Kind::Union:
+                generate_union(type->cast<UnionType>());
                 break;
             default:
                 UNREACHABLE();
@@ -375,6 +379,19 @@ private:
             /// TODO: methods with instantiations
             definitions_ += "};\n"sv;
         }
+    }
+
+    void generate_union(const UnionType* type) {
+        std::format_to(
+            std::back_inserter(definitions_), "#define _t{} std::variant<"sv, type_map_.at(type)
+        );
+        strview sep = ""sv;
+        for (const Type* variant_type : type->cast<UnionType>()->types_) {
+            definitions_ += sep;
+            output(definitions_, variant_type, type_map_);
+            sep = ", "sv;
+        }
+        definitions_ += ">\n"sv;
     }
 };
 
@@ -1387,7 +1404,8 @@ private:
 };
 
 auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env) -> int {
-    std::filesystem::path out_path = sources.files[1].relative_path_.concat(".cpp");
+    std::filesystem::path out_path = sources.files[1].relative_path_;
+    out_path.concat(".cpp");
     std::ofstream out(out_path);
     if (!out) {
         std::cerr << "Failed to open output file: " << out_path << "\n";
@@ -1433,7 +1451,7 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
 
     TypeMap type_map;
     ObjectCodeGen type_codegen{type_map};
-    type_codegen.order_types();
+    type_codegen.sort_types();
     NameMangler mangler(type_map);
     mangler.mangle_all_instantiations(codegen_env);
     type_codegen.output_type_defs(out);

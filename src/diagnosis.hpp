@@ -306,6 +306,16 @@ public:
         unlocated_error(GlobalMemory::format("Circular type definition detected:"));
     }
 
+    static auto error_duplicate_field(Location location, strview field_name) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format("Duplicate field name: '{}'", field_name)
+            }
+        );
+    }
+
     static auto error_duplicate_attribute(Location location, strview attribute_name) noexcept
         -> void {
         Diagnostic::report(
@@ -601,16 +611,6 @@ public:
                 .severity = Severity::Error,
                 .location = location,
                 .message = GlobalMemory::String("Missing type annotation"sv)
-            }
-        );
-    }
-
-    static auto error_redeclaration(Location location, strview name) noexcept -> void {
-        Diagnostic::report(
-            Problem{
-                .severity = Severity::Error,
-                .location = location,
-                .message = GlobalMemory::format("Redeclaration of '{}'", name)
             }
         );
     }

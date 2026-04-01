@@ -427,8 +427,9 @@ struct ASTFunctionDefinition final : public ASTNode {
     std::span<ASTFunctionParameter> parameters;
     ASTExprVariant return_type;
     std::span<ASTNodeVariant> body;
-    bool declared_const;
     bool declared_static;
+    bool declared_virtual;
+    bool declared_override;
 };
 
 struct ASTCtorDtorDefinition final : public ASTNode {

@@ -440,13 +440,13 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
-    std::span<const Type*> parameters_;
+    GlobalMemory::Vector<const Type*> parameters_;
     const Type* return_type_;
 
 public:
-    FunctionType(std::span<const Type*> parameters, const Type* return_type) noexcept
+    FunctionType(GlobalMemory::Vector<const Type*> parameters, const Type* return_type) noexcept
         : Type(kind, any_pattern(parameters) || return_type->is_pattern()),
-          parameters_(parameters),
+          parameters_(std::move(parameters)),
           return_type_(return_type) {}
 
     GlobalMemory::String repr() const final {
@@ -507,11 +507,11 @@ public:
     static constexpr Kind kind = Kind::Struct;
 
 public:
-    std::span<std::pair<strview, const Type*>> fields_;
+    GlobalMemory::FlatMap<strview, const Type*> fields_;
 
 public:
-    StructType(std::span<std::pair<strview, const Type*>> fields) noexcept
-        : Type(kind, any_pattern(fields | std::views::values)), fields_(fields) {}
+    StructType(GlobalMemory::FlatMap<strview, const Type*> fields) noexcept
+        : Type(kind, any_pattern(fields | std::views::values)), fields_(std::move(fields)) {}
 
     GlobalMemory::String repr() const final {
         GlobalMemory::String str;
@@ -545,9 +545,12 @@ protected:
         if (fields_.size() != other_struct->fields_.size()) {
             return fields_.size() <=> other_struct->fields_.size();
         }
-        for (std::size_t i = 0; i < fields_.size(); ++i) {
-            const auto& [this_name, this_type] = fields_[i];
-            const auto& [other_name, other_type] = other_struct->fields_[i];
+        auto this_it = fields_.begin();
+        auto other_it = other_struct->fields_.begin();
+        for (; this_it != fields_.end() && other_it != other_struct->fields_.end();
+             ++this_it, ++other_it) {
+            const auto& [this_name, this_type] = *this_it;
+            const auto& [other_name, other_type] = *other_it;
             if (this_name != other_name) {
                 return this_name <=> other_name;
             }
@@ -567,9 +570,12 @@ protected:
         if (fields_.size() != other_struct->fields_.size()) {
             return false;
         }
-        for (std::size_t i = 0; i < fields_.size(); ++i) {
-            const auto& [this_name, this_type] = fields_[i];
-            const auto& [other_name, other_type] = other_struct->fields_[i];
+        auto this_it = fields_.begin();
+        auto other_it = other_struct->fields_.begin();
+        for (; this_it != fields_.end() && other_it != other_struct->fields_.end();
+             ++this_it, ++other_it) {
+            const auto& [this_name, this_type] = *this_it;
+            const auto& [other_name, other_type] = *other_it;
             if (this_name != other_name) {
                 return false;
             }
@@ -586,20 +592,18 @@ public:
     static constexpr Kind kind = Kind::Interface;
 
 private:
-    GlobalMemory::FlatMap<strview, std::span<const FunctionType*>> methods_;
+    strview identifier_;
+    GlobalMemory::FlatMultiMap<strview, const FunctionType*> methods_;
 
 public:
-    InterfaceType() noexcept : Type(kind, false) {}
+    InterfaceType(
+        strview identifier, GlobalMemory::FlatMultiMap<strview, const FunctionType*> methods
+    ) noexcept
+        : Type(kind, false), identifier_(identifier), methods_(std::move(methods)) {}
 
-    GlobalMemory::String repr() const override {
-        /// TODO:
-        return {};
-    }
+    GlobalMemory::String repr() const override { return GlobalMemory::String{identifier_}; }
 
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
-        /// TODO:
-        return true;
-    }
+    bool can_intern(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
 
     bool default_construct() const noexcept final { return false; }
 
@@ -607,8 +611,11 @@ protected:
     std::strong_ordering do_compare(
         const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
-        /// TODO:
-        return std::strong_ordering::equal;
+        return this <=> other;
+    }
+
+    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
+        return this == target;
     }
 };
 
@@ -619,9 +626,9 @@ public:
 public:
     Scope* scope_;
     strview identifier_;
-    const Type* extends_;
-    std::span<const Type*> implements_;
-    std::span<std::pair<strview, const Type*>> attrs_;
+    const InstanceType* extends_;
+    GlobalMemory::FlatSet<const InterfaceType*> implements_;
+    GlobalMemory::FlatMap<strview, const Type*> attrs_;
     mutable const void* primary_template_;
     mutable std::span<const Object*> template_args_;
 
@@ -639,16 +646,16 @@ public:
     InstanceType(
         Scope* scope,
         strview identifier,
-        const Type* extends,
-        std::span<const Type*> interfaces,
-        std::span<std::pair<strview, const Type*>> attrs
+        const InstanceType* extends,
+        GlobalMemory::FlatSet<const InterfaceType*> interfaces,
+        GlobalMemory::FlatMap<strview, const Type*> attrs
     ) noexcept
         : Type(kind, false),
           scope_(scope),
           identifier_(identifier),
           extends_(extends),
-          implements_(interfaces),
-          attrs_(attrs) {}
+          implements_(std::move(interfaces)),
+          attrs_(std::move(attrs)) {}
 
     GlobalMemory::String repr() const override {
         GlobalMemory::String str = GlobalMemory::format("{}", identifier_);
@@ -1133,11 +1140,32 @@ private:
 
 class ClassHierarchyGraph {
 private:
-    GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> edges_;
+    struct ClassNode {
+        const InstanceType* type;
+        const ClassNode* parent;
+        GlobalMemory::Vector<ClassNode> children;
+    };
+
+private:
+    GlobalMemory::Vector<ClassNode> top_level_classes_;
+    GlobalMemory::FlatMap<const InterfaceType*, GlobalMemory::Vector<ClassNode*>>
+        interface_implementors_;
+    GlobalMemory::FlatMap<const InstanceType*, ClassNode*> class_nodes_;
 
 public:
-    auto add_edge(const Type* parent, const Type* child) noexcept -> void {
-        edges_.insert({parent, child});
+    auto add_class(const InstanceType* instance_type) noexcept -> void {
+        ClassNode* node;
+        if (instance_type->extends_) {
+            const InstanceType* parent_type = instance_type->extends_->cast<InstanceType>();
+            ClassNode& parent_node = *class_nodes_.at(parent_type);
+            node = &parent_node.children.emplace_back(ClassNode{instance_type, &parent_node});
+            class_nodes_[instance_type] = node;
+        } else {
+            node = &top_level_classes_.emplace_back(ClassNode{instance_type, nullptr});
+        }
+        for (const InterfaceType* interface : instance_type->implements_) {
+            interface_implementors_[interface].push_back(node);
+        }
     }
 
     auto is_base(const Type* from, const Type* to) const noexcept -> bool {
@@ -1163,29 +1191,8 @@ public:
         return false;
     }
 
-    auto is_derived(const Type* from, const Type* to) const noexcept -> bool {
-        GlobalMemory::FlatSet<const Type*> visited;
-        std::vector<const Type*> stack{from};
-        while (!stack.empty()) {
-            const Type* current = stack.back();
-            stack.pop_back();
-            if (current == to) {
-                return true;
-            }
-            if (visited.insert(current).second) {
-                auto range = std::ranges::equal_range(
-                    edges_, current, {}, &std::pair<const Type*, const Type*>::first
-                );
-                for (const auto& edge : range) {
-                    stack.push_back(edge.second);
-                }
-            }
-        }
-        return false;
-    }
-
     auto is_reachable(const Type* from, const Type* to) const noexcept -> bool {
-        return is_base(from, to) || is_derived(from, to);
+        return is_base(from, to) || is_base(to, from);
     }
 };
 
@@ -1264,7 +1271,7 @@ public:
             // classes with same definition are distinct types
             out.reconstruct<T>(std::forward<decltype(args)>(args)...);
             instance->instance_types_.push_back(static_cast<const T*>(out.get()));
-            instance->add_class_hierarchy(static_cast<const T*>(out.get()));
+            instance->class_graph_.add_class(out.get()->cast<InstanceType>());
         } else {
             instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
         }
@@ -1414,15 +1421,6 @@ private:
             }
         }
         return interned_type;
-    }
-
-    auto add_class_hierarchy(const InstanceType* type) noexcept -> void {
-        if (type->extends_) {
-            class_graph_.add_edge(type, type->extends_);
-        }
-        for (const Type* impl : type->implements_) {
-            class_graph_.add_edge(type, impl);
-        }
     }
 
 public:

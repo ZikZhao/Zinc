@@ -1746,35 +1746,26 @@ public:
             out_ = nullptr;
             return;
         }
-        TypeRegistry::get_at<FunctionType>(
-            out_, param_types | GlobalMemory::collect<std::span>(), return_type
-        );
+        TypeRegistry::get_at<FunctionType>(out_, param_types, return_type);
     }
 
     void operator()(const ASTStructType* node) noexcept {
         out_ = std::type_identity<StructType>();
         bool has_error = false;
-        GlobalMemory::Vector<std::pair<strview, const Type*>> fields;
+        GlobalMemory::FlatMap<strview, const Type*> fields;
         for (const ASTFieldDeclaration& decl : node->fields) {
-            if (std::ranges::contains(
-                    fields, decl.identifier, &std::pair<strview, const Type*>::first
-                )) {
-                Diagnostic::error_redeclaration(decl.location, decl.identifier);
-                has_error = true;
-                continue;
-            }
             TypeResolution field_type;
             TypeContextEvaluator{sema_, field_type}(decl.type);
             if (!field_type.get()) {
                 has_error = true;
             }
-            fields.push_back({decl.identifier, field_type.get()});
+            fields[decl.identifier] = field_type.get();
         }
         if (has_error) {
             out_ = nullptr;
             return;
         }
-        TypeRegistry::get_at<StructType>(out_, fields | GlobalMemory::collect<std::span>());
+        TypeRegistry::get_at<StructType>(out_, fields);
     }
 
     void operator()(const ASTArrayType* node) noexcept;
@@ -1824,31 +1815,29 @@ public:
         out_ = new InstanceType(node->identifier);
         Sema::Guard guard(sema_, node);
         bool has_error = false;
-        const Type* base = nullptr;
+        const InstanceType* base = nullptr;
         if (!holds_monostate(node->extends)) {
             TypeResolution result;
             TypeContextEvaluator{sema_, result}(node->extends);
-            base = result.get();
-            has_error = !base;
+            if (!result.get() || result.get()->kind_ != Kind::Instance) {
+                has_error = true;
+            }
+            base = result.get()->cast<InstanceType>();
         }
-        GlobalMemory::Vector<const Type*> interfaces;
+        GlobalMemory::FlatSet<const InterfaceType*> interfaces;
         for (ASTExprVariant interface : node->implements) {
             TypeResolution result;
             TypeContextEvaluator{sema_, result}(interface);
-            has_error |= !result.get();
-            interfaces.push_back(result.get());
-        }
-        GlobalMemory::Vector<std::pair<strview, const Type*>> attrs;
-        for (ASTNodeVariant decl_variant : node->fields) {
-            const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
-            if (decl->declared_static) continue;
-            if (std::ranges::contains(
-                    attrs, decl->identifier, &std::pair<strview, const Type*>::first
-                )) {
-                Diagnostic::error_redeclaration(decl->location, decl->identifier);
+            if (!result.get() || result.get()->kind_ != Kind::Interface) {
                 has_error = true;
                 continue;
             }
+            interfaces.insert(result.get()->cast<InterfaceType>());
+        }
+        GlobalMemory::FlatMap<strview, const Type*> attrs;
+        for (ASTNodeVariant decl_variant : node->fields) {
+            const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
+            if (decl->declared_static) continue;
             TypeResolution field_type;
             if (holds_monostate(decl->declared_type)) {
                 Diagnostic::error_missing_type_annotation(decl->location);
@@ -1856,20 +1845,18 @@ public:
                 continue;
             }
             TypeContextEvaluator{sema_, field_type}(decl->declared_type);
-            has_error |= !field_type.get();
-            attrs.push_back({decl->identifier, field_type.get()});
+            if (!field_type.get()) {
+                has_error = true;
+                continue;
+            }
+            attrs[decl->identifier] = field_type.get();
         }
         if (has_error) {
             out_ = nullptr;
             return;
         }
         TypeRegistry::get_at<InstanceType>(
-            out_,
-            sema_.current_scope_,
-            node->identifier,
-            base,
-            interfaces,
-            attrs | GlobalMemory::collect<std::span>()
+            out_, sema_.current_scope_, node->identifier, base, interfaces, attrs
         );
     }
 
@@ -2244,9 +2231,7 @@ public:
         if (std::ranges::contains(param_types, nullptr) || return_type.get() == nullptr) {
             return {};
         }
-        const Type* func_type = TypeRegistry::get<FunctionType>(
-            param_types | GlobalMemory::collect<std::span>(), return_type
-        );
+        const FunctionType* func_type = TypeRegistry::get<FunctionType>(param_types, return_type);
         sema_.codegen_env_.map_type(sema_.current_scope_, node, func_type);
         return Term::of(func_type);
     }
@@ -3104,9 +3089,7 @@ inline auto CallHandler::get_func_type(Scope* scope, FunctionOverloadDef overloa
     if (std::ranges::contains(params, nullptr) || return_type.get() == nullptr) {
         return {};
     }
-    return TypeRegistry::get<FunctionType>(
-        params | GlobalMemory::collect<std::span>(), return_type
-    );
+    return TypeRegistry::get<FunctionType>(params, return_type);
 }
 
 inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> Symbol {
