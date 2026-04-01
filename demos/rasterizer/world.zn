@@ -19,14 +19,14 @@ type Colour = {
 
 fn make_colour(data: u32) -> Colour {
     return Colour{
-        red: (data >> (16 as u32)) as u8,
-        green: (data >> (8 as u32)) as u8,
+        red: (data >> 16u32) as u8,
+        green: (data >> 8u32) as u8,
         blue: data as u8
     };
 }
 
 fn from_colour(colour: Colour) -> u32 {
-    return ((colour.red as u32) << (16 as u32)) | ((colour.green as u32) << (8 as u32)) | (colour.blue as u32);
+    return ((colour.red as u32) << 16u32) | ((colour.green as u32) << 8u32) | (colour.blue as u32);
 }
 
 class ImageBuffer<T: type> {
@@ -46,10 +46,10 @@ class ImageBuffer<T: type> {
     fn sample(self: &Self, mut u: f32, mut v: f32) -> T {
         u = u - std.floor(u);
         v = v - std.floor(v);
-        let mut ix = (u * (self.width_ - (1 as usize)) as f32) as usize;
-        let mut iy = (v * (self.height_ - (1 as usize)) as f32) as usize;
-        if (ix >= self.width_) { ix = self.width_ - (1 as usize); }
-        if (iy >= self.height_) { iy = self.height_ - (1 as usize); }
+        let mut ix = (u * (self.width_ - 1usize) as f32) as usize;
+        let mut iy = (v * (self.height_ - 1usize) as f32) as usize;
+        if (ix >= self.width_) { ix = self.width_ - 1usize; }
+        if (iy >= self.height_) { iy = self.height_ - 1usize; }
         return self.data_[iy * self.width_ + ix];
     }
 }
@@ -100,13 +100,13 @@ class Camera {
 
     init() {
         return Self{
-            position_: glm.vec3(0.0f, 0.0f, 12.0f),
-            yaw_: 0.0f,
-            pitch_: 0.0f,
-            roll_: 0.0f,
+            position_: glm.vec3(0.0f32, 0.0f32, 12.0f32),
+            yaw_: 0.0f32,
+            pitch_: 0.0f32,
+            roll_: 0.0f32,
             is_orbiting_: false,
-            orbit_radius_: 0.0f,
-            aspect_ratio_: 1.0f,
+            orbit_radius_: 0.0f32,
+            aspect_ratio_: 1.0f32,
         };
     }
 
@@ -121,20 +121,20 @@ class Camera {
         let cos_yaw = std.cos(self.yaw_);
         let sin_yaw = std.sin(self.yaw_);
         let f = glm.vec3(sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch);
-        let world_up = glm.vec3(0.0f, 1.0f, 0.0f);
+        let world_up = glm.vec3(0.0f32, 1.0f32, 0.0f32);
         let mut r = glm.normalize(glm.cross(f, world_up));
         let mut u = glm.normalize(glm.cross(r, f));
         let c = std.cos(self.roll_);
         let s = std.sin(self.roll_);
         let rotate_axis = (v: &glm.vec3): glm.vec3 => {
-            return v * c + glm.cross(f, v) * s + f * glm.dot(f, v) * (1.0f - c);
+            return v * c + glm.cross(f, v) * s + f * glm.dot(f, v) * (1.0f32 - c);
         };
         r = rotate_axis(r);
         u = rotate_axis(u);
         let mut o = glm.mat3();
-        o[0 as usize] = r;
-        o[1 as usize] = u;
-        o[2 as usize] = f;
+        o[0usize] = r;
+        o[1usize] = u;
+        o[2usize] = f;
         return o;
     }
 
@@ -148,12 +148,12 @@ class Camera {
 
     fn go_right(self: &Self) -> glm.vec3 {  
         let o = self.orientation();
-        return glm.normalize(o[0 as usize]);
+        return glm.normalize(o[0usize]);
     }
 
     fn go_up(self: &Self) -> glm.vec3 {
         let o = self.orientation();
-        return glm.normalize(o[1 as usize]);
+        return glm.normalize(o[1usize]);
     }
 
     /// Projects a world-space vertex to homogeneous clip space.
@@ -163,7 +163,7 @@ class Camera {
         let view_space = view_rotation * view_vector;
         let w = view_space.z;
         let fov_rad = glm.radians(Constant.FOV);
-        let tan_half_fov = std.tan(fov_rad / 2.0f);
+        let tan_half_fov = std.tan(fov_rad / 2.0f32);
         let x_ndc = view_space.x / (view_space.z * tan_half_fov * self.aspect_ratio_);
         let y_ndc = view_space.y / (view_space.z * tan_half_fov);
         let z_ndc = (Constant.FarPlane * (view_space.z - Constant.NearPlane)) /
@@ -173,8 +173,8 @@ class Camera {
 
     /// Converts clip coordinates to NDC by dividing by w.
     fn clip_to_ndc(self: &Self, clip: &glm.vec4) -> glm.vec3 {
-        if (std.abs(clip.w) < 1e-6f) {
-            return glm.vec3(0.0f, 0.0f, -1.0f);
+        if (std.abs(clip.w) < 1e-6f32) {
+            return glm.vec3(0.0f32, 0.0f32, -1.0f32);
         }
         // Divide by w to get NDC; guard above avoids division by near-zero
         return glm.vec3(clip) / clip.w;
@@ -212,9 +212,9 @@ class Camera {
 }
 
 type Face = {
-    v_indices: [u32; 3 as usize],
-    vt_indices: [u32; 3 as usize],
-    vn_indices: [u32; 3 as usize],
+    v_indices: [u32; 3usize],
+    vt_indices: [u32; 3usize],
+    vn_indices: [u32; 3usize],
     material: Material,
     face_normal: glm.vec3,
 };
@@ -283,35 +283,35 @@ class World {
 
     static fn parse_index_token(token: &std.string) -> [i32; 3] {
         // Parses an OBJ index token of the form "v", "v/vt", "v//vn", or "v/vt/vn"
-        let mut idx: [i32; 3 as usize] = [-1, -1, -1];
+        let mut idx: [i32; 3usize] = [-1, -1, -1];
 
         let first_slash = token.find('/');
         if (first_slash == std.string.npos) {
             // Format: v
             if (!token.empty()) {
-                idx[0 as usize] = std.stoi(token);
+                idx[0usize] = std.stoi(token);
             }
             return idx;
         }
 
         // Parse vertex index (before first slash)
-        if (first_slash > (0 as usize)) {
-            idx[0 as usize] = std.stoi(token.substr(0 as usize, first_slash));
+        if (first_slash > 0usize) {
+            idx[0usize] = std.stoi(token.substr(0usize, first_slash));
         }
 
-        let second_slash = token.find('/', first_slash + (1 as usize));
+        let second_slash = token.find('/', first_slash + 1usize);
         if (second_slash == std.string.npos) {
             // Format: v/vt
-            if (first_slash + (1 as usize) < token.size()) {
-                idx[1 as usize] = std.stoi(token.substr(first_slash + (1 as usize)));
+            if (first_slash + 1usize < token.size()) {
+                idx[1usize] = std.stoi(token.substr(first_slash + 1usize));
             }
         } else {
             // Format: v/vt/vn or v//vn
-            if (second_slash > first_slash + (1 as usize)) {
-                idx[1 as usize] = std.stoi(token.substr(first_slash + (1 as usize), second_slash - first_slash - (1 as usize)));
+            if (second_slash > first_slash + 1usize) {
+                idx[1usize] = std.stoi(token.substr(first_slash + 1usize, second_slash - first_slash - 1usize));
             }
-            if (second_slash + (1 as usize) < token.size()) {
-                idx[2 as usize] = std.stoi(token.substr(second_slash + (1 as usize)));
+            if (second_slash + 1usize < token.size()) {
+                idx[2usize] = std.stoi(token.substr(second_slash + 1usize));
             }
         }
 
@@ -347,28 +347,28 @@ class World {
             } else if (keyword == "Mt") {
                 let mut metallic_value: f32;
                 iss >> metallic_value;
-                current_material->second.metallic = std.clamp(metallic_value as f32, 0.0f, 1.0f);
+                current_material->second.metallic = std.clamp(metallic_value as f32, 0.0f32, 1.0f32);
             } else if (keyword == "ior") {
                 let mut ior_value: f32;
                 iss >> ior_value;
-                current_material->second.ior = std.max(1.0f, ior_value as f32);
+                current_material->second.ior = std.max(1.0f32, ior_value as f32);
             } else if (keyword == "td") {
                 let mut td_value: f32;
                 iss >> td_value;
-                current_material->second.td = std.max(0.0f, td_value as f32);
+                current_material->second.td = std.max(0.0f32, td_value as f32);
             } else if (keyword == "tw") {
                 let mut tw_value: f32;
                 iss >> tw_value;
-                current_material->second.tw = std.clamp(tw_value as f32, 0.0f, 1.0f);
+                current_material->second.tw = std.clamp(tw_value as f32, 0.0f32, 1.0f32);
             } else if (keyword == "Ke") {
                 let mut r: f32;
                 let mut g: f32;
                 let mut b: f32;
                 iss >> r >> g >> b;
                 current_material->second.emission = glm.vec3(
-                    std.max(0.0f, r as f32),
-                    std.max(0.0f, g as f32),
-                    std.max(0.0f, b as f32)
+                    std.max(0.0f32, r as f32),
+                    std.max(0.0f32, g as f32),
+                    std.max(0.0f32, b as f32)
                 );
             } else if (keyword == "sigma_a") {
                 let mut r: f32;
@@ -376,9 +376,9 @@ class World {
                 let mut b: f32;
                 iss >> r >> g >> b;
                 current_material->second.sigma_a = glm.vec3(
-                    std.max(0.0f, r as f32),
-                    std.max(0.0f, g as f32),
-                    std.max(0.0f, b as f32)
+                    std.max(0.0f32, r as f32),
+                    std.max(0.0f32, g as f32),
+                    std.max(0.0f32, b as f32)
                 );
             } else if (keyword == "map_Kd") {
                 let mut texture_filename: std.string;
@@ -454,28 +454,28 @@ class World {
                 if (current_material != model.materials.end()) {
                     let mut m: f32;
                     iss >> m;
-                    current_material->second.metallic = std.clamp(m as f32, 0.0f, 1.0f);
+                    current_material->second.metallic = std.clamp(m as f32, 0.0f32, 1.0f32);
                 }
             } else if (keyword == "IOR") {
                 // Index of refraction for dielectrics (>= 1.0)
                 if (current_material != model.materials.end()) {
                     let mut i: f32;
                     iss >> i;
-                    current_material->second.ior = std.max(1.0f, i as f32);
+                    current_material->second.ior = std.max(1.0f32, i as f32);
                 }
             } else if (keyword == "AtDistance") {
                 // Absorption length td; used to derive sigma_a when not provided
                 if (current_material != model.materials.end()) {
                     let mut td: f32;
                     iss >> td;
-                    current_material->second.td = std.max(0.0f, td as f32);
+                    current_material->second.td = std.max(0.0f32, td as f32);
                 }
             } else if (keyword == "TransmissionWeight") {
                 // Transmission weight for mixing reflection/refraction
                 if (current_material != model.materials.end()) {
                     let mut tw: f32;
                     iss >> tw;
-                    current_material->second.tw = std.clamp(tw as f32, 0.0f, 1.0f);
+                    current_material->second.tw = std.clamp(tw as f32, 0.0f32, 1.0f32);
                 }
             } else if (keyword == "Emission") {
                 // Emissive colour
@@ -485,9 +485,9 @@ class World {
                     let mut b: f32;
                     iss >> r >> g >> b;
                     current_material->second.emission = glm.vec3(
-                        std.max(0.0f, r as f32),
-                        std.max(0.0f, g as f32),
-                        std.max(0.0f, b as f32)
+                        std.max(0.0f32, r as f32),
+                        std.max(0.0f32, g as f32),
+                        std.max(0.0f32, b as f32)
                     );
                 }
             } else if (keyword == "Texture") {
@@ -517,11 +517,11 @@ class World {
                 let mut rest: std.string;
                 std.getline(iss, rest);
                 let mut name = rest;
-                if (!name.empty() && name[0 as usize] == '#') {
-                    name.erase(0 as usize, 1 as usize);
+                if (!name.empty() && name[0usize] == '#') {
+                    name.erase(0usize, 1usize);
                 }
-                for (!name.empty() && (name[0 as usize] == ' ' || name[0 as usize] == '\t')) {
-                    name.erase(0 as usize, 1 as usize);
+                for (!name.empty() && (name[0usize] == ' ' || name[0usize] == '\t')) {
+                    name.erase(0usize, 1usize);
                 }
                 model.objects.emplace_back(name);
                 current_obj = std.prev(model.objects.end());
@@ -561,7 +561,7 @@ class World {
                     let mut z: f32;
                     iss >> x >> y >> z;
                     model.vertices.emplace_back(x, y, z);
-                    model.vertex_normals_by_vertex.emplace_back(glm.vec3(0.0f));
+                    model.vertex_normals_by_vertex.emplace_back(glm.vec3(0.0f32));
                     let mut c: u8;
                     if (iss >> c) {
                         if (c == '/') {
@@ -593,22 +593,22 @@ class World {
                 // Triangle face -- parse indices (v/vt/vn) and create Face with material
                 if (current_obj == model.objects.end()) { continue; }
                 let mut tok: [std.string; 3];
-                iss >> tok[0 as usize] >> tok[1 as usize] >> tok[2 as usize];
+                iss >> tok[0usize] >> tok[1usize] >> tok[2usize];
                 let mut vpos: [glm.vec3; 3];
-                let mut vt_out: [u32; 3 as usize] = [
+                let mut vt_out: [u32; 3usize] = [
                     std.numeric_limits<u32>.max(),
                     std.numeric_limits<u32>.max(),
                     std.numeric_limits<u32>.max()
                 ];
-                let mut vi_out: [i32; 3 as usize] = [0, 0, 0];
-                let mut vn_out: [i32; 3 as usize] = [-1, -1, -1];
+                let mut vi_out: [i32; 3usize] = [0, 0, 0];
+                let mut vn_out: [i32; 3usize] = [-1, -1, -1];
                 let mut has_vn = false;
-                for (let mut i = 0 as usize; i < 3 as usize; ++i) {
+                for (let mut i = 0usize; i < 3usize; ++i) {
                     let t: &std.string = tok[i];
                     let indice = Self.parse_index_token(t);
-                    let v_i = indice[0 as usize];
-                    let vt_i = indice[1 as usize];
-                    let vn_i = indice[2 as usize];
+                    let v_i = indice[0usize];
+                    let vt_i = indice[1usize];
+                    let vn_i = indice[2usize];
                     if (vn_i >= 0) { has_vn = true; }
                     let v_global = vertex_offset + (v_i >= 0 ? v_i : 0);
                     vpos[i] = model.vertices[v_global as usize];
@@ -625,16 +625,16 @@ class World {
                 // If normals are absent, defer to per-vertex cached normals when available; mark
                 // missing as -1
                 if (!has_vn) {
-                    for (let mut i = 0 as usize; i < 3 as usize; ++i) {
+                    for (let mut i = 0usize; i < 3usize; ++i) {
                         let vidx = vi_out[i];
                         if (vidx >= 0 &&
                             vidx as usize < model.vertex_normals_by_vertex.size()) {
-                            if (glm.length(model.vertex_normals_by_vertex[vidx as usize]) > 0.001f) {
+                            if (glm.length(model.vertex_normals_by_vertex[vidx as usize]) > 0.001f32) {
                                 vn_out[i] = -1;
                             }
                         }
                     }
-                    for (let mut i = 0 as usize; i < 3 as usize; ++i) {
+                    for (let mut i = 0usize; i < 3usize; ++i) {
                         if (vn_out[i] < 0) {
                             vn_out[i] = -1;
                         }
@@ -642,19 +642,19 @@ class World {
                 }
                 let new_face = Face{
                     v_indices:
-                        [vi_out[0 as usize] as u32,
-                         vi_out[1 as usize] as u32,
-                         vi_out[2 as usize] as u32],
-                    vt_indices: [vt_out[0 as usize], vt_out[1 as usize], vt_out[2 as usize]],
+                        [vi_out[0usize] as u32,
+                         vi_out[1usize] as u32,
+                         vi_out[2usize] as u32],
+                    vt_indices: [vt_out[0usize], vt_out[1usize], vt_out[2usize]],
                     vn_indices:
-                        [vn_out[0 as usize] >= 0 ? vn_out[0 as usize] as u32
+                        [vn_out[0usize] >= 0 ? vn_out[0usize] as u32
                                         : std.numeric_limits<u32>.max(),
-                         vn_out[1 as usize] >= 0 ? vn_out[1 as usize] as u32
+                         vn_out[1usize] >= 0 ? vn_out[1usize] as u32
                                         : std.numeric_limits<u32>.max(),
-                         vn_out[2 as usize] >= 0 ? vn_out[2 as usize] as u32
+                         vn_out[2usize] >= 0 ? vn_out[2usize] as u32
                                         : std.numeric_limits<u32>.max()],
                     material: current_obj->material,
-                    face_normal: glm.vec3(0.0f)
+                    face_normal: glm.vec3(0.0f32)
                 };
                 model.objects.back().faces.emplace_back(move new_face);
             }
@@ -667,7 +667,7 @@ class World {
         let mut ppm = Utils.ReadPPM(path);
         let mut texture_data: std.vector<Colour>;
         texture_data.resize(ppm.width * ppm.height);
-        for (let mut i = 0 as usize; i < ppm.width * ppm.height; ++i) {
+        for (let mut i = 0usize; i < ppm.width * ppm.height; ++i) {
             let red = ppm.stream.get();
             let green = ppm.stream.get();
             let blue = ppm.stream.get();
@@ -690,7 +690,7 @@ class World {
         model.all_faces.reserve(std.accumulate(
             model.objects.begin(),
             model.objects.end(),
-            0 as usize,
+            0usize,
             (sum: usize, obj: &Object): usize => sum + obj.faces.size()
         ));
 
@@ -723,11 +723,11 @@ class World {
         self.all_vertex_normals_by_vertex_.clear();
         self.all_faces_.clear();
 
-        let mut num_v = 0 as usize;
-        let mut num_vt = 0 as usize;
-        let mut num_vn = 0 as usize;
-        let mut num_vnbv = 0 as usize;
-        let mut num_f = 0 as usize;
+        let mut num_v = 0usize;
+        let mut num_vt = 0usize;
+        let mut num_vn = 0usize;
+        let mut num_vnbv = 0usize;
+        let mut num_f = 0usize;
         for (let mut it = self.models_.begin(); it != self.models_.end(); ++it) {
             let m = *it;
             num_v += m.vertices.size();

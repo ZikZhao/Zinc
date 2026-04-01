@@ -475,11 +475,7 @@ OP_BITAND_ASSIGN: '&=';
 OP_BITOR_ASSIGN: '|=';
 OP_BITXOR_ASSIGN: '^=';
 
-T_FLOAT: (T_HEX_FLOAT | T_DEC_FLOAT) [fF]?;
-
-fragment T_HEX_FLOAT:
-	'0' [xX] [0-9a-fA-F]* '.' [0-9a-fA-F]+ [pP] [+-]? [0-9]+
-	| '0' [xX] [0-9a-fA-F]+ [pP] [+-]? [0-9]+;
+T_FLOAT: T_DEC_FLOAT T_FLOAT_SUFFIX?;
 
 fragment T_DEC_FLOAT:
 	[0-9]+ '.' [0-9]* EXP?
@@ -488,11 +484,27 @@ fragment T_DEC_FLOAT:
 
 fragment EXP: [eE] [+-]? [0-9]+;
 
+fragment T_FLOAT_SUFFIX: 'f32' | 'f64';
+
 T_INT:
-	'0' [xX] [0-9a-fA-F]+
-	| '0' [bB] [0-1]+
-	| '0' [0-7]+
-	| [0-9]+;
+	(
+		'0' [xX] [0-9a-fA-F]+
+		| '0' [bB] [0-1]+
+		| '0' [oO] [0-7]+
+		| [0-9]+
+	) T_INT_SUFFIX?;
+
+fragment T_INT_SUFFIX:
+	'i8'
+	| 'i16'
+	| 'i32'
+	| 'i64'
+	| 'isize'
+	| 'u8'
+	| 'u16'
+	| 'u32'
+	| 'u64'
+	| 'usize';
 
 T_STRING: '"' (~["\r\n] | '\\' .)* '"';
 T_CHAR: '\'' (~['\r\n] | '\\' .) '\'';

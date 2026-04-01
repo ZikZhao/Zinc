@@ -311,6 +311,93 @@ public:
         return GlobalMemory::format("{}{}", is_signed_ ? "i" : "u", bits_);
     }
     bool default_construct() const noexcept final { return true; }
+    bool in_range(std::int64_t value) const noexcept {
+        if (is_signed_) {
+            switch (bits_) {
+            case 8:
+                return std::in_range<std::int8_t>(value);
+            case 16:
+                return std::in_range<std::int16_t>(value);
+            case 32:
+                return std::in_range<std::int32_t>(value);
+            case 64:
+                return true;
+            default:
+                UNREACHABLE();
+            }
+        } else {
+            switch (bits_) {
+            case 8:
+                return std::in_range<std::uint8_t>(value);
+            case 16:
+                return std::in_range<std::uint16_t>(value);
+            case 32:
+                return std::in_range<std::uint32_t>(value);
+            case 64:
+                return value >= 0;
+            default:
+                UNREACHABLE();
+            }
+        }
+    }
+    bool in_range(std::uint64_t value) const noexcept {
+        if (is_signed_) {
+            switch (bits_) {
+            case 8:
+                return std::in_range<std::int8_t>(value);
+            case 16:
+                return std::in_range<std::int16_t>(value);
+            case 32:
+                return std::in_range<std::int32_t>(value);
+            case 64:
+                return std::in_range<std::int64_t>(value);
+            default:
+                UNREACHABLE();
+            }
+        } else {
+            switch (bits_) {
+            case 8:
+                return std::in_range<std::uint8_t>(value);
+            case 16:
+                return std::in_range<std::uint16_t>(value);
+            case 32:
+                return std::in_range<std::uint32_t>(value);
+            case 64:
+                return true;
+            default:
+                UNREACHABLE();
+            }
+        }
+    }
+    bool in_range(double value) const noexcept {
+        if (is_signed_) {
+            switch (bits_) {
+            case 8:
+                return float_in_range<std::int8_t>(value);
+            case 16:
+                return float_in_range<std::int16_t>(value);
+            case 32:
+                return float_in_range<std::int32_t>(value);
+            case 64:
+                return float_in_range<std::int64_t>(value);
+            default:
+                UNREACHABLE();
+            }
+        } else {
+            switch (bits_) {
+            case 8:
+                return float_in_range<std::uint8_t>(value);
+            case 16:
+                return float_in_range<std::uint16_t>(value);
+            case 32:
+                return float_in_range<std::uint32_t>(value);
+            case 64:
+                return float_in_range<std::uint64_t>(value);
+            default:
+                UNREACHABLE();
+            }
+        }
+    }
 };
 
 class FloatType final : public PrimitiveType {
@@ -328,6 +415,13 @@ public:
     }
     GlobalMemory::String repr() const final { return GlobalMemory::format("f{}", bits_); }
     bool default_construct() const noexcept final { return true; }
+    bool in_range(double value) const noexcept {
+        if (bits_ == 32) {
+            return std::abs(value) <= std::numeric_limits<float>::max();
+        } else {
+            return true;
+        }
+    }
 };
 
 class BooleanType final : public PrimitiveType {
@@ -823,15 +917,21 @@ public:
     };
 
 public:
-    explicit IntegerValue(std::int64_t signed_value) noexcept
-        : Value(kind), type_(&IntegerType::i32_instance), signed_value_(signed_value) {}
     IntegerValue(const IntegerType* type, std::int64_t signed_value) noexcept
-        : Value(kind), type_(type), signed_value_(signed_value) {
-        assert(type->is_signed_ == true);
+        : Value(kind), type_(type) {
+        if (type->is_signed_) {
+            signed_value_ = signed_value;
+        } else {
+            unsigned_value_ = static_cast<std::uint64_t>(signed_value);
+        }
     }
     IntegerValue(const IntegerType* type, std::uint64_t unsigned_value) noexcept
-        : Value(kind), type_(type), unsigned_value_(unsigned_value) {
-        assert(type->is_signed_ == false);
+        : Value(kind), type_(type) {
+        if (type->is_signed_) {
+            signed_value_ = static_cast<std::int64_t>(unsigned_value);
+        } else {
+            unsigned_value_ = unsigned_value;
+        }
     }
     auto repr() const -> GlobalMemory::String final {
         strview prefix;

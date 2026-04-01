@@ -5,8 +5,8 @@ import "window.zn" as Window;
 import "renderer.zn" as Renderer;
 
 fn main(args: [strview]) {
-    if (args.size() < (2 as usize)) {
-        std.cerr << "Usage: " << args[0 as usize] << " <scene1.obj> [<scene2.obj> ...]\n";
+    if (args.size() < 2usize) {
+        std.cerr << "Usage: " << args[0usize] << " <scene1.obj> [<scene2.obj> ...]\n";
         return EXIT_FAILURE;
     }
 
@@ -24,19 +24,19 @@ fn main(args: [strview]) {
     let mut last_print = std.chrono.steady_clock.now();
 
     // Centralized input callbacks: movement and UI toggles
-    let translate_keys: [sdl.SDL_Scancode; 6 as usize] =
+    let translate_keys: [sdl.SDL_Scancode; 6usize] =
         [sdl.SDL_SCANCODE_W, sdl.SDL_SCANCODE_S, sdl.SDL_SCANCODE_A,
          sdl.SDL_SCANCODE_D, sdl.SDL_SCANCODE_SPACE, sdl.SDL_SCANCODE_C];
     window.register_key(
         std.unordered_set<sdl.SDL_Scancode>(translate_keys.begin(), translate_keys.end()),
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
-            let fwd = (ks[sdl.SDL_SCANCODE_W as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_S as usize] ? 1.0f : 0.0f);
+            let fwd = (ks[sdl.SDL_SCANCODE_W as usize] ? 1.0f32 : 0.0f32) - (ks[sdl.SDL_SCANCODE_S as usize] ? 1.0f32 : 0.0f32);
             let right =
-                (ks[sdl.SDL_SCANCODE_D as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_A as usize] ? 1.0f : 0.0f);
+                (ks[sdl.SDL_SCANCODE_D as usize] ? 1.0f32 : 0.0f32) - (ks[sdl.SDL_SCANCODE_A as usize] ? 1.0f32 : 0.0f32);
             let up =
-                (ks[sdl.SDL_SCANCODE_SPACE as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_C as usize] ? 1.0f : 0.0f);
-            if (fwd != 0.0f || right != 0.0f || up != 0.0f) {
+                (ks[sdl.SDL_SCANCODE_SPACE as usize] ? 1.0f32 : 0.0f32) - (ks[sdl.SDL_SCANCODE_C as usize] ? 1.0f32 : 0.0f32);
+            if (fwd != 0.0f32 || right != 0.0f32 || up != 0.0f32) {
                 world.camera_.translate(
                     fwd * Constant.MoveSpeed,
                     right * Constant.MoveSpeed,
@@ -47,19 +47,19 @@ fn main(args: [strview]) {
         }
     );
 
-    let roll_keys: [sdl.SDL_Scancode; 2 as usize] = [sdl.SDL_SCANCODE_Q, sdl.SDL_SCANCODE_E];
+    let roll_keys: [sdl.SDL_Scancode; 2usize] = [sdl.SDL_SCANCODE_Q, sdl.SDL_SCANCODE_E];
     window.register_key(
         std.unordered_set<sdl.SDL_Scancode>(roll_keys.begin(), roll_keys.end()),
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
-            let r = (ks[sdl.SDL_SCANCODE_E as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_Q as usize] ? 1.0f : 0.0f);
-            if (r != 0.0f) {
+            let r = (ks[sdl.SDL_SCANCODE_E as usize] ? 1.0f32 : 0.0f32) - (ks[sdl.SDL_SCANCODE_Q as usize] ? 1.0f32 : 0.0f32);
+            if (r != 0.0f32) {
                 world.camera_.roll(r * Constant.RollSpeed * dt);
             }
         }
     );
 
-    let orbit_keys: [sdl.SDL_Scancode; 1 as usize] = [sdl.SDL_SCANCODE_O];
+    let orbit_keys: [sdl.SDL_Scancode; 1usize] = [sdl.SDL_SCANCODE_O];
     window.register_key(
         std.unordered_set<sdl.SDL_Scancode>(orbit_keys.begin(), orbit_keys.end()),
         Window.Trigger.ANY_JUST_PRESSED,
@@ -72,7 +72,7 @@ fn main(args: [strview]) {
         }
     );
 
-    let mode_keys: [sdl.SDL_Scancode; 5 as usize] = [
+    let mode_keys: [sdl.SDL_Scancode; 5usize] = [
         sdl.SDL_SCANCODE_1, sdl.SDL_SCANCODE_2, sdl.SDL_SCANCODE_3, sdl.SDL_SCANCODE_4, sdl.SDL_SCANCODE_0
     ];
     window.register_key(
@@ -102,7 +102,7 @@ fn main(args: [strview]) {
     );
 
     // Screenshot save (Ctrl+S)
-    let screenshot_keys: [sdl.SDL_Scancode; 2 as usize] = [sdl.SDL_SCANCODE_LCTRL, sdl.SDL_SCANCODE_S];
+    let screenshot_keys: [sdl.SDL_Scancode; 2usize] = [sdl.SDL_SCANCODE_LCTRL, sdl.SDL_SCANCODE_S];
     window.register_key(
         std.unordered_set<sdl.SDL_Scancode>(screenshot_keys.begin(), screenshot_keys.end()),
         Window.Trigger.ALL_JUST_PRESSED,
@@ -131,7 +131,7 @@ fn main(args: [strview]) {
     );
 
     // Keyboard look (arrow keys)
-    let look_keys: [sdl.SDL_Scancode; 4 as usize] = [
+    let look_keys: [sdl.SDL_Scancode; 4usize] = [
         sdl.SDL_SCANCODE_UP, sdl.SDL_SCANCODE_DOWN, sdl.SDL_SCANCODE_LEFT, sdl.SDL_SCANCODE_RIGHT
     ];
     window.register_key(
@@ -139,10 +139,10 @@ fn main(args: [strview]) {
         Window.Trigger.ANY_PRESSED,
         (ks: &Window.KeyState, dt: f32) => {
             let dx0 =
-                (ks[sdl.SDL_SCANCODE_RIGHT as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_LEFT as usize] ? 1.0f : 0.0f);
+                (ks[sdl.SDL_SCANCODE_RIGHT as usize] ? 1.0f32 : 0.0f32) - (ks[sdl.SDL_SCANCODE_LEFT as usize] ? 1.0f32 : 0.0f32);
             let dy0 =
-                (ks[sdl.SDL_SCANCODE_UP as usize] ? 1.0f : 0.0f) - (ks[sdl.SDL_SCANCODE_DOWN as usize] ? 1.0f : 0.0f);
-            if (dx0 != 0.0f || dy0 != 0.0f) {
+                (ks[sdl.SDL_SCANCODE_UP as usize] ? 1.0f32 : 0.0f32) - (ks[sdl.SDL_SCANCODE_DOWN as usize] ? 1.0f32 : 0.0f32);
+            if (dx0 != 0.0f32 || dy0 != 0.0f32) {
                 let roll = world.camera_.roll_;
                 let c = std.cos(roll);
                 let s = std.sin(roll);
@@ -164,7 +164,7 @@ fn main(args: [strview]) {
         fps++;
         let now = std.chrono.steady_clock.now();
         let elapsed = now - last_print;
-        if (elapsed >= std.chrono.seconds(1 as i64)) {
+        if (elapsed >= std.chrono.seconds(1i64)) {
             let elapsed_ms = std.chrono.duration_cast::<std.chrono.milliseconds>(elapsed).count();
             let elapsed_sec = elapsed_ms as f64 / 1000.0;
             std.cout << std.format(

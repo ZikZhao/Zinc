@@ -29,7 +29,7 @@ class Rasterizer {
                 return v.y <= v.w;
             }
             case World.ClipPlane.NEAR: {
-                return v.z >= 0.0f;
+                return v.z >= 0.0f32;
             }
             case World.ClipPlane.FAR: {
                 return v.z <= v.w;
@@ -74,11 +74,11 @@ class Rasterizer {
                 break;
             }
             default: {
-                return 0.0f;
+                return 0.0f32;
             }
         }
-        if (std.abs(d1 - d0) < 1e-6f) {
-            return 0.0f;
+        if (std.abs(d1 - d0) < 1e-6f32) {
+            return 0.0f32;
         }
         return d0 / (d0 - d1);
     }
@@ -89,14 +89,14 @@ class Rasterizer {
     ) -> World.ClipVertex {
         let t = Self.ComputeIntersectionT(v0.position_clip, v1.position_clip, plane);
         return World.ClipVertex{
-            position_clip: v0.position_clip * (1.0f - t) + v1.position_clip * t,
+            position_clip: v0.position_clip * (1.0f32 - t) + v1.position_clip * t,
             colour:
                 World.Colour{
-                    red: (v0.colour.red as f32 * (1.0f - t) + v1.colour.red as f32 * t) as u8,
-                    green: (v0.colour.green as f32 * (1.0f - t) + v1.colour.green as f32 * t) as u8,
-                    blue: (v0.colour.blue as f32 * (1.0f - t) + v1.colour.blue as f32 * t) as u8,
+                    red: (v0.colour.red as f32 * (1.0f32 - t) + v1.colour.red as f32 * t) as u8,
+                    green: (v0.colour.green as f32 * (1.0f32 - t) + v1.colour.green as f32 * t) as u8,
+                    blue: (v0.colour.blue as f32 * (1.0f32 - t) + v1.colour.blue as f32 * t) as u8,
                 },
-            uv: v0.uv * (1.0f - t) + v1.uv * t,
+            uv: v0.uv * (1.0f32 - t) + v1.uv * t,
         };
     }
 
@@ -106,11 +106,11 @@ class Rasterizer {
     ) -> Utils.InplaceVector<World.ClipVertex, 9> {
         let mut output = Utils.InplaceVector::<World.ClipVertex, 9>();
 
-        if (input.size() == (0 as usize)) { return output; }
+        if (input.size() == 0usize) { return output; }
 
-        for (let mut i = 0 as usize; i < input.size(); i++) {
+        for (let mut i = 0usize; i < input.size(); i++) {
             let current = input[i];
-            let next = input[(i + (1 as usize)) % input.size()];
+            let next = input[(i + 1usize) % input.size()];
 
             let current_inside = Self.InsidePlane(current.position_clip, plane);
             let next_inside = Self.InsidePlane(next.position_clip, plane);
@@ -136,7 +136,7 @@ class Rasterizer {
         v1: &World.ScreenNdcCoord,
         v2: &World.ScreenNdcCoord
     ) -> World.Colour {
-        let mut base_color = glm.vec3(0.0f, 0.0f, 0.0f);
+        let mut base_color = glm.vec3(0.0f32, 0.0f32, 0.0f32);
 
         // If textured, reconstruct UV with 1/w weighting to avoid affine distortion
         if (face.material.texture) {
@@ -151,9 +151,9 @@ class Rasterizer {
             // Sample texture and modulate by material albedo
             let tex_sample = face.material.texture->sample(u, v);
             base_color = glm.vec3(
-                (tex_sample.red as f32 / 255.0f) * face.material.base_color.r,
-                (tex_sample.green as f32 / 255.0f) * face.material.base_color.g,
-                (tex_sample.blue as f32 / 255.0f) * face.material.base_color.b
+                (tex_sample.red as f32 / 255.0f32) * face.material.base_color.r,
+                (tex_sample.green as f32 / 255.0f32) * face.material.base_color.g,
+                (tex_sample.blue as f32 / 255.0f32) * face.material.base_color.b
             );
         } else {
             // No texture: use flat material base color
@@ -161,9 +161,9 @@ class Rasterizer {
         }
 
         return World.Colour{
-            red: (std.clamp(base_color.r * 255.0f, 0.0f, 255.0f)) as u8,
-            green: (std.clamp(base_color.g * 255.0f, 0.0f, 255.0f)) as u8,
-            blue: (std.clamp(base_color.b * 255.0f, 0.0f, 255.0f)) as u8,
+            red: (std.clamp(base_color.r * 255.0f32, 0.0f32, 255.0f32)) as u8,
+            green: (std.clamp(base_color.g * 255.0f32, 0.0f32, 255.0f32)) as u8,
+            blue: (std.clamp(base_color.b * 255.0f32, 0.0f32, 255.0f32)) as u8,
         };
     }
 
@@ -173,19 +173,19 @@ class Rasterizer {
     init(window: &mut Window.Window) {
         return Self{
             window_: window,
-            z_buffer_: std.vector<f32>(window.width_ * window.height_, 0.0f)
+            z_buffer_: std.vector<f32>(window.width_ * window.height_, 0.0f32)
         };
     }
 
     fn get_depth(self: &Self, x: i32, y: i32) -> f32 {
         if (x < 0 || x as usize >= self.window_.width_ || y < 0 || y as usize >= self.window_.height_) {
-            return 0.0f;
+            return 0.0f32;
         }
         return self.z_buffer_[y as usize * self.window_.width_ + x as usize];
     }
 
     fn clear(self: &mut Self) {
-        self.z_buffer_.assign(self.window_.width_ * self.window_.height_, 0.0f);
+        self.z_buffer_.assign(self.window_.width_ * self.window_.height_, 0.0f32);
     }
 
     fn wireframe(self: &mut Self, camera: &World.Camera, faces: &std.vector<World.Face>, vertices: &std.vector<glm.vec3>) {
@@ -215,33 +215,33 @@ class Rasterizer {
     ) {
         // Clip triangle to the frustum (Sutherland–Hodgman in clip space)
         let clipped = self.clip_triangle(camera, face, vertices, texcoords);
-        if (clipped.size() < (3 as usize)) { return; }
+        if (clipped.size() < 3usize) { return; }
 
         // Project clipped polygon to NDC and convert to screen; carry 1/w for depth
         let mut screen_verts: std.vector<World.ScreenNdcCoord>;
-        for (let mut i = 0 as usize; i < clipped.size(); i++) {
+        for (let mut i = 0usize; i < clipped.size(); i++) {
             let ndc = camera.clip_to_ndc(clipped[i].position_clip);
             screen_verts.push_back(self.ndc_to_screen(ndc, clipped[i].uv, clipped[i].position_clip.w));
         }
 
         // Edge rasterization using DDA with inverse-Z depth testing
-        let colour = clipped[0 as usize].colour;
+        let colour = clipped[0usize].colour;
         let width = self.window_.width_;
         let height = self.window_.height_;
 
-        for (let mut i = 0 as usize; i < screen_verts.size(); i++) {
+        for (let mut i = 0usize; i < screen_verts.size(); i++) {
             let from = screen_verts[i];
-            let to = screen_verts[(i + (1 as usize)) % screen_verts.size()];
+            let to = screen_verts[(i + 1usize) % screen_verts.size()];
             if (std.abs(to.x - from.x) >= std.abs(to.y - from.y)) {
                 // Iterate over x
-                let from_x = std.max(std.floor(std.min(from.x, to.x)) as isize, 0 as isize);
+                let from_x = std.max(std.floor(std.min(from.x, to.x)) as isize, 0isize);
                 let to_x = std.min(std.ceil(std.max(from.x, to.x)) as isize, (width as isize) - 1);
                 for (let mut x: isize = from_x; x <= to_x; x++) {
                     let y = std.round(from.y + (to.y - from.y) * ((x as f32) - from.x) / (to.x - from.x)) as isize;
                     if (x < 0 || x >= width as isize || y < 0 || y >= height as isize) {
                         continue;
                     }
-                    let progress = (to.x == from.x) ? 0.0f : ((x as f32) - from.x) / (to.x - from.x);
+                    let progress = (to.x == from.x) ? 0.0f32 : ((x as f32) - from.x) / (to.x - from.x);
                     let inv_z = Utils.InvZndc(progress, [from.z_ndc, to.z_ndc]);
                     let depth: &mut f32 = self.z_buffer_[y as usize * width + x as usize];
                     if (inv_z >= depth) {
@@ -251,14 +251,14 @@ class Rasterizer {
                 }
             } else {
                 // Iterate over y
-                let from_y = std.max(std.floor(std.min(from.y, to.y)) as isize, 0 as isize);
+                let from_y = std.max(std.floor(std.min(from.y, to.y)) as isize, 0isize);
                 let to_y = std.min(std.ceil(std.max(from.y, to.y)) as isize, (height as isize) - 1);
                 for (let mut y: isize = from_y; y <= to_y; y++) {
                     let x = (std.round(from.x + (to.x - from.x) * ((y as f32) - from.y) / (to.y - from.y))) as isize;
                     if (x < 0 || x >= width as isize || y < 0 || y >= height as isize) {
                         continue;
                     }
-                    let progress = (to.y == from.y) ? 0.0f : ((y as f32) - from.y) / (to.y - from.y);
+                    let progress = (to.y == from.y) ? 0.0f32 : ((y as f32) - from.y) / (to.y - from.y);
                     let inv_z = Utils.InvZndc(progress, [from.z_ndc, to.z_ndc]);
                     let depth: &mut f32 = self.z_buffer_[y as usize * width + x as usize];
                     if (inv_z >= depth) {
@@ -279,14 +279,14 @@ class Rasterizer {
     ) {
         // Clip triangle against all frustum planes; early out if culled
         let clipped = self.clip_triangle(camera, face, vertices, texcoords);
-        if (clipped.size() < (3 as usize)) {
+        if (clipped.size() < 3usize) {
             return;
         }
     
         // Project to NDC and convert to screen space, tracking 1/w for perspective-correct
         // interpolation
         let mut screen_verts = Utils.InplaceVector::<World.ScreenNdcCoord, 9>();
-        for (let mut i = 0 as usize; i < clipped.size(); i++) {
+        for (let mut i = 0usize; i < clipped.size(); i++) {
             let ndc = camera.clip_to_ndc(clipped[i].position_clip);
             screen_verts.push_back(self.ndc_to_screen(ndc, clipped[i].uv, clipped[i].position_clip.w));
         }
@@ -294,10 +294,10 @@ class Rasterizer {
         // Triangulate convex polygon fan-wise and perform two-pass scanline fill (top/bottom)
         let width = self.window_.width_;
         let height = self.window_.height_;
-        for (let mut i = 1 as usize; i + 1 as usize < clipped.size(); i++) {
-            let mut v0 = screen_verts[0 as usize];
+        for (let mut i = 1usize; i + 1usize < clipped.size(); i++) {
+            let mut v0 = screen_verts[0usize];
             let mut v1 = screen_verts[i];
-            let mut v2 = screen_verts[i + (1 as usize)];
+            let mut v2 = screen_verts[i + 1usize];
             if (v0.y > v1.y) {
                 let t = v0;
                 v0 = v1;
@@ -315,26 +315,26 @@ class Rasterizer {
             }
 
             // Compute inverse slopes for edge stepping and derive scan ranges
-            let from_y = std.max(std.ceil(v0.y) as isize, 0 as isize);
+            let from_y = std.max(std.ceil(v0.y) as isize, 0isize);
             let mid_y = std.min(std.ceil(v1.y) as isize, height as isize - 1);
             let to_y = std.min(std.ceil(v2.y) as isize, height as isize - 1);
-            let inv_slope_v0v1 = (v1.y - v0.y) == 0.0f ? 0.0f : (v1.x - v0.x) / (v1.y - v0.y);
-            let inv_slope_v0v2 = (v2.y - v0.y) == 0.0f ? 0.0f : (v2.x - v0.x) / (v2.y - v0.y);
-            let inv_slope_v1v2 = (v2.y - v1.y) == 0.0f ? 0.0f : (v2.x - v1.x) / (v2.y - v1.y);
+            let inv_slope_v0v1 = (v1.y - v0.y) == 0.0f32 ? 0.0f32 : (v1.x - v0.x) / (v1.y - v0.y);
+            let inv_slope_v0v2 = (v2.y - v0.y) == 0.0f32 ? 0.0f32 : (v2.x - v0.x) / (v2.y - v0.y);
+            let inv_slope_v1v2 = (v2.y - v1.y) == 0.0f32 ? 0.0f32 : (v2.x - v1.x) / (v2.y - v1.y);
 
             // Upper half scanlines: barycentrics, perspective-correct texture, depth test
             for (let mut y: isize = from_y; y < mid_y; y++) {
-                let y_center = y as f32 + 0.5f;
+                let y_center = y as f32 + 0.5f32;
                 let x01 = inv_slope_v0v1 * (y_center - v0.y) + v0.x;
                 let x02 = inv_slope_v0v2 * (y_center - v0.y) + v0.x;
-                let start_x = std.max(std.floor(std.min(x01, x02)) as isize, 0 as isize);
+                let start_x = std.max(std.floor(std.min(x01, x02)) as isize, 0isize);
                 let end_x = std.min(std.ceil(std.max(x01, x02)) as isize, width as isize - 1);
                 for (let mut x: isize = start_x; x <= end_x; x++) {
-                    let x_center = x as f32 + 0.5f;
+                    let x_center = x as f32 + 0.5f32;
                     let bary = Utils.Barycentric(
                         glm.vec2(v0.x, v0.y), glm.vec2(v1.x, v1.y), glm.vec2(v2.x, v2.y), glm.vec2(x_center, y_center)
                     );
-                    if (bary.x >= 0.0f && bary.y >= 0.0f && bary.z >= 0.0f) {
+                    if (bary.x >= 0.0f32 && bary.y >= 0.0f32 && bary.z >= 0.0f32) {
                         let colour = Self.SampleTexture(face, bary, v0, v1, v2);
                         let z0 = v0.z_ndc;
                         let z1 = v1.z_ndc;
@@ -354,20 +354,20 @@ class Rasterizer {
 
             // Lower half scanlines: same process with bottom edges
             for (let mut y: isize = mid_y; y <= to_y; y++) {
-                let y_center = y as f32 + 0.5f;
+                let y_center = y as f32 + 0.5f32;
                 let x12 = inv_slope_v1v2 * (y_center - v1.y) + v1.x;
                 let x02 = inv_slope_v0v2 * (y_center - v0.y) + v0.x;
-                let start_x = std.max(std.floor(std.min(x12, x02)) as isize, 0 as isize);
+                let start_x = std.max(std.floor(std.min(x12, x02)) as isize, 0isize);
                 let end_x = std.min(
                     std.ceil(std.max(x12, x02)) as isize,
                     width as isize - 1
                 );
                 for (let mut x: isize = start_x; x <= end_x; x++) {
-                    let x_center = x as f32 + 0.5f;
+                    let x_center = x as f32 + 0.5f32;
                     let bary = Utils.Barycentric(
                         glm.vec2(v0.x, v0.y), glm.vec2(v1.x, v1.y), glm.vec2(v2.x, v2.y), glm.vec2(x_center, y_center)
                     );
-                    if (bary.x >= 0.0f && bary.y >= 0.0f && bary.z >= 0.0f) {
+                    if (bary.x >= 0.0f32 && bary.y >= 0.0f32 && bary.z >= 0.0f32) {
                         let colour = Self.SampleTexture(face, bary, v0, v1, v2);
                         let z0 = v0.z_ndc;
                         let z1 = v1.z_ndc;
@@ -401,27 +401,27 @@ class Rasterizer {
         texcoords: &std.vector<glm.vec2>
     ) -> Utils.InplaceVector::<World.ClipVertex, 9> {
         let vertex_color = World.Colour{
-            red: std.clamp(face.material.base_color.r * 255.0f, 0.0f, 255.0f) as u8,
-            green: std.clamp(face.material.base_color.g * 255.0f, 0.0f, 255.0f) as u8,
-            blue: std.clamp(face.material.base_color.b * 255.0f, 0.0f, 255.0f) as u8
+            red: std.clamp(face.material.base_color.r * 255.0f32, 0.0f32, 255.0f32) as u8,
+            green: std.clamp(face.material.base_color.g * 255.0f32, 0.0f32, 255.0f32) as u8,
+            blue: std.clamp(face.material.base_color.b * 255.0f32, 0.0f32, 255.0f32) as u8
         };
 
         // Gather vertex positions and optional UVs
-        let v0: &glm.vec3 = vertices[face.v_indices[0 as usize] as usize];
-        let v1: &glm.vec3 = vertices[face.v_indices[1 as usize] as usize];
-        let v2: &glm.vec3 = vertices[face.v_indices[2 as usize] as usize];
-        let mut uv0 = glm.vec2(0.0f, 0.0f);
-        let mut uv1 = glm.vec2(0.0f, 0.0f);
-        let mut uv2 = glm.vec2(0.0f, 0.0f);
+        let v0: &glm.vec3 = vertices[face.v_indices[0usize] as usize];
+        let v1: &glm.vec3 = vertices[face.v_indices[1usize] as usize];
+        let v2: &glm.vec3 = vertices[face.v_indices[2usize] as usize];
+        let mut uv0 = glm.vec2(0.0f32, 0.0f32);
+        let mut uv1 = glm.vec2(0.0f32, 0.0f32);
+        let mut uv2 = glm.vec2(0.0f32, 0.0f32);
         if (!texcoords.empty()) {
-            if (face.vt_indices[0 as usize] < texcoords.size()) {
-                uv0 = texcoords[face.vt_indices[0 as usize] as usize];
+            if (face.vt_indices[0usize] < texcoords.size()) {
+                uv0 = texcoords[face.vt_indices[0usize] as usize];
             }
-            if (face.vt_indices[1 as usize] < texcoords.size()) {
-                uv1 = texcoords[face.vt_indices[1 as usize] as usize];
+            if (face.vt_indices[1usize] < texcoords.size()) {
+                uv1 = texcoords[face.vt_indices[1usize] as usize];
             }
-            if (face.vt_indices[2 as usize] < texcoords.size()) {
-                uv2 = texcoords[face.vt_indices[2 as usize] as usize];
+            if (face.vt_indices[2usize] < texcoords.size()) {
+                uv2 = texcoords[face.vt_indices[2usize] as usize];
             }
         }
 
@@ -451,22 +451,22 @@ class Rasterizer {
 
         // Sequentially clip against each frustum plane; bail out if polygon fully disappears
         let polygon1 = Self.ClipAgainstPlane(polygon, World.ClipPlane.LEFT);
-        if (polygon1.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon1.size() < 3usize) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon2 = Self.ClipAgainstPlane(polygon1, World.ClipPlane.RIGHT);
-        if (polygon2.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon2.size() < 3usize) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon3 = Self.ClipAgainstPlane(polygon2, World.ClipPlane.BOTTOM);
-        if (polygon3.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon3.size() < 3usize) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon4 = Self.ClipAgainstPlane(polygon3, World.ClipPlane.TOP);
-        if (polygon4.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon4.size() < 3usize) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon5 = Self.ClipAgainstPlane(polygon4, World.ClipPlane.NEAR);
-        if (polygon5.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon5.size() < 3usize) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon6 = Self.ClipAgainstPlane(polygon5, World.ClipPlane.FAR);
-        if (polygon6.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon6.size() < 3usize) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         // Return final clipped polygon (may have 3–9 vertices)
         return polygon6;
@@ -475,11 +475,11 @@ class Rasterizer {
     /// NDC `[-1,1]` to pixel coordinates; store `1/w` for downstream perspective correction.
     fn ndc_to_screen(self: &Self, ndc: &glm.vec3, uv: &glm.vec2, w: f32) -> World.ScreenNdcCoord {
         return World.ScreenNdcCoord{
-            x: (ndc.x + 1.0f) * 0.5f * self.window_.width_ as f32,
-            y: (1.0f - ndc.y) * 0.5f * self.window_.height_ as f32,
+            x: (ndc.x + 1.0f32) * 0.5f32 * self.window_.width_ as f32,
+            y: (1.0f32 - ndc.y) * 0.5f32 * self.window_.height_ as f32,
             z_ndc: ndc.z,
             uv: uv,
-            inv_w: 1.0f / w
+            inv_w: 1.0f32 / w
         };
     }
 }

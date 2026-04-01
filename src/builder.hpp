@@ -1036,39 +1036,82 @@ private:
         strview literal_text = text(ctx->value_);
         switch (ctx->value_->getType()) {
         case ZincParser::T_INT: {
-            int32_t value = 0;
-            auto [ptr, ec] = std::from_chars(
-                literal_text.data(), literal_text.data() + literal_text.size(), value
-            );
-            if (ec == std::errc::result_out_of_range) {
-                Diagnostic::error_overflow(literal_text, "integer literal");
-                return as_variant(new ASTConstant{loc(ctx), new IntegerValue(0)});
-            } else if (ec != std::errc{}) {
-                Diagnostic::error_invalid_literal(literal_text, "integer literal");
-                return as_variant(new ASTConstant{loc(ctx), new IntegerValue(0)});
+            const IntegerType* int_type = &IntegerType::i32_instance;
+            if (literal_text.ends_with("i8")) {
+                int_type = &IntegerType::i8_instance;
+                literal_text = literal_text.substr(0, literal_text.size() - 2);
+            } else if (literal_text.ends_with("i16")) {
+                int_type = &IntegerType::i16_instance;
+                literal_text = literal_text.substr(0, literal_text.size() - 3);
+            } else if (literal_text.ends_with("i32")) {
+                literal_text = literal_text.substr(0, literal_text.size() - 3);
+            } else if (literal_text.ends_with("i64") || literal_text.ends_with("isize")) {
+                int_type = &IntegerType::i64_instance;
+                literal_text = literal_text.substr(0, literal_text.size() - 3);
+            } else if (literal_text.ends_with("u8")) {
+                int_type = &IntegerType::u8_instance;
+                literal_text = literal_text.substr(0, literal_text.size() - 2);
+            } else if (literal_text.ends_with("u16")) {
+                int_type = &IntegerType::u16_instance;
+                literal_text = literal_text.substr(0, literal_text.size() - 3);
+            } else if (literal_text.ends_with("u32")) {
+                int_type = &IntegerType::u32_instance;
+                literal_text = literal_text.substr(0, literal_text.size() - 3);
+            } else if (literal_text.ends_with("u64") || literal_text.ends_with("usize")) {
+                int_type = &IntegerType::u64_instance;
+                literal_text = literal_text.substr(0, literal_text.size() - 3);
             }
-            return as_variant(new ASTConstant{loc(ctx), new IntegerValue(value)});
+            if (int_type->is_signed_) {
+                std::int64_t value = 0;
+                auto [ptr, ec] = std::from_chars(
+                    literal_text.data(), literal_text.data() + literal_text.size(), value
+                );
+                if (ec == std::errc::result_out_of_range ||
+                    (ec == std::errc{} && !int_type->in_range(value))) {
+                    Diagnostic::error_overflow(literal_text, int_type->repr());
+                    return as_variant(new ASTConstant{loc(ctx), nullptr});
+                } else if (ec != std::errc{}) {
+                    Diagnostic::error_invalid_literal(literal_text, "integer literal");
+                    return as_variant(new ASTConstant{loc(ctx), nullptr});
+                }
+                return as_variant(new ASTConstant{loc(ctx), new IntegerValue(int_type, value)});
+            } else {
+                std::uint64_t value = 0;
+                auto [ptr, ec] = std::from_chars(
+                    literal_text.data(), literal_text.data() + literal_text.size(), value
+                );
+                if (ec == std::errc::result_out_of_range ||
+                    (ec == std::errc{} && !int_type->in_range(value))) {
+                    Diagnostic::error_overflow(literal_text, int_type->repr());
+                    return as_variant(new ASTConstant{loc(ctx), nullptr});
+                } else if (ec != std::errc{}) {
+                    Diagnostic::error_invalid_literal(literal_text, "integer literal");
+                    return as_variant(new ASTConstant{loc(ctx), nullptr});
+                }
+                return as_variant(new ASTConstant{loc(ctx), new IntegerValue(int_type, value)});
+            }
         }
         case ZincParser::T_FLOAT: {
             double value = 0.0;
+            const FloatType* float_type = &FloatType::f64_instance;
+            if (literal_text.ends_with("f32")) {
+                float_type = &FloatType::f32_instance;
+                literal_text = literal_text.substr(0, literal_text.size() - 3);
+            } else if (literal_text.ends_with("f64")) {
+                literal_text = literal_text.substr(0, literal_text.size() - 3);
+            }
             auto [ptr, ec] = std::from_chars(
                 literal_text.data(), literal_text.data() + literal_text.size(), value
             );
-            if (ec == std::errc::result_out_of_range) {
+            if (ec == std::errc::result_out_of_range ||
+                (ec == std::errc{} && !float_type->in_range(value))) {
                 Diagnostic::error_overflow(literal_text, "float literal");
-                return as_variant(new ASTConstant{loc(ctx), new FloatValue(0)});
+                return as_variant(new ASTConstant{loc(ctx), nullptr});
             } else if (ec != std::errc{}) {
                 Diagnostic::error_invalid_literal(literal_text, "float literal");
-                return as_variant(new ASTConstant{loc(ctx), new FloatValue(0)});
+                return as_variant(new ASTConstant{loc(ctx), nullptr});
             }
-            if (!literal_text.empty() &&
-                (literal_text.back() == 'f' || literal_text.back() == 'F')) {
-                return as_variant(
-                    new ASTConstant{loc(ctx), new FloatValue(&FloatType::f32_instance, value)}
-                );
-            } else {
-                return as_variant(new ASTConstant{loc(ctx), new FloatValue(value)});
-            }
+            return as_variant(new ASTConstant{loc(ctx), new FloatValue(float_type, value)});
         }
         case ZincParser::T_STRING: {
             GlobalMemory::String raw_string{literal_text.substr(1, literal_text.size() - 2)};

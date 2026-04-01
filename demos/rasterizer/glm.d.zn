@@ -4,7 +4,7 @@
     #include <glm/glm.hpp>
 }
 
-const PI = 3.14159265358979323846 as f32;
+const PI = 3.14159265358979323846f32;
 
 class vec2 {
 	let x: f32;

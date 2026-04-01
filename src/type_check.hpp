@@ -1600,49 +1600,16 @@ private:
     auto eval_primitive_cast(Term operand, const Type* target_type) const noexcept -> Term {
         if (!operand.is_comptime()) return Term::of(target_type);
         const Value* source_value = operand.get_comptime();
-        bool convertible = true;
         if (auto* int_value = source_value->dyn_cast<IntegerValue>()) {
             if (auto* int_target_type = target_type->dyn_cast<IntegerType>()) {
-                if (int_target_type->is_signed_) {
-                    switch (int_target_type->bits_) {
-                    case 8:
-                        convertible = int_value->in_range<std::int8_t>();
-                        break;
-                    case 16:
-                        convertible = int_value->in_range<std::int16_t>();
-                        break;
-                    case 32:
-                        convertible = int_value->in_range<std::int32_t>();
-                        break;
-                    case 64:
-                        convertible = int_value->in_range<std::int64_t>();
-                        break;
-                    default:
-                        UNREACHABLE();
-                    }
-                    if (!convertible) {
+                if (int_value->type_->is_signed_) {
+                    if (!int_target_type->in_range(int_value->signed_value_)) {
                         Diagnostic::error_overflow(int_value->repr(), int_target_type->repr());
                         return {};
                     }
                     return Term::of(new IntegerValue(int_target_type, int_value->signed_value_));
                 } else {
-                    switch (int_target_type->bits_) {
-                    case 8:
-                        convertible = int_value->in_range<std::uint8_t>();
-                        break;
-                    case 16:
-                        convertible = int_value->in_range<std::uint16_t>();
-                        break;
-                    case 32:
-                        convertible = int_value->in_range<std::uint32_t>();
-                        break;
-                    case 64:
-                        convertible = int_value->in_range<std::uint64_t>();
-                        break;
-                    default:
-                        UNREACHABLE();
-                    }
-                    if (!convertible) {
+                    if (!int_target_type->in_range(int_value->unsigned_value_)) {
                         Diagnostic::error_overflow(int_value->repr(), int_target_type->repr());
                         return {};
                     }
@@ -1661,61 +1628,23 @@ private:
             }
         } else if (auto* float_value = source_value->dyn_cast<FloatValue>()) {
             if (auto* int_target_type = target_type->dyn_cast<IntegerType>()) {
+                if (!int_target_type->in_range(float_value->value_)) {
+                    Diagnostic::error_overflow(float_value->repr(), int_target_type->repr());
+                    return {};
+                }
                 if (int_target_type->is_signed_) {
-                    switch (int_target_type->bits_) {
-                    case 8:
-                        convertible = float_in_range<std::int8_t>(float_value->value_);
-                        break;
-                    case 16:
-                        convertible = float_in_range<std::int16_t>(float_value->value_);
-                        break;
-                    case 32:
-                        convertible = float_in_range<std::int32_t>(float_value->value_);
-                        break;
-                    case 64:
-                        convertible = float_in_range<std::int64_t>(float_value->value_);
-                        break;
-                    default:
-                        UNREACHABLE();
-                    }
-                    if (!convertible) {
-                        Diagnostic::error_overflow(float_value->repr(), int_target_type->repr());
-                        return {};
-                    }
                     return Term::of(new IntegerValue(
                         int_target_type, static_cast<std::int64_t>(float_value->value_)
                     ));
                 } else {
-                    switch (int_target_type->bits_) {
-                    case 8:
-                        convertible = float_in_range<std::uint8_t>(float_value->value_);
-                        break;
-                    case 16:
-                        convertible = float_in_range<std::uint16_t>(float_value->value_);
-                        break;
-                    case 32:
-                        convertible = float_in_range<std::uint32_t>(float_value->value_);
-                        break;
-                    case 64:
-                        convertible = float_in_range<std::uint64_t>(float_value->value_);
-                        break;
-                    default:
-                        UNREACHABLE();
-                    }
-                    if (!convertible) {
-                        Diagnostic::error_overflow(float_value->repr(), int_target_type->repr());
-                        return {};
-                    }
                     return Term::of(new IntegerValue(
                         int_target_type, static_cast<std::uint64_t>(float_value->value_)
                     ));
                 }
             } else if (auto* float_target_type = target_type->dyn_cast<FloatType>()) {
-                if (float_target_type->bits_ == 32) {
-                    if (std::abs(float_value->value_) > std::numeric_limits<float>::max()) {
-                        Diagnostic::error_overflow(float_value->repr(), float_target_type->repr());
-                        return {};
-                    }
+                if (!float_target_type->in_range(float_value->value_)) {
+                    Diagnostic::error_overflow(float_value->repr(), float_target_type->repr());
+                    return {};
                 }
                 return Term::of(new FloatValue(float_target_type, float_value->value_));
             }

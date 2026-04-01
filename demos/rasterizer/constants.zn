@@ -1,53 +1,53 @@
 // Window
 const WindowWidth: i32 = 1920;
 const WindowHeight: i32 = 1080;
-// const TargetFrameTime = std.chrono.microseconds(15000 as i64);  // ~66 FPS cap
+// const TargetFrameTime = std.chrono.microseconds(15000i64);  // ~66 FPS cap
 
 // Camera
-// const OrbitInterval = std.chrono.seconds(1 as i64) / 60 as i64;
-const FOV = 45.0f;
-const NearPlane = 0.001f;
-const FarPlane = 100.0f;
-const MaxPitch = 1.553343f;              // glm::radians(89.0f)
-const OrbitAngleIncrement = -0.004363f;  // glm::radians(-0.25f)
+// const OrbitInterval = std.chrono.seconds(1i64) / 60i64;
+const FOV = 45.0f32;
+const NearPlane = 0.001f32;
+const FarPlane = 100.0f32;
+const MaxPitch = 1.553343f32;              // glm::radians(89.0f32)
+const OrbitAngleIncrement = -0.004363f32;  // glm::radians(-0.25f32)
 
 // Input
-const MoveSpeed = 3.0f;
-const RollSpeed = 0.5f;
-const MouseSensitivity = 0.002f;
-const RotateSpeed = 0.2f;
-const ZoomFactor = 1.1f;
-const GammaStep = 0.01f;
+const MoveSpeed = 3.0f32;
+const RollSpeed = 0.5f32;
+const MouseSensitivity = 0.002f32;
+const RotateSpeed = 0.2f32;
+const ZoomFactor = 1.1f32;
+const GammaStep = 0.01f32;
 
 // Renderer
 const TileSize = 32;      // Tile-based rendering block size
 const VideoSamples = 64;  // SPP for video recording mode
 const TargetFPS = 60;     // Target FPS for video recording
-const DefaultGamma = 2.2f;
+const DefaultGamma = 2.2f32;
 
 // Ray Tracing
 const MaxRayDepth = 64;          // Absolute max recursion depth
-const RayEpsilon = 0.001f;        // Offset to avoid self-intersection
-const Epsilon = 1e-6f;            // General numerical epsilon
-const AmbientIntensity = 0.025f;  // Ambient light contribution
+const RayEpsilon = 0.001f32;        // Offset to avoid self-intersection
+const Epsilon = 1e-6f32;            // General numerical epsilon
+const AmbientIntensity = 0.025f32;  // Ambient light contribution
 
 // Photon Mapping
 const TargetStoredPhotons = 50000;   // Target caustic photons
 const MaxEmittedPhotons = 10000000;  // Safety bailout
 const PhotonBatchSize = 5000;
 const MaxPhotonBounces = 5;
-const MinPhotonPower = 0.01f;
-const CausticSearchRadius = 0.4f;
+const MinPhotonPower = 0.01f32;
+const CausticSearchRadius = 0.4f32;
 const PhotonGridCellSize = CausticSearchRadius;
-const RussianRouletteThreshold = 0.5f;
-const PhotonVisualizationExposure = 10000.0f;
-const ConeFilterK = 1.1f;  // Cone filter constant for density estimation
+const RussianRouletteThreshold = 0.5f32;
+const PhotonVisualizationExposure = 10000.0f32;
+const ConeFilterK = 1.1f32;  // Cone filter constant for density estimation
 
 // BVH
-const SAHTraversalCost = 1.0f;
-const SAHIntersectionCost = 1.0f;
+const SAHTraversalCost = 1.0f32;
+const SAHIntersectionCost = 1.0f32;
 const SAHBuckets = 12;
 const BVHLeafThreshold = 4;
 
 // Auto Exposure
-const TargetMiddleGray = 0.3f;
+const TargetMiddleGray = 0.3f32;

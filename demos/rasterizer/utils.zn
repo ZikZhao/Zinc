@@ -10,11 +10,11 @@ class InplaceVector<T: type, N: usize> {
     let size_: usize;
 
     init() {
-        return Self{size_: 0 as usize};
+        return Self{size_: 0usize};
     }
 
     init(values: [T]) {
-        let mut inst = Self{size_: 0 as usize};
+        let mut inst = Self{size_: 0usize};
         for (let mut it = values.begin(); it != values.end(); ++it) {
             inst.push_back(*it);
         }
@@ -62,7 +62,7 @@ fn ReadPPM(path: &std.filesystem.path) -> PPMData {
 
     let mut line: std.string;
     std.getline(file, line);
-    for (!line.empty() && line[0 as usize] == '#') {
+    for (!line.empty() && line[0usize] == '#') {
         std.getline(file, line);
     }
 
@@ -100,13 +100,13 @@ fn WritePPM(
     output_stream << width << " " << height << "\n";
     output_stream << max << "\n";
 
-    for (let mut i = 0 as usize; i < width * height; i++) {
-        let rgb: [u8; 3 as usize] = [
-            (pixels[i] >> (16 as u32)) as u8 & 0xFF as u8,
-            (pixels[i] >> (8 as u32)) as u8 & 0xFF as u8,
-            (pixels[i] >> (0 as u32)) as u8 & 0xFF as u8
+    for (let mut i = 0usize; i < width * height; i++) {
+        let rgb: [u8; 3usize] = [
+            (pixels[i] >> 16u32) as u8 & 0xFFu8,
+            (pixels[i] >> 8u32) as u8 & 0xFFu8,
+            (pixels[i] >> 0u32) as u8 & 0xFFu8
         ];
-        output_stream.write(rgb.data(), 3 as usize);
+        output_stream.write(rgb.data(), 3usize);
     }
 }
 
@@ -114,16 +114,16 @@ fn WritePPM(
 /// @param progress Interpolation factor in `[0,1]`.
 /// @param vertices_z_ndc Z components (NDC) for the two edge endpoints.
 /// @return `1/z` value suitable for depth comparison and perspective-correct interpolation.
-fn InvZndc(progress: f32, vertices_z_ndc: [f32; 2 as usize]) -> f32 {
-    return (1.0f - progress) / vertices_z_ndc[0 as usize] + progress / vertices_z_ndc[1 as usize];
+fn InvZndc(progress: f32, vertices_z_ndc: [f32; 2usize]) -> f32 {
+    return (1.0f32 - progress) / vertices_z_ndc[0usize] + progress / vertices_z_ndc[1usize];
 }
 
 /// Computes inverse Z in NDC using barycentric weights over a triangle.
 /// @param bary Barycentric weights for triangle vertices (sum to 1).
 /// @param vertices_z_ndc Z components (NDC) for the three triangle vertices.
 /// @return `1/z` value for perspective-correct interpolation and depth testing.
-fn InvZndc(bary: [f32; 3 as usize], vertices_z_ndc: [f32; 3 as usize]) -> f32 {
-    return bary[0 as usize] / vertices_z_ndc[0 as usize] + bary[1 as usize] / vertices_z_ndc[1 as usize] + bary[2 as usize] / vertices_z_ndc[2 as usize];
+fn InvZndc(bary: [f32; 3usize], vertices_z_ndc: [f32; 3usize]) -> f32 {
+    return bary[0usize] / vertices_z_ndc[0usize] + bary[1usize] / vertices_z_ndc[1usize] + bary[2usize] / vertices_z_ndc[2usize];
 }
 
 /// Computes barycentric coordinates of a point relative to a 2D triangle.
@@ -137,9 +137,9 @@ fn Barycentric(v0: glm.vec2, v1: glm.vec2, v2: glm.vec2, p: glm.vec2) -> glm.vec
     let e1 = v2 - v0;
     let e2 = p - v0;
     let denominator = e0.x * e1.y - e0.y * e1.x;
-    let invDenominator = 1.0f / denominator;
+    let invDenominator = 1.0f32 / denominator;
     let weight_v1 = (e2.x * e1.y - e2.y * e1.x) * invDenominator;
     let weight_v2 = (e0.x * e2.y - e0.y * e2.x) * invDenominator;
-    let weight_v0 = 1.0f - weight_v1 - weight_v2;
+    let weight_v0 = 1.0f32 - weight_v1 - weight_v2;
     return glm.vec3(weight_v0, weight_v1, weight_v2);
 }
