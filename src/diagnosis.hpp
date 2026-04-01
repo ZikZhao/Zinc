@@ -96,7 +96,7 @@ public:
         if (error_count == 0 && warning_count == 0) return false;
         std::print(
             std::cerr,
-            "{}{} error(s){}, {}{} warning(s){} generated.\n",
+            "{}{} error(s){}, {}{} warning(s){} found.\n",
             ColourEscape::RED,
             error_count,
             ColourEscape::RESET,
@@ -327,7 +327,7 @@ public:
         );
     }
 
-    static auto error_overflow(auto literal, strview type) noexcept -> void {
+    static auto error_overflow(strview literal, strview type) noexcept -> void {
         unlocated_error(GlobalMemory::format("Literal '{}' overflows type '{}'", literal, type));
     }
 

@@ -106,11 +106,11 @@ class Rasterizer {
     ) -> Utils.InplaceVector<World.ClipVertex, 9> {
         let mut output = Utils.InplaceVector::<World.ClipVertex, 9>();
 
-        if (input.size() == 0) { return output; }
+        if (input.size() == (0 as usize)) { return output; }
 
-        for (let mut i: usize = 0; i < input.size(); i++) {
+        for (let mut i = 0 as usize; i < input.size(); i++) {
             let current = input[i];
-            let next = input[(i + 1) % input.size()];
+            let next = input[(i + (1 as usize)) % input.size()];
 
             let current_inside = Self.InsidePlane(current.position_clip, plane);
             let next_inside = Self.InsidePlane(next.position_clip, plane);
@@ -215,11 +215,11 @@ class Rasterizer {
     ) {
         // Clip triangle to the frustum (Sutherland–Hodgman in clip space)
         let clipped = self.clip_triangle(camera, face, vertices, texcoords);
-        if (clipped.size() < 3) { return; }
+        if (clipped.size() < (3 as usize)) { return; }
 
         // Project clipped polygon to NDC and convert to screen; carry 1/w for depth
         let mut screen_verts: std.vector<World.ScreenNdcCoord>;
-        for (let mut i: usize = 0; i < clipped.size(); i++) {
+        for (let mut i = 0 as usize; i < clipped.size(); i++) {
             let ndc = camera.clip_to_ndc(clipped[i].position_clip);
             screen_verts.push_back(self.ndc_to_screen(ndc, clipped[i].uv, clipped[i].position_clip.w));
         }
@@ -229,9 +229,9 @@ class Rasterizer {
         let width = self.window_.width_;
         let height = self.window_.height_;
 
-        for (let mut i: usize = 0; i < screen_verts.size(); i++) {
+        for (let mut i = 0 as usize; i < screen_verts.size(); i++) {
             let from = screen_verts[i];
-            let to = screen_verts[(i + 1) % screen_verts.size()];
+            let to = screen_verts[(i + (1 as usize)) % screen_verts.size()];
             if (std.abs(to.x - from.x) >= std.abs(to.y - from.y)) {
                 // Iterate over x
                 let from_x = std.max(std.floor(std.min(from.x, to.x)) as isize, 0 as isize);
@@ -279,14 +279,14 @@ class Rasterizer {
     ) {
         // Clip triangle against all frustum planes; early out if culled
         let clipped = self.clip_triangle(camera, face, vertices, texcoords);
-        if (clipped.size() < 3) {
+        if (clipped.size() < (3 as usize)) {
             return;
         }
     
         // Project to NDC and convert to screen space, tracking 1/w for perspective-correct
         // interpolation
         let mut screen_verts = Utils.InplaceVector::<World.ScreenNdcCoord, 9>();
-        for (let mut i: usize = 0; i < clipped.size(); i++) {
+        for (let mut i = 0 as usize; i < clipped.size(); i++) {
             let ndc = camera.clip_to_ndc(clipped[i].position_clip);
             screen_verts.push_back(self.ndc_to_screen(ndc, clipped[i].uv, clipped[i].position_clip.w));
         }
@@ -294,10 +294,10 @@ class Rasterizer {
         // Triangulate convex polygon fan-wise and perform two-pass scanline fill (top/bottom)
         let width = self.window_.width_;
         let height = self.window_.height_;
-        for (let mut i: usize = 1; i + 1 < clipped.size(); i++) {
+        for (let mut i = 1 as usize; i + 1 as usize < clipped.size(); i++) {
             let mut v0 = screen_verts[0 as usize];
             let mut v1 = screen_verts[i];
-            let mut v2 = screen_verts[i + 1];
+            let mut v2 = screen_verts[i + (1 as usize)];
             if (v0.y > v1.y) {
                 let t = v0;
                 v0 = v1;
@@ -407,21 +407,21 @@ class Rasterizer {
         };
 
         // Gather vertex positions and optional UVs
-        let v0: &glm.vec3 = vertices[face.v_indices[0] as usize];
-        let v1: &glm.vec3 = vertices[face.v_indices[1] as usize];
-        let v2: &glm.vec3 = vertices[face.v_indices[2] as usize];
+        let v0: &glm.vec3 = vertices[face.v_indices[0 as usize] as usize];
+        let v1: &glm.vec3 = vertices[face.v_indices[1 as usize] as usize];
+        let v2: &glm.vec3 = vertices[face.v_indices[2 as usize] as usize];
         let mut uv0 = glm.vec2(0.0f, 0.0f);
         let mut uv1 = glm.vec2(0.0f, 0.0f);
         let mut uv2 = glm.vec2(0.0f, 0.0f);
         if (!texcoords.empty()) {
-            if (face.vt_indices[0] < texcoords.size()) {
-                uv0 = texcoords[face.vt_indices[0] as usize];
+            if (face.vt_indices[0 as usize] < texcoords.size()) {
+                uv0 = texcoords[face.vt_indices[0 as usize] as usize];
             }
-            if (face.vt_indices[1] < texcoords.size()) {
-                uv1 = texcoords[face.vt_indices[1] as usize];
+            if (face.vt_indices[1 as usize] < texcoords.size()) {
+                uv1 = texcoords[face.vt_indices[1 as usize] as usize];
             }
-            if (face.vt_indices[2] < texcoords.size()) {
-                uv2 = texcoords[face.vt_indices[2] as usize];
+            if (face.vt_indices[2 as usize] < texcoords.size()) {
+                uv2 = texcoords[face.vt_indices[2 as usize] as usize];
             }
         }
 
@@ -451,22 +451,22 @@ class Rasterizer {
 
         // Sequentially clip against each frustum plane; bail out if polygon fully disappears
         let polygon1 = Self.ClipAgainstPlane(polygon, World.ClipPlane.LEFT);
-        if (polygon1.size() < 3) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon1.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon2 = Self.ClipAgainstPlane(polygon1, World.ClipPlane.RIGHT);
-        if (polygon2.size() < 3) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon2.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon3 = Self.ClipAgainstPlane(polygon2, World.ClipPlane.BOTTOM);
-        if (polygon3.size() < 3) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon3.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon4 = Self.ClipAgainstPlane(polygon3, World.ClipPlane.TOP);
-        if (polygon4.size() < 3) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon4.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon5 = Self.ClipAgainstPlane(polygon4, World.ClipPlane.NEAR);
-        if (polygon5.size() < 3) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon5.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         let polygon6 = Self.ClipAgainstPlane(polygon5, World.ClipPlane.FAR);
-        if (polygon6.size() < 3) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
+        if (polygon6.size() < (3 as usize)) { return Utils.InplaceVector::<World.ClipVertex, 9>(); }
 
         // Return final clipped polygon (may have 3–9 vertices)
         return polygon6;

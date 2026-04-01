@@ -78,29 +78,27 @@ struct IndexOfTypeInTuple<Target, Head, Tail...> {
 template <typename Target, typename... Ts>
 constexpr std::size_t IndexOfTypeInTupleV = IndexOfTypeInTuple<Target, Ts...>::value;
 
-template <typename R, typename T>
-concept ForwardRange =
-    std::ranges::forward_range<R> && std::convertible_to<std::ranges::range_reference_t<R>, T>;
-
-template <typename R, typename T>
-concept RandomAccessRange = std::ranges::random_access_range<R> && std::ranges::sized_range<R> &&
-                            std::convertible_to<std::ranges::range_reference_t<R>, T>;
-
 template <typename T>
 constexpr auto holds_monostate(T&& variant) -> bool {
     return std::holds_alternative<std::monostate>(std::forward<T>(variant));
-}
-
-template <typename T>
-constexpr auto opaque_cast(auto* ptr) {
-    /// NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    return reinterpret_cast<T>(ptr);
 }
 
 template <std::same_as<std::size_t>... Ts>
 auto hash_combine(std::size_t first, const Ts&... rest) noexcept -> std::size_t {
     ((first ^= rest + 0x9e3779b9 + (first << 6) + (first >> 2)), ...);
     return first;
+}
+
+template <std::integral T>
+constexpr auto float_in_range(auto value) -> bool {
+    using Float = decltype(value);
+    if (!std::isfinite(value)) {
+        return false;
+    }
+    Float t = std::trunc(value);
+    constexpr auto low = static_cast<Float>(std::numeric_limits<T>::lowest());
+    constexpr auto high = static_cast<Float>(std::numeric_limits<T>::max());
+    return t >= low && t <= high;
 }
 
 template <typename... Ts>
@@ -854,41 +852,39 @@ auto unescape_string(auto& input) -> void {
 
 auto escape_string(strview input) -> GlobalMemory::String {
     GlobalMemory::String result;
-    result.resize(input.size() + 24);  // Reserve extra space for escape sequences
-    std::size_t write_index = 0;
+    result.reserve(input.size() + 24);  // Reserve extra space for escape sequences
     for (std::size_t read_index = 0; read_index < input.size(); ++read_index) {
         char c = input[read_index];
         switch (c) {
         case '\n':
-            result[write_index++] = '\\';
-            result[write_index++] = 'n';
+            result.push_back('\\');
+            result.push_back('n');
             break;
         case '\t':
-            result[write_index++] = '\\';
-            result[write_index++] = 't';
+            result.push_back('\\');
+            result.push_back('t');
             break;
         case '\r':
-            result[write_index++] = '\\';
-            result[write_index++] = 'r';
+            result.push_back('\\');
+            result.push_back('r');
             break;
         case '\\':
-            result[write_index++] = '\\';
-            result[write_index++] = '\\';
+            result.push_back('\\');
+            result.push_back('\\');
             break;
         case '\'':
-            result[write_index++] = '\\';
-            result[write_index++] = '\'';
+            result.push_back('\\');
+            result.push_back('\'');
             break;
         case '\"':
-            result[write_index++] = '\\';
-            result[write_index++] = '\"';
+            result.push_back('\\');
+            result.push_back('\"');
             break;
         default:
-            result[write_index++] = c;
+            result.push_back(c);
             break;
         }
     }
-    result.resize(write_index);
     return result;
 }
 

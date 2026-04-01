@@ -5,8 +5,8 @@ import "window.zn" as Window;
 import "renderer.zn" as Renderer;
 
 fn main(args: [strview]) {
-    if (args.size() < 2) {
-        std.cerr << "Usage: " << args[0] << " <scene1.obj> [<scene2.obj> ...]\n";
+    if (args.size() < (2 as usize)) {
+        std.cerr << "Usage: " << args[0 as usize] << " <scene1.obj> [<scene2.obj> ...]\n";
         return EXIT_FAILURE;
     }
 
@@ -24,7 +24,7 @@ fn main(args: [strview]) {
     let mut last_print = std.chrono.steady_clock.now();
 
     // Centralized input callbacks: movement and UI toggles
-    let translate_keys: [sdl.SDL_Scancode; 6] =
+    let translate_keys: [sdl.SDL_Scancode; 6 as usize] =
         [sdl.SDL_SCANCODE_W, sdl.SDL_SCANCODE_S, sdl.SDL_SCANCODE_A,
          sdl.SDL_SCANCODE_D, sdl.SDL_SCANCODE_SPACE, sdl.SDL_SCANCODE_C];
     window.register_key(
@@ -47,7 +47,7 @@ fn main(args: [strview]) {
         }
     );
 
-    let roll_keys: [sdl.SDL_Scancode; 2] = [sdl.SDL_SCANCODE_Q, sdl.SDL_SCANCODE_E];
+    let roll_keys: [sdl.SDL_Scancode; 2 as usize] = [sdl.SDL_SCANCODE_Q, sdl.SDL_SCANCODE_E];
     window.register_key(
         std.unordered_set<sdl.SDL_Scancode>(roll_keys.begin(), roll_keys.end()),
         Window.Trigger.ANY_PRESSED,
@@ -59,7 +59,7 @@ fn main(args: [strview]) {
         }
     );
 
-    let orbit_keys: [sdl.SDL_Scancode; 1] = [sdl.SDL_SCANCODE_O];
+    let orbit_keys: [sdl.SDL_Scancode; 1 as usize] = [sdl.SDL_SCANCODE_O];
     window.register_key(
         std.unordered_set<sdl.SDL_Scancode>(orbit_keys.begin(), orbit_keys.end()),
         Window.Trigger.ANY_JUST_PRESSED,
@@ -72,7 +72,7 @@ fn main(args: [strview]) {
         }
     );
 
-    let mode_keys: [sdl.SDL_Scancode; 5] = [
+    let mode_keys: [sdl.SDL_Scancode; 5 as usize] = [
         sdl.SDL_SCANCODE_1, sdl.SDL_SCANCODE_2, sdl.SDL_SCANCODE_3, sdl.SDL_SCANCODE_4, sdl.SDL_SCANCODE_0
     ];
     window.register_key(
@@ -102,7 +102,7 @@ fn main(args: [strview]) {
     );
 
     // Screenshot save (Ctrl+S)
-    let screenshot_keys: [sdl.SDL_Scancode; 2] = [sdl.SDL_SCANCODE_LCTRL, sdl.SDL_SCANCODE_S];
+    let screenshot_keys: [sdl.SDL_Scancode; 2 as usize] = [sdl.SDL_SCANCODE_LCTRL, sdl.SDL_SCANCODE_S];
     window.register_key(
         std.unordered_set<sdl.SDL_Scancode>(screenshot_keys.begin(), screenshot_keys.end()),
         Window.Trigger.ALL_JUST_PRESSED,
@@ -131,7 +131,7 @@ fn main(args: [strview]) {
     );
 
     // Keyboard look (arrow keys)
-    let look_keys: [sdl.SDL_Scancode; 4] = [
+    let look_keys: [sdl.SDL_Scancode; 4 as usize] = [
         sdl.SDL_SCANCODE_UP, sdl.SDL_SCANCODE_DOWN, sdl.SDL_SCANCODE_LEFT, sdl.SDL_SCANCODE_RIGHT
     ];
     window.register_key(

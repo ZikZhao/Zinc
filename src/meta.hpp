@@ -36,11 +36,11 @@ struct MetaTraits<R (*)(Args...)> {
     template <size_t index>
     static auto validate_arg(const Object* obj) -> void {
         if constexpr (std::is_same_v<ArgType<index>, const Type*>) {
-            if (!obj->dyn_type()) {
+            if (!obj->dyn_cast<Type>()) {
                 throw std::invalid_argument("Expected a type argument for meta function");
             }
         } else {
-            if (!obj->dyn_value()) {
+            if (!obj->dyn_cast<Value>()) {
                 throw std::invalid_argument("Expected a value argument for meta function");
             }
         }

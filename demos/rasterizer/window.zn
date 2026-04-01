@@ -175,16 +175,16 @@ class Window {
             }
 
             // Keyboard transitions
-            if (event.type == sdl.SDL_KEYDOWN && event.key.repeat == 0) {
+            if (event.type == sdl.SDL_KEYDOWN && event.key.repeat == (0 as u8)) {
                 let sc = event.key.keysym.scancode;
-                if (sc >= 0 && sc < sdl.SDL_NUM_SCANCODES) {
+                if (sc >= 0 && sc < (sdl.SDL_NUM_SCANCODES as i32)) {
                     self.keys_this_frame_[sc as usize] = true;
                     self.keys_pressed_this_frame_.insert(sc);
                 }
             }
             if (event.type == sdl.SDL_KEYUP) {
                 let sc = event.key.keysym.scancode;
-                if (sc >= 0 && sc < sdl.SDL_NUM_SCANCODES) {
+                if (sc >= 0 && sc < (sdl.SDL_NUM_SCANCODES as i32)) {
                     self.keys_this_frame_[sc as usize] = false;
                 }
             }
@@ -194,7 +194,7 @@ class Window {
                 let b = event.button.button;
                 self.mouse_buttons_this_frame_.insert(b as i32);
                 self.mouse_buttons_updated_this_frame_.insert(b as i32);
-                for (let mut i: usize = 0; i < self.mouse_bindings_.size(); ++i) {
+                for (let mut i = 0 as usize; i < self.mouse_bindings_.size(); ++i) {
                     let mb: &mut MouseBinding = self.mouse_bindings_[i];
                     if (mb.button == b) { mb.first_motion = true; }
                 }
@@ -233,7 +233,7 @@ class Window {
 
     /// Uploads backbuffer to SDL texture, presents and clears buffer.
     fn update(self: &mut Self) {
-        sdl.SDL_UpdateTexture(self.texture_, nullptr, self.pixel_buffer_.data(), self.width_ * 4);
+        sdl.SDL_UpdateTexture(self.texture_, nullptr, self.pixel_buffer_.data(), self.width_ * (4 as usize));
         sdl.SDL_RenderClear(self.renderer_);
         sdl.SDL_RenderCopy(self.renderer_, self.texture_, nullptr, nullptr);
         sdl.SDL_RenderPresent(self.renderer_);
@@ -255,7 +255,7 @@ class Window {
             self.width_ as i32,
             self.height_ as i32,
             32,
-            (self.width_ * 4) as usize,
+            (self.width_ * (4 as usize)) as usize,
             (0xFF << 16) as u32,
             (0xFF << 8) as u32,
             (0xFF << 0) as u32,
@@ -268,7 +268,7 @@ class Window {
     /// Processes registered key bindings based on current state.
     fn process_key_bindings(self: &mut Self) {
         let now = std.chrono.steady_clock.now();
-        for (let mut i: usize = 0; i < self.key_bindings_.size(); ++i) {
+        for (let mut i = 0 as usize; i < self.key_bindings_.size(); ++i) {
             let binding: &mut KeyBinding = self.key_bindings_[i];
             // Continuous trigger (ANY_PRESSED) needs delta time tracking
             if (binding.trigger == Trigger.ANY_PRESSED) {
@@ -305,7 +305,7 @@ class Window {
                 let mut effective_keys = self.keys_this_frame_;
                 for (let mut it = self.keys_pressed_this_frame_.begin(); it != self.keys_pressed_this_frame_.end(); ++it) {
                     let k = *it;
-                    if (k >= 0 && k < sdl.SDL_NUM_SCANCODES) {
+                    if (k >= 0 && k < (sdl.SDL_NUM_SCANCODES as i32)) {
                         effective_keys[k as usize] = true;
                     }
                 }
@@ -317,10 +317,10 @@ class Window {
     /// Processes registered mouse bindings based on current state.
     fn process_mouse_bindings(self: &mut Self) {
         let now = std.chrono.steady_clock.now();
-        for (let mut i: usize = 0; i < self.mouse_bindings_.size(); ++i) {
+        for (let mut i = 0 as usize; i < self.mouse_bindings_.size(); ++i) {
             let binding: &mut MouseBinding = self.mouse_bindings_[i];
-            let down = self.mouse_buttons_this_frame_.count(binding.button as i32) > 0;
-            let just_pressed = self.mouse_buttons_updated_this_frame_.count(binding.button as i32) > 0 && down;
+            let down = self.mouse_buttons_this_frame_.count(binding.button as i32) > (0 as usize);
+            let just_pressed = self.mouse_buttons_updated_this_frame_.count(binding.button as i32) > (0 as usize) && down;
             switch (binding.trigger) {
             case Trigger.ANY_JUST_PRESSED: {
                 if (just_pressed) { binding.handler(0, 0, 0.0f); }
@@ -390,7 +390,7 @@ class Window {
             let mut exists_pressed_this_frame = false;  // at least one key must be just pressed
             for (let mut it = binding.keys.begin(); it != binding.keys.end(); ++it) {
                 let key = *it;
-                if (!(self.keys_this_frame_[key as usize] || self.keys_pressed_this_frame_.count(key) != 0)) { return false; }
+                if (!(self.keys_this_frame_[key as usize] || self.keys_pressed_this_frame_.count(key) != (0 as usize))) { return false; }
                 if (self.keys_pressed_this_frame_.count(key)) { exists_pressed_this_frame = true; }
             }
             return exists_pressed_this_frame;

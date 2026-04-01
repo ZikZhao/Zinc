@@ -62,7 +62,7 @@ fn ReadPPM(path: &std.filesystem.path) -> PPMData {
 
     let mut line: std.string;
     std.getline(file, line);
-    for (!line.empty() && line[0] == '#') {
+    for (!line.empty() && line[0 as usize] == '#') {
         std.getline(file, line);
     }
 
@@ -100,11 +100,11 @@ fn WritePPM(
     output_stream << width << " " << height << "\n";
     output_stream << max << "\n";
 
-    for (let mut i: usize = 0; i < width * height; i++) {
-        let rgb: [u8; 3] = [
-            ((pixels[i] >> 16) & 0xFF) as u8,
-            ((pixels[i] >> 8) & 0xFF) as u8,
-            ((pixels[i] >> 0) & 0xFF) as u8
+    for (let mut i = 0 as usize; i < width * height; i++) {
+        let rgb: [u8; 3 as usize] = [
+            (pixels[i] >> (16 as u32)) as u8 & 0xFF as u8,
+            (pixels[i] >> (8 as u32)) as u8 & 0xFF as u8,
+            (pixels[i] >> (0 as u32)) as u8 & 0xFF as u8
         ];
         output_stream.write(rgb.data(), 3 as usize);
     }
@@ -114,16 +114,16 @@ fn WritePPM(
 /// @param progress Interpolation factor in `[0,1]`.
 /// @param vertices_z_ndc Z components (NDC) for the two edge endpoints.
 /// @return `1/z` value suitable for depth comparison and perspective-correct interpolation.
-fn InvZndc(progress: f32, vertices_z_ndc: [f32; 2]) -> f32 {
-    return (1.0f - progress) / vertices_z_ndc[0] + progress / vertices_z_ndc[1];
+fn InvZndc(progress: f32, vertices_z_ndc: [f32; 2 as usize]) -> f32 {
+    return (1.0f - progress) / vertices_z_ndc[0 as usize] + progress / vertices_z_ndc[1 as usize];
 }
 
 /// Computes inverse Z in NDC using barycentric weights over a triangle.
 /// @param bary Barycentric weights for triangle vertices (sum to 1).
 /// @param vertices_z_ndc Z components (NDC) for the three triangle vertices.
 /// @return `1/z` value for perspective-correct interpolation and depth testing.
-fn InvZndc(bary: [f32; 3], vertices_z_ndc: [f32; 3]) -> f32 {
-    return bary[0] / vertices_z_ndc[0] + bary[1] / vertices_z_ndc[1] + bary[2] / vertices_z_ndc[2];
+fn InvZndc(bary: [f32; 3 as usize], vertices_z_ndc: [f32; 3 as usize]) -> f32 {
+    return bary[0 as usize] / vertices_z_ndc[0 as usize] + bary[1 as usize] / vertices_z_ndc[1 as usize] + bary[2 as usize] / vertices_z_ndc[2 as usize];
 }
 
 /// Computes barycentric coordinates of a point relative to a 2D triangle.

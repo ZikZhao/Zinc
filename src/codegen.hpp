@@ -63,7 +63,7 @@ public:
             }
             if (instance->primary_template_ && instance->scope_->is_extern_) {
                 for (const Object* template_arg : instance->template_args_) {
-                    if (auto template_arg_type = template_arg->dyn_type()) {
+                    if (auto template_arg_type = template_arg->dyn_cast<Type>()) {
                         edges_.insert({.child = template_arg_type, .parent = type});
                         add(template_arg_type);
                     }
@@ -131,7 +131,7 @@ private:
 class ObjectCodeGen final {
 public:
     static void output(GlobalMemory::String& out, const Object* obj, TypeMap& type_map) {
-        if (auto* type = obj->dyn_type()) {
+        if (auto* type = obj->dyn_cast<Type>()) {
             output(out, type, type_map);
         } else {
             output(out, obj->cast<Value>(), type_map);
@@ -238,13 +238,10 @@ public:
             break;
         case Kind::Integer: {
             const IntegerValue* int_value = value->cast<IntegerValue>();
-            out += int_value->value_.to_string();
-            if (!int_value->type_->is_signed_ &&
-                int_value->type_ != &IntegerType::untyped_instance) {
-                out += "u"sv;
-            }
-            if (int_value->type_->bits_ == 64) {
-                out += "LL"sv;
+            if (int_value->type_->is_signed_) {
+                std::format_to(std::back_inserter(out), "{}", int_value->signed_value_);
+            } else {
+                std::format_to(std::back_inserter(out), "{}u", int_value->unsigned_value_);
             }
             break;
         }
@@ -386,7 +383,7 @@ public:
                 strview sep = ""sv;
                 for (const Object* arg : args) {
                     qualified_name += sep;
-                    if (auto* type = arg->dyn_type()) {
+                    if (auto* type = arg->dyn_cast<Type>()) {
                         ObjectCodeGen::output(qualified_name, type, type_map_);
                     } else {
                         ObjectCodeGen::output(qualified_name, arg->cast<Value>(), type_map_);
@@ -399,7 +396,7 @@ public:
                 qualified_name += "_0"sv;
                 for (const Object* arg : args) {
                     std::size_t prev_size = qualified_name.size();
-                    if (auto* type = arg->dyn_type()) {
+                    if (auto* type = arg->dyn_cast<Type>()) {
                         (*this)(qualified_name, type);
                     } else {
                         (*this)(qualified_name, arg->cast<Value>());
@@ -516,7 +513,11 @@ public:
             break;
         case Kind::Integer: {
             const IntegerValue* int_value = value->cast<IntegerValue>();
-            std::format_to(std::back_inserter(out), "Vi{}"sv, int_value->value_.to_string());
+            if (int_value->type_->is_signed_) {
+                std::format_to(std::back_inserter(out), "Vi{}"sv, int_value->signed_value_);
+            } else {
+                std::format_to(std::back_inserter(out), "Vu{}"sv, int_value->unsigned_value_);
+            }
             break;
         }
         case Kind::Float: {
@@ -701,7 +702,7 @@ public:
             const Scope* scope = scope_and_id.first;
             GlobalMemory::String type_name = "auto";
             strview identifier = scope_and_id.second;
-            if (auto* type = obj->dyn_type()) {
+            if (auto* type = obj->dyn_cast<Type>()) {
                 type_name = type->repr();
             }
             if (scope->is_extern_) {
@@ -715,7 +716,7 @@ public:
                     std::back_inserter(statics_), "constexpr {} {}"sv, type_name, mangled_path
                 );
             }
-            if (auto* value = obj->dyn_value()) {
+            if (auto* value = obj->dyn_cast<Value>()) {
                 statics_ += " = "sv;
                 ObjectCodeGen::output(statics_, value, type_map_);
             }
@@ -1247,7 +1248,7 @@ public:
         strview sep = "<"sv;
         for (const Object* arg : args) {
             definitions_ += sep;
-            if (auto* type = arg->dyn_type()) {
+            if (auto* type = arg->dyn_cast<Type>()) {
                 ObjectCodeGen::output(definitions_, type, type_map_);
             } else {
                 ObjectCodeGen::output(definitions_, arg->cast<Value>(), type_map_);

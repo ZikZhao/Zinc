@@ -370,7 +370,7 @@ private:
         auto operator()(const TemplateCacheKey& key) const noexcept -> std::size_t {
             std::size_t result = std::bit_cast<std::size_t>(key.first);
             for (const Object* arg : key.second) {
-                if (auto* type = arg->dyn_type()) {
+                if (auto* type = arg->dyn_cast<Type>()) {
                     result = hash_combine(result, std::bit_cast<std::size_t>(type));
                 } else {
                     result = hash_combine(
@@ -394,7 +394,7 @@ private:
             for (size_t i = 0; i < left.second.size(); i++) {
                 const Object* left_arg = left.second[i];
                 const Object* right_arg = right.second[i];
-                if (auto* left_type = left_arg->dyn_type()) {
+                if (auto* left_type = left_arg->dyn_cast<Type>()) {
                     if (left_type != right_arg) {
                         return false;
                     }
@@ -499,7 +499,7 @@ public:
 
 private:
     static auto as_symbol(const Object* obj) -> Symbol {
-        if (auto type = obj->dyn_type()) {
+        if (auto type = obj->dyn_cast<Type>()) {
             return Symbol(type);
         } else {
             return Symbol(Term::of(obj->cast<Value>()));
@@ -884,7 +884,7 @@ private:
                 }
                 return NoMatch;
             } else {
-                const AutoObject* auto_obj = decayed_param->cast<AutoObject>();
+                const AutoObject* auto_obj = static_cast<const AutoObject*>(decayed_param);
                 if (auto it = auto_bindings.find(auto_obj); it != auto_bindings.end()) {
                     if (it->second != decayed_arg) {
                         return NoMatch;
@@ -1116,25 +1116,6 @@ private:
         Diagnostic::error_member_not_found(member);
         return {};
     }
-
-    auto is_std_indexable_container(const InstanceType* instance_type) const noexcept -> bool {
-        if (!instance_type->scope_->is_extern_) {
-            return false;
-        }
-        if (instance_type->primary_template_ == nullptr) {
-            auto get = [&](strview name) -> const Type* {
-                return Sema::get<SymbolKind::Type>(sema_.get_std_symbol(name));
-            };
-            return instance_type == get("string") || instance_type == get("string_view");
-        } else {
-            auto get = [&](strview name) -> const ASTTemplateDefinition* {
-                return Sema::get<SymbolKind::Template>(sema_.get_std_symbol(name))->primary;
-            };
-            return instance_type->primary_template_ == get("vector") ||
-                   instance_type->primary_template_ == get("array") ||
-                   instance_type->primary_template_ == get("span");
-        }
-    }
 };
 
 class OperationHandler final : public GlobalMemory::MonotonicAllocated {
@@ -1152,7 +1133,7 @@ private:
             case OperatorCode::Divide:
                 return left / right;
             case OperatorCode::Remainder:
-                if constexpr (std::is_same_v<std::decay_t<decltype(left)>, BigInt>) {
+                if constexpr (requires { left % right; }) {
                     return left % right;
                 } else {
                     return std::fmod(left, right);
@@ -1234,22 +1215,55 @@ private:
         -> const Value* {
         const IntegerValue* left_int = left->cast<IntegerValue>();
         const IntegerValue* right_int = right->cast<IntegerValue>();
+        bool is_signed = left_int->type_->is_signed_;
         bool extended = left_int->type_->bits_ > 32 || right_int->type_->bits_ > 32;
         switch (GetOperatorGroup(opcode)) {
         case OperatorGroup::Arithmetic:
-            return new IntegerValue(
-                extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
-                apply_op<OperatorGroup::Arithmetic>(opcode, left_int->value_, right_int->value_)
-            );
+            if (is_signed) {
+                return new IntegerValue(
+                    extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
+                    apply_op<OperatorGroup::Arithmetic>(
+                        opcode, left_int->signed_value_, right_int->signed_value_
+                    )
+                );
+            } else {
+                return new IntegerValue(
+                    extended ? &IntegerType::u64_instance : &IntegerType::u32_instance,
+                    apply_op<OperatorGroup::Arithmetic>(
+                        opcode, left_int->unsigned_value_, right_int->unsigned_value_
+                    )
+                );
+            }
         case OperatorGroup::Comparison:
-            return new BooleanValue(
-                apply_op<OperatorGroup::Comparison>(opcode, left_int->value_, right_int->value_)
-            );
+            if (is_signed) {
+                return new BooleanValue(
+                    apply_op<OperatorGroup::Comparison>(
+                        opcode, left_int->signed_value_, right_int->signed_value_
+                    )
+                );
+            } else {
+                return new BooleanValue(
+                    apply_op<OperatorGroup::Comparison>(
+                        opcode, left_int->unsigned_value_, right_int->unsigned_value_
+                    )
+                );
+            }
         case OperatorGroup::Bitwise:
-            return new IntegerValue(
-                extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
-                apply_op<OperatorGroup::Bitwise>(opcode, left_int->value_, right_int->value_)
-            );
+            if (is_signed) {
+                return new IntegerValue(
+                    extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
+                    apply_op<OperatorGroup::Bitwise>(
+                        opcode, left_int->signed_value_, right_int->signed_value_
+                    )
+                );
+            } else {
+                return new IntegerValue(
+                    extended ? &IntegerType::u64_instance : &IntegerType::u32_instance,
+                    apply_op<OperatorGroup::Bitwise>(
+                        opcode, left_int->unsigned_value_, right_int->unsigned_value_
+                    )
+                );
+            }
         default:
             UNREACHABLE();
         }
@@ -1257,18 +1271,33 @@ private:
 
     static auto integer_op(OperatorCode opcode, const Value* left) noexcept -> const Value* {
         const IntegerValue* left_int = left->cast<IntegerValue>();
+        bool is_signed = left_int->type_->is_signed_;
         bool extended = left_int->type_->bits_ > 32;
         switch (GetOperatorGroup(opcode)) {
         case OperatorGroup::UnaryArithmetic:
-            return new IntegerValue(
-                extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
-                apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_int->value_)
-            );
+            if (is_signed) {
+                return new IntegerValue(
+                    extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
+                    apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_int->signed_value_)
+                );
+            } else {
+                return new IntegerValue(
+                    extended ? &IntegerType::u64_instance : &IntegerType::u32_instance,
+                    apply_op<OperatorGroup::UnaryArithmetic>(opcode, left_int->unsigned_value_)
+                );
+            }
         case OperatorGroup::UnaryBitwise:
-            return new IntegerValue(
-                extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
-                apply_op<OperatorGroup::UnaryBitwise>(opcode, left_int->value_)
-            );
+            if (is_signed) {
+                return new IntegerValue(
+                    extended ? &IntegerType::i64_instance : &IntegerType::i32_instance,
+                    apply_op<OperatorGroup::UnaryBitwise>(opcode, left_int->signed_value_)
+                );
+            } else {
+                return new IntegerValue(
+                    extended ? &IntegerType::u64_instance : &IntegerType::u32_instance,
+                    apply_op<OperatorGroup::UnaryBitwise>(opcode, left_int->unsigned_value_)
+                );
+            }
         default:
             UNREACHABLE();
         }
@@ -1358,13 +1387,12 @@ public:
         const Type* decayed_left = left.decay();
         const Type* decayed_right = right.decay();
         const Type* result_type = decayed_left;
-        if (result_type == &IntegerType::untyped_instance ||
-            result_type == &FloatType::untyped_instance) {
-            result_type = decayed_right;
-        }
         Kind left_kind = decayed_left->kind_;
         Kind right_kind = decayed_right ? decayed_right->kind_ : Kind::None;
-        if (comptime) {
+        if (left_kind == Kind::Integer && right_kind == Kind::Integer &&
+            decayed_left->cast<IntegerType>()->is_signed_ !=
+                decayed_right->cast<IntegerType>()->is_signed_) {
+        } else if (comptime) {
             const Value* left_value = left.get_comptime();
             const Value* right_value = right ? right.get_comptime() : nullptr;
             switch (GetOperatorGroup(opcode)) {
@@ -1377,9 +1405,8 @@ public:
                 break;
             case OperatorGroup::UnaryArithmetic:
                 assert(!right);
-                if (!Type::is_mutable(left.effective_type()) &&
-                    (opcode == OperatorCode::Increment || opcode == OperatorCode::PostIncrement ||
-                     opcode == OperatorCode::Decrement || opcode == OperatorCode::PostDecrement))
+                if (opcode == OperatorCode::Increment || opcode == OperatorCode::PostIncrement ||
+                    opcode == OperatorCode::Decrement || opcode == OperatorCode::PostDecrement)
                     break;
                 if (left_kind == Kind::Integer) {
                     return Term::of(integer_op(opcode, left_value));
@@ -1416,12 +1443,6 @@ public:
                 }
                 break;
             case OperatorGroup::Assignment:
-                /// TODO:
-                Diagnostic::error_operation_not_defined(
-                    GetOperatorString(opcode),
-                    decayed_left->repr(),
-                    decayed_right ? decayed_right->repr() : ""
-                );
                 break;
             }
         } else {
@@ -1487,7 +1508,6 @@ public:
                 break;
             }
         }
-        /// TODO: throw error
         Diagnostic::error_operation_not_defined(
             GetOperatorString(opcode),
             decayed_left->repr(),
@@ -1515,9 +1535,7 @@ public:
             );
             return {};
         }
-        std::array<const Type*, 2> args = {
-            left.resolve_to_default().effective_type(), right.resolve_to_default().effective_type()
-        };
+        std::array<const Type*, 2> args = {left.effective_type(), right.effective_type()};
         if (opcode == OperatorCode::PostIncrement || opcode == OperatorCode::PostDecrement) {
             args[1] = &IntegerType::i32_instance;
         }
@@ -1532,12 +1550,12 @@ public:
         -> Term {
         bool convertible = false;
         const Type* source_type = operand.effective_type();
-        const Type* decayed_source_type = Type::decay(source_type);
-        const Type* decayed_target_type = Type::decay(target_type);
         if (source_type == target_type) {
             sema_.codegen_env_.map_type(sema_.current_scope_, node, target_type);
             return operand;
         }
+        const Type* decayed_source_type = Type::decay(source_type);
+        const Type* decayed_target_type = Type::decay(target_type);
         if (decayed_source_type == decayed_target_type) {
             if (auto* source_ref = source_type->dyn_cast<ReferenceType>()) {
                 if (auto* target_ref = target_type->dyn_cast<ReferenceType>()) {
@@ -1550,8 +1568,8 @@ public:
         }
         if (decayed_source_type->kind_ == Kind::Integer ||
             decayed_source_type->kind_ == Kind::Float) {
-            if (decayed_target_type->kind_ == Kind::Integer ||
-                decayed_target_type->kind_ == Kind::Float) {
+            if (target_type->kind_ == Kind::Integer || target_type->kind_ == Kind::Float) {
+                return eval_primitive_cast(operand, target_type);
                 convertible = true;
             }
         } else if (decayed_source_type->kind_ == Kind::Nullptr) {
@@ -1576,6 +1594,133 @@ public:
         }
         Diagnostic::error_invalid_cast(node->location, source_type->repr(), target_type->repr());
         return {};
+    }
+
+private:
+    auto eval_primitive_cast(Term operand, const Type* target_type) const noexcept -> Term {
+        if (!operand.is_comptime()) return Term::of(target_type);
+        const Value* source_value = operand.get_comptime();
+        bool convertible = true;
+        if (auto* int_value = source_value->dyn_cast<IntegerValue>()) {
+            if (auto* int_target_type = target_type->dyn_cast<IntegerType>()) {
+                if (int_target_type->is_signed_) {
+                    switch (int_target_type->bits_) {
+                    case 8:
+                        convertible = int_value->in_range<std::int8_t>();
+                        break;
+                    case 16:
+                        convertible = int_value->in_range<std::int16_t>();
+                        break;
+                    case 32:
+                        convertible = int_value->in_range<std::int32_t>();
+                        break;
+                    case 64:
+                        convertible = int_value->in_range<std::int64_t>();
+                        break;
+                    default:
+                        UNREACHABLE();
+                    }
+                    if (!convertible) {
+                        Diagnostic::error_overflow(int_value->repr(), int_target_type->repr());
+                        return {};
+                    }
+                    return Term::of(new IntegerValue(int_target_type, int_value->signed_value_));
+                } else {
+                    switch (int_target_type->bits_) {
+                    case 8:
+                        convertible = int_value->in_range<std::uint8_t>();
+                        break;
+                    case 16:
+                        convertible = int_value->in_range<std::uint16_t>();
+                        break;
+                    case 32:
+                        convertible = int_value->in_range<std::uint32_t>();
+                        break;
+                    case 64:
+                        convertible = int_value->in_range<std::uint64_t>();
+                        break;
+                    default:
+                        UNREACHABLE();
+                    }
+                    if (!convertible) {
+                        Diagnostic::error_overflow(int_value->repr(), int_target_type->repr());
+                        return {};
+                    }
+                    return Term::of(new IntegerValue(int_target_type, int_value->unsigned_value_));
+                }
+            } else if (auto* float_target_type = target_type->dyn_cast<FloatType>()) {
+                if (int_value->type_->is_signed_) {
+                    return Term::of(new FloatValue(
+                        float_target_type, static_cast<double>(int_value->signed_value_)
+                    ));
+                } else {
+                    return Term::of(new FloatValue(
+                        float_target_type, static_cast<double>(int_value->unsigned_value_)
+                    ));
+                }
+            }
+        } else if (auto* float_value = source_value->dyn_cast<FloatValue>()) {
+            if (auto* int_target_type = target_type->dyn_cast<IntegerType>()) {
+                if (int_target_type->is_signed_) {
+                    switch (int_target_type->bits_) {
+                    case 8:
+                        convertible = float_in_range<std::int8_t>(float_value->value_);
+                        break;
+                    case 16:
+                        convertible = float_in_range<std::int16_t>(float_value->value_);
+                        break;
+                    case 32:
+                        convertible = float_in_range<std::int32_t>(float_value->value_);
+                        break;
+                    case 64:
+                        convertible = float_in_range<std::int64_t>(float_value->value_);
+                        break;
+                    default:
+                        UNREACHABLE();
+                    }
+                    if (!convertible) {
+                        Diagnostic::error_overflow(float_value->repr(), int_target_type->repr());
+                        return {};
+                    }
+                    return Term::of(new IntegerValue(
+                        int_target_type, static_cast<std::int64_t>(float_value->value_)
+                    ));
+                } else {
+                    switch (int_target_type->bits_) {
+                    case 8:
+                        convertible = float_in_range<std::uint8_t>(float_value->value_);
+                        break;
+                    case 16:
+                        convertible = float_in_range<std::uint16_t>(float_value->value_);
+                        break;
+                    case 32:
+                        convertible = float_in_range<std::uint32_t>(float_value->value_);
+                        break;
+                    case 64:
+                        convertible = float_in_range<std::uint64_t>(float_value->value_);
+                        break;
+                    default:
+                        UNREACHABLE();
+                    }
+                    if (!convertible) {
+                        Diagnostic::error_overflow(float_value->repr(), int_target_type->repr());
+                        return {};
+                    }
+                    return Term::of(new IntegerValue(
+                        int_target_type, static_cast<std::uint64_t>(float_value->value_)
+                    ));
+                }
+            } else if (auto* float_target_type = target_type->dyn_cast<FloatType>()) {
+                if (float_target_type->bits_ == 32) {
+                    if (std::abs(float_value->value_) > std::numeric_limits<float>::max()) {
+                        Diagnostic::error_overflow(float_value->repr(), float_target_type->repr());
+                        return {};
+                    }
+                }
+                return Term::of(new FloatValue(float_target_type, float_value->value_));
+            }
+        }
+        UNREACHABLE();
     }
 };
 
@@ -1628,7 +1773,8 @@ public:
         /// TODO: type operation
         // TypeResolution expr_result;
         // TypeContextEvaluator{sema_, expr_result, false}(node->expr);
-        // out_ = TypeResolution(sema_.operation_handler_->eval_type_op(node->opcode, expr_result));
+        // out_ = TypeResolution(sema_.operation_handler_->eval_type_op(node->opcode,
+        // expr_result));
     }
 
     void operator()(const ASTBinaryOp* node) noexcept {
@@ -1637,7 +1783,8 @@ public:
         // TypeContextEvaluator{sema_, left_result}(node->left);
         // TypeResolution right_result;
         // TypeContextEvaluator{sema_, right_result}(node->right);
-        // out_ = sema_.operation_handler_->eval_type_op(node->opcode, left_result, right_result);
+        // out_ = sema_.operation_handler_->eval_type_op(node->opcode, left_result,
+        // right_result);
     }
 
     void operator()(const ASTStructInitialization* node) noexcept {
@@ -1817,20 +1964,19 @@ public:
 class ValueContextEvaluator {
 private:
     Sema& sema_;
-    const Type* expected_;
     bool require_comptime_;
 
 private:
     explicit ValueContextEvaluator(
         ValueContextEvaluator& other, const Type* expected = nullptr
     ) noexcept
-        : sema_(other.sema_), expected_(expected), require_comptime_(other.require_comptime_) {}
+        : sema_(other.sema_), require_comptime_(other.require_comptime_) {}
 
 public:
     explicit ValueContextEvaluator(
         Sema& sema, const Type* expected = nullptr, bool require_comptime = false
     ) noexcept
-        : sema_(sema), expected_(expected), require_comptime_(require_comptime) {}
+        : sema_(sema), require_comptime_(require_comptime) {}
 
     auto operator()(const ASTExprVariant& variant) noexcept -> Symbol {
         Diagnostic::ErrorTrap trap{ASTNodePtrGetter{}(variant)->location};
@@ -1855,31 +2001,7 @@ public:
 
     auto operator()(const ASTParenExpr* node) noexcept -> Symbol { return (*this)(node->inner); }
 
-    auto operator()(const ASTConstant* node) noexcept -> Symbol {
-        if (expected_) {
-            if (node->value->kind_ != expected_->kind_) {
-                if (node->value->kind_ == Kind::Nullptr && expected_->kind_ == Kind::Pointer) {
-                    return Term::of(expected_);
-                }
-                Diagnostic::error_type_mismatch(expected_->repr(), node->value->repr());
-                return {};
-            } else if (auto* int_type = expected_->dyn_cast<IntegerType>()) {
-                IntegerValue* int_value = node->value->cast<IntegerValue>()->resolve_to(int_type);
-                return Sema::nonnull(Term::of(int_value));
-            } else if (auto* float_type = expected_->dyn_cast<FloatType>()) {
-                FloatValue* float_value = node->value->cast<FloatValue>()->resolve_to(float_type);
-                return Sema::nonnull(Term::of(float_value));
-            } else {
-                if (expected_ != node->value->get_type()) {
-                    Diagnostic::error_type_mismatch(expected_->repr(), node->value->repr());
-                    return {};
-                }
-                return Term::of(node->value);
-            }
-        } else {
-            return Term::of(node->value);
-        }
-    }
+    auto operator()(const ASTConstant* node) noexcept -> Symbol { return Term::of(node->value); }
 
     auto operator()(const ASTStringConstant* node) noexcept -> Symbol {
         Symbol string_view_symbol = sema_.get_std_symbol("string_view");
@@ -2025,10 +2147,7 @@ public:
                 any_error = true;
                 continue;
             }
-            inits.emplace(
-                init.identifier,
-                Sema::get<SymbolKind::Term>(symbol).resolve_to_default().effective_type()
-            );
+            inits.emplace(init.identifier, Sema::get<SymbolKind::Term>(symbol).effective_type());
         }
         if (any_error || !struct_validate(type, inits)) {
             return {};
@@ -2039,68 +2158,35 @@ public:
     auto operator()(const ASTArrayInitialization* node) noexcept -> Symbol {
         /// TODO: array element type inference and constexpr
         Symbol array_type_symbol = sema_.get_std_symbol("array"sv);
-        const void* array_template = Sema::get<SymbolKind::Template>(array_type_symbol)->primary;
-        if (expected_) {
-            auto* instance_type = expected_->dyn_cast<InstanceType>();
-            if (!instance_type || instance_type->primary_template_ != array_template) {
-                Diagnostic::error_symbol_category_mismatch(
-                    node->location, expected_->repr(), "array initializer"
-                );
-                return {};
-            }
-            const Type* element_type = instance_type->template_args_[0]->cast<Type>();
-            const IntegerValue* size_value = instance_type->template_args_[1]->cast<IntegerValue>();
-            if (node->elements.size() != static_cast<std::size_t>(size_value->value_)) {
-                Diagnostic::error_array_initializer_size_mismatch(
-                    node->location, static_cast<size_t>(size_value->value_), node->elements.size()
-                );
-                return {};
-            }
-            GlobalMemory::Vector<Term> elements;
-            elements.reserve(node->elements.size());
-            for (const ASTExprVariant& element : node->elements) {
-                Symbol element_symbol = ValueContextEvaluator{*this, element_type}(element);
-                if (Sema::expect(element_symbol, SymbolKind::Term)) {
-                    Term element_term = Sema::get<SymbolKind::Term>(element_symbol);
-                    elements.push_back(element_term);
-                } else {
-                    elements.push_back(Term{});
-                }
-            }
-            return Term::of(expected_);
+        TemplateFamily& array_template = *Sema::get<SymbolKind::Template>(array_type_symbol);
+        const Type* element_type = nullptr;
+        Symbol first_element_symbol = ValueContextEvaluator{*this, nullptr}(node->elements.front());
+        if (Sema::expect(first_element_symbol, SymbolKind::Term)) {
+            element_type = Sema::get<SymbolKind::Term>(first_element_symbol).decay();
         } else {
-            const Type* element_type = nullptr;
-            Symbol first_element_symbol =
-                ValueContextEvaluator{*this, nullptr}(node->elements.front());
-            if (Sema::expect(first_element_symbol, SymbolKind::Term)) {
-                element_type = Sema::get<SymbolKind::Term>(first_element_symbol).decay();
+            return {};
+        }
+        for (size_t i = 1; i < node->elements.size(); ++i) {
+            Symbol element_symbol = ValueContextEvaluator{*this, element_type}(node->elements[i]);
+            if (Sema::expect(element_symbol, SymbolKind::Term)) {
+                Term element_term = Sema::get<SymbolKind::Term>(element_symbol);
+                if (element_term.decay() != element_type) {
+                    Diagnostic::error_type_mismatch(
+                        element_type->repr(), element_term.effective_type()->repr()
+                    );
+                    return {};
+                }
             } else {
                 return {};
             }
-            for (size_t i = 1; i < node->elements.size(); ++i) {
-                Symbol element_symbol =
-                    ValueContextEvaluator{*this, element_type}(node->elements[i]);
-                if (Sema::expect(element_symbol, SymbolKind::Term)) {
-                    Term element_term = Sema::get<SymbolKind::Term>(element_symbol);
-                    if (element_term.decay() != element_type) {
-                        Diagnostic::error_type_mismatch(
-                            element_type->repr(), element_term.effective_type()->repr()
-                        );
-                        return {};
-                    }
-                } else {
-                    return {};
-                }
-            }
-            std::array<const Object*, 2> template_args = {
-                element_type, new IntegerValue(&IntegerType::u64_instance, node->elements.size())
-            };
-            Symbol result_type_symbol = sema_.template_handler_->instantiate(
-                *Sema::get<SymbolKind::Template>(array_type_symbol), template_args
-            );
-            const Type* result_type = Sema::get_default<SymbolKind::Type>(result_type_symbol);
-            return result_type ? Term::of(result_type) : Symbol{};
         }
+        std::array<const Object*, 2> template_args = {
+            element_type, new IntegerValue(&IntegerType::u64_instance, node->elements.size())
+        };
+        Symbol result_type_symbol =
+            sema_.template_handler_->instantiate(array_template, template_args);
+        const Type* result_type = Sema::get_default<SymbolKind::Type>(result_type_symbol);
+        return result_type ? Term::of(result_type) : Symbol{};
     }
 
     auto operator()(const ASTMoveExpr* node) noexcept -> Symbol {
@@ -2126,9 +2212,7 @@ public:
         for (const ASTExprVariant& arg : node->arguments) {
             Symbol arg_symbol = ValueContextEvaluator{*this, nullptr}(arg);
             if (Sema::expect(arg_symbol, SymbolKind::Term)) {
-                args_type.push_back(
-                    Sema::get<SymbolKind::Term>(arg_symbol).resolve_to_default().effective_type()
-                );
+                args_type.push_back(Sema::get<SymbolKind::Term>(arg_symbol).effective_type());
             } else {
                 args_type.push_back(nullptr);
             }
@@ -2184,23 +2268,17 @@ public:
         if (any_error) {
             return {};
         }
-        Term then_term = Sema::get<SymbolKind::Term>(then_symbol).resolve_to_default();
-        Term else_term = Sema::get<SymbolKind::Term>(else_symbol).resolve_to_default();
+        Term then_term = Sema::get<SymbolKind::Term>(then_symbol);
+        Term else_term = Sema::get<SymbolKind::Term>(else_symbol);
         if (then_term.decay() != else_term.decay()) {
             Diagnostic::error_type_mismatch(
                 then_term.effective_type()->repr(), else_term.effective_type()->repr()
             );
             return {};
         }
-        if (expected_) {
-            AutoBindings auto_bindings;
-            if (!CallHandler::assignable(then_term.effective_type(), expected_)) {
-                Diagnostic::error_type_mismatch(
-                    expected_->repr(), then_term.effective_type()->repr()
-                );
-                return {};
-            }
-            return Term::of(expected_);
+        if (Type::category(then_term.effective_type()) !=
+            Type::category(else_term.effective_type())) {
+            return Term::of(then_term.decay());
         }
         return Term::of(then_term.effective_type());
     }
@@ -2213,6 +2291,10 @@ public:
         Term expr_term = Sema::get<SymbolKind::Term>(expr_symbol);
         TypeResolution target_type;
         TypeContextEvaluator{sema_, target_type}(node->target_type);
+        if (!target_type.get()) {
+            return {};
+        }
+        sema_.codegen_env_.map_type(sema_.current_scope_, node, target_type);
         return Sema::nonnull(sema_.operation_handler_->eval_cast(node, expr_term, target_type));
     }
 
@@ -2354,7 +2436,6 @@ public:
                     );
                 }
             } else {
-                init_term = init_term.resolve_to_default();
                 type = init_term.decay();
             }
             if (node->is_constant && !init_term.is_comptime()) {
@@ -2578,7 +2659,7 @@ inline auto Sema::deferred_analysis(Scope& scope, auto variant) noexcept -> void
 
 inline auto Sema::eval_type(Scope& scope, const ScopeValue& value) noexcept -> TypeResolution {
     if (auto* object = value.get<const Object*>()) {
-        if (auto* type = object->dyn_type()) {
+        if (auto* type = object->dyn_cast<Type>()) {
             return type;
         }
         Diagnostic::error_symbol_category_mismatch("type", "value");
@@ -2618,7 +2699,7 @@ inline auto Sema::eval_type(Scope& scope, const ScopeValue& value) noexcept -> T
 
 inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept -> Symbol {
     if (auto* object = value.get<const Object*>()) {
-        if (auto* type = object->dyn_type()) {
+        if (auto* type = object->dyn_cast<Type>()) {
             return type;
         } else {
             return Term::of(object->cast<Value>());
@@ -2652,7 +2733,7 @@ inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init
     if (!holds_monostate(init.value)) {
         Symbol init_symbol = ValueContextEvaluator{*this, type.get(), false}(init.value);
         if (!Sema::expect(init_symbol, SymbolKind::Term)) return {};
-        Term init_term = std::get<Term>(init_symbol).resolve_to_default();
+        Term init_term = std::get<Term>(init_symbol);
         if (!init_term) return {};
         if (type.get()) {
             if (!CallHandler::assignable(init_term.effective_type(), type.get())) {
@@ -2860,7 +2941,7 @@ inline auto TemplateHandler::validate(
     }
     for (size_t i = 0; i < args.size(); i++) {
         const auto& param = primary.parameters[std::min(i, primary.parameters.size() - 1)];
-        if (static_cast<bool>(args[i]->dyn_value()) != param.is_nttp) {
+        if (static_cast<bool>(args[i]->dyn_cast<Value>()) != param.is_nttp) {
             return false;
         }
         if (param.is_nttp) {
@@ -3217,17 +3298,7 @@ inline auto AccessHandler::eval_index(const ASTIndexAccess* node) noexcept -> Sy
     Term index_term = Sema::get<SymbolKind::Term>(index_symbol);
     const Type* base_type = base_term.decay();
     const Type* index_type = index_term.decay();
-    std::array<const Type*, 2> args_type{
-        base_term.resolve_to_default().effective_type(),
-        index_term.resolve_to_default().effective_type()
-    };
-    if (auto* instance_type = base_type->dyn_cast<InstanceType>();
-        instance_type && is_std_indexable_container(instance_type)) {
-        // implicitly cast index to usize
-        if (index_term.effective_type() == &IntegerType::untyped_instance) {
-            index_type = args_type[1] = &IntegerType::u64_instance;
-        }
-    }
+    std::array<const Type*, 2> args_type{base_term.effective_type(), index_term.effective_type()};
     return Sema::nonnull(
         sema_.call_handler_
             ->eval_call(node, std::tuple{OperatorCode::Index, base_type, index_type}, args_type)

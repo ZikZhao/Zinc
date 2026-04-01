@@ -1033,21 +1033,36 @@ private:
     }
 
     auto visitConstant(ZincParser::ConstantContext* ctx) noexcept -> Any<ASTExprVariant> final {
+        strview literal_text = text(ctx->value_);
         switch (ctx->value_->getType()) {
-        case ZincParser::T_INT:
-            return as_variant(new ASTConstant{loc(ctx), new IntegerValue(text(ctx->value_))});
-        case ZincParser::T_FLOAT: {
-            std::string str = ctx->value_->getText();
-            double value = 0.0;
-            auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), value);
+        case ZincParser::T_INT: {
+            int32_t value = 0;
+            auto [ptr, ec] = std::from_chars(
+                literal_text.data(), literal_text.data() + literal_text.size(), value
+            );
             if (ec == std::errc::result_out_of_range) {
-                Diagnostic::error_overflow(str, "float literal");
+                Diagnostic::error_overflow(literal_text, "integer literal");
+                return as_variant(new ASTConstant{loc(ctx), new IntegerValue(0)});
+            } else if (ec != std::errc{}) {
+                Diagnostic::error_invalid_literal(literal_text, "integer literal");
+                return as_variant(new ASTConstant{loc(ctx), new IntegerValue(0)});
+            }
+            return as_variant(new ASTConstant{loc(ctx), new IntegerValue(value)});
+        }
+        case ZincParser::T_FLOAT: {
+            double value = 0.0;
+            auto [ptr, ec] = std::from_chars(
+                literal_text.data(), literal_text.data() + literal_text.size(), value
+            );
+            if (ec == std::errc::result_out_of_range) {
+                Diagnostic::error_overflow(literal_text, "float literal");
                 return as_variant(new ASTConstant{loc(ctx), new FloatValue(0)});
             } else if (ec != std::errc{}) {
-                Diagnostic::error_invalid_literal(str, "float literal");
+                Diagnostic::error_invalid_literal(literal_text, "float literal");
                 return as_variant(new ASTConstant{loc(ctx), new FloatValue(0)});
             }
-            if (!str.empty() && (str.back() == 'f' || str.back() == 'F')) {
+            if (!literal_text.empty() &&
+                (literal_text.back() == 'f' || literal_text.back() == 'F')) {
                 return as_variant(
                     new ASTConstant{loc(ctx), new FloatValue(&FloatType::f32_instance, value)}
                 );
@@ -1056,17 +1071,17 @@ private:
             }
         }
         case ZincParser::T_STRING: {
-            std::string str = ctx->value_->getText();
-            unescape_string(str);
-            strview persisted = GlobalMemory::persist_string({str.data() + 1, str.size() - 2});
+            GlobalMemory::String raw_string{literal_text.substr(1, literal_text.size() - 2)};
+            unescape_string(raw_string);
+            strview persisted = GlobalMemory::persist_string(raw_string);
             return as_variant(new ASTStringConstant{loc(ctx), persisted});
         }
         case ZincParser::T_CHAR: {
-            std::string str = ctx->value_->getText();
-            unescape_string(str);
+            GlobalMemory::String raw_string{literal_text.substr(1, literal_text.size() - 2)};
+            unescape_string(raw_string);
             return as_variant(new ASTConstant{
                 loc(ctx),
-                new IntegerValue(&IntegerType::u8_instance, static_cast<std::size_t>(str[1]))
+                new IntegerValue(&IntegerType::u8_instance, static_cast<std::size_t>(raw_string[0]))
             });
         }
         case ZincParser::KW_TRUE:

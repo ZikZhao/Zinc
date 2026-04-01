@@ -19,14 +19,14 @@ type Colour = {
 
 fn make_colour(data: u32) -> Colour {
     return Colour{
-        red: (data >> 16) as u8,
-        green: (data >> 8) as u8,
+        red: (data >> (16 as u32)) as u8,
+        green: (data >> (8 as u32)) as u8,
         blue: data as u8
     };
 }
 
 fn from_colour(colour: Colour) -> u32 {
-    return ((colour.red as u32) << 16) | ((colour.green as u32) << 8) | (colour.blue as u32);
+    return ((colour.red as u32) << (16 as u32)) | ((colour.green as u32) << (8 as u32)) | (colour.blue as u32);
 }
 
 class ImageBuffer<T: type> {
@@ -46,10 +46,10 @@ class ImageBuffer<T: type> {
     fn sample(self: &Self, mut u: f32, mut v: f32) -> T {
         u = u - std.floor(u);
         v = v - std.floor(v);
-        let mut ix = (u * (self.width_ - 1) as f32) as usize;
-        let mut iy = (v * (self.height_ - 1) as f32) as usize;
-        if (ix >= self.width_) { ix = self.width_ - 1; }
-        if (iy >= self.height_) { iy = self.height_ - 1; }
+        let mut ix = (u * (self.width_ - (1 as usize)) as f32) as usize;
+        let mut iy = (v * (self.height_ - (1 as usize)) as f32) as usize;
+        if (ix >= self.width_) { ix = self.width_ - (1 as usize); }
+        if (iy >= self.height_) { iy = self.height_ - (1 as usize); }
         return self.data_[iy * self.width_ + ix];
     }
 }
@@ -212,9 +212,9 @@ class Camera {
 }
 
 type Face = {
-    v_indices: [u32; 3],
-    vt_indices: [u32; 3],
-    vn_indices: [u32; 3],
+    v_indices: [u32; 3 as usize],
+    vt_indices: [u32; 3 as usize],
+    vn_indices: [u32; 3 as usize],
     material: Material,
     face_normal: glm.vec3,
 };
@@ -283,35 +283,35 @@ class World {
 
     static fn parse_index_token(token: &std.string) -> [i32; 3] {
         // Parses an OBJ index token of the form "v", "v/vt", "v//vn", or "v/vt/vn"
-        let mut idx: [i32; 3] = [-1, -1, -1];
+        let mut idx: [i32; 3 as usize] = [-1, -1, -1];
 
         let first_slash = token.find('/');
         if (first_slash == std.string.npos) {
             // Format: v
             if (!token.empty()) {
-                idx[0] = std.stoi(token);
+                idx[0 as usize] = std.stoi(token);
             }
             return idx;
         }
 
         // Parse vertex index (before first slash)
-        if (first_slash > 0) {
-            idx[0] = std.stoi(token.substr(0 as usize, first_slash));
+        if (first_slash > (0 as usize)) {
+            idx[0 as usize] = std.stoi(token.substr(0 as usize, first_slash));
         }
 
-        let second_slash = token.find('/', first_slash + 1);
+        let second_slash = token.find('/', first_slash + (1 as usize));
         if (second_slash == std.string.npos) {
             // Format: v/vt
-            if (first_slash + 1 < token.size()) {
-                idx[1] = std.stoi(token.substr(first_slash + 1));
+            if (first_slash + (1 as usize) < token.size()) {
+                idx[1 as usize] = std.stoi(token.substr(first_slash + (1 as usize)));
             }
         } else {
             // Format: v/vt/vn or v//vn
-            if (second_slash > first_slash + 1) {
-                idx[1] = std.stoi(token.substr(first_slash + 1, second_slash - first_slash - 1));
+            if (second_slash > first_slash + (1 as usize)) {
+                idx[1 as usize] = std.stoi(token.substr(first_slash + (1 as usize), second_slash - first_slash - (1 as usize)));
             }
-            if (second_slash + 1 < token.size()) {
-                idx[2] = std.stoi(token.substr(second_slash + 1));
+            if (second_slash + (1 as usize) < token.size()) {
+                idx[2 as usize] = std.stoi(token.substr(second_slash + (1 as usize)));
             }
         }
 
@@ -517,10 +517,10 @@ class World {
                 let mut rest: std.string;
                 std.getline(iss, rest);
                 let mut name = rest;
-                if (!name.empty() && name[0] == '#') {
+                if (!name.empty() && name[0 as usize] == '#') {
                     name.erase(0 as usize, 1 as usize);
                 }
-                for (!name.empty() && (name[0] == ' ' || name[0] == '\t')) {
+                for (!name.empty() && (name[0 as usize] == ' ' || name[0 as usize] == '\t')) {
                     name.erase(0 as usize, 1 as usize);
                 }
                 model.objects.emplace_back(name);
@@ -593,22 +593,22 @@ class World {
                 // Triangle face -- parse indices (v/vt/vn) and create Face with material
                 if (current_obj == model.objects.end()) { continue; }
                 let mut tok: [std.string; 3];
-                iss >> tok[0] >> tok[1] >> tok[2];
+                iss >> tok[0 as usize] >> tok[1 as usize] >> tok[2 as usize];
                 let mut vpos: [glm.vec3; 3];
-                let mut vt_out: [u32; 3] = [
+                let mut vt_out: [u32; 3 as usize] = [
                     std.numeric_limits<u32>.max(),
                     std.numeric_limits<u32>.max(),
                     std.numeric_limits<u32>.max()
                 ];
-                let mut vi_out: [i32; 3] = [0, 0, 0];
-                let mut vn_out: [i32; 3] = [-1, -1, -1];
+                let mut vi_out: [i32; 3 as usize] = [0, 0, 0];
+                let mut vn_out: [i32; 3 as usize] = [-1, -1, -1];
                 let mut has_vn = false;
-                for (let mut i: usize = 0; i < 3; ++i) {
+                for (let mut i = 0 as usize; i < 3 as usize; ++i) {
                     let t: &std.string = tok[i];
                     let indice = Self.parse_index_token(t);
-                    let v_i = indice[0];
-                    let vt_i = indice[1];
-                    let vn_i = indice[2];
+                    let v_i = indice[0 as usize];
+                    let vt_i = indice[1 as usize];
+                    let vn_i = indice[2 as usize];
                     if (vn_i >= 0) { has_vn = true; }
                     let v_global = vertex_offset + (v_i >= 0 ? v_i : 0);
                     vpos[i] = model.vertices[v_global as usize];
@@ -619,13 +619,13 @@ class World {
                     }
                     if (vn_i >= 0) {
                         let vn_global = normal_offset + vn_i;
-                        vn_out[i] = vn_global as u32;
+                        vn_out[i] = vn_global as i32;
                     }
                 }
                 // If normals are absent, defer to per-vertex cached normals when available; mark
                 // missing as -1
                 if (!has_vn) {
-                    for (let mut i: usize = 0; i < 3; ++i) {
+                    for (let mut i = 0 as usize; i < 3 as usize; ++i) {
                         let vidx = vi_out[i];
                         if (vidx >= 0 &&
                             vidx as usize < model.vertex_normals_by_vertex.size()) {
@@ -634,7 +634,7 @@ class World {
                             }
                         }
                     }
-                    for (let mut i: usize = 0; i < 3; ++i) {
+                    for (let mut i = 0 as usize; i < 3 as usize; ++i) {
                         if (vn_out[i] < 0) {
                             vn_out[i] = -1;
                         }
@@ -642,16 +642,16 @@ class World {
                 }
                 let new_face = Face{
                     v_indices:
-                        [vi_out[0] as u32,
-                         vi_out[1] as u32,
-                         vi_out[2] as u32],
-                    vt_indices: [vt_out[0], vt_out[1], vt_out[2]],
+                        [vi_out[0 as usize] as u32,
+                         vi_out[1 as usize] as u32,
+                         vi_out[2 as usize] as u32],
+                    vt_indices: [vt_out[0 as usize], vt_out[1 as usize], vt_out[2 as usize]],
                     vn_indices:
-                        [vn_out[0] >= 0 ? vn_out[0] as u32
+                        [vn_out[0 as usize] >= 0 ? vn_out[0 as usize] as u32
                                         : std.numeric_limits<u32>.max(),
-                         vn_out[1] >= 0 ? vn_out[1] as u32
+                         vn_out[1 as usize] >= 0 ? vn_out[1 as usize] as u32
                                         : std.numeric_limits<u32>.max(),
-                         vn_out[2] >= 0 ? vn_out[2] as u32
+                         vn_out[2 as usize] >= 0 ? vn_out[2 as usize] as u32
                                         : std.numeric_limits<u32>.max()],
                     material: current_obj->material,
                     face_normal: glm.vec3(0.0f)
@@ -667,7 +667,7 @@ class World {
         let mut ppm = Utils.ReadPPM(path);
         let mut texture_data: std.vector<Colour>;
         texture_data.resize(ppm.width * ppm.height);
-        for (let mut i: usize = 0; i < ppm.width * ppm.height; ++i) {
+        for (let mut i = 0 as usize; i < ppm.width * ppm.height; ++i) {
             let red = ppm.stream.get();
             let green = ppm.stream.get();
             let blue = ppm.stream.get();
@@ -723,11 +723,11 @@ class World {
         self.all_vertex_normals_by_vertex_.clear();
         self.all_faces_.clear();
 
-        let mut num_v: usize = 0;
-        let mut num_vt: usize = 0;
-        let mut num_vn: usize = 0;
-        let mut num_vnbv: usize = 0;
-        let mut num_f: usize = 0;
+        let mut num_v = 0 as usize;
+        let mut num_vt = 0 as usize;
+        let mut num_vn = 0 as usize;
+        let mut num_vnbv = 0 as usize;
+        let mut num_f = 0 as usize;
         for (let mut it = self.models_.begin(); it != self.models_.end(); ++it) {
             let m = *it;
             num_v += m.vertices.size();
