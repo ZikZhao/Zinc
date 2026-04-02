@@ -351,7 +351,7 @@ private:
             visit_expr(ctx->return_type_),
             visit_list(ctx->body_),
             ctx->KW_STATIC() != nullptr,
-            ctx->KW_VIRTUAL() != nullptr,
+            ctx->KW_VIRTUAL() != nullptr || ctx->KW_OVERRIDE() != nullptr,
             ctx->KW_OVERRIDE() != nullptr,
         };
         if (ctx->template_list_) {
@@ -584,9 +584,13 @@ private:
             visit_list<ASTExprVariant>(ctx->implements_),
             attrs,
             scope_items,
+            ctx->KW_VIRTUAL() != nullptr
         };
         if (ctx->template_list_) {
-            if (ctx->specialize_list_) throw;
+            if (ctx->specialize_list_) {
+                Diagnostic::error_both_template_and_specialization(loc(ctx));
+                return {};
+            }
             return as_variant(new ASTTemplateDefinition{
                 loc(ctx),
                 class_def->identifier,
@@ -594,7 +598,10 @@ private:
                 class_def
             });
         } else if (ctx->specialize_list_) {
-            if (!ctx->instantiation_list_) throw;
+            if (!ctx->instantiation_list_) {
+                Diagnostic::error_specialization_without_pattern(loc(ctx));
+                return {};
+            }
             return as_variant(new ASTTemplateSpecialization{
                 loc(ctx),
                 class_def->identifier,

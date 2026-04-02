@@ -184,6 +184,9 @@ using ASTExprVariant = std::variant<
     // Match case variable type
     const MatchCaseVarType*>;
 
+template <typename T>
+concept ASTClass = std::derived_from<T, ASTNode>;
+
 struct ASTNode : public GlobalMemory::MonotonicAllocated {
     Location location;
     ASTNode(const Location& loc) noexcept : location(loc) {}
@@ -454,6 +457,7 @@ struct ASTClassDefinition final : public ASTNode {
     std::span<ASTExprVariant> implements;
     std::span<ASTNodeVariant> fields;
     std::span<ASTNodeVariant> scope_items;
+    bool is_virtual;
 };
 
 struct ASTNamespaceDefinition final : public ASTNode {

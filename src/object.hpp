@@ -591,21 +591,29 @@ class InterfaceType final : public Type {
 public:
     static constexpr Kind kind = Kind::Interface;
 
-private:
+public:
+    Scope* scope_;
     strview identifier_;
-    GlobalMemory::FlatMultiMap<strview, const FunctionType*> methods_;
+    GlobalMemory::FlatSet<const InterfaceType*> parents_;
+    mutable GlobalMemory::FlatSet<const InstanceType*> implementors_;
 
 public:
-    InterfaceType(
-        strview identifier, GlobalMemory::FlatMultiMap<strview, const FunctionType*> methods
-    ) noexcept
-        : Type(kind, false), identifier_(identifier), methods_(std::move(methods)) {}
+    InterfaceType(Scope* scope, strview identifier) noexcept
+        : Type(kind, false), scope_(scope), identifier_(identifier) {}
 
     GlobalMemory::String repr() const override { return GlobalMemory::String{identifier_}; }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
 
     bool default_construct() const noexcept final { return false; }
+
+    void implemented_by(const InstanceType* instance) const noexcept {
+        if (implementors_.insert(instance).second) {
+            for (const InterfaceType* parent : parents_) {
+                parent->implemented_by(instance);
+            }
+        }
+    }
 
 protected:
     std::strong_ordering do_compare(
@@ -624,6 +632,34 @@ public:
     static constexpr Kind kind = Kind::Instance;
 
 public:
+    static auto is_base(const Type* from, const Type* to) noexcept -> bool {
+        GlobalMemory::FlatSet<const Type*> visited;
+        std::vector<const Type*> stack{from};
+        while (!stack.empty()) {
+            const Type* current = stack.back();
+            stack.pop_back();
+            if (current == to) {
+                return true;
+            }
+            if (visited.insert(current).second) {
+                if (auto* instance_type = current->dyn_cast<InstanceType>()) {
+                    stack.push_back(instance_type->extends_);
+                    stack.insert(
+                        stack.end(),
+                        instance_type->implements_.begin(),
+                        instance_type->implements_.end()
+                    );
+                }
+            }
+        }
+        return false;
+    }
+
+    static auto is_castable(const Type* from, const Type* to) noexcept -> bool {
+        return is_base(from, to) || is_base(to, from);
+    }
+
+public:
     Scope* scope_;
     strview identifier_;
     const InstanceType* extends_;
@@ -631,6 +667,7 @@ public:
     GlobalMemory::FlatMap<strview, const Type*> attrs_;
     mutable const void* primary_template_;
     mutable std::span<const Object*> template_args_;
+    bool is_virtual_;
 
 public:
     InstanceType(strview identifier) : Type(kind, false), identifier_(identifier) {}
@@ -648,14 +685,20 @@ public:
         strview identifier,
         const InstanceType* extends,
         GlobalMemory::FlatSet<const InterfaceType*> interfaces,
-        GlobalMemory::FlatMap<strview, const Type*> attrs
+        GlobalMemory::FlatMap<strview, const Type*> attrs,
+        bool is_virtual
     ) noexcept
         : Type(kind, false),
           scope_(scope),
           identifier_(identifier),
           extends_(extends),
           implements_(std::move(interfaces)),
-          attrs_(std::move(attrs)) {}
+          attrs_(std::move(attrs)),
+          is_virtual_(is_virtual) {
+        for (const InterfaceType* interface : implements_) {
+            interface->implemented_by(this);
+        }
+    }
 
     GlobalMemory::String repr() const override {
         GlobalMemory::String str = GlobalMemory::format("{}", identifier_);
@@ -673,10 +716,7 @@ public:
 
     auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
 
-    auto default_construct() const noexcept -> bool final {
-        /// TODO:
-        return true;
-    }
+    auto default_construct() const noexcept -> bool final { return false; }
 
 protected:
     std::strong_ordering do_compare(
@@ -1138,64 +1178,6 @@ private:
     }
 };
 
-class ClassHierarchyGraph {
-private:
-    struct ClassNode {
-        const InstanceType* type;
-        const ClassNode* parent;
-        GlobalMemory::Vector<ClassNode> children;
-    };
-
-private:
-    GlobalMemory::Vector<ClassNode> top_level_classes_;
-    GlobalMemory::FlatMap<const InterfaceType*, GlobalMemory::Vector<ClassNode*>>
-        interface_implementors_;
-    GlobalMemory::FlatMap<const InstanceType*, ClassNode*> class_nodes_;
-
-public:
-    auto add_class(const InstanceType* instance_type) noexcept -> void {
-        ClassNode* node;
-        if (instance_type->extends_) {
-            const InstanceType* parent_type = instance_type->extends_->cast<InstanceType>();
-            ClassNode& parent_node = *class_nodes_.at(parent_type);
-            node = &parent_node.children.emplace_back(ClassNode{instance_type, &parent_node});
-            class_nodes_[instance_type] = node;
-        } else {
-            node = &top_level_classes_.emplace_back(ClassNode{instance_type, nullptr});
-        }
-        for (const InterfaceType* interface : instance_type->implements_) {
-            interface_implementors_[interface].push_back(node);
-        }
-    }
-
-    auto is_base(const Type* from, const Type* to) const noexcept -> bool {
-        GlobalMemory::FlatSet<const Type*> visited;
-        std::vector<const Type*> stack{from};
-        while (!stack.empty()) {
-            const Type* current = stack.back();
-            stack.pop_back();
-            if (current == to) {
-                return true;
-            }
-            if (visited.insert(current).second) {
-                if (auto* instance_type = current->dyn_cast<InstanceType>()) {
-                    stack.push_back(instance_type->extends_);
-                    stack.insert(
-                        stack.end(),
-                        instance_type->implements_.begin(),
-                        instance_type->implements_.end()
-                    );
-                }
-            }
-        }
-        return false;
-    }
-
-    auto is_reachable(const Type* from, const Type* to) const noexcept -> bool {
-        return is_base(from, to) || is_base(to, from);
-    }
-};
-
 class TypeResolution final {
     friend class TypeRegistry;
 
@@ -1248,6 +1230,7 @@ private:
 class TypeRegistry {
     friend class ThreadGuard;
     friend class ObjectCodeGen;
+    friend class ClassHierarchy;
 
 private:
     struct TypeComparator {
@@ -1267,11 +1250,14 @@ public:
     template <TypeClass T>
         requires(!TypeInTupleV<T, std::tuple<NullptrType, IntegerType, FloatType, BooleanType>>)
     static void get_at(TypeResolution& out, auto&&... args) noexcept {
-        if constexpr (std::is_same_v<T, InstanceType>) {
+        if constexpr (std::is_same_v<T, InterfaceType>) {
+            // interfaces are not interned but still need to be tracked for ref dependencies
+            out.construct<T>(std::forward<decltype(args)>(args)...);
+            instance->interface_types_.push_back(static_cast<const T*>(out.get()));
+        } else if constexpr (std::is_same_v<T, InstanceType>) {
             // classes with same definition are distinct types
             out.reconstruct<T>(std::forward<decltype(args)>(args)...);
             instance->instance_types_.push_back(static_cast<const T*>(out.get()));
-            instance->class_graph_.add_class(out.get()->cast<InstanceType>());
         } else {
             instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
         }
@@ -1293,14 +1279,6 @@ public:
         return instance->graph_.is_parent(type);
     }
 
-    static auto is_base(const Type* from, const Type* to) noexcept -> bool {
-        return instance->class_graph_.is_base(from, to);
-    }
-
-    static auto is_reachable(const Type* from, const Type* to) noexcept -> bool {
-        return instance->class_graph_.is_reachable(from, to);
-    }
-
     static auto get_auto_instances(std::size_t count) noexcept -> std::span<const AutoObject*> {
         while (instance->auto_objects_.size() < count) {
             instance->auto_objects_.push_back(new AutoObject(instance->auto_objects_.size()));
@@ -1317,7 +1295,6 @@ public:
 
 private:
     TypeDependencyGraph graph_;
-    ClassHierarchyGraph class_graph_;
     std::tuple<
         TypeSet<FunctionType>,
         TypeSet<StructType>,
@@ -1325,6 +1302,7 @@ private:
         TypeSet<PointerType>,
         TypeSet<UnionType>>
         types_;
+    GlobalMemory::Vector<const InterfaceType*> interface_types_;
     GlobalMemory::Vector<const InstanceType*> instance_types_;
     GlobalMemory::Vector<const AutoObject*> auto_objects_;
     GlobalMemory::Vector<const SkolemObject*> skolem_objects_;

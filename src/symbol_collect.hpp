@@ -135,6 +135,24 @@ public:
         }
     }
 
+    void add_function(strview identifier, const ASTFunctionDefinition* func) noexcept {
+        if (auto it = identifiers_.find(identifier); it == identifiers_.end()) {
+            auto overloads = GlobalMemory::alloc<GlobalMemory::Vector<FunctionOverloadDef>>();
+            overloads->push_back(func);
+            identifiers_[identifier] = overloads;
+        } else {
+            auto overloads = it->second.get<GlobalMemory::Vector<FunctionOverloadDef>*>();
+            if (!overloads) {
+                Diagnostic::error_redeclared_identifier(identifier);
+                return;
+            } else if (func->declared_virtual) {
+                Diagnostic::error_virtual_overload(func->location);
+                return;
+            }
+            overloads->push_back(func);
+        }
+    }
+
     void add_function(strview identifier, const auto* func) noexcept {
         if (auto it = identifiers_.find(identifier); it == identifiers_.end()) {
             auto overloads = GlobalMemory::alloc<GlobalMemory::Vector<FunctionOverloadDef>>();
@@ -144,6 +162,12 @@ public:
             auto overloads = it->second.get<GlobalMemory::Vector<FunctionOverloadDef>*>();
             if (!overloads) {
                 Diagnostic::error_redeclared_identifier(identifier);
+                return;
+            } else if (
+                overloads->front().get<const ASTFunctionDefinition*>() &&
+                overloads->front().get<const ASTFunctionDefinition*>()->declared_virtual
+            ) {
+                Diagnostic::error_virtual_overload(func->location);
                 return;
             }
             overloads->push_back(func);

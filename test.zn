@@ -1,11 +1,30 @@
-type A = i32 | f32;
-
 fn main(args: [strview]) {
-    std.cout << "Hello, world!";
-    let mut x: A = 42;
-    match (x) {
-        a: i32 => { std.cout << a; }
-        _ => { std.cout << "It's something else!"; }
+    let inst = Derived();
+    let base_ref: &Base = inst;
+    std.cout << "Base reference: " << base_ref.foo();
+}
+
+virtual class Base {
+    init() {
+        return Self();
+    }
+    drop() {
+        std.cout << "Base destructor called\n";
+    }
+    virtual fn foo(self: &Self) -> i32 {
+        return 42;
+    }
+}
+
+virtual class Derived extends Base {
+    init() {
+        return Self();
+    }
+    drop() {
+        std.cout << "Derived destructor called\n";
+    }
+    override fn foo(self: &Self) -> i32 {
+        return 100;
     }
 }
 

@@ -274,12 +274,46 @@ public:
         }
     }
 
+    static auto error_both_template_and_specialization(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String(
+                    "Specialization definition requires a pattern to specialize, but a template argument list is provided"sv
+                )
+            }
+        );
+    }
+
+    static auto error_specialization_without_pattern(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String(
+                    "Specialization definition requires a pattern to specialize"sv
+                )
+            }
+        );
+    }
+
     static auto error_undeclared_identifier(strview identifier) noexcept -> void {
         unlocated_error(GlobalMemory::format("Undeclared identifier: '{}'", identifier));
     }
 
     static auto error_redeclared_identifier(strview identifier) noexcept -> void {
         unlocated_error(GlobalMemory::format("Redeclared identifier: '{}'", identifier));
+    }
+
+    static auto error_virtual_overload(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Cannot overload a virtual function"sv)
+            }
+        );
     }
 
     static auto error_symbol_category_mismatch(strview expected, strview actual) noexcept -> void {
@@ -642,6 +676,36 @@ public:
                 .severity = Severity::Warning,
                 .location = location,
                 .message = GlobalMemory::format("Unreachable match case: '{}'", case_repr)
+            }
+        );
+    }
+
+    static auto error_pointer_to_reference(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Cannot create pointer to reference type"sv)
+            }
+        );
+    }
+
+    static auto error_reference_to_reference(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Cannot create reference to reference type"sv)
+            }
+        );
+    }
+
+    static auto error_reference_to_void(Location location) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::String("Cannot create reference to void type"sv)
             }
         );
     }

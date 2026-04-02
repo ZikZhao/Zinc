@@ -55,6 +55,7 @@ public:
         const Scope* scope;
         strview identifier;
         PointerChain* self;
+        const Type* virtual_decl_provider;
     };
 
     using TableValue = std::variant<
@@ -66,48 +67,45 @@ public:
 
     using Table = GlobalMemory::FlatMap<const ASTNode*, TableValue>;
 
-public:
-    static auto mangle_path(GlobalMemory::String& mangled, const Scope* scope, strview identifier)
-        -> void {
-        if (scope->is_extern_) {
-            [&](this auto&& self, const Scope* current) -> void {
-                if (current->parent_) self(current->parent_);
-                if (!current->scope_id_.empty()) {
-                    std::format_to(std::back_inserter(mangled), "{}::", current->scope_id_);
-                }
-            }(scope);
-            mangled += identifier;
-        } else {
-            [&](this auto&& self, const Scope* current) -> void {
-                if (current->parent_) self(current->parent_);
-                if (!current->scope_id_.empty()) {
-                    if (current->scope_id_[0] == '0') {
-                        mangled += "_";
-                        mangled += current->scope_id_;
-                    } else {
-                        std::format_to(
-                            std::back_inserter(mangled),
-                            "_{}{}",
-                            current->scope_id_.length(),
-                            current->scope_id_
-                        );
-                    }
-                }
-            }(scope);
-            std::format_to(std::back_inserter(mangled), "_{}{}", identifier.length(), identifier);
+    struct VirtualDecl {
+        const Type* decl_provider;
+        strview identifier;
+        const FunctionType* func_type;
+    };
+
+    struct VirtualDeclHasher {
+        auto operator()(const VirtualDecl& decl) const noexcept -> std::size_t {
+            return hash_combine(
+                std::bit_cast<std::size_t>(decl.decl_provider),
+                std::hash<strview>{}(decl.identifier),
+                std::bit_cast<std::size_t>(decl.func_type)
+            );
         }
-    }
+    };
+
+    struct VirtualDeclEqual {
+        auto operator()(const VirtualDecl& lhs, const VirtualDecl& rhs) const noexcept -> bool {
+            return lhs.decl_provider == rhs.decl_provider && lhs.identifier == rhs.identifier &&
+                   lhs.func_type == rhs.func_type;
+        }
+    };
 
 public:
-    GlobalMemory::FlatMap<std::pair<const Scope*, strview>, const Object*> statics_;
+    GlobalMemory::Vector<std::tuple<const Scope*, strview, const Object*>> statics_;
     GlobalMemory::Vector<FunctionDef> functions_;
+    GlobalMemory::UnorderedMap<
+        VirtualDecl,
+        GlobalMemory::Vector<const Type*>,
+        VirtualDeclHasher,
+        VirtualDeclEqual>
+        virtuals_;
     GlobalMemory::Vector<std::pair<Scope*, std::span<const Object*>>> instantiations_;
     GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
     GlobalMemory::Vector<strview> cpp_blocks_;
 
 public:
     auto add_static(const Scope* scope, strview identifier, const Object* obj) -> void {
-        statics_.insert({{scope, identifier}, obj});
+        statics_.push_back({scope, identifier, obj});
     }
 
     auto add_function_output(
@@ -115,6 +113,15 @@ public:
     ) -> void {
         if (current_scope->is_extern_) return;
         functions_.push_back({current_scope, node, func_obj});
+    }
+
+    auto add_virtual_impl(
+        const Type* decl_provider,
+        strview identifier,
+        const FunctionType* func_type,
+        const Type* impl_provider
+    ) -> void {
+        virtuals_[{decl_provider, identifier, func_type}].push_back(impl_provider);
     }
 
     auto add_instantiation(const Scope* inst_scope, std::span<const Object*> args) -> void {
@@ -143,13 +150,15 @@ public:
         const FunctionType* func_type,
         const Scope* func_scope,
         strview identifier,
-        PointerChain* self
+        PointerChain* self,
+        const Type* virtual_decl_provider
     ) -> void {
         scope_map_[current_scope][node] = new FunctionCall{
             .func_type = func_type,
             .scope = func_scope,
             .identifier = identifier,
             .self = self,
+            .virtual_decl_provider = virtual_decl_provider,
         };
     }
 
@@ -295,7 +304,7 @@ public:
 
     auto deferred_analysis(Scope& scope, auto variant) noexcept -> void;
 
-    auto get_self_type() noexcept -> const Type* {
+    auto get_self_type() noexcept -> const InstanceType* {
         Scope* scope = current_scope_;
         while (scope->self_id_.empty() && scope->parent_) {
             scope = scope->parent_;
@@ -305,7 +314,7 @@ public:
         }
         const ScopeValue* self_value = scope->parent_->find(scope->self_id_);
         assert(self_value);
-        return eval_type(*scope->parent_, *self_value).get();
+        return eval_type(*scope->parent_, *self_value).get()->cast<InstanceType>();
     }
 
     auto is_at_top_level() const noexcept -> bool { return current_scope_->parent_ == nullptr; }
@@ -354,6 +363,52 @@ public:
         auto [scope, value] = lookup("std");
         auto std_scope = value->get<Scope*>();
         return eval_symbol(*std_scope, *std_scope->find(identifier));
+    }
+
+    auto get_func_type(Scope* scope, FunctionOverloadDef overload) noexcept -> const FunctionType*;
+
+    auto find_virtual_decl(
+        const Type* self_type, strview identifier, const FunctionType* func_type
+    ) noexcept -> const Type* {
+        auto is_provider = [&](Scope* scope) -> bool {
+            auto value = scope->find(identifier);
+            if (!value) return false;
+            auto* overloads = value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
+            if (!overloads) return false;
+            const ASTFunctionDefinition* front =
+                overloads->front().get<const ASTFunctionDefinition*>();
+            if (!front || !front->declared_virtual) return false;
+            for (FunctionOverloadDef func : *overloads) {
+                const FunctionType* candidate_type = get_func_type(scope, func);
+                if (func_type == candidate_type) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (auto* inst_type = self_type->dyn_cast<InstanceType>()) {
+            if (is_provider(inst_type->scope_)) return inst_type;
+            if (inst_type->extends_) {
+                if (const Type* func =
+                        find_virtual_decl(inst_type->extends_, identifier, func_type)) {
+                    return func;
+                }
+            }
+            for (const InterfaceType* interface : inst_type->implements_) {
+                if (auto* func = find_virtual_decl(interface, identifier, func_type)) {
+                    return func;
+                }
+            }
+        } else {
+            const InterfaceType* interface_type = self_type->cast<InterfaceType>();
+            if (is_provider(interface_type->scope_)) return self_type;
+            for (const InterfaceType* parent : interface_type->parents_) {
+                if (auto* func = find_virtual_decl(parent, identifier, func_type)) {
+                    return func;
+                }
+            }
+        }
+        return nullptr;
     }
 
 private:
@@ -586,8 +641,6 @@ private:
 public:
     CallHandler(Sema& sema) noexcept : sema_(sema) {}
 
-    auto get_func_type(Scope* scope, FunctionOverloadDef overload) noexcept -> const FunctionType*;
-
     auto eval_call(const ASTNode* node, Symbol callee, std::span<const Type*> args_type)
         -> std::pair<Term, const FunctionType*> {
         if (holds_monostate(callee)) return {};
@@ -612,8 +665,13 @@ public:
             PointerChain* self = Sema::get_if<SymbolKind::Method>(callee)
                                      ? Sema::get<SymbolKind::Method>(callee).self
                                      : nullptr;
+            const Type* virtual_decl = nullptr;
+            if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
+                virtual_decl =
+                    sema_.find_virtual_decl(method->object.decay(), identifier, overload);
+            }
             sema_.codegen_env_.map_func_call(
-                sema_.current_scope_, node, overload, scope, identifier, self
+                sema_.current_scope_, node, overload, scope, identifier, self, virtual_decl
             );
         }
         return {Term::of(overload->return_type_), overload};
@@ -638,7 +696,7 @@ private:
             return *overloads | std::views::filter([](FunctionOverloadDef overload) {
                 return !overload.get<const ASTTemplateDefinition*>();
             }) | std::views::transform([this, scope](FunctionOverloadDef overload) {
-                return get_func_type(scope, overload);
+                return sema_.get_func_type(scope, overload);
             }) | GlobalMemory::collect<GlobalMemory::Vector>();
         };
         if (!Sema::expect(
@@ -871,11 +929,7 @@ private:
                 return param_ref->is_moved_ ? Exact : QualifiedReferenced;
             }
         };
-        if (decayed_param == decayed_arg) {
-            // qualification conversion
-            if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
-            return tiebreaker_rank();
-        } else if (decayed_param->is_pattern()) {
+        if (decayed_param->is_pattern()) {
             // auto type deduction
             if (auto* inst_param = decayed_param->dyn_cast<InstanceType>()) {
                 auto* inst_arg = decayed_arg->dyn_cast<InstanceType>();
@@ -894,6 +948,11 @@ private:
                 }
                 return tiebreaker_rank();
             }
+        }
+        if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
+        if (decayed_param == decayed_arg) {
+            // qualification conversion
+            return tiebreaker_rank();
         } else if (auto* union_param = decayed_param->dyn_cast<UnionType>()) {
             // assignment to union field
             if (decayed_arg->kind_ == Kind::Union) {
@@ -902,9 +961,17 @@ private:
             }
             if (!union_param->types_.contains(decayed_arg)) return NoMatch;
             return tiebreaker_rank();
+        } else if (param->kind_ == Kind::Reference && arg->kind_ == Kind::Reference) {
+            // reference conversion
+            const InstanceType* param_class = decayed_param->dyn_cast<InstanceType>();
+            const InstanceType* arg_class = decayed_arg->dyn_cast<InstanceType>();
+            if (param_class && arg_class) {
+                if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
+                return InstanceType::is_base(arg_class, param_class) ? Upcast : NoMatch;
+            }
+            return NoMatch;
         } else {
             // pointer conversion
-            if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
             if (decayed_param->kind_ == Kind::Pointer && decayed_arg->kind_ == Kind::Nullptr) {
                 return Upcast;
             }
@@ -921,12 +988,11 @@ private:
             } else if (decayed_param_pointee->kind_ == Kind::Void) {
                 return Upcast;
             } else {
-                const InstanceType* param_class =
-                    Type::decay(param_pointee)->dyn_cast<InstanceType>();
-                const InstanceType* arg_class = Type::decay(arg_pointee)->dyn_cast<InstanceType>();
+                const InstanceType* param_class = decayed_param_pointee->dyn_cast<InstanceType>();
+                const InstanceType* arg_class = decayed_arg_pointee->dyn_cast<InstanceType>();
                 if (param_class && arg_class) {
                     if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
-                    if (!TypeRegistry::is_base(arg_class, param_class)) return NoMatch;
+                    return InstanceType::is_base(arg_class, param_class) ? Upcast : NoMatch;
                 }
             }
             return NoMatch;
@@ -1582,7 +1648,7 @@ public:
                     decayed_source_type->cast<PointerType>()->target_type_ == &VoidType::instance) {
                     convertible = true;
                 } else {
-                    if (TypeRegistry::is_reachable(decayed_source_type, target_type)) {
+                    if (InstanceType::is_castable(decayed_source_type, target_type)) {
                         convertible = true;
                     }
                 }
@@ -1777,6 +1843,14 @@ public:
         if (!expr_type.get()) {
             out_ = nullptr;
             return;
+        } else if (expr_type.get()->kind_ == Kind::Reference) {
+            Diagnostic::error_reference_to_reference(node->location);
+            out_ = nullptr;
+            return;
+        } else if (expr_type.get()->kind_ == Kind::Void) {
+            Diagnostic::error_reference_to_void(node->location);
+            out_ = nullptr;
+            return;
         }
         if (!expr_type.is_sized()) {
             TypeRegistry::add_ref_dependency(out_, expr_type);
@@ -1789,6 +1863,10 @@ public:
         TypeResolution expr_type;
         TypeContextEvaluator{sema_, expr_type, false}(node->inner);
         if (!expr_type.get()) {
+            out_ = nullptr;
+            return;
+        } else if (expr_type.get()->kind_ == Kind::Reference) {
+            Diagnostic::error_pointer_to_reference(node->location);
             out_ = nullptr;
             return;
         }
@@ -1856,7 +1934,7 @@ public:
             return;
         }
         TypeRegistry::get_at<InstanceType>(
-            out_, sema_.current_scope_, node->identifier, base, interfaces, attrs
+            out_, sema_.current_scope_, node->identifier, base, interfaces, attrs, node->is_virtual
         );
     }
 
@@ -2151,6 +2229,7 @@ public:
                     func_type,
                     std::get<0>(*partial),
                     std::get<1>(*partial)->identifier,
+                    nullptr,
                     nullptr
                 );
             }
@@ -2292,7 +2371,7 @@ public:
 
     void operator()(std::monostate) noexcept { UNREACHABLE(); }
 
-    void operator()(const auto*) {}
+    void operator()(const ASTClass auto*) {}
 
     // Root and blocks
     void operator()(const ASTRoot* node) noexcept {
@@ -2394,7 +2473,6 @@ public:
             return;
         }
         Term value_term = Sema::get<SymbolKind::Term>(value);
-        ValueCategory value_category = Type::category(value_term.effective_type());
         sema_.codegen_env_.map_type(sema_.current_scope_, node, value_term.effective_type());
         const Type* value_type = value_term.decay();
         if (auto* ptr_type = value_type->dyn_cast<PointerType>()) {
@@ -2465,7 +2543,7 @@ public:
 
     // Functions and classes
     void operator()(const ASTFunctionDefinition* node) noexcept {
-        const FunctionType* func = sema_.call_handler_->get_func_type(sema_.current_scope_, node);
+        const FunctionType* func = sema_.get_func_type(sema_.current_scope_, node);
         Sema::Guard guard(sema_, node);
         if (func) {
             sema_.codegen_env_.add_function_output(sema_.current_scope_, node, func);
@@ -2478,11 +2556,17 @@ public:
     void operator()(const ASTCtorDtorDefinition* node) noexcept {
         Sema::Guard guard(sema_, node);
         if (node->is_constructor) {
-            const FunctionType* func =
-                sema_.call_handler_->get_func_type(sema_.current_scope_, node);
+            const FunctionType* func = sema_.get_func_type(sema_.current_scope_, node);
             if (func) {
                 sema_.codegen_env_.add_function_output(sema_.current_scope_, node, func);
             }
+        } else {
+            const InstanceType* self_type = sema_.get_self_type();
+            sema_.codegen_env_.add_function_output(
+                sema_.current_scope_,
+                node,
+                TypeRegistry::get<FunctionType>(GlobalMemory::Vector<const Type*>{}, self_type)
+            );
         }
         for (auto& stmt : node->body) {
             (*this)(stmt);
@@ -2490,7 +2574,7 @@ public:
     }
 
     void operator()(const ASTOperatorDefinition* node) noexcept {
-        const FunctionType* func = sema_.call_handler_->get_func_type(sema_.current_scope_, node);
+        const FunctionType* func = sema_.get_func_type(sema_.current_scope_, node);
         Sema::Guard guard(sema_, node);
         if (func) {
             sema_.codegen_env_.add_function_output(sema_.current_scope_, node, func);
@@ -2634,6 +2718,66 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
         return scope_ptr;
     }
     UNREACHABLE();
+}
+
+inline auto Sema::get_func_type(Scope* scope, FunctionOverloadDef overload) noexcept
+    -> const FunctionType* {
+    auto get_param_type = [&](const ASTFunctionParameter& param) -> const Type* {
+        TypeResolution type;
+        TypeContextEvaluator{*this, type}(param.type);
+        return type;
+    };
+    Sema::Guard guard{*this, *scope};
+    GlobalMemory::Vector<const Type*> params;
+    TypeResolution return_type;
+    if (auto* func_def = overload.get<const ASTFunctionDefinition*>()) {
+        for (const ASTFunctionParameter& param : func_def->parameters) {
+            if (param.is_variadic) {
+                Symbol pack =
+                    ValueContextEvaluator{*this, nullptr, true}(func_def->parameters.back().type);
+                for (const Object* param_type : Sema::get<SymbolKind::ParameterPack>(pack)) {
+                    params.push_back(param_type->cast<Type>());
+                }
+                break;
+            }
+            params.push_back(get_param_type(param));
+        }
+        if (!holds_monostate(func_def->return_type)) {
+            TypeContextEvaluator{*this, return_type}(func_def->return_type);
+        } else {
+            return_type = &VoidType::instance;
+        }
+    } else if (auto* ctor_def = overload.get<const ASTCtorDtorDefinition*>()) {
+        for (const ASTFunctionParameter& param : ctor_def->parameters) {
+            if (param.is_variadic) {
+                Symbol pack =
+                    ValueContextEvaluator{*this, nullptr, true}(ctor_def->parameters.back().type);
+                for (const Object* param_type : Sema::get<SymbolKind::ParameterPack>(pack)) {
+                    params.push_back(param_type->cast<Type>());
+                }
+                break;
+            }
+            params.push_back(get_param_type(param));
+        }
+        return_type = get_self_type();
+    } else if (auto* op_def = overload.get<const ASTOperatorDefinition*>()) {
+        TypeResolution left_type;
+        TypeContextEvaluator{*this, left_type}(op_def->left.type);
+        params.push_back(left_type.get());
+        if (op_def->right) {
+            TypeResolution right_type;
+            TypeContextEvaluator{*this, right_type}(op_def->right->type);
+            params.push_back(right_type.get());
+        }
+        TypeContextEvaluator{*this, return_type}(op_def->return_type);
+    } else {
+        UNREACHABLE();
+    }
+    /// TODO: handle constexpr functions
+    if (std::ranges::contains(params, nullptr) || return_type.get() == nullptr) {
+        return {};
+    }
+    return TypeRegistry::get<FunctionType>(params, return_type);
 }
 
 inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init) noexcept
@@ -2785,11 +2929,11 @@ inline auto TemplateHandler::inference(
         FunctionOverloadDef overload_def =
             (*value->get<GlobalMemory::Vector<FunctionOverloadDef>*>())[0];
         if (auto* func_def = overload_def.get<const ASTFunctionDefinition*>()) {
-            return sema_.call_handler_->get_func_type(scope, func_def);
+            return sema_.get_func_type(scope, func_def);
         } else if (auto* ctor_def = overload_def.get<const ASTCtorDtorDefinition*>()) {
-            return sema_.call_handler_->get_func_type(scope, ctor_def);
+            return sema_.get_func_type(scope, ctor_def);
         } else if (auto* op_def = overload_def.get<const ASTOperatorDefinition*>()) {
-            return sema_.call_handler_->get_func_type(scope, op_def);
+            return sema_.get_func_type(scope, op_def);
         } else {
             UNREACHABLE();
         }
@@ -2860,31 +3004,7 @@ inline auto TemplateHandler::validate(
             return false;
         }
         if (param.is_nttp) {
-            // if (!holds_monostate(param.constraint)) {
-            //     Symbol constraint_term =
-            //         ValueContextEvaluator{sema_, nullptr, true}(param.constraint);
-            //     if (!Sema::expect(constraint_term, SymbolKind::Type, SymbolKind::Term)) {
-            //         return false;
-            //     }
-            //     Term constraint_term = std::get<Term>(constraint_term);
-            //     if (constraint_term.is_type()) {
-            //         // constraint is a type, check if the argument's type is assignable to it
-            //         if (!constraint_term.get_type()->assignable_from(
-            //                 args[i]->template cast<Value>()->get_type()
-            //             )) {
-            //             return false;
-            //         }
-            //     } else {
-            //         // constraint is a concept, check if the argument satisfies it
-            //         if (auto satisfies =
-            //         constraint_term.get_comptime()->dyn_cast<BooleanValue>()) {
-            //             if (!satisfies) return false;
-            //         } else {
-            //             /// invalid constraint
-            //             throw;
-            //         }
-            //     }
-            // }
+            /// TODO: non-type template parameter validation
         } else {
             /// TODO: type constraint validation
         }
@@ -3030,66 +3150,6 @@ inline auto TemplateHandler::get_prototype(
     }
     pattern_scope.clear();
     return it->second;
-}
-
-inline auto CallHandler::get_func_type(Scope* scope, FunctionOverloadDef overload) noexcept
-    -> const FunctionType* {
-    auto get_param_type = [&](const ASTFunctionParameter& param) -> const Type* {
-        TypeResolution type;
-        TypeContextEvaluator{sema_, type}(param.type);
-        return type;
-    };
-    Sema::Guard guard{sema_, *scope};
-    GlobalMemory::Vector<const Type*> params;
-    TypeResolution return_type;
-    if (auto* func_def = overload.get<const ASTFunctionDefinition*>()) {
-        for (const ASTFunctionParameter& param : func_def->parameters) {
-            if (param.is_variadic) {
-                Symbol pack =
-                    ValueContextEvaluator{sema_, nullptr, true}(func_def->parameters.back().type);
-                for (const Object* param_type : Sema::get<SymbolKind::ParameterPack>(pack)) {
-                    params.push_back(param_type->cast<Type>());
-                }
-                break;
-            }
-            params.push_back(get_param_type(param));
-        }
-        if (!holds_monostate(func_def->return_type)) {
-            TypeContextEvaluator{sema_, return_type}(func_def->return_type);
-        } else {
-            return_type = &VoidType::instance;
-        }
-    } else if (auto* ctor_def = overload.get<const ASTCtorDtorDefinition*>()) {
-        for (const ASTFunctionParameter& param : ctor_def->parameters) {
-            if (param.is_variadic) {
-                Symbol pack =
-                    ValueContextEvaluator{sema_, nullptr, true}(ctor_def->parameters.back().type);
-                for (const Object* param_type : Sema::get<SymbolKind::ParameterPack>(pack)) {
-                    params.push_back(param_type->cast<Type>());
-                }
-                break;
-            }
-            params.push_back(get_param_type(param));
-        }
-        return_type = sema_.get_self_type();
-    } else if (auto* op_def = overload.get<const ASTOperatorDefinition*>()) {
-        TypeResolution left_type;
-        TypeContextEvaluator{sema_, left_type}(op_def->left.type);
-        params.push_back(left_type.get());
-        if (op_def->right) {
-            TypeResolution right_type;
-            TypeContextEvaluator{sema_, right_type}(op_def->right->type);
-            params.push_back(right_type.get());
-        }
-        TypeContextEvaluator{sema_, return_type}(op_def->return_type);
-    } else {
-        UNREACHABLE();
-    }
-    /// TODO: handle constexpr functions
-    if (std::ranges::contains(params, nullptr) || return_type.get() == nullptr) {
-        return {};
-    }
-    return TypeRegistry::get<FunctionType>(params, return_type);
 }
 
 inline auto AccessHandler::eval_access(const ASTMemberAccess* node) noexcept -> Symbol {

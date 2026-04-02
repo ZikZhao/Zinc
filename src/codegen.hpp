@@ -135,6 +135,52 @@ private:
     }
 };
 
+class ClassHierarchy {
+private:
+    struct ClassNode : public GlobalMemory::MonotonicAllocated {
+        std::size_t type_index = 0;
+        GlobalMemory::Vector<ClassNode*> children;
+    };
+
+private:
+    GlobalMemory::FlatMap<const InstanceType*, ClassNode*> type_map_;
+
+public:
+    ClassHierarchy() noexcept {
+        GlobalMemory::Vector<ClassNode*> classes;
+        auto add =
+            [&, &type_map = type_map_](this auto&& self, const InstanceType* type) -> ClassNode* {
+            if (type_map.contains(type)) return type_map[type];
+            ClassNode* node = new ClassNode();
+            if (type->extends_) {
+                self(type->extends_)->children.push_back(node);
+            } else {
+                classes.push_back(node);
+            }
+            type_map[type] = node;
+            return node;
+        };
+        for (const InstanceType* type : TypeRegistry::instance->instance_types_) {
+            if (type->scope_->is_extern_) continue;
+            add(type);
+        }
+        std::size_t index = 0;
+        auto assign_index = [&](this auto&& self, ClassNode* node) -> void {
+            node->type_index = index++;
+            for (ClassNode* child : node->children) {
+                self(child);
+            }
+        };
+        for (ClassNode* root : classes) {
+            assign_index(root);
+        }
+    }
+
+    auto get_type_index(const InstanceType* type) const noexcept -> std::size_t {
+        return type_map_.at(type)->type_index;
+    }
+};
+
 class ObjectCodeGen final {
 public:
     static void output(GlobalMemory::String& out, const Object* obj, TypeMap& type_map) {
@@ -303,14 +349,14 @@ public:
             TypeMap(std::from_range, std::views::zip(types_, std::views::iota(std::size_t{0})));
     }
 
-    void output_type_defs(std::ofstream& stream) {
+    void output_type_defs(std::ofstream& stream, const ClassHierarchy& class_hierarchy) {
         for (const Type* type : types_) {
             switch (type->kind_) {
             case Kind::Struct:
                 generate_struct(type->cast<StructType>());
                 break;
             case Kind::Instance:
-                generate_class(type->cast<InstanceType>());
+                generate_class(type->cast<InstanceType>(), class_hierarchy);
                 break;
             case Kind::Union:
                 generate_union(type->cast<UnionType>());
@@ -342,7 +388,7 @@ private:
         definitions_ += "};\n"sv;
     }
 
-    void generate_class(const InstanceType* type) {
+    void generate_class(const InstanceType* type, const ClassHierarchy& class_hierarchy) {
         std::size_t type_index = type_map_.at(type);
         if (type->scope_->is_extern_) {
             std::format_to(
@@ -369,6 +415,14 @@ private:
                 std::back_inserter(forward_declarations_), "struct _t{};\n"sv, type_index
             );
             std::format_to(std::back_inserter(definitions_), "struct _t{} {{\n"sv, type_index);
+            if (type->is_virtual_) {
+                definitions_ += "    std::uint64_t $type_index = "sv;
+                std::format_to(
+                    std::back_inserter(definitions_),
+                    "{};\n"sv,
+                    class_hierarchy.get_type_index(type)
+                );
+            }
             for (const auto& [attr_name, attr_type] : type->attrs_) {
                 definitions_ += "    "sv;
                 output(definitions_, attr_type, type_map_);
@@ -376,7 +430,11 @@ private:
                 definitions_ += attr_name;
                 definitions_ += ";\n"sv;
             }
-            /// TODO: methods with instantiations
+            if (type->scope_->find(destructor_symbol)) {
+                std::format_to(
+                    std::back_inserter(definitions_), "    ~_t{}();\n"sv, type_map_.at(type)
+                );
+            }
             definitions_ += "};\n"sv;
         }
     }
@@ -716,20 +774,24 @@ private:
     GlobalMemory::String forward_declarations_;
     GlobalMemory::String definitions_;
     CodeGenEnvironment& env_;
-    NameMangler mangler_;
+    NameMangler& mangler_;
     TypeMap& type_map_;
+    ClassHierarchy& class_hierarchy_;
     const Scope* current_scope_;
     std::size_t indent_level_;
 
 public:
-    CodeGen(CodeGenEnvironment& env, NameMangler& mangler, TypeMap& type_map) noexcept
-        : env_(env), mangler_(mangler), type_map_(type_map) {}
+    CodeGen(
+        CodeGenEnvironment& env,
+        NameMangler& mangler,
+        TypeMap& type_map,
+        ClassHierarchy& class_hierarchy
+    ) noexcept
+        : env_(env), mangler_(mangler), type_map_(type_map), class_hierarchy_(class_hierarchy) {}
 
     auto operator()(std::ofstream& stream) -> void {
-        for (const auto& [scope_and_id, obj] : env_.statics_) {
-            const Scope* scope = scope_and_id.first;
+        for (const auto& [scope, identifier, obj] : env_.statics_) {
             GlobalMemory::String type_name = "auto";
-            strview identifier = scope_and_id.second;
             if (auto* type = obj->dyn_cast<Type>()) {
                 type_name = type->repr();
             }
@@ -739,7 +801,7 @@ public:
                 );
             } else {
                 GlobalMemory::String mangled_path;
-                CodeGenEnvironment::mangle_path(mangled_path, scope, identifier);
+                mangler_(mangled_path, scope, identifier);
                 std::format_to(
                     std::back_inserter(statics_), "constexpr {} {}"sv, type_name, mangled_path
                 );
@@ -755,13 +817,21 @@ public:
             if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&node)) {
                 (*this)(*func_def, func_obj);
             } else if (auto* ctor_def = std::get_if<const ASTCtorDtorDefinition*>(&node)) {
-                (*this)(*ctor_def, func_obj);
+                if ((*ctor_def)->is_constructor) {
+                    (*this)(*ctor_def, func_obj);
+                } else {
+                    (*this)(*ctor_def, func_obj, 0);
+                }
             } else if (auto* op_def = std::get_if<const ASTOperatorDefinition*>(&node)) {
                 (*this)(*op_def, func_obj);
             } else {
                 UNREACHABLE();
             }
             newline(false);
+        }
+        for (const auto& [decl_info, impl_providers] : env_.virtuals_) {
+            const auto& [decl_provider, identifier, func_type] = decl_info;
+            (*this)(decl_provider, identifier, func_type, impl_providers);
         }
         stream << "\n// ----- Constants -----\n"sv;
         flush_without_sdl_prefix(statics_, stream);
@@ -777,10 +847,7 @@ public:
 
     auto operator()(std::monostate) -> void { UNREACHABLE(); }
 
-    template <typename T>
-    auto operator()(const T*) -> void
-        requires(std::is_base_of_v<ASTNode, T>)
-    {}
+    auto operator()(const ASTClass auto*) -> void {}
 
     auto operator()(const ASTFunctionDefinition* node, const FunctionType* func_type) -> void {
         bool is_main = node->identifier == "main"sv && current_scope_->parent_->parent_ == nullptr;
@@ -789,7 +856,7 @@ public:
                 out += "auto main(int $argc, char** $argv) -> int"sv;
             } else {
                 out += "auto "sv;
-                CodeGenEnvironment::mangle_path(out, current_scope_, node->identifier);
+                mangler_(out, current_scope_, node->identifier);
                 out += "_0"sv;
                 for (const Type* param_type : func_type->parameters_) {
                     mangler_(out, param_type);
@@ -833,6 +900,7 @@ public:
     }
 
     auto operator()(const ASTCtorDtorDefinition* node, const FunctionType* func_type) -> void {
+        assert(node->is_constructor);
         auto gen = [&](GlobalMemory::String& out) {
             std::format_to(
                 std::back_inserter(out), "auto _init_t{}_0"sv, type_map_.at(func_type->return_type_)
@@ -860,6 +928,26 @@ public:
         forward_declarations_ += ";\n"sv;
         gen(definitions_);
         definitions_ += " {"sv;
+        indent_level_++;
+        for (const ASTNodeVariant& child : node->body) {
+            newline();
+            (*this)(child);
+        }
+        indent_level_--;
+        newline();
+        definitions_ += "}"sv;
+        newline(false);
+    }
+
+    auto operator()(const ASTCtorDtorDefinition* node, const FunctionType* func_type, int) -> void {
+        assert(!node->is_constructor);
+        std::format_to(
+            std::back_inserter(definitions_),
+            "_t{}::~_t{}"sv,
+            type_map_.at(func_type->return_type_),
+            type_map_.at(func_type->return_type_)
+        );
+        definitions_ += "() {"sv;
         indent_level_++;
         for (const ASTNodeVariant& child : node->body) {
             newline();
@@ -912,6 +1000,92 @@ public:
         newline();
         definitions_ += "}"sv;
         newline(false);
+    }
+
+    auto operator()(
+        const Type* decl_provider,
+        strview identifier,
+        const FunctionType* func_type,
+        std::span<const Type*> impl_providers
+    ) -> void {
+        auto gen = [&](GlobalMemory::String& out) {
+            out += "auto _virtual"sv;
+            std::format_to(std::back_inserter(out), "_t{}"sv, type_map_.at(decl_provider));
+            std::format_to(std::back_inserter(out), "_{}{}"sv, identifier.length(), identifier);
+            out += "_0"sv;
+            for (const Type* param_type : func_type->parameters_) {
+                mangler_(out, param_type);
+            }
+            out += "("sv;
+            strview sep = ""sv;
+            for (std::size_t i = 0; i < func_type->parameters_.size(); i++) {
+                out += sep;
+                ObjectCodeGen::output(out, func_type->parameters_[i], type_map_);
+                out += " "sv;
+                std::format_to(std::back_inserter(out), "arg{}"sv, i);
+                sep = ", "sv;
+            }
+            out += ") -> "sv;
+            ObjectCodeGen::output(out, func_type->return_type_, type_map_);
+        };
+        gen(forward_declarations_);
+        forward_declarations_ += ";\n"sv;
+        gen(definitions_);
+
+        const Type* self = func_type->parameters_[0];
+        ValueCategory self_category = Type::category(self);
+        auto gen_self = [&](const Type* impl_type) {
+            switch (self_category) {
+            case ValueCategory::Right:
+                std::format_to(
+                    std::back_inserter(definitions_),
+                    "std::launder(static_cast<{}&&>(arg0))"sv,
+                    Type::repr(Type::forward_like(self, impl_type))
+                );
+            }
+        };
+
+        definitions_ += " {"sv;
+        indent_level_++;
+        newline();
+        definitions_ += "switch (arg0.$type_index) {"sv;
+        indent_level_++;
+        for (const Type* impl_provider : impl_providers) {
+            std::format_to(
+                std::back_inserter(definitions_),
+                "case {}: // {}\n"sv,
+                class_hierarchy_.get_type_index(impl_provider->cast<InstanceType>()),
+                impl_provider->repr()
+            );
+            indent_level_++;
+            definitions_ += "return "sv;
+            const Scope* impl_scope = impl_provider->kind_ == Kind::Instance
+                                          ? impl_provider->cast<InstanceType>()->scope_
+                                          : impl_provider->cast<InterfaceType>()->scope_;
+            mangler_(definitions_, impl_scope, identifier);
+            definitions_ += "_0"sv;
+            mangler_(definitions_, Type::forward_like(self, impl_provider));
+            for (std::size_t i = 1; i < func_type->parameters_.size(); i++) {
+                mangler_(definitions_, func_type->parameters_[i]);
+            }
+            definitions_ += "("sv;
+            if (Type::category(self) == ValueCategory::Expiring) {
+                definitions_ += "std::move("sv;
+            }
+            definitions_ += "*static_cast<>(&arg0)" ObjectCodeGen::output(
+                definitions_,
+                Type::forward_like(func_type->parameters_[0], impl_provider),
+                type_map_
+            );
+            strview sep = ", "sv;
+            for (std::size_t i = 0; i < func_type->parameters_.size(); i++) {
+                definitions_ += sep;
+                std::format_to(std::back_inserter(definitions_), "arg{}", i);
+                sep = ", "sv;
+            }
+            definitions_ += ");\n"sv;
+            indent_level_--;
+        }
     }
 
     auto operator()(const ASTLocalBlock* node) -> void {
@@ -1103,7 +1277,7 @@ public:
     auto operator()(const ASTFunctionCall* node) -> void {
         PointerChain* self_arg = nullptr;
         if (auto* replacement = env_.find(current_scope_, node)) {
-            const auto& [func_type, scope, identifier, self] =
+            const auto& [func_type, scope, identifier, self, virtual_decl_provider] =
                 *std::get<CodeGenEnvironment::FunctionCall*>(*replacement);
             assert(scope && !scope->is_extern_);
             self_arg = self;
@@ -1113,7 +1287,19 @@ public:
             } else if (identifier == GetOperatorString(OperatorCode::Call)) {
                 definitions_ += "_op_call"sv;
             } else {
-                mangler_(definitions_, scope, identifier);
+                if (virtual_decl_provider) {
+                    definitions_ += "_virtual"sv;
+                    std::format_to(
+                        std::back_inserter(definitions_),
+                        "_t{}"sv,
+                        type_map_.at(virtual_decl_provider)
+                    );
+                    std::format_to(
+                        std::back_inserter(definitions_), "_{}{}"sv, identifier.length(), identifier
+                    );
+                } else {
+                    mangler_(definitions_, scope, identifier);
+                }
             }
             definitions_ += "_0"sv;
             for (const Type* param_type : func_type->parameters_) {
@@ -1454,7 +1640,8 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
     type_codegen.sort_types();
     NameMangler mangler(type_map);
     mangler.mangle_all_instantiations(codegen_env);
-    type_codegen.output_type_defs(out);
-    CodeGen{codegen_env, mangler, type_map}(out);
+    ClassHierarchy class_hierarchy;
+    type_codegen.output_type_defs(out, class_hierarchy);
+    CodeGen{codegen_env, mangler, type_map, class_hierarchy}(out);
     return EXIT_SUCCESS;
 }
