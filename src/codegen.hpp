@@ -135,53 +135,7 @@ private:
     }
 };
 
-class ClassHierarchy {
-private:
-    struct ClassNode : public GlobalMemory::MonotonicAllocated {
-        std::size_t type_index = 0;
-        GlobalMemory::Vector<ClassNode*> children;
-    };
-
-private:
-    GlobalMemory::FlatMap<const InstanceType*, ClassNode*> type_map_;
-
-public:
-    ClassHierarchy() noexcept {
-        GlobalMemory::Vector<ClassNode*> classes;
-        auto add =
-            [&, &type_map = type_map_](this auto&& self, const InstanceType* type) -> ClassNode* {
-            if (type_map.contains(type)) return type_map[type];
-            ClassNode* node = new ClassNode();
-            if (type->extends_) {
-                self(type->extends_)->children.push_back(node);
-            } else {
-                classes.push_back(node);
-            }
-            type_map[type] = node;
-            return node;
-        };
-        for (const InstanceType* type : TypeRegistry::instance->instance_types_) {
-            if (type->scope_->is_extern_) continue;
-            add(type);
-        }
-        std::size_t index = 0;
-        auto assign_index = [&](this auto&& self, ClassNode* node) -> void {
-            node->type_index = index++;
-            for (ClassNode* child : node->children) {
-                self(child);
-            }
-        };
-        for (ClassNode* root : classes) {
-            assign_index(root);
-        }
-    }
-
-    auto get_type_index(const InstanceType* type) const noexcept -> std::size_t {
-        return type_map_.at(type)->type_index;
-    }
-};
-
-class ObjectCodeGen final {
+class ObjectGen final {
 public:
     static void output(GlobalMemory::String& out, const Object* obj, TypeMap& type_map) {
         if (auto* type = obj->dyn_cast<Type>()) {
@@ -293,9 +247,55 @@ public:
         case Kind::Integer: {
             const IntegerValue* int_value = value->cast<IntegerValue>();
             if (int_value->type_->is_signed_) {
-                std::format_to(std::back_inserter(out), "{}", int_value->signed_value_);
+                switch (int_value->type_->bits_) {
+                case 8:
+                    std::format_to(
+                        std::back_inserter(out), "std::int8_t{{{}}}", int_value->signed_value_
+                    );
+                    break;
+                case 16:
+                    std::format_to(
+                        std::back_inserter(out), "std::int16_t{{{}}}", int_value->signed_value_
+                    );
+                    break;
+                case 32:
+                    std::format_to(
+                        std::back_inserter(out), "std::int32_t{{{}}}", int_value->signed_value_
+                    );
+                    break;
+                case 64:
+                    std::format_to(
+                        std::back_inserter(out), "std::int64_t{{{}}}", int_value->signed_value_
+                    );
+                    break;
+                default:
+                    UNREACHABLE();
+                }
             } else {
-                std::format_to(std::back_inserter(out), "{}u", int_value->unsigned_value_);
+                switch (int_value->type_->bits_) {
+                case 8:
+                    std::format_to(
+                        std::back_inserter(out), "std::uint8_t{{{}}}", int_value->unsigned_value_
+                    );
+                    break;
+                case 16:
+                    std::format_to(
+                        std::back_inserter(out), "std::uint16_t{{{}}}", int_value->unsigned_value_
+                    );
+                    break;
+                case 32:
+                    std::format_to(
+                        std::back_inserter(out), "std::uint32_t{{{}u}}", int_value->unsigned_value_
+                    );
+                    break;
+                case 64:
+                    std::format_to(
+                        std::back_inserter(out), "std::uint64_t{{{}u}}", int_value->unsigned_value_
+                    );
+                    break;
+                default:
+                    UNREACHABLE();
+                }
             }
             break;
         }
@@ -325,7 +325,7 @@ private:
     GlobalMemory::String definitions_;
 
 public:
-    ObjectCodeGen(TypeMap& type_map) noexcept : type_map_(type_map) {}
+    ObjectGen(TypeMap& type_map) noexcept : type_map_(type_map) {}
 
     void sort_types() {
         TypeSorter sorter;
@@ -349,14 +349,14 @@ public:
             TypeMap(std::from_range, std::views::zip(types_, std::views::iota(std::size_t{0})));
     }
 
-    void output_type_defs(std::ofstream& stream, const ClassHierarchy& class_hierarchy) {
+    void output_type_defs(std::ofstream& stream) {
         for (const Type* type : types_) {
             switch (type->kind_) {
             case Kind::Struct:
                 generate_struct(type->cast<StructType>());
                 break;
             case Kind::Instance:
-                generate_class(type->cast<InstanceType>(), class_hierarchy);
+                generate_class(type->cast<InstanceType>());
                 break;
             case Kind::Union:
                 generate_union(type->cast<UnionType>());
@@ -388,7 +388,7 @@ private:
         definitions_ += "};\n"sv;
     }
 
-    void generate_class(const InstanceType* type, const ClassHierarchy& class_hierarchy) {
+    void generate_class(const InstanceType* type) {
         std::size_t type_index = type_map_.at(type);
         if (type->scope_->is_extern_) {
             std::format_to(
@@ -415,14 +415,6 @@ private:
                 std::back_inserter(forward_declarations_), "struct _t{};\n"sv, type_index
             );
             std::format_to(std::back_inserter(definitions_), "struct _t{} {{\n"sv, type_index);
-            if (type->is_virtual_) {
-                definitions_ += "    std::uint64_t $type_index = "sv;
-                std::format_to(
-                    std::back_inserter(definitions_),
-                    "{};\n"sv,
-                    class_hierarchy.get_type_index(type)
-                );
-            }
             for (const auto& [attr_name, attr_type] : type->attrs_) {
                 definitions_ += "    "sv;
                 output(definitions_, attr_type, type_map_);
@@ -470,9 +462,9 @@ public:
                 for (const Object* arg : args) {
                     qualified_name += sep;
                     if (auto* type = arg->dyn_cast<Type>()) {
-                        ObjectCodeGen::output(qualified_name, type, type_map_);
+                        ObjectGen::output(qualified_name, type, type_map_);
                     } else {
-                        ObjectCodeGen::output(qualified_name, arg->cast<Value>(), type_map_);
+                        ObjectGen::output(qualified_name, arg->cast<Value>(), type_map_);
                     }
                     sep = ", "sv;
                 }
@@ -770,47 +762,28 @@ private:
     };
 
 private:
-    GlobalMemory::String statics_;
+    GlobalMemory::String constants_;
     GlobalMemory::String forward_declarations_;
     GlobalMemory::String definitions_;
     CodeGenEnvironment& env_;
     NameMangler& mangler_;
     TypeMap& type_map_;
-    ClassHierarchy& class_hierarchy_;
     const Scope* current_scope_;
     std::size_t indent_level_;
 
 public:
-    CodeGen(
-        CodeGenEnvironment& env,
-        NameMangler& mangler,
-        TypeMap& type_map,
-        ClassHierarchy& class_hierarchy
-    ) noexcept
-        : env_(env), mangler_(mangler), type_map_(type_map), class_hierarchy_(class_hierarchy) {}
+    CodeGen(CodeGenEnvironment& env, NameMangler& mangler, TypeMap& type_map) noexcept
+        : env_(env), mangler_(mangler), type_map_(type_map) {}
 
     auto operator()(std::ofstream& stream) -> void {
-        for (const auto& [scope, identifier, obj] : env_.statics_) {
-            GlobalMemory::String type_name = "auto";
-            if (auto* type = obj->dyn_cast<Type>()) {
-                type_name = type->repr();
-            }
-            if (scope->is_extern_) {
-                std::format_to(
-                    std::back_inserter(statics_), "constexpr {} {}"sv, type_name, identifier
-                );
-            } else {
-                GlobalMemory::String mangled_path;
-                mangler_(mangled_path, scope, identifier);
-                std::format_to(
-                    std::back_inserter(statics_), "constexpr {} {}"sv, type_name, mangled_path
-                );
-            }
-            if (auto* value = obj->dyn_cast<Value>()) {
-                statics_ += " = "sv;
-                ObjectCodeGen::output(statics_, value, type_map_);
-            }
-            statics_ += ";\n"sv;
+        for (const auto& [scope, identifier, value] : env_.constants_) {
+            constants_ += "constexpr "sv;
+            ObjectGen::output(constants_, value->get_type(), type_map_);
+            constants_ += " "sv;
+            mangler_(constants_, scope, identifier);
+            constants_ += " = "sv;
+            ObjectGen::output(constants_, value, type_map_);
+            constants_ += ";\n"sv;
         }
         for (const auto& [scope, node, func_obj] : env_.functions_) {
             current_scope_ = scope;
@@ -834,7 +807,7 @@ public:
             (*this)(decl_provider, identifier, func_type, impl_providers);
         }
         stream << "\n// ----- Constants -----\n"sv;
-        flush_without_sdl_prefix(statics_, stream);
+        flush_without_sdl_prefix(constants_, stream);
         stream << "\n// ----- Function Forward Declarations -----\n"sv;
         flush_without_sdl_prefix(forward_declarations_, stream);
         stream << "\n// ----- Function Definitions -----\n"sv;
@@ -866,7 +839,7 @@ public:
                 for (std::size_t i = 0; i < node->parameters.size(); i++) {
                     out += sep;
                     const ASTFunctionParameter& param = node->parameters[i];
-                    ObjectCodeGen::output(out, func_type->parameters_[i], type_map_);
+                    ObjectGen::output(out, func_type->parameters_[i], type_map_);
                     if (!param.is_mutable && func_type->parameters_[i]->kind_ != Kind::Reference) {
                         out += " const"sv;
                     }
@@ -875,7 +848,7 @@ public:
                     sep = ", "sv;
                 }
                 out += ") -> "sv;
-                ObjectCodeGen::output(out, func_type->return_type_, type_map_);
+                ObjectGen::output(out, func_type->return_type_, type_map_);
             }
         };
         gen(forward_declarations_);
@@ -913,7 +886,7 @@ public:
             for (std::size_t i = 0; i < node->parameters.size(); i++) {
                 out += sep;
                 const ASTFunctionParameter& param = node->parameters[i];
-                ObjectCodeGen::output(out, func_type->parameters_[i], type_map_);
+                ObjectGen::output(out, func_type->parameters_[i], type_map_);
                 if (!param.is_mutable && func_type->parameters_[i]->kind_ != Kind::Reference) {
                     out += " const"sv;
                 }
@@ -922,7 +895,7 @@ public:
                 sep = ", "sv;
             }
             out += ") -> "sv;
-            ObjectCodeGen::output(out, func_type->return_type_, type_map_);
+            ObjectGen::output(out, func_type->return_type_, type_map_);
         };
         gen(forward_declarations_);
         forward_declarations_ += ";\n"sv;
@@ -949,6 +922,8 @@ public:
         );
         definitions_ += "() {"sv;
         indent_level_++;
+        newline();
+        definitions_ += "auto&& self = *this;"sv;
         for (const ASTNodeVariant& child : node->body) {
             newline();
             (*this)(child);
@@ -968,7 +943,7 @@ public:
                 mangler_(out, param_type);
             }
             out += "("sv;
-            ObjectCodeGen::output(out, func_type->parameters_[0], type_map_);
+            ObjectGen::output(out, func_type->parameters_[0], type_map_);
             if (!node->left.is_mutable && func_type->parameters_[0]->kind_ != Kind::Reference) {
                 out += " const"sv;
             }
@@ -976,7 +951,7 @@ public:
             out += node->left.identifier;
             if (node->right) {
                 out += ", "sv;
-                ObjectCodeGen::output(out, func_type->parameters_[1], type_map_);
+                ObjectGen::output(out, func_type->parameters_[1], type_map_);
                 if (!node->right->is_mutable &&
                     func_type->parameters_[1]->kind_ != Kind::Reference) {
                     out += " const"sv;
@@ -985,7 +960,7 @@ public:
                 out += node->right->identifier;
             }
             out += ") -> "sv;
-            ObjectCodeGen::output(out, func_type->return_type_, type_map_);
+            ObjectGen::output(out, func_type->return_type_, type_map_);
         };
         gen(forward_declarations_);
         forward_declarations_ += ";\n"sv;
@@ -1003,10 +978,10 @@ public:
     }
 
     auto operator()(
-        const Type* decl_provider,
+        const InterfaceType* decl_provider,
         strview identifier,
         const FunctionType* func_type,
-        std::span<const Type*> impl_providers
+        std::span<const Type* const> impl_providers
     ) -> void {
         auto gen = [&](GlobalMemory::String& out) {
             out += "auto _virtual"sv;
@@ -1020,13 +995,13 @@ public:
             strview sep = ""sv;
             for (std::size_t i = 0; i < func_type->parameters_.size(); i++) {
                 out += sep;
-                ObjectCodeGen::output(out, func_type->parameters_[i], type_map_);
+                ObjectGen::output(out, func_type->parameters_[i], type_map_);
                 out += " "sv;
                 std::format_to(std::back_inserter(out), "arg{}"sv, i);
                 sep = ", "sv;
             }
             out += ") -> "sv;
-            ObjectCodeGen::output(out, func_type->return_type_, type_map_);
+            ObjectGen::output(out, func_type->return_type_, type_map_);
         };
         gen(forward_declarations_);
         forward_declarations_ += ";\n"sv;
@@ -1037,11 +1012,12 @@ public:
         auto gen_self = [&](const Type* impl_type) {
             switch (self_category) {
             case ValueCategory::Right:
-                std::format_to(
-                    std::back_inserter(definitions_),
-                    "std::launder(static_cast<{}&&>(arg0))"sv,
-                    Type::repr(Type::forward_like(self, impl_type))
-                );
+                // std::format_to(
+                //     std::back_inserter(definitions_),
+                //     "std::launder(static_cast<{}&&>(arg0))"sv,
+                //     Type::repr(Type::forward_like(self, impl_type))
+                // );
+                break;
             }
         };
 
@@ -1054,7 +1030,7 @@ public:
             std::format_to(
                 std::back_inserter(definitions_),
                 "case {}: // {}\n"sv,
-                class_hierarchy_.get_type_index(impl_provider->cast<InstanceType>()),
+                type_map_.at(impl_provider->cast<InstanceType>()),
                 impl_provider->repr()
             );
             indent_level_++;
@@ -1072,7 +1048,8 @@ public:
             if (Type::category(self) == ValueCategory::Expiring) {
                 definitions_ += "std::move("sv;
             }
-            definitions_ += "*static_cast<>(&arg0)" ObjectCodeGen::output(
+            definitions_ += "*static_cast<>(&arg0)";
+            ObjectGen::output(
                 definitions_,
                 Type::forward_like(func_type->parameters_[0], impl_provider),
                 type_map_
@@ -1108,7 +1085,7 @@ public:
     }
 
     auto operator()(const ASTConstant* node) -> void {
-        ObjectCodeGen::output(definitions_, node->value, type_map_);
+        ObjectGen::output(definitions_, node->value, type_map_);
     }
 
     auto operator()(const ASTStringConstant* node) -> void {
@@ -1233,7 +1210,7 @@ public:
     auto operator()(const ASTStructInitialization* node) -> void {
         auto* variant = env_.find(current_scope_, node);
         const Type* type = std::get<const Type*>(*variant);
-        ObjectCodeGen::output(definitions_, type, type_map_);
+        ObjectGen::output(definitions_, type, type_map_);
         GlobalMemory::Vector<strview> order;
         if (auto* struct_type = type->dyn_cast<StructType>()) {
             for (const auto& [field_name, _] : struct_type->fields_) {
@@ -1277,7 +1254,7 @@ public:
     auto operator()(const ASTFunctionCall* node) -> void {
         PointerChain* self_arg = nullptr;
         if (auto* replacement = env_.find(current_scope_, node)) {
-            const auto& [func_type, scope, identifier, self, virtual_decl_provider] =
+            const auto& [func_type, scope, identifier, self] =
                 *std::get<CodeGenEnvironment::FunctionCall*>(*replacement);
             assert(scope && !scope->is_extern_);
             self_arg = self;
@@ -1287,19 +1264,7 @@ public:
             } else if (identifier == GetOperatorString(OperatorCode::Call)) {
                 definitions_ += "_op_call"sv;
             } else {
-                if (virtual_decl_provider) {
-                    definitions_ += "_virtual"sv;
-                    std::format_to(
-                        std::back_inserter(definitions_),
-                        "_t{}"sv,
-                        type_map_.at(virtual_decl_provider)
-                    );
-                    std::format_to(
-                        std::back_inserter(definitions_), "_{}{}"sv, identifier.length(), identifier
-                    );
-                } else {
-                    mangler_(definitions_, scope, identifier);
-                }
+                mangler_(definitions_, scope, identifier);
             }
             definitions_ += "_0"sv;
             for (const Type* param_type : func_type->parameters_) {
@@ -1336,7 +1301,7 @@ public:
     auto operator()(const ASTAs* node) -> void {
         auto* replacement = env_.find(current_scope_, node);
         definitions_ += "static_cast<"sv;
-        ObjectCodeGen::output(definitions_, std::get<const Type*>(*replacement), type_map_);
+        ObjectGen::output(definitions_, std::get<const Type*>(*replacement), type_map_);
         definitions_ += ">("sv;
         (*this)(node->expr);
         definitions_ += ")"sv;
@@ -1351,7 +1316,7 @@ public:
         for (size_t i = 0; i < node->parameters.size(); i++) {
             const auto& param = node->parameters[i];
             definitions_ += sep;
-            ObjectCodeGen::output(definitions_, lambda_type->parameters_[i], type_map_);
+            ObjectGen::output(definitions_, lambda_type->parameters_[i], type_map_);
             definitions_ += " "sv;
             definitions_ += param.identifier;
             sep = ", "sv;
@@ -1359,7 +1324,7 @@ public:
         definitions_ += ")"sv;
         if (lambda_type->return_type_->kind_ != Kind::Void) {
             definitions_ += " -> "sv;
-            ObjectCodeGen::output(definitions_, lambda_type->return_type_, type_map_);
+            ObjectGen::output(definitions_, lambda_type->return_type_, type_map_);
         }
         Guard guard{*this, node};
         if (auto* node_variant = std::get_if<ASTNodeVariant>(&node->body)) {
@@ -1378,7 +1343,7 @@ public:
 
     auto operator()(const ASTDeclaration* node) -> void {
         const Type* type = std::get<const Type*>(*env_.find(current_scope_, node));
-        ObjectCodeGen::output(definitions_, type, type_map_);
+        ObjectGen::output(definitions_, type, type_map_);
         if (current_scope_->self_id_.empty() && !node->is_mutable &&
             type->kind_ != Kind::Reference) {
             definitions_ += " const"sv;
@@ -1445,7 +1410,7 @@ public:
         definitions_ += "{  // match statement"sv;
         indent_level_++;
         newline();
-        ObjectCodeGen::output(definitions_, value_type, type_map_);
+        ObjectGen::output(definitions_, value_type, type_map_);
         definitions_ += qualifier;
         definitions_ += " $match_value = "sv;
         (*this)(node->value);
@@ -1457,17 +1422,17 @@ public:
                     const Type* case_type =
                         std::get<const Type*>(*env_.find(current_scope_, &match_case));
                     definitions_ += "if (std::holds_alternative<"sv;
-                    ObjectCodeGen::output(definitions_, case_type, type_map_);
+                    ObjectGen::output(definitions_, case_type, type_map_);
                     definitions_ += ">($match_value)) {"sv;
                     indent_level_++;
                     if (!match_case.identifier.empty()) {
                         newline();
-                        ObjectCodeGen::output(definitions_, case_type, type_map_);
+                        ObjectGen::output(definitions_, case_type, type_map_);
                         definitions_ += qualifier;
                         definitions_ += " "sv;
                         definitions_ += match_case.identifier;
                         definitions_ += " = std::get<"sv;
-                        ObjectCodeGen::output(definitions_, case_type, type_map_);
+                        ObjectGen::output(definitions_, case_type, type_map_);
                         definitions_ += ">($match_value);"sv;
                     }
                 } else {
@@ -1529,9 +1494,9 @@ public:
         for (const Object* arg : args) {
             definitions_ += sep;
             if (auto* type = arg->dyn_cast<Type>()) {
-                ObjectCodeGen::output(definitions_, type, type_map_);
+                ObjectGen::output(definitions_, type, type_map_);
             } else {
-                ObjectCodeGen::output(definitions_, arg->cast<Value>(), type_map_);
+                ObjectGen::output(definitions_, arg->cast<Value>(), type_map_);
             }
             sep = ", "sv;
         }
@@ -1636,12 +1601,11 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
     }
 
     TypeMap type_map;
-    ObjectCodeGen type_codegen{type_map};
+    ObjectGen type_codegen{type_map};
     type_codegen.sort_types();
     NameMangler mangler(type_map);
     mangler.mangle_all_instantiations(codegen_env);
-    ClassHierarchy class_hierarchy;
-    type_codegen.output_type_defs(out, class_hierarchy);
-    CodeGen{codegen_env, mangler, type_map, class_hierarchy}(out);
+    type_codegen.output_type_defs(out);
+    CodeGen{codegen_env, mangler, type_map}(out);
     return EXIT_SUCCESS;
 }

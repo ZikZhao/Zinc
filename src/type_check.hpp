@@ -55,7 +55,6 @@ public:
         const Scope* scope;
         strview identifier;
         PointerChain* self;
-        const Type* virtual_decl_provider;
     };
 
     using TableValue = std::variant<
@@ -68,7 +67,7 @@ public:
     using Table = GlobalMemory::FlatMap<const ASTNode*, TableValue>;
 
     struct VirtualDecl {
-        const Type* decl_provider;
+        const InterfaceType* decl_provider;
         strview identifier;
         const FunctionType* func_type;
     };
@@ -91,7 +90,7 @@ public:
     };
 
 public:
-    GlobalMemory::Vector<std::tuple<const Scope*, strview, const Object*>> statics_;
+    GlobalMemory::Vector<std::tuple<const Scope*, strview, const Value*>> constants_;
     GlobalMemory::Vector<FunctionDef> functions_;
     GlobalMemory::UnorderedMap<
         VirtualDecl,
@@ -104,8 +103,8 @@ public:
     GlobalMemory::Vector<strview> cpp_blocks_;
 
 public:
-    auto add_static(const Scope* scope, strview identifier, const Object* obj) -> void {
-        statics_.push_back({scope, identifier, obj});
+    auto add_constant(const Scope* scope, strview identifier, const Value* value) -> void {
+        constants_.push_back({scope, identifier, value});
     }
 
     auto add_function_output(
@@ -116,7 +115,7 @@ public:
     }
 
     auto add_virtual_impl(
-        const Type* decl_provider,
+        const InterfaceType* decl_provider,
         strview identifier,
         const FunctionType* func_type,
         const Type* impl_provider
@@ -150,15 +149,13 @@ public:
         const FunctionType* func_type,
         const Scope* func_scope,
         strview identifier,
-        PointerChain* self,
-        const Type* virtual_decl_provider
+        PointerChain* self
     ) -> void {
         scope_map_[current_scope][node] = new FunctionCall{
             .func_type = func_type,
             .scope = func_scope,
             .identifier = identifier,
             .self = self,
-            .virtual_decl_provider = virtual_decl_provider,
         };
     }
 
@@ -304,7 +301,7 @@ public:
 
     auto deferred_analysis(Scope& scope, auto variant) noexcept -> void;
 
-    auto get_self_type() noexcept -> const InstanceType* {
+    auto get_self_type() noexcept -> const Type* {
         Scope* scope = current_scope_;
         while (scope->self_id_.empty() && scope->parent_) {
             scope = scope->parent_;
@@ -314,7 +311,7 @@ public:
         }
         const ScopeValue* self_value = scope->parent_->find(scope->self_id_);
         assert(self_value);
-        return eval_type(*scope->parent_, *self_value).get()->cast<InstanceType>();
+        return eval_type(*scope->parent_, *self_value).get();
     }
 
     auto is_at_top_level() const noexcept -> bool { return current_scope_->parent_ == nullptr; }
@@ -366,50 +363,6 @@ public:
     }
 
     auto get_func_type(Scope* scope, FunctionOverloadDef overload) noexcept -> const FunctionType*;
-
-    auto find_virtual_decl(
-        const Type* self_type, strview identifier, const FunctionType* func_type
-    ) noexcept -> const Type* {
-        auto is_provider = [&](Scope* scope) -> bool {
-            auto value = scope->find(identifier);
-            if (!value) return false;
-            auto* overloads = value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
-            if (!overloads) return false;
-            const ASTFunctionDefinition* front =
-                overloads->front().get<const ASTFunctionDefinition*>();
-            if (!front || !front->declared_virtual) return false;
-            for (FunctionOverloadDef func : *overloads) {
-                const FunctionType* candidate_type = get_func_type(scope, func);
-                if (func_type == candidate_type) {
-                    return true;
-                }
-            }
-            return false;
-        };
-        if (auto* inst_type = self_type->dyn_cast<InstanceType>()) {
-            if (is_provider(inst_type->scope_)) return inst_type;
-            if (inst_type->extends_) {
-                if (const Type* func =
-                        find_virtual_decl(inst_type->extends_, identifier, func_type)) {
-                    return func;
-                }
-            }
-            for (const InterfaceType* interface : inst_type->implements_) {
-                if (auto* func = find_virtual_decl(interface, identifier, func_type)) {
-                    return func;
-                }
-            }
-        } else {
-            const InterfaceType* interface_type = self_type->cast<InterfaceType>();
-            if (is_provider(interface_type->scope_)) return self_type;
-            for (const InterfaceType* parent : interface_type->parents_) {
-                if (auto* func = find_virtual_decl(parent, identifier, func_type)) {
-                    return func;
-                }
-            }
-        }
-        return nullptr;
-    }
 
 private:
     auto eval_var_init(Scope& scope, const VariableInitialization& init) noexcept -> Symbol;
@@ -665,13 +618,8 @@ public:
             PointerChain* self = Sema::get_if<SymbolKind::Method>(callee)
                                      ? Sema::get<SymbolKind::Method>(callee).self
                                      : nullptr;
-            const Type* virtual_decl = nullptr;
-            if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
-                virtual_decl =
-                    sema_.find_virtual_decl(method->object.decay(), identifier, overload);
-            }
             sema_.codegen_env_.map_func_call(
-                sema_.current_scope_, node, overload, scope, identifier, self, virtual_decl
+                sema_.current_scope_, node, overload, scope, identifier, self
             );
         }
         return {Term::of(overload->return_type_), overload};
@@ -929,6 +877,7 @@ private:
                 return param_ref->is_moved_ ? Exact : QualifiedReferenced;
             }
         };
+
         if (decayed_param->is_pattern()) {
             // auto type deduction
             if (auto* inst_param = decayed_param->dyn_cast<InstanceType>()) {
@@ -949,6 +898,7 @@ private:
                 return tiebreaker_rank();
             }
         }
+
         if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
         if (decayed_param == decayed_arg) {
             // qualification conversion
@@ -961,39 +911,29 @@ private:
             }
             if (!union_param->types_.contains(decayed_arg)) return NoMatch;
             return tiebreaker_rank();
-        } else if (param->kind_ == Kind::Reference && arg->kind_ == Kind::Reference) {
-            // reference conversion
-            const InstanceType* param_class = decayed_param->dyn_cast<InstanceType>();
-            const InstanceType* arg_class = decayed_arg->dyn_cast<InstanceType>();
-            if (param_class && arg_class) {
-                if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
-                return InstanceType::is_base(arg_class, param_class) ? Upcast : NoMatch;
+        } else if (auto* param_pointer = decayed_param->dyn_cast<PointerType>()) {
+            // pointer conversion
+            if (decayed_arg->kind_ == Kind::Nullptr) return Upcast;
+            if (decayed_arg->kind_ != Kind::Pointer) return NoMatch;
+            const PointerType* arg_pointer = decayed_arg->cast<PointerType>();
+            if (param_pointer->is_mutable_ && !arg_pointer->is_mutable_) return NoMatch;
+            if (param_pointer->target_type_ == arg_pointer->target_type_) {
+                return tiebreaker_rank();
+            } else if (param_pointer->target_type_->kind_ == Kind::Void) {
+                return Upcast;
             }
             return NoMatch;
         } else {
-            // pointer conversion
-            if (decayed_param->kind_ == Kind::Pointer && decayed_arg->kind_ == Kind::Nullptr) {
-                return Upcast;
-            }
-            if (!decayed_arg->dyn_cast<PointerType>() || !decayed_param->dyn_cast<PointerType>()) {
-                return NoMatch;
-            }
-            auto param_pointee = decayed_param->cast<PointerType>()->target_type_;
-            auto arg_pointee = decayed_arg->cast<PointerType>()->target_type_;
-            if (Type::is_mutable(param_pointee) && !Type::is_mutable(arg_pointee)) return NoMatch;
-            const Type* decayed_param_pointee = Type::decay(param_pointee);
-            const Type* decayed_arg_pointee = Type::decay(arg_pointee);
-            if (decayed_param_pointee == decayed_arg_pointee) {
-                return tiebreaker_rank();
-            } else if (decayed_param_pointee->kind_ == Kind::Void) {
-                return Upcast;
-            } else {
-                const InstanceType* param_class = decayed_param_pointee->dyn_cast<InstanceType>();
-                const InstanceType* arg_class = decayed_arg_pointee->dyn_cast<InstanceType>();
-                if (param_class && arg_class) {
-                    if (static_cast<const Type*>(param_class) == &VoidType::instance) return Upcast;
-                    return InstanceType::is_base(arg_class, param_class) ? Upcast : NoMatch;
-                }
+            // upcast to fat pointer
+            if (decayed_param->kind_ != Kind::Dynamic) return NoMatch;
+            if (decayed_arg->kind_ == Kind::Nullptr) return Upcast;
+            if (decayed_arg->kind_ != Kind::Pointer) return NoMatch;
+            const DynamicType* param_dynamic = decayed_param->cast<DynamicType>();
+            const PointerType* arg_pointer = decayed_arg->cast<PointerType>();
+            if (param_dynamic->is_mutable_ && !arg_pointer->is_mutable_) return NoMatch;
+            if (const InstanceType* arg_class =
+                    arg_pointer->target_type_->dyn_cast<InstanceType>()) {
+                return arg_class->implemented(param_dynamic->target_type_) ? Upcast : NoMatch;
             }
             return NoMatch;
         }
@@ -1642,15 +1582,13 @@ public:
             if (target_type->kind_ == Kind::Pointer) {
                 convertible = true;
             }
-        } else if (decayed_source_type->kind_ == Kind::Pointer) {
-            if (target_type->kind_ == Kind::Pointer) {
-                if (target_type->cast<PointerType>()->target_type_ == &VoidType::instance ||
-                    decayed_source_type->cast<PointerType>()->target_type_ == &VoidType::instance) {
+        } else if (auto* source_instance = decayed_source_type->dyn_cast<PointerType>()) {
+            if (target_type->kind_ == Kind::Nullptr) {
+                convertible = true;
+            } else if (auto* target_pointer = target_type->dyn_cast<PointerType>()) {
+                if (target_pointer->target_type_ == &VoidType::instance ||
+                    source_instance->target_type_ == &VoidType::instance) {
                     convertible = true;
-                } else {
-                    if (InstanceType::is_castable(decayed_source_type, target_type)) {
-                        convertible = true;
-                    }
                 }
             }
         }
@@ -1818,14 +1756,14 @@ public:
     void operator()(const ASTStructType* node) noexcept {
         out_ = std::type_identity<StructType>();
         bool has_error = false;
-        GlobalMemory::FlatMap<strview, const Type*> fields;
+        GlobalMemory::Vector<std::pair<strview, const Type*>> fields;
         for (const ASTFieldDeclaration& decl : node->fields) {
             TypeResolution field_type;
             TypeContextEvaluator{sema_, field_type}(decl.type);
             if (!field_type.get()) {
                 has_error = true;
             }
-            fields[decl.identifier] = field_type.get();
+            fields.push_back({decl.identifier, field_type.get()});
         }
         if (has_error) {
             out_ = nullptr;
@@ -1876,6 +1814,23 @@ public:
         TypeRegistry::get_at<PointerType>(out_, expr_type, node->is_mutable);
     }
 
+    void operator()(const ASTDynamicType* node) noexcept {
+        out_ = std::type_identity<DynamicType>();
+        TypeResolution inner_type;
+        TypeContextEvaluator{sema_, inner_type, false}(node->inner);
+        if (!inner_type.get()) {
+            out_ = nullptr;
+            return;
+        } else if (inner_type.get()->kind_ != Kind::Interface) {
+            Diagnostic::error_invalid_dynamic_type(node->location, inner_type.get()->repr());
+            out_ = nullptr;
+            return;
+        }
+        TypeRegistry::get_at<DynamicType>(
+            out_, inner_type.get()->cast<InterfaceType>(), node->is_mutable
+        );
+    }
+
     void operator()(const ASTUnionType* node) noexcept {
         out_ = std::type_identity<UnionType>();
         TypeResolution left_type;
@@ -1889,19 +1844,54 @@ public:
         TypeRegistry::get_at<UnionType>(out_, left_type.get(), right_type.get());
     }
 
-    void operator()(const ASTClassDefinition* node) noexcept {
-        out_ = new InstanceType(node->identifier);
+    void operator()(const ASTInterfaceDefinition* node) noexcept {
+        out_ = std::type_identity<InterfaceType>{};
         Sema::Guard guard(sema_, node);
         bool has_error = false;
-        const InstanceType* base = nullptr;
-        if (!holds_monostate(node->extends)) {
-            TypeResolution result;
-            TypeContextEvaluator{sema_, result}(node->extends);
-            if (!result.get() || result.get()->kind_ != Kind::Instance) {
+        GlobalMemory::FlatSet<const InterfaceType*> extends;
+        for (ASTExprVariant extend : node->extends) {
+            TypeResolution extend_res;
+            TypeContextEvaluator{sema_, extend_res}(extend);
+            if (!extend_res.get() || extend_res.get()->kind_ != Kind::Interface) {
+                Diagnostic::ErrorTrap trap{ASTNodePtrGetter{}(extend)->location};
+                Diagnostic::error_type_mismatch("interface", extend_res.get()->repr());
                 has_error = true;
+            } else {
+                extends.insert(extend_res.get()->cast<InterfaceType>());
             }
-            base = result.get()->cast<InstanceType>();
         }
+        GlobalMemory::FlatMap<
+            std::pair<strview, const FunctionType*>,
+            GlobalMemory::Vector<const InstanceType*>>
+            implementors;
+        for (const auto& [identifier, value] : *sema_.current_scope_) {
+            auto* overloads = value.get<GlobalMemory::Vector<FunctionOverloadDef>*>();
+            if (!overloads) continue;
+            for (const FunctionOverloadDef& overload_def : *overloads) {
+                if (overload_def.get<const ASTFunctionDefinition*>()) {
+                    const FunctionType* func_type =
+                        sema_.get_func_type(sema_.current_scope_, overload_def);
+                    if (!func_type) {
+                        has_error = true;
+                        continue;
+                    }
+                    implementors[{identifier, func_type}] = {};
+                }
+            }
+        }
+        if (has_error) {
+            out_ = nullptr;
+            return;
+        }
+        TypeRegistry::get_at<InterfaceType>(
+            out_, sema_.current_scope_, node->identifier, extends, implementors
+        );
+    }
+
+    void operator()(const ASTClassDefinition* node) noexcept {
+        out_ = std::type_identity<InstanceType>{};
+        Sema::Guard guard(sema_, node);
+        bool has_error = false;
         GlobalMemory::FlatSet<const InterfaceType*> interfaces;
         for (ASTExprVariant interface : node->implements) {
             TypeResolution result;
@@ -1912,7 +1902,7 @@ public:
             }
             interfaces.insert(result.get()->cast<InterfaceType>());
         }
-        GlobalMemory::FlatMap<strview, const Type*> attrs;
+        GlobalMemory::Vector<std::pair<strview, const Type*>> attrs;
         for (ASTNodeVariant decl_variant : node->fields) {
             const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
             if (decl->declared_static) continue;
@@ -1927,14 +1917,14 @@ public:
                 has_error = true;
                 continue;
             }
-            attrs[decl->identifier] = field_type.get();
+            attrs.push_back({decl->identifier, field_type.get()});
         }
         if (has_error) {
             out_ = nullptr;
             return;
         }
         TypeRegistry::get_at<InstanceType>(
-            out_, sema_.current_scope_, node->identifier, base, interfaces, attrs, node->is_virtual
+            out_, sema_.current_scope_, node->identifier, interfaces, attrs
         );
     }
 
@@ -2048,7 +2038,7 @@ public:
         Term operand_term = Sema::get<SymbolKind::Term>(operand_symbol);
         return Term::of(
             TypeRegistry::get<PointerType>(
-                operand_term.effective_type(), Type::is_mutable(operand_term.effective_type())
+                operand_term.decay(), Type::is_mutable(operand_term.effective_type())
             )
         );
     }
@@ -2111,21 +2101,13 @@ public:
     auto operator()(const ASTStructInitialization* node) noexcept -> Symbol {
         /// TODO: constexpr
         const Type* type = nullptr;
-        if (!holds_monostate(node->struct_type)) {
-            TypeResolution struct_type;
-            TypeContextEvaluator{sema_, struct_type}(node->struct_type);
-            if (!struct_type.get()) {
-                return {};
-            }
-            type = struct_type;
-            sema_.codegen_env_.map_type(sema_.current_scope_, node, struct_type);
-        } else if (auto* self = sema_.get_self_type()) {
-            type = self;
-            sema_.codegen_env_.map_type(sema_.current_scope_, node, self);
-        } else {
-            Diagnostic::error_cannot_deduce_struct_type(node->location);
+        TypeResolution struct_type;
+        TypeContextEvaluator{sema_, struct_type}(node->struct_type);
+        if (!struct_type.get()) {
             return {};
         }
+        type = struct_type;
+        sema_.codegen_env_.map_type(sema_.current_scope_, node, struct_type);
         if (type->dyn_cast<InstanceType>() && sema_.get_self_type() != type) {
             Diagnostic::error_construct_instance_out_of_class(node->location, type->repr());
         }
@@ -2229,7 +2211,6 @@ public:
                     func_type,
                     std::get<0>(*partial),
                     std::get<1>(*partial)->identifier,
-                    nullptr,
                     nullptr
                 );
             }
@@ -2334,24 +2315,13 @@ private:
         AutoBindings auto_bindings;
         for (auto [field_name, field_type] : field_types) {
             auto init_it = inits.find(field_name);
-            if (init_it == inits.end()) {
-                if (!field_type->default_construct()) {
-                    Diagnostic::error_uninitialized_attribute(field_name);
-                    valid = false;
-                }
-            } else {
+            if (init_it != inits.end()) {
                 if (!CallHandler::assignable(init_it->second, field_type)) {
                     Diagnostic::error_type_mismatch(field_type->repr(), init_it->second->repr());
                     valid = false;
                 }
                 inits.erase(init_it);
             }
-        }
-        if (!inits.empty()) {
-            for (const auto& [id, _] : inits) {
-                Diagnostic::error_unrecognized_attribute(id);
-            }
-            return false;
         }
         return valid;
     }
@@ -2403,8 +2373,6 @@ public:
         if (is_global && node->is_mutable) {
             Diagnostic::error_mutable_global_variable(node->location);
         }
-        bool is_static = !sema_.current_scope_->is_extern_ && sema_.current_scope_->is_namespace_ &&
-                         (sema_.current_scope_->self_id_.empty() ? true : node->declared_static);
         TypeResolution type;
         if (!holds_monostate(node->declared_type)) {
             TypeContextEvaluator{sema_, type}(node->declared_type);
@@ -2426,9 +2394,8 @@ public:
             }
             if (node->is_constant && !init_term.is_comptime()) {
                 Diagnostic::error_not_constant_expression(node->location);
-            }
-            if (is_static) {
-                sema_.codegen_env_.add_static(
+            } else if (node->is_constant && !sema_.current_scope_->is_extern_) {
+                sema_.codegen_env_.add_constant(
                     sema_.current_scope_, node->identifier, init_term.get_comptime()
                 );
             }
@@ -2439,9 +2406,6 @@ public:
             );
         }
         if (type.get()) {
-            if (is_static) {
-                sema_.codegen_env_.add_static(sema_.current_scope_, node->identifier, type.get());
-            }
             sema_.codegen_env_.map_type(sema_.current_scope_, node, type);
         }
     }
@@ -2475,7 +2439,7 @@ public:
         Term value_term = Sema::get<SymbolKind::Term>(value);
         sema_.codegen_env_.map_type(sema_.current_scope_, node, value_term.effective_type());
         const Type* value_type = value_term.decay();
-        if (auto* ptr_type = value_type->dyn_cast<PointerType>()) {
+        if (auto* dynamic_type = value_type->dyn_cast<DynamicType>()) {
             /// TODO:
         } else if (auto* union_type = value_type->dyn_cast<UnionType>()) {
             GlobalMemory::FlatSet<const Type*> remaining_types = union_type->types_;
@@ -2561,7 +2525,7 @@ public:
                 sema_.codegen_env_.add_function_output(sema_.current_scope_, node, func);
             }
         } else {
-            const InstanceType* self_type = sema_.get_self_type();
+            const Type* self_type = sema_.get_self_type();
             sema_.codegen_env_.add_function_output(
                 sema_.current_scope_,
                 node,
@@ -2581,6 +2545,13 @@ public:
         }
         for (auto& stmt : node->body) {
             (*this)(stmt);
+        }
+    }
+
+    void operator()(const ASTInterfaceDefinition* node) noexcept {
+        Sema::Guard guard(sema_, node);
+        for (auto& item : node->scope_items) {
+            (*this)(item);
         }
     }
 
@@ -2676,6 +2647,9 @@ inline auto Sema::eval_type(Scope& scope, const ScopeValue& value) noexcept -> T
         switch (type_provider->kind) {
         case TypeProvider::Kind::Alias:
             evaluator(static_cast<const ASTTypeAlias*>(type_provider->node));
+            break;
+        case TypeProvider::Kind::Interface:
+            evaluator(static_cast<const ASTInterfaceDefinition*>(type_provider->node));
             break;
         case TypeProvider::Kind::Class:
             evaluator(static_cast<const ASTClassDefinition*>(type_provider->node));

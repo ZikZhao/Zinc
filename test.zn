@@ -1,22 +1,28 @@
 fn main(args: [strview]) {
     let inst = Derived();
-    let base_ref: &Base = inst;
+    let base_ref: dyn BaseInterface = inst;
     std.cout << "Base reference: " << base_ref.foo();
 }
 
-virtual class Base {
+interface BaseInterface {
+    fn foo(self: &Self) -> i32 {
+        return 0;
+    }
+}
+
+class Base implements BaseInterface {
     init() {
         return Self();
     }
     drop() {
         std.cout << "Base destructor called\n";
     }
-    virtual fn foo(self: &Self) -> i32 {
+    override fn foo(self: &Self) -> i32 {
         return 42;
     }
 }
 
-virtual class Derived extends Base {
+class Derived implements BaseInterface {
     init() {
         return Self();
     }

@@ -306,16 +306,6 @@ public:
         unlocated_error(GlobalMemory::format("Redeclared identifier: '{}'", identifier));
     }
 
-    static auto error_virtual_overload(Location location) noexcept -> void {
-        Diagnostic::report(
-            Problem{
-                .severity = Severity::Error,
-                .location = location,
-                .message = GlobalMemory::String("Cannot overload a virtual function"sv)
-            }
-        );
-    }
-
     static auto error_symbol_category_mismatch(strview expected, strview actual) noexcept -> void {
         unlocated_error(
             GlobalMemory::format("Symbol kind mismatch: expected {}, got {}", expected, actual)
@@ -373,18 +363,6 @@ public:
 
     static auto error_overflow(strview literal, strview type) noexcept -> void {
         unlocated_error(GlobalMemory::format("Literal '{}' overflows type '{}'", literal, type));
-    }
-
-    static auto error_uninitialized_attribute(strview attribute_name) noexcept -> void {
-        unlocated_error(
-            GlobalMemory::format(
-                "Attribute '{}' is not initialized and is not default constructible", attribute_name
-            )
-        );
-    }
-
-    static auto error_unrecognized_attribute(strview attribute_name) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Unrecognized attribute: '{}'", attribute_name));
     }
 
     static auto error_type_mismatch(strview expected, strview actual) noexcept -> void {
@@ -535,16 +513,6 @@ public:
 
     static auto error_value_not_callable(strview callee) noexcept -> void {
         unlocated_error(GlobalMemory::format("Value of type '{}' is not callable", callee));
-    }
-
-    static auto error_cannot_deduce_struct_type(Location location) noexcept -> void {
-        Diagnostic::report(
-            Problem{
-                .severity = Severity::Error,
-                .location = location,
-                .message = GlobalMemory::String("Cannot deduce struct type from initializer"sv)
-            }
-        );
     }
 
     static auto error_auto_binding_mismatch(
@@ -706,6 +674,16 @@ public:
                 .severity = Severity::Error,
                 .location = location,
                 .message = GlobalMemory::String("Cannot create reference to void type"sv)
+            }
+        );
+    }
+
+    static auto error_invalid_dynamic_type(Location location, strview type) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format("Type '{}' cannot be used as a dynamic type", type)
             }
         );
     }

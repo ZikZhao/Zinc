@@ -13,6 +13,7 @@ top_level_statement:
 	declaration_statement
 	| type_alias
 	| function_definition
+	| interface_definition
 	| class_definition
 	| namespace_definition
 	| import_statement;
@@ -88,7 +89,7 @@ type_alias:
 	)? OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
-	(KW_STATIC | KW_VIRTUAL | KW_OVERRIDE)? KW_FUNC identifier_ = T_IDENTIFIER (
+	(KW_STATIC | KW_OVERRIDE)? KW_FUNC identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
 	)? OP_LPAREN (
 		parameters_ += parameter (
@@ -155,12 +156,16 @@ parameter:
 		DefaultParam
 	| KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_ELLIPSIS # VariadicParam;
 
+interface_definition:
+	KW_INTERFACE identifier_ = T_IDENTIFIER (
+		KW_EXTENDS extends_ += type (OP_COMMA extends_ += type)*
+	)? OP_LBRACE (functions_ += function_definition)* OP_RBRACE;
+
 class_definition:
-	(specialize_list_ = specialize_parameter_list)? KW_VIRTUAL? KW_CLASS identifier_ = T_IDENTIFIER
-		(
+	(specialize_list_ = specialize_parameter_list)? KW_CLASS identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
 		| instantiation_list_ = instantiation_list
-	)? (KW_EXTENDS extends_ = type)? (
+	)? (
 		KW_IMPLEMENTS implements_ += type (
 			OP_COMMA implements_ += type
 		)*
@@ -194,7 +199,7 @@ expr:
 	| func_ = expr OP_LPAREN (
 		arguments_ += expr (OP_COMMA arguments_ += expr)*
 	)? OP_RPAREN # CallExpr
-	| (struct_ = type)? OP_LBRACE (
+	| struct_ = type OP_LBRACE (
 		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
 	)? OP_RBRACE # StructInitExpr
 	| OP_LBRACKET (
@@ -314,6 +319,7 @@ type:
 	)? OP_RPAREN OP_ARROW return_type_ = type		# FunctionType
 	| KW_MOVE? OP_BITAND KW_MUT? inner_type_ = type	# ReferenceType
 	| OP_MUL KW_MUT? inner_type_ = type				# PointerType
+	| KW_DYN KW_MUT? inner_type_ = type				# DynamicType
 	| left_ = type OP_BITOR right_ = type			# UnionType
 	| OP_LBRACKET inner_type_ = type OP_RBRACKET	# ParenType;
 
@@ -403,8 +409,9 @@ KW_BREAK: 'break';
 KW_CONTINUE: 'continue';
 KW_RETURN: 'return';
 KW_TYPE: 'type';
-KW_CLASS: 'class';
+KW_INTERFACE: 'interface';
 KW_EXTENDS: 'extends';
+KW_CLASS: 'class';
 KW_IMPLEMENTS: 'implements';
 KW_SELF: 'self';
 KW_SELF_TYPE: 'Self';
@@ -419,8 +426,8 @@ KW_OPERATOR: 'operator';
 KW_AS: 'as';
 KW_IMPORT: 'import';
 KW_THROW: 'throw';
-KW_VIRTUAL: 'virtual';
 KW_OVERRIDE: 'override';
+KW_DYN: 'dyn';
 
 OP_DOT: '.';
 OP_QUESTION: '?';

@@ -351,7 +351,6 @@ private:
             visit_expr(ctx->return_type_),
             visit_list(ctx->body_),
             ctx->KW_STATIC() != nullptr,
-            ctx->KW_VIRTUAL() != nullptr || ctx->KW_OVERRIDE() != nullptr,
             ctx->KW_OVERRIDE() != nullptr,
         };
         if (ctx->template_list_) {
@@ -544,6 +543,16 @@ private:
         };
     }
 
+    auto visitInterface_definition(ZincParser::Interface_definitionContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTInterfaceDefinition{
+            loc(ctx),
+            text(ctx->identifier_),
+            visit_list<ASTExprVariant>(ctx->extends_),
+            visit_list(ctx->functions_)
+        });
+    }
+
     auto visitClass_definition(ZincParser::Class_definitionContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
         std::span attrs = visit_list(ctx->attrs_);
@@ -580,11 +589,9 @@ private:
         auto* class_def = new ASTClassDefinition{
             loc(ctx),
             text(ctx->identifier_),
-            visit_expr(ctx->extends_),
             visit_list<ASTExprVariant>(ctx->implements_),
             attrs,
             scope_items,
-            ctx->KW_VIRTUAL() != nullptr
         };
         if (ctx->template_list_) {
             if (ctx->specialize_list_) {
@@ -1028,6 +1035,13 @@ private:
         -> Any<ASTExprVariant> final {
         return as_variant(
             new ASTPointerType{loc(ctx), visit_expr(ctx->inner_type_), ctx->KW_MUT() != nullptr}
+        );
+    }
+
+    auto visitDynamicType(ZincParser::DynamicTypeContext* ctx) noexcept
+        -> Any<ASTExprVariant> final {
+        return as_variant(
+            new ASTDynamicType{loc(ctx), visit_expr(ctx->inner_type_), ctx->KW_MUT() != nullptr}
         );
     }
 

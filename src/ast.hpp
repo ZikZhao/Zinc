@@ -85,7 +85,9 @@ struct ASTArrayType;
 struct ASTMutableType;
 struct ASTReferenceType;
 struct ASTPointerType;
+struct ASTDynamicType;
 struct ASTUnionType;
+
 struct ASTExpressionStatement;
 struct ASTDeclaration;
 struct ASTFieldDeclaration;
@@ -104,6 +106,7 @@ struct ASTFunctionParameter;
 struct ASTFunctionDefinition;
 struct ASTCtorDtorDefinition;
 struct ASTOperatorDefinition;
+struct ASTInterfaceDefinition;
 struct ASTClassDefinition;
 struct ASTNamespaceDefinition;
 struct ASTTemplateParameter;
@@ -135,6 +138,7 @@ using ASTNodeVariant = std::variant<
     const ASTCtorDtorDefinition*,
     const ASTOperatorDefinition*,
     const ASTClassDefinition*,
+    const ASTInterfaceDefinition*,
     const ASTNamespaceDefinition*,
     // Templates
     const ASTTemplateDefinition*,
@@ -180,6 +184,7 @@ using ASTExprVariant = std::variant<
     const ASTMutableType*,
     const ASTReferenceType*,
     const ASTPointerType*,
+    const ASTDynamicType*,
     const ASTUnionType*,
     // Match case variable type
     const MatchCaseVarType*>;
@@ -348,6 +353,11 @@ struct ASTPointerType final : public ASTTypeExpr {
     bool is_mutable;
 };
 
+struct ASTDynamicType final : public ASTTypeExpr {
+    ASTExprVariant inner;
+    bool is_mutable;
+};
+
 struct ASTUnionType final : public ASTTypeExpr {
     ASTExprVariant left;
     ASTExprVariant right;
@@ -431,7 +441,6 @@ struct ASTFunctionDefinition final : public ASTNode {
     ASTExprVariant return_type;
     std::span<ASTNodeVariant> body;
     bool declared_static;
-    bool declared_virtual;
     bool declared_override;
 };
 
@@ -451,13 +460,17 @@ struct ASTOperatorDefinition final : public ASTNode {
     bool declared_const;
 };
 
+struct ASTInterfaceDefinition final : public ASTNode {
+    strview identifier;
+    std::span<ASTExprVariant> extends;
+    std::span<ASTNodeVariant> scope_items;
+};
+
 struct ASTClassDefinition final : public ASTNode {
     strview identifier;
-    ASTExprVariant extends;
     std::span<ASTExprVariant> implements;
     std::span<ASTNodeVariant> fields;
     std::span<ASTNodeVariant> scope_items;
-    bool is_virtual;
 };
 
 struct ASTNamespaceDefinition final : public ASTNode {
