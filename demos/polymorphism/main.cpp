@@ -1,673 +1,1150 @@
+// Polymorphism stress sandbox with optional SDL visualization.
+#include <SDL2/SDL.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
-#include <iomanip>
+#include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
-#include <optional>
-#include <sstream>
+#include <random>
 #include <string>
-#include <thread>
-#include <utility>
+#include <string_view>
 #include <vector>
 
-struct Hitbox {
-    int x;
-    int y;
-    int w;
-    int h;
-};
-
-static bool overlaps(const Hitbox& a, const Hitbox& b) {
-    return !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y);
-}
-
 class World;
-class Entity;
 
-class ITickable {
-public:
-    virtual ~ITickable() = default;
-    virtual void tick(float deltaTime, World& world) = 0;
+enum class EntityType {
+    VoidCell,
+    Wall,
+    Sand,
+    Water,
+    Plant,
+    Lava,
+    Steam,
+    Acid,
+    Generator,
+    BlackHole,
 };
 
-class IRenderable {
-public:
-    virtual ~IRenderable() = default;
-    virtual void draw(World& world) const = 0;
+enum class SpawnKind {
+    Water,
+    Lava,
+    Acid,
 };
 
-class ICollidable {
-public:
-    virtual ~ICollidable() = default;
-    virtual Hitbox getHitbox() const = 0;
-    virtual void onCollide(ICollidable& other, World& world) = 0;
-    virtual Entity* asEntity() = 0;
-    virtual const Entity* asEntity() const = 0;
-};
-
-class IDamageable {
-public:
-    virtual ~IDamageable() = default;
-    virtual void takeDamage(int amount) = 0;
-    virtual bool isDead() const = 0;
-};
-
-class IInteractable {
-public:
-    virtual ~IInteractable() = default;
-    virtual void interact(Entity& actor, World& world) = 0;
+struct MoveIntent {
+    int dx;
+    int dy;
 };
 
 class Entity {
 public:
-    Entity(std::string name, int x, int y, char glyph)
-        : name_(std::move(name)), x_(x), y_(y), glyph_(glyph) {}
-
     virtual ~Entity() = default;
 
-    const std::string& name() const { return name_; }
-    int x() const { return x_; }
-    int y() const { return y_; }
-    char glyph() const { return glyph_; }
-    bool pendingDestroy() const { return pendingDestroy_; }
+    uint64_t last_update_frame = 0;
 
-    void setPosition(int nx, int ny) {
-        x_ = nx;
-        y_ = ny;
+    virtual EntityType type() const = 0;
+    virtual SDL_Color color() const = 0;
+    virtual bool is_static() const { return false; }
+
+    virtual void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) = 0;
+
+    virtual bool accept_move(
+        World& world, int self_x, int self_y, int from_x, int from_y, Entity& mover, uint64_t frame
+    ) {
+        (void)world;
+        (void)self_x;
+        (void)self_y;
+        (void)from_x;
+        (void)from_y;
+        (void)mover;
+        (void)frame;
+        return false;
     }
-
-    void markForDestroy() { pendingDestroy_ = true; }
-
-protected:
-    std::string name_;
-    int x_;
-    int y_;
-    char glyph_;
-    bool pendingDestroy_ = false;
 };
+
+class VoidCell;
+class Wall;
+class Sand;
+class Water;
+class Plant;
+class Lava;
+class Steam;
+class Acid;
+class Generator;
+class BlackHole;
+
+std::unique_ptr<Entity> make_entity(EntityType t);
+std::unique_ptr<Entity> make_generator(SpawnKind kind, int interval);
 
 class World {
 public:
-    World(int width, int height)
-        : width_(width), height_(height), canvas_(height, std::string(width, '.')) {}
-
-    template <typename T, typename... Args>
-    T& spawn(Args&&... args) {
-        auto instance = std::make_unique<T>(std::forward<Args>(args)...);
-        T* raw = instance.get();
-        entities_.push_back(std::move(instance));
-        return *raw;
-    }
-
-    void rebuildViews() {
-        tickables_.clear();
-        renderables_.clear();
-        collidables_.clear();
-        damageables_.clear();
-        interactables_.clear();
-
-        for (auto& uptr : entities_) {
-            if (uptr->pendingDestroy()) {
-                continue;
-            }
-            Entity* e = uptr.get();
-            if (auto* v = dynamic_cast<ITickable*>(e)) tickables_.push_back(v);
-            if (auto* v = dynamic_cast<IRenderable*>(e)) renderables_.push_back(v);
-            if (auto* v = dynamic_cast<ICollidable*>(e)) collidables_.push_back(v);
-            if (auto* v = dynamic_cast<IDamageable*>(e)) damageables_.push_back(v);
-            if (auto* v = dynamic_cast<IInteractable*>(e)) interactables_.push_back(v);
+    World(int w, int h) : width_(w), height_(h), cells_(w * h) {
+        for (auto& c : cells_) {
+            c = make_entity(EntityType::VoidCell);
         }
-    }
-
-    void tickAll(float dt) {
-        for (auto* tickable : tickables_) {
-            tickable->tick(dt, *this);
-        }
-    }
-
-    void resolveCollisions() {
-        for (std::size_t i = 0; i < collidables_.size(); ++i) {
-            for (std::size_t j = i + 1; j < collidables_.size(); ++j) {
-                ICollidable* a = collidables_[i];
-                ICollidable* b = collidables_[j];
-                Entity* ea = a->asEntity();
-                Entity* eb = b->asEntity();
-                if (!ea || !eb || ea->pendingDestroy() || eb->pendingDestroy()) {
-                    continue;
-                }
-                if (overlaps(a->getHitbox(), b->getHitbox())) {
-                    a->onCollide(*b, *this);
-                    b->onCollide(*a, *this);
-                }
-            }
-        }
-    }
-
-    void drawAll() {
-        clearCanvas();
-        for (const auto* renderable : renderables_) {
-            renderable->draw(*this);
-        }
-    }
-
-    void cleanupDestroyed() {
-        entities_.erase(
-            std::remove_if(
-                entities_.begin(),
-                entities_.end(),
-                [](const std::unique_ptr<Entity>& e) { return e->pendingDestroy(); }
-            ),
-            entities_.end()
-        );
-    }
-
-    void putPixel(int x, int y, char c) {
-        if (x < 0 || y < 0 || x >= width_ || y >= height_) {
-            return;
-        }
-        canvas_[y][x] = c;
-    }
-
-    void drawRect(const Hitbox& b, char c) {
-        for (int dy = 0; dy < b.h; ++dy) {
-            for (int dx = 0; dx < b.w; ++dx) {
-                putPixel(b.x + dx, b.y + dy, c);
-            }
-        }
-    }
-
-    void printFrame(long long frameIndex, int targetFps) const {
-        std::cout << "\x1b[H";
-        std::cout << "==== Zinc Polymorphism Sandbox ====\n";
-        std::cout << "Frame=" << frameIndex << " TargetFPS=" << targetFps << " (Ctrl+C to stop)\n";
-        for (const auto& line : canvas_) {
-            std::cout << line << '\n';
-        }
-        std::cout << "Entities=" << livingEntityCount() << " Tickables=" << tickables_.size()
-                  << " Renderables=" << renderables_.size()
-                  << " Collidables=" << collidables_.size()
-                  << " Damageables=" << damageables_.size()
-                  << " Interactables=" << interactables_.size() << '\n';
-
-        std::cout << "Legend: . empty  P player  Z zombie  S slime  G ghost  # wall  = dirt\n";
-        std::cout
-            << "        ~/- water  L/! lava  ^/v trap  D door(closed)  l/L lever  b/B button\n";
-        std::cout << "        H potion  $ coin  * damaged-flash\n";
-        std::cout.flush();
     }
 
     int width() const { return width_; }
     int height() const { return height_; }
 
-    std::vector<IInteractable*>& interactables() { return interactables_; }
-    const std::vector<std::unique_ptr<Entity>>& entities() const { return entities_; }
+    bool in_bounds(int x, int y) const { return x >= 0 && x < width_ && y >= 0 && y < height_; }
 
-    std::optional<Entity*> findByName(const std::string& needle) {
-        for (auto& e : entities_) {
-            if (!e->pendingDestroy() && e->name() == needle) {
-                return e.get();
+    Entity& at(int x, int y) { return *cells_[index(x, y)]; }
+    const Entity& at(int x, int y) const { return *cells_[index(x, y)]; }
+
+    void set(int x, int y, std::unique_ptr<Entity> entity) {
+        cells_[index(x, y)] = std::move(entity);
+    }
+
+    void swap_cells(int x1, int y1, int x2, int y2) {
+        std::swap(cells_[index(x1, y1)], cells_[index(x2, y2)]);
+    }
+
+    bool try_move(int from_x, int from_y, int to_x, int to_y, uint64_t frame) {
+        if (!in_bounds(to_x, to_y)) {
+            return false;
+        }
+        Entity& mover = at(from_x, from_y);
+        Entity& target = at(to_x, to_y);
+        return target.accept_move(*this, to_x, to_y, from_x, from_y, mover, frame);
+    }
+
+    bool try_moves(
+        int x, int y, std::vector<MoveIntent> intents, uint64_t frame, std::mt19937_64& rng
+    ) {
+        std::shuffle(intents.begin(), intents.end(), rng);
+        for (const auto& mv : intents) {
+            if (try_move(x, y, x + mv.dx, y + mv.dy, frame)) {
+                return true;
             }
         }
-        return std::nullopt;
+        return false;
     }
 
-private:
-    void clearCanvas() {
-        for (auto& line : canvas_) {
-            std::fill(line.begin(), line.end(), '.');
-        }
-    }
-
-    std::size_t livingEntityCount() const {
-        std::size_t count = 0;
-        for (const auto& e : entities_) {
-            if (!e->pendingDestroy()) {
+    int count_type(EntityType t) const {
+        int count = 0;
+        for (const auto& cell : cells_) {
+            if (cell->type() == t) {
                 ++count;
             }
         }
         return count;
     }
 
+    void step(uint64_t frame, std::mt19937_64& rng) {
+        const int mode = static_cast<int>(frame % 4ULL);
+        if (mode == 0) {
+            iterate(0, height_, 1, 0, width_, 1, frame, rng);
+        } else if (mode == 1) {
+            iterate(height_ - 1, -1, -1, 0, width_, 1, frame, rng);
+        } else if (mode == 2) {
+            iterate(0, height_, 1, width_ - 1, -1, -1, frame, rng);
+        } else {
+            iterate(height_ - 1, -1, -1, width_ - 1, -1, -1, frame, rng);
+        }
+    }
+
+private:
+    size_t index(int x, int y) const {
+        return static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x);
+    }
+
+    void iterate(
+        int y_begin,
+        int y_end,
+        int y_step,
+        int x_begin,
+        int x_end,
+        int x_step,
+        uint64_t frame,
+        std::mt19937_64& rng
+    ) {
+        for (int y = y_begin; y != y_end; y += y_step) {
+            for (int x = x_begin; x != x_end; x += x_step) {
+                Entity& e = at(x, y);
+                if (e.last_update_frame == frame) {
+                    continue;
+                }
+                e.last_update_frame = frame;
+                e.tick(*this, x, y, frame, rng);
+            }
+        }
+    }
+
     int width_;
     int height_;
-    std::vector<std::string> canvas_;
-    std::vector<std::unique_ptr<Entity>> entities_;
-    std::vector<ITickable*> tickables_;
-    std::vector<IRenderable*> renderables_;
-    std::vector<ICollidable*> collidables_;
-    std::vector<IDamageable*> damageables_;
-    std::vector<IInteractable*> interactables_;
+    std::vector<std::unique_ptr<Entity>> cells_;
 };
 
-class TerrainEntity : public Entity, public IRenderable, public ICollidable {
+class VoidCell final : public Entity {
 public:
-    TerrainEntity(std::string name, int x, int y, char glyph)
-        : Entity(std::move(name), x, y, glyph) {}
+    EntityType type() const override { return EntityType::VoidCell; }
+    SDL_Color color() const override { return SDL_Color{20, 20, 28, 255}; }
+    bool is_static() const override { return true; }
 
-    Hitbox getHitbox() const override { return Hitbox{x_, y_, 1, 1}; }
-    void onCollide(ICollidable&, World&) override {}
-    Entity* asEntity() override { return this; }
-    const Entity* asEntity() const override { return this; }
-    void draw(World& world) const override { world.drawRect(getHitbox(), glyph_); }
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        (void)world;
+        (void)x;
+        (void)y;
+        (void)frame;
+        (void)rng;
+    }
+
+    bool accept_move(
+        World& world, int self_x, int self_y, int from_x, int from_y, Entity& mover, uint64_t frame
+    ) override {
+        (void)mover;
+        world.swap_cells(self_x, self_y, from_x, from_y);
+        world.at(self_x, self_y).last_update_frame = frame;
+        return true;
+    }
 };
 
-class StoneWall : public TerrainEntity {
+class Wall final : public Entity {
 public:
-    StoneWall(int x, int y) : TerrainEntity("StoneWall", x, y, '#') {}
-};
-
-class DirtBlock : public TerrainEntity {
-public:
-    DirtBlock(int x, int y) : TerrainEntity("DirtBlock", x, y, '=') {}
-};
-
-class Water : public Entity, public ITickable, public IRenderable, public ICollidable {
-public:
-    Water(int x, int y) : Entity("Water", x, y, '~') {}
-
-    void tick(float, World& world) override {
-        flowPhase_ = (flowPhase_ + 1) % 2;
-        if (x_ + 1 < world.width() && flowPhase_ == 1) {
-            x_ += 1;
-        }
+    EntityType type() const override { return EntityType::Wall; }
+    SDL_Color color() const override {
+        const uint8_t glow = static_cast<uint8_t>(std::min(255, 85 + static_cast<int>(heat_)));
+        return SDL_Color{glow, glow, glow, 255};
     }
-
-    Hitbox getHitbox() const override { return Hitbox{x_, y_, 1, 1}; }
-    void onCollide(ICollidable&, World&) override {}
-    Entity* asEntity() override { return this; }
-    const Entity* asEntity() const override { return this; }
-    void draw(World& world) const override {
-        world.drawRect(getHitbox(), flowPhase_ == 0 ? '~' : '-');
-    }
-
-private:
-    int flowPhase_ = 0;
-};
-
-class Lava : public Entity,
-             public ITickable,
-             public IRenderable,
-             public ICollidable,
-             public IDamageable {
-public:
-    Lava(int x, int y) : Entity("Lava", x, y, 'L') {}
-
-    void tick(float, World&) override { pulse_ = (pulse_ + 1) % 3; }
-    Hitbox getHitbox() const override { return Hitbox{x_, y_, 1, 1}; }
-
-    void onCollide(ICollidable& other, World&) override {
-        if (auto* target = dynamic_cast<IDamageable*>(&other)) {
-            target->takeDamage(2);
-        }
-    }
-
-    Entity* asEntity() override { return this; }
-    const Entity* asEntity() const override { return this; }
-    void draw(World& world) const override { world.drawRect(getHitbox(), pulse_ == 0 ? 'L' : '!'); }
-
-    void takeDamage(int amount) override {
-        hp_ -= amount;
-        if (hp_ <= 0) {
-            markForDestroy();
-        }
-    }
-
-    bool isDead() const override { return hp_ <= 0; }
-
-private:
-    int hp_ = 8;
-    int pulse_ = 0;
-};
-
-class BackgroundCloud : public Entity, public ITickable, public IRenderable {
-public:
-    BackgroundCloud(int x, int y) : Entity("BackgroundCloud", x, y, 'c') {}
-
-    void tick(float, World& world) override { x_ = (x_ + 1) % world.width(); }
-
-    void draw(World& world) const override { world.putPixel(x_, y_, glyph_); }
-};
-
-class CharacterBase : public Entity,
-                      public ITickable,
-                      public IRenderable,
-                      public ICollidable,
-                      public IDamageable,
-                      public IInteractable {
-public:
-    CharacterBase(std::string name, int x, int y, char glyph, int hp)
-        : Entity(std::move(name), x, y, glyph), hp_(hp) {}
-
-    Hitbox getHitbox() const override { return Hitbox{x_, y_, 1, 1}; }
-    Entity* asEntity() override { return this; }
-    const Entity* asEntity() const override { return this; }
-
-    void onCollide(ICollidable&, World&) override {}
-
-    void takeDamage(int amount) override {
-        hp_ -= amount;
-        flashFrames_ = 1;
-        if (hp_ <= 0) {
-            markForDestroy();
-        }
-    }
-
-    bool isDead() const override { return hp_ <= 0; }
-
-    void interact(Entity&, World&) override {}
-
-    void draw(World& world) const override {
-        world.drawRect(getHitbox(), flashFrames_ > 0 ? '*' : glyph_);
-    }
-
-    void decayFlash() {
-        if (flashFrames_ > 0) {
-            --flashFrames_;
-        }
-    }
-
-    int hp() const { return hp_; }
-
-private:
-    int hp_;
-    int flashFrames_ = 0;
-};
-
-class Player : public CharacterBase {
-public:
-    Player(int x, int y) : CharacterBase("Player", x, y, 'P', 25) {}
-
-    void tick(float, World& world) override {
-        if (direction_ > 0) {
-            if (x() + 1 < world.width()) {
-                setPosition(x() + 1, y());
-            } else {
-                direction_ = -1;
-            }
-        } else {
-            if (x() - 1 >= 0) {
-                setPosition(x() - 1, y());
-            } else {
-                direction_ = 1;
-            }
-        }
-        decayFlash();
-    }
-
-    void interact(Entity& actor, World&) override {
-        std::cout << "Player acknowledged interaction from " << actor.name() << '\n';
-    }
-
-private:
-    int direction_ = 1;
-};
-
-class Zombie : public CharacterBase {
-public:
-    Zombie(int x, int y) : CharacterBase("Zombie", x, y, 'Z', 14) {}
-
-    void tick(float, World& world) override {
-        auto playerPtr = world.findByName("Player");
-        if (playerPtr.has_value()) {
-            Entity* p = *playerPtr;
-            int nx = x();
-            if (p->x() > x()) nx += 1;
-            if (p->x() < x()) nx -= 1;
-            nx = std::clamp(nx, 0, world.width() - 1);
-            setPosition(nx, y());
-        }
-        decayFlash();
-    }
-
-    void onCollide(ICollidable& other, World&) override {
-        if (auto* d = dynamic_cast<IDamageable*>(&other)) {
-            d->takeDamage(1);
-        }
-    }
-};
-
-class Slime : public CharacterBase {
-public:
-    Slime(int x, int y) : CharacterBase("Slime", x, y, 'S', 10) {}
-
-    void tick(float, World& world) override {
-        hop_ = !hop_;
-        if (hop_) {
-            int nx = std::clamp(x() + 1, 0, world.width() - 1);
-            setPosition(nx, y());
-        }
-        decayFlash();
-    }
-
-private:
-    bool hop_ = false;
-};
-
-class IndestructibleGhost : public Entity,
-                            public ITickable,
-                            public IRenderable,
-                            public IInteractable {
-public:
-    IndestructibleGhost(int x, int y) : Entity("IndestructibleGhost", x, y, 'G') {}
-
-    void tick(float, World& world) override { y_ = (y_ + 1) % world.height(); }
-
-    void draw(World& world) const override { world.putPixel(x_, y_, glyph_); }
-
-    void interact(Entity& actor, World&) override {
-        std::cout << "Ghost whispers to " << actor.name() << '\n';
-    }
-};
-
-class HealthPotion : public Entity, public IRenderable, public ICollidable {
-public:
-    HealthPotion(int x, int y) : Entity("HealthPotion", x, y, 'H') {}
-
-    Hitbox getHitbox() const override { return Hitbox{x_, y_, 1, 1}; }
-
-    void onCollide(ICollidable& other, World&) override {
-        if (auto* d = dynamic_cast<IDamageable*>(&other)) {
-            d->takeDamage(-5);
-            markForDestroy();
-        }
-    }
-
-    Entity* asEntity() override { return this; }
-    const Entity* asEntity() const override { return this; }
-    void draw(World& world) const override { world.drawRect(getHitbox(), glyph_); }
-};
-
-class GoldCoin : public Entity, public IRenderable, public ICollidable {
-public:
-    GoldCoin(int x, int y) : Entity("GoldCoin", x, y, '$') {}
-
-    Hitbox getHitbox() const override { return Hitbox{x_, y_, 1, 1}; }
-
-    void onCollide(ICollidable& other, World&) override {
-        if (dynamic_cast<Player*>(&other)) {
-            markForDestroy();
-            std::cout << "GoldCoin picked up\n";
-        }
-    }
-
-    Entity* asEntity() override { return this; }
-    const Entity* asEntity() const override { return this; }
-    void draw(World& world) const override { world.drawRect(getHitbox(), glyph_); }
-};
-
-class StoneDoor : public TerrainEntity {
-public:
-    StoneDoor(int x, int y) : TerrainEntity("StoneDoor", x, y, 'D') {}
-
-    void setOpen(bool open) {
-        open_ = open;
-        glyph_ = open_ ? '.' : 'D';
-    }
-
-    bool open() const { return open_; }
-
-private:
-    bool open_ = false;
-};
-
-class Lever : public Entity, public IRenderable, public IInteractable {
-public:
-    Lever(int x, int y, StoneDoor* door) : Entity("Lever", x, y, 'l'), linkedDoor_(door) {}
-
-    void draw(World& world) const override { world.putPixel(x_, y_, glyph_); }
-
-    void interact(Entity& actor, World&) override {
-        toggled_ = !toggled_;
-        glyph_ = toggled_ ? 'L' : 'l';
-        if (linkedDoor_ != nullptr) {
-            linkedDoor_->setOpen(toggled_);
-        }
-        std::cout << actor.name() << " toggled Lever => " << (toggled_ ? "ON" : "OFF") << '\n';
-    }
-
-private:
-    bool toggled_ = false;
-    StoneDoor* linkedDoor_ = nullptr;
-};
-
-class Button : public Entity, public IRenderable, public IInteractable {
-public:
-    Button(int x, int y) : Entity("Button", x, y, 'b') {}
-
-    void draw(World& world) const override { world.putPixel(x_, y_, glyph_); }
-
-    void interact(Entity& actor, World&) override {
-        pressed_ = !pressed_;
-        glyph_ = pressed_ ? 'B' : 'b';
-        std::cout << actor.name() << " pressed Button => " << (pressed_ ? "ON" : "OFF") << '\n';
-    }
-
-private:
-    bool pressed_ = false;
-};
-
-class SpikeTrap : public Entity,
-                  public ITickable,
-                  public IRenderable,
-                  public ICollidable,
-                  public IDamageable {
-public:
-    SpikeTrap(int x, int y) : Entity("SpikeTrap", x, y, '^') {}
-
-    void tick(float, World&) override {
-        armed_ = !armed_;
-        glyph_ = armed_ ? '^' : 'v';
-    }
-
-    Hitbox getHitbox() const override { return Hitbox{x_, y_, 1, 1}; }
-
-    void onCollide(ICollidable& other, World&) override {
-        if (!armed_) {
-            return;
-        }
-        if (auto* victim = dynamic_cast<IDamageable*>(&other)) {
-            victim->takeDamage(3);
-        }
-    }
-
-    Entity* asEntity() override { return this; }
-    const Entity* asEntity() const override { return this; }
-    void draw(World& world) const override { world.drawRect(getHitbox(), glyph_); }
-
-    void takeDamage(int amount) override {
-        hp_ -= amount;
-        if (hp_ <= 0) {
-            markForDestroy();
-        }
-    }
-
-    bool isDead() const override { return hp_ <= 0; }
-
-private:
-    bool armed_ = true;
-    int hp_ = 12;
-};
-
-// Empty-state entity to emulate the "ZST-style" edge case in interface containers.
-class InvisibleWall : public ICollidable {
-public:
-    InvisibleWall() = default;
-
-    Hitbox getHitbox() const override { return Hitbox{0, 0, 1, 1}; }
-    void onCollide(ICollidable&, World&) override {}
-    Entity* asEntity() override { return nullptr; }
-    const Entity* asEntity() const override { return nullptr; }
-};
-
-int main() {
-    World world(40, 12);
-
-    auto& door = world.spawn<StoneDoor>(31, 6);
-
-    world.spawn<StoneWall>(30, 6);
-    world.spawn<StoneWall>(32, 6);
-    world.spawn<DirtBlock>(5, 10);
-    world.spawn<DirtBlock>(6, 10);
-    world.spawn<Water>(7, 8);
-    world.spawn<Lava>(11, 8);
-    world.spawn<BackgroundCloud>(2, 1);
-
-    auto& player = world.spawn<Player>(3, 6);
-    world.spawn<Zombie>(20, 6);
-    world.spawn<Slime>(15, 6);
-    world.spawn<IndestructibleGhost>(25, 2);
-
-    world.spawn<HealthPotion>(10, 6);
-    world.spawn<GoldCoin>(12, 6);
-    world.spawn<Lever>(28, 6, &door);
-    world.spawn<Button>(26, 6);
-    world.spawn<SpikeTrap>(18, 6);
-
-    InvisibleWall zstLikeCollidable;
-    (void)zstLikeCollidable;
-
-    constexpr int targetFps = 30;
-    constexpr bool runForever = true;
-    constexpr long long totalFrames = 2000;
-    const auto frameBudget = std::chrono::milliseconds(1000 / targetFps);
-
-    std::cout << "\x1b[2J\x1b[H";
-
-    for (long long frame = 1; runForever || frame <= totalFrames; ++frame) {
-        const auto frameStart = std::chrono::steady_clock::now();
-
-        world.rebuildViews();
-        world.tickAll(1.0f / 60.0f);
-        world.resolveCollisions();
-
-        if (frame == 4 || frame == 12) {
-            world.rebuildViews();
-            for (auto* target : world.interactables()) {
-                if (target != nullptr) {
-                    target->interact(player, world);
+    bool is_static() const override { return true; }
+
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        (void)rng;
+
+        int heat_in = 0;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                const int nx = x + dx;
+                const int ny = y + dy;
+                if (!world.in_bounds(nx, ny)) {
+                    continue;
+                }
+                if (world.at(nx, ny).type() == EntityType::Lava) {
+                    heat_in += 24;
                 }
             }
         }
 
-        world.cleanupDestroyed();
-        world.rebuildViews();
-        world.drawAll();
-
-        world.printFrame(frame, targetFps);
-
-        auto playerEntity = world.findByName("Player");
-        if (!playerEntity.has_value()) {
-            std::cout << "Player died. Simulation ends early.\n";
-            break;
+        if (heat_in > 0) {
+            heat_ = static_cast<uint8_t>(std::min(255, static_cast<int>(heat_) + heat_in));
+        } else if (heat_ > 0) {
+            heat_ = static_cast<uint8_t>(heat_ > 2 ? heat_ - 2 : 0);
         }
 
-        const auto elapsed = std::chrono::steady_clock::now() - frameStart;
-        if (elapsed < frameBudget) {
-            std::this_thread::sleep_for(frameBudget - elapsed);
+        if (heat_ > 170) {
+            world.set(x, y, make_entity(EntityType::Lava));
+            world.at(x, y).last_update_frame = frame;
         }
     }
 
-    std::cout << "\nSimulation complete.\n";
+private:
+    uint8_t heat_ = 0;
+};
+
+class Sand final : public Entity {
+public:
+    EntityType type() const override { return EntityType::Sand; }
+    SDL_Color color() const override { return SDL_Color{219, 186, 92, 255}; }
+
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        const std::vector<MoveIntent> dirs = {
+            {0, 1},
+            {-1, 1},
+            {1, 1},
+        };
+        world.try_moves(x, y, dirs, frame, rng);
+    }
+};
+
+class Water final : public Entity {
+public:
+    EntityType type() const override { return EntityType::Water; }
+    SDL_Color color() const override { return SDL_Color{56, 119, 224, 255}; }
+
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        if (world.try_move(x, y, x, y + 1, frame)) {
+            lateral_momentum_ = 0;
+            return;
+        }
+
+        std::uniform_real_distribution<double> prob(0.0, 1.0);
+        if (lateral_momentum_ == 0) {
+            std::uniform_int_distribution<int> side_pick(0, 1);
+            lateral_momentum_ =
+                (side_pick(rng) == 0) ? static_cast<int8_t>(-1) : static_cast<int8_t>(1);
+        }
+
+        const int m = static_cast<int>(lateral_momentum_);
+        if (world.try_move(x, y, x + m, y + 1, frame) || world.try_move(x, y, x + m, y, frame)) {
+            return;
+        }
+
+        lateral_momentum_ = static_cast<int8_t>(-m);
+        if (world.try_move(x, y, x - m, y + 1, frame) || world.try_move(x, y, x - m, y, frame)) {
+            return;
+        }
+
+        if (prob(rng) < 0.45) {
+            lateral_momentum_ = 0;
+        }
+    }
+
+    bool accept_move(
+        World& world, int self_x, int self_y, int from_x, int from_y, Entity& mover, uint64_t frame
+    ) override {
+        if (mover.type() == EntityType::Sand || mover.type() == EntityType::Acid) {
+            world.swap_cells(self_x, self_y, from_x, from_y);
+            world.at(self_x, self_y).last_update_frame = frame;
+            return true;
+        }
+        return false;
+    }
+
+private:
+    int8_t lateral_momentum_ = 0;
+};
+
+class Lava final : public Entity {
+public:
+    EntityType type() const override { return EntityType::Lava; }
+    SDL_Color color() const override { return SDL_Color{230, 88, 35, 255}; }
+
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        std::uniform_real_distribution<double> prob(0.0, 1.0);
+
+        // Active thermal reactions: sustain high-entropy transitions around lava.
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                const int nx = x + dx;
+                const int ny = y + dy;
+                if (!world.in_bounds(nx, ny)) {
+                    continue;
+                }
+                const EntityType t = world.at(nx, ny).type();
+                if (t == EntityType::Water && prob(rng) < 0.7) {
+                    world.set(nx, ny, make_entity(EntityType::Steam));
+                    world.set(x, y, make_entity(EntityType::Wall));
+                    world.at(nx, ny).last_update_frame = frame;
+                    world.at(x, y).last_update_frame = frame;
+                    return;
+                }
+                if (t == EntityType::Plant && prob(rng) < 0.5) {
+                    world.set(nx, ny, make_entity(EntityType::VoidCell));
+                    world.at(nx, ny).last_update_frame = frame;
+                }
+            }
+        }
+
+        if ((frame & 1ULL) == 0ULL) {
+            return;
+        }
+        const std::vector<MoveIntent> dirs = {
+            {0, 1},
+            {-1, 1},
+            {1, 1},
+            {-1, 0},
+            {1, 0},
+        };
+        world.try_moves(x, y, dirs, frame, rng);
+    }
+
+    bool accept_move(
+        World& world, int self_x, int self_y, int from_x, int from_y, Entity& mover, uint64_t frame
+    ) override {
+        if (mover.type() == EntityType::Water) {
+            world.set(self_x, self_y, make_entity(EntityType::Steam));
+            world.set(from_x, from_y, make_entity(EntityType::Wall));
+            world.at(self_x, self_y).last_update_frame = frame;
+            world.at(from_x, from_y).last_update_frame = frame;
+            return true;
+        }
+        return false;
+    }
+};
+
+class Steam final : public Entity {
+public:
+    explicit Steam(int life = 160) : life_(life) {}
+
+    EntityType type() const override { return EntityType::Steam; }
+    SDL_Color color() const override { return SDL_Color{204, 214, 235, 255}; }
+
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        --life_;
+        if (life_ <= 0) {
+            world.set(x, y, make_entity(EntityType::Water));
+            world.at(x, y).last_update_frame = frame;
+            return;
+        }
+        const std::vector<MoveIntent> dirs = {
+            {0, -1},
+            {-1, -1},
+            {1, -1},
+            {-1, 0},
+            {1, 0},
+        };
+        world.try_moves(x, y, dirs, frame, rng);
+    }
+
+private:
+    int life_;
+};
+
+class Plant final : public Entity {
+public:
+    EntityType type() const override { return EntityType::Plant; }
+    SDL_Color color() const override { return SDL_Color{43, 176, 84, 255}; }
+    bool is_static() const override { return true; }
+
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        std::uniform_real_distribution<double> dist01(0.0, 1.0);
+        bool has_water = false;
+
+        std::vector<std::pair<int, int>> empty_neighbors;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                const int nx = x + dx;
+                const int ny = y + dy;
+                if (!world.in_bounds(nx, ny)) {
+                    continue;
+                }
+                EntityType t = world.at(nx, ny).type();
+                if (t == EntityType::Water) {
+                    has_water = true;
+                    world.set(nx, ny, make_entity(EntityType::VoidCell));
+                    world.at(nx, ny).last_update_frame = frame;
+                } else if (t == EntityType::VoidCell) {
+                    empty_neighbors.emplace_back(nx, ny);
+                }
+            }
+        }
+
+        if (has_water && !empty_neighbors.empty() && dist01(rng) < 0.22) {
+            std::uniform_int_distribution<size_t> pick(0, empty_neighbors.size() - 1);
+            auto [gx, gy] = empty_neighbors[pick(rng)];
+            world.set(gx, gy, make_entity(EntityType::Plant));
+            world.at(gx, gy).last_update_frame = frame;
+        }
+    }
+};
+
+class Acid final : public Entity {
+public:
+    EntityType type() const override { return EntityType::Acid; }
+    SDL_Color color() const override { return SDL_Color{175, 235, 74, 255}; }
+
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        std::uniform_real_distribution<double> dist01(0.0, 1.0);
+
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                const int nx = x + dx;
+                const int ny = y + dy;
+                if (!world.in_bounds(nx, ny)) {
+                    continue;
+                }
+                EntityType t = world.at(nx, ny).type();
+                if (t == EntityType::Wall && dist01(rng) < 0.18) {
+                    world.set(nx, ny, make_entity(EntityType::VoidCell));
+                    world.set(x, y, make_entity(EntityType::VoidCell));
+                    world.at(nx, ny).last_update_frame = frame;
+                    world.at(x, y).last_update_frame = frame;
+                    return;
+                }
+                if (t == EntityType::Plant && dist01(rng) < 0.55) {
+                    world.set(nx, ny, make_entity(EntityType::VoidCell));
+                    world.set(x, y, make_entity(EntityType::VoidCell));
+                    world.at(nx, ny).last_update_frame = frame;
+                    world.at(x, y).last_update_frame = frame;
+                    return;
+                }
+            }
+        }
+
+        if (world.try_move(x, y, x, y + 1, frame)) {
+            lateral_momentum_ = 0;
+            return;
+        }
+
+        if (lateral_momentum_ == 0) {
+            std::uniform_int_distribution<int> side_pick(0, 1);
+            lateral_momentum_ =
+                (side_pick(rng) == 0) ? static_cast<int8_t>(-1) : static_cast<int8_t>(1);
+        }
+
+        const int m = static_cast<int>(lateral_momentum_);
+        if (world.try_move(x, y, x + m, y + 1, frame) || world.try_move(x, y, x + m, y, frame)) {
+            return;
+        }
+
+        lateral_momentum_ = static_cast<int8_t>(-m);
+        if (world.try_move(x, y, x - m, y + 1, frame) || world.try_move(x, y, x - m, y, frame)) {
+            return;
+        }
+
+        if (dist01(rng) < 0.35) {
+            lateral_momentum_ = 0;
+        }
+    }
+
+private:
+    int8_t lateral_momentum_ = 0;
+};
+
+class Generator final : public Entity {
+public:
+    Generator(SpawnKind spawn, int interval)
+        : spawn_(spawn), interval_(std::max(1, interval)), move_interval_(6), vx_(1), vy_(0) {}
+
+    EntityType type() const override { return EntityType::Generator; }
+    SDL_Color color() const override {
+        if (spawn_ == SpawnKind::Water) {
+            return SDL_Color{58, 152, 255, 255};
+        }
+        if (spawn_ == SpawnKind::Lava) {
+            return SDL_Color{247, 122, 57, 255};
+        }
+        return SDL_Color{196, 247, 97, 255};
+    }
+
+    bool is_static() const override { return true; }
+
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        // Kinematic generators move periodically; they all start with rightward drift.
+        if ((frame % static_cast<uint64_t>(move_interval_)) == 0ULL) {
+            int nx = x + vx_;
+            const int ny = y + vy_;
+
+            // Reflect only on lateral borders.
+            if (nx <= 0 || nx >= world.width() - 1) {
+                vx_ = -vx_;
+                nx = x + vx_;
+            }
+
+            if (world.in_bounds(nx, ny)) {
+                const EntityType target = world.at(nx, ny).type();
+                if (target != EntityType::BlackHole) {
+                    // Force-occupy next cell to avoid jittery collision ping-pong.
+                    world.swap_cells(x, y, nx, ny);
+                    world.set(x, y, make_entity(EntityType::VoidCell));
+                    world.at(nx, ny).last_update_frame = frame;
+                }
+            }
+        }
+
+        ++counter_;
+        if (counter_ % interval_ != 0) {
+            return;
+        }
+
+        std::vector<std::pair<int, int>> candidates;
+        for (int dx = -1; dx <= 1; ++dx) {
+            const int nx = x + dx;
+            const int ny = y + 1;
+            if (!world.in_bounds(nx, ny)) {
+                continue;
+            }
+            if (world.at(nx, ny).type() == EntityType::VoidCell) {
+                candidates.emplace_back(nx, ny);
+            }
+        }
+        if (candidates.empty()) {
+            return;
+        }
+
+        std::uniform_int_distribution<size_t> pick(0, candidates.size() - 1);
+        auto [gx, gy] = candidates[pick(rng)];
+        if (spawn_ == SpawnKind::Water) {
+            world.set(gx, gy, make_entity(EntityType::Water));
+        } else if (spawn_ == SpawnKind::Lava) {
+            world.set(gx, gy, make_entity(EntityType::Lava));
+        } else {
+            world.set(gx, gy, make_entity(EntityType::Acid));
+        }
+        world.at(gx, gy).last_update_frame = frame;
+    }
+
+private:
+    SpawnKind spawn_;
+    int interval_;
+    int move_interval_;
+    int vx_;
+    int vy_;
+    int counter_ = 0;
+};
+
+class BlackHole final : public Entity {
+public:
+    EntityType type() const override { return EntityType::BlackHole; }
+    SDL_Color color() const override { return SDL_Color{160, 64, 220, 255}; }
+    bool is_static() const override { return false; }
+
+    void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
+        if (!initialized_) {
+            std::uniform_int_distribution<int> sign(0, 1);
+            vx_ = sign(rng) == 0 ? 1 : -1;
+            vy_ = sign(rng) == 0 ? 1 : -1;
+            initialized_ = true;
+        }
+
+        int cx = x;
+        int cy = y;
+
+        if ((frame % static_cast<uint64_t>(move_interval_)) == 0ULL) {
+            int tx = x + vx_;
+            int ty = y + vy_;
+
+            if (tx <= 0 || tx >= world.width() - 1) {
+                vx_ = -vx_;
+                tx = x + vx_;
+            }
+            if (ty <= 0 || ty >= world.height() - 1) {
+                vy_ = -vy_;
+                ty = y + vy_;
+            }
+
+            if (world.in_bounds(tx, ty) && tx > 0 && tx < world.width() - 1 && ty > 0 &&
+                ty < world.height() - 1) {
+                EntityType tt = world.at(tx, ty).type();
+                if (tt != EntityType::Generator && tt != EntityType::BlackHole &&
+                    tt != EntityType::VoidCell) {
+                    world.set(tx, ty, make_entity(EntityType::VoidCell));
+                    world.at(tx, ty).last_update_frame = frame;
+                    tt = EntityType::VoidCell;
+                }
+
+                if (tt == EntityType::VoidCell && world.try_move(x, y, tx, ty, frame)) {
+                    cx = tx;
+                    cy = ty;
+                }
+            }
+        }
+
+        for (int iy = cy - radius_; iy <= cy + radius_; ++iy) {
+            for (int ix = cx - radius_; ix <= cx + radius_; ++ix) {
+                if (!world.in_bounds(ix, iy)) {
+                    continue;
+                }
+                if (ix <= 0 || iy <= 0 || ix >= world.width() - 1 || iy >= world.height() - 1) {
+                    continue;
+                }
+                const int dx = ix - cx;
+                const int dy = iy - cy;
+                if (dx * dx + dy * dy > radius_ * radius_) {
+                    continue;
+                }
+                if (ix == cx && iy == cy) {
+                    continue;
+                }
+                const EntityType t = world.at(ix, iy).type();
+                if (t != EntityType::VoidCell && t != EntityType::BlackHole &&
+                    t != EntityType::Generator) {
+                    world.set(ix, iy, make_entity(EntityType::VoidCell));
+                    world.at(ix, iy).last_update_frame = frame;
+                }
+            }
+        }
+    }
+
+private:
+    bool initialized_ = false;
+    int vx_ = 1;
+    int vy_ = 1;
+    int move_interval_ = 4;
+    int radius_ = 3;
+};
+
+std::unique_ptr<Entity> make_entity(EntityType t) {
+    switch (t) {
+    case EntityType::VoidCell:
+        return std::make_unique<VoidCell>();
+    case EntityType::Wall:
+        return std::make_unique<Wall>();
+    case EntityType::Sand:
+        return std::make_unique<Sand>();
+    case EntityType::Water:
+        return std::make_unique<Water>();
+    case EntityType::Plant:
+        return std::make_unique<Plant>();
+    case EntityType::Lava:
+        return std::make_unique<Lava>();
+    case EntityType::Steam:
+        return std::make_unique<Steam>();
+    case EntityType::Acid:
+        return std::make_unique<Acid>();
+    case EntityType::Generator:
+        return std::make_unique<Generator>(SpawnKind::Water, 8);
+    case EntityType::BlackHole:
+        return std::make_unique<BlackHole>();
+    }
+    return std::make_unique<VoidCell>();
+}
+
+std::unique_ptr<Entity> make_generator(SpawnKind kind, int interval) {
+    return std::make_unique<Generator>(kind, interval);
+}
+
+static int randint(std::mt19937_64& rng, int lo, int hi) {
+    std::uniform_int_distribution<int> dist(lo, hi);
+    return dist(rng);
+}
+
+static bool is_solid_support(EntityType t) {
+    return t == EntityType::Wall || t == EntityType::Sand || t == EntityType::Plant;
+}
+
+static bool can_place_cluster(const World& world, int x, int y, int margin) {
+    return x >= margin && y >= margin && x < world.width() - margin && y < world.height() - margin;
+}
+
+static void place_wall_vein(World& world, int sx, int sy, int steps, std::mt19937_64& rng) {
+    static const std::array<std::pair<int, int>, 8> dirs = {
+        std::pair{1, 0},
+        std::pair{-1, 0},
+        std::pair{0, 1},
+        std::pair{0, -1},
+        std::pair{1, 1},
+        std::pair{-1, 1},
+        std::pair{1, -1},
+        std::pair{-1, -1},
+    };
+    std::uniform_real_distribution<double> prob(0.0, 1.0);
+
+    struct Walker {
+        int x;
+        int y;
+        int dir_index;
+        int life;
+    };
+
+    std::vector<Walker> walkers;
+    walkers.push_back({sx, sy, randint(rng, 0, static_cast<int>(dirs.size()) - 1), steps});
+
+    while (!walkers.empty()) {
+        Walker w = walkers.back();
+        walkers.pop_back();
+
+        while (w.life-- > 0) {
+            if (!can_place_cluster(world, w.x, w.y, 1)) {
+                break;
+            }
+
+            world.set(w.x, w.y, make_entity(EntityType::Wall));
+            if (prob(rng) < 0.22) {
+                for (int oy = -1; oy <= 1; ++oy) {
+                    for (int ox = -1; ox <= 1; ++ox) {
+                        if ((ox == 0 && oy == 0) || !world.in_bounds(w.x + ox, w.y + oy)) {
+                            continue;
+                        }
+                        if (prob(rng) < 0.25) {
+                            world.set(w.x + ox, w.y + oy, make_entity(EntityType::Wall));
+                        }
+                    }
+                }
+            }
+
+            if (prob(rng) < 0.24) {
+                const int delta = randint(rng, -3, 3);
+                w.dir_index = (w.dir_index + delta + static_cast<int>(dirs.size())) %
+                              static_cast<int>(dirs.size());
+            }
+
+            if (prob(rng) < 0.09 && w.life > 16) {
+                const int branch_dir =
+                    (w.dir_index + randint(rng, -2, 2) + static_cast<int>(dirs.size())) %
+                    static_cast<int>(dirs.size());
+                walkers.push_back({w.x, w.y, branch_dir, w.life / 2});
+            }
+
+            w.x += dirs[static_cast<size_t>(w.dir_index)].first;
+            w.y += dirs[static_cast<size_t>(w.dir_index)].second;
+        }
+    }
+}
+
+static void place_sand_heap(World& world, int cx, int cy, int radius, std::mt19937_64& rng) {
+    std::uniform_real_distribution<double> prob(0.0, 1.0);
+    const int r2 = radius * radius;
+    for (int y = std::max(1, cy - radius); y <= std::min(world.height() - 2, cy + radius); ++y) {
+        for (int x = std::max(1, cx - radius); x <= std::min(world.width() - 2, cx + radius); ++x) {
+            const int dx = x - cx;
+            const int dy = y - cy;
+            const int d2 = dx * dx + dy * dy;
+            if (d2 > r2) {
+                continue;
+            }
+            const double falloff = 1.0 - static_cast<double>(d2) / std::max(1, r2);
+            if (prob(rng) < 0.18 + 0.74 * falloff) {
+                world.set(x, y, make_entity(EntityType::Sand));
+            }
+        }
+    }
+}
+
+static void grow_plants_constrained(
+    World& world, int sx, int sy, int budget, std::mt19937_64& rng
+) {
+    std::uniform_real_distribution<double> prob(0.0, 1.0);
+    std::vector<std::pair<int, int>> frontier;
+    if (world.in_bounds(sx, sy)) {
+        frontier.emplace_back(sx, sy);
+        world.set(sx, sy, make_entity(EntityType::Plant));
+    }
+
+    static const std::array<std::pair<int, int>, 8> dirs = {
+        std::pair{1, 0},
+        std::pair{-1, 0},
+        std::pair{0, 1},
+        std::pair{0, -1},
+        std::pair{1, 1},
+        std::pair{-1, 1},
+        std::pair{1, -1},
+        std::pair{-1, -1},
+    };
+
+    while (!frontier.empty() && budget-- > 0) {
+        const size_t i =
+            static_cast<size_t>(randint(rng, 0, static_cast<int>(frontier.size()) - 1));
+        auto [x, y] = frontier[i];
+        frontier[i] = frontier.back();
+        frontier.pop_back();
+
+        for (const auto& [dx, dy] : dirs) {
+            const int nx = x + dx;
+            const int ny = y + dy;
+            if (!can_place_cluster(world, nx, ny, 1)) {
+                continue;
+            }
+            if (world.at(nx, ny).type() != EntityType::VoidCell) {
+                continue;
+            }
+
+            const bool near_core = std::abs(nx - sx) + std::abs(ny - sy) < budget / 6 + 14;
+            const bool has_support = is_solid_support(world.at(nx, ny + 1).type()) ||
+                                     is_solid_support(world.at(nx, ny - 1).type());
+            if (!has_support && prob(rng) > 0.16) {
+                continue;
+            }
+
+            const double p = near_core ? 0.58 : 0.26;
+            if (prob(rng) < p) {
+                world.set(nx, ny, make_entity(EntityType::Plant));
+                frontier.emplace_back(nx, ny);
+            }
+        }
+    }
+}
+
+static void place_fluid_pool(
+    World& world, EntityType t, int cx, int cy, int size, std::mt19937_64& rng
+) {
+    std::uniform_real_distribution<double> prob(0.0, 1.0);
+    std::vector<std::pair<int, int>> q;
+    q.emplace_back(cx, cy);
+
+    static const std::array<std::pair<int, int>, 8> dirs = {
+        std::pair{1, 0},
+        std::pair{-1, 0},
+        std::pair{0, 1},
+        std::pair{0, -1},
+        std::pair{1, 1},
+        std::pair{-1, 1},
+        std::pair{1, -1},
+        std::pair{-1, -1},
+    };
+
+    int placed = 0;
+    while (!q.empty() && placed < size) {
+        auto [x, y] = q.back();
+        q.pop_back();
+        if (!can_place_cluster(world, x, y, 1)) {
+            continue;
+        }
+        EntityType cur = world.at(x, y).type();
+        if (cur != EntityType::VoidCell && cur != EntityType::Sand && cur != EntityType::Plant) {
+            continue;
+        }
+
+        world.set(x, y, make_entity(t));
+        ++placed;
+
+        for (const auto& [dx, dy] : dirs) {
+            const int nx = x + dx;
+            const int ny = y + dy;
+            if (!world.in_bounds(nx, ny)) {
+                continue;
+            }
+            if (prob(rng) < 0.57) {
+                q.emplace_back(nx, ny);
+            }
+        }
+    }
+}
+
+void seed_world(World& world, uint64_t seed) {
+    std::mt19937_64 rng(seed);
+
+    for (int y = 0; y < world.height(); ++y) {
+        for (int x = 0; x < world.width(); ++x) {
+            if (x == 0 || y == 0 || x == world.width() - 1 || y == world.height() - 1) {
+                world.set(x, y, make_entity(EntityType::Wall));
+            } else {
+                world.set(x, y, make_entity(EntityType::VoidCell));
+            }
+        }
+    }
+
+    const int area = world.width() * world.height();
+    const int wall_cores = std::max(4, area / 4200);
+    const int sand_cores = std::max(3, area / 5200);
+    const int plant_cores = std::max(3, area / 5600);
+    const int water_cores = std::max(2, area / 9000);
+    const int lava_cores = std::max(1, area / 16000);
+
+    struct Core {
+        EntityType type;
+        int x;
+        int y;
+    };
+    std::vector<Core> cores;
+
+    for (int i = 0; i < wall_cores; ++i) {
+        cores.push_back(
+            {EntityType::Wall,
+             randint(rng, 6, world.width() - 7),
+             randint(rng, 5, world.height() - 6)}
+        );
+    }
+    for (int i = 0; i < sand_cores; ++i) {
+        cores.push_back(
+            {EntityType::Sand,
+             randint(rng, 8, world.width() - 9),
+             randint(rng, world.height() / 3, world.height() - 8)}
+        );
+    }
+    for (int i = 0; i < plant_cores; ++i) {
+        cores.push_back(
+            {EntityType::Plant,
+             randint(rng, 8, world.width() - 9),
+             randint(rng, world.height() / 2, world.height() - 7)}
+        );
+    }
+    for (int i = 0; i < water_cores; ++i) {
+        cores.push_back(
+            {EntityType::Water,
+             randint(rng, 8, world.width() - 9),
+             randint(rng, 6, world.height() / 2)}
+        );
+    }
+    for (int i = 0; i < lava_cores; ++i) {
+        cores.push_back(
+            {EntityType::Lava,
+             randint(rng, 8, world.width() - 9),
+             randint(rng, world.height() * 2 / 3, world.height() - 8)}
+        );
+    }
+    std::shuffle(cores.begin(), cores.end(), rng);
+
+    for (const auto& c : cores) {
+        if (c.type == EntityType::Wall) {
+            const int steps = randint(rng, 18, 50);
+            place_wall_vein(world, c.x, c.y, steps, rng);
+        }
+    }
+
+    for (const auto& c : cores) {
+        if (c.type == EntityType::Sand) {
+            place_sand_heap(world, c.x, c.y, randint(rng, 7, 15), rng);
+        }
+    }
+
+    for (const auto& c : cores) {
+        if (c.type == EntityType::Plant) {
+            grow_plants_constrained(world, c.x, c.y, randint(rng, 220, 520), rng);
+        }
+    }
+
+    for (const auto& c : cores) {
+        if (c.type == EntityType::Water) {
+            place_fluid_pool(world, EntityType::Water, c.x, c.y, randint(rng, 24, 64), rng);
+        } else if (c.type == EntityType::Lava) {
+            place_fluid_pool(world, EntityType::Lava, c.x, c.y, randint(rng, 9, 28), rng);
+        }
+    }
+
+    const int top = 2;
+    const int bottom = world.height() - 3;
+
+    const int acid_y = std::min(world.height() - 13, top + 1);
+    const int water_y = acid_y + 5;
+    const int lava_y = acid_y + 10;
+
+    const int acid_x = std::max(2, world.width() / 6);
+    const int water_x = world.width() / 2;
+    const int lava_x = std::min(world.width() - 3, world.width() * 5 / 6);
+
+    world.set(acid_x, acid_y, make_generator(SpawnKind::Acid, 7));
+    world.set(water_x, water_y, make_generator(SpawnKind::Water, 2));
+    world.set(lava_x, lava_y, make_generator(SpawnKind::Lava, 4));
+
+    world.set(world.width() / 2, bottom, make_entity(EntityType::BlackHole));
+}
+
+void render_world(SDL_Renderer* renderer, const World& world, int cell_size) {
+    SDL_SetRenderDrawColor(renderer, 8, 8, 12, 255);
+    SDL_RenderClear(renderer);
+
+    SDL_Rect rect{0, 0, cell_size, cell_size};
+    for (int y = 0; y < world.height(); ++y) {
+        for (int x = 0; x < world.width(); ++x) {
+            SDL_Color c = world.at(x, y).color();
+            SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, c.a);
+            rect.x = x * cell_size;
+            rect.y = y * cell_size;
+            SDL_RenderFillRect(renderer, &rect);
+        }
+    }
+
+    SDL_RenderPresent(renderer);
+}
+
+int run_visualization(int width, int height, uint64_t seed) {
+    constexpr int kCellSize = 8;
+    constexpr uint32_t kFrameMs = 1000 / 24;
+
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
+        return 1;
+    }
+
+    SDL_Window* window = SDL_CreateWindow(
+        "Polymorphism Sandbox",
+        SDL_WINDOWPOS_CENTERED,
+        SDL_WINDOWPOS_CENTERED,
+        width * kCellSize,
+        height * kCellSize,
+        SDL_WINDOW_SHOWN
+    );
+    if (window == nullptr) {
+        std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << '\n';
+        SDL_Quit();
+        return 1;
+    }
+
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    if (renderer == nullptr) {
+        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    }
+    if (renderer == nullptr) {
+        std::cerr << "SDL_CreateRenderer failed: " << SDL_GetError() << '\n';
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    std::mt19937_64 rng(seed);
+    World world(width, height);
+    seed_world(world, seed);
+
+    bool running = true;
+    uint64_t frame = 1;
+    while (running) {
+        const uint32_t frame_start = SDL_GetTicks();
+
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                running = false;
+            }
+            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+                running = false;
+            }
+        }
+
+        world.step(frame, rng);
+        ++frame;
+        render_world(renderer, world, kCellSize);
+
+        const uint32_t elapsed = SDL_GetTicks() - frame_start;
+        if (elapsed < kFrameMs) {
+            SDL_Delay(kFrameMs - elapsed);
+        }
+    }
+
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
     return 0;
+}
+
+int run_benchmark(int width, int height, uint64_t seed, uint64_t steps) {
+    World world(width, height);
+    seed_world(world, seed);
+    std::mt19937_64 rng(seed ^ 0x9E3779B97F4A7C15ULL);
+
+    const auto start = std::chrono::steady_clock::now();
+    for (uint64_t frame = 1; frame <= steps; ++frame) {
+        world.step(frame, rng);
+    }
+    const auto end = std::chrono::steady_clock::now();
+    const auto elapsed_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+
+    const double elapsed_s = static_cast<double>(elapsed_ns) / 1e9;
+    const double fps_logic = steps / std::max(1e-9, elapsed_s);
+
+    std::cout << "benchmark_mode=on\n";
+    std::cout << "steps=" << steps << "\n";
+    std::cout << "elapsed_sec=" << elapsed_s << "\n";
+    std::cout << "logic_fps=" << fps_logic << "\n";
+    std::cout << "remaining_water=" << world.count_type(EntityType::Water) << "\n";
+    std::cout << "remaining_lava=" << world.count_type(EntityType::Lava) << "\n";
+    std::cout << "remaining_steam=" << world.count_type(EntityType::Steam) << "\n";
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    int width = 160;
+    int height = 96;
+    uint64_t seed = 1337;
+    bool benchmark = false;
+    uint64_t steps = 5000;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view arg = argv[i];
+        if (arg == "--benchmark") {
+            benchmark = true;
+            if (i + 1 < argc) {
+                steps = static_cast<uint64_t>(std::strtoull(argv[i + 1], nullptr, 10));
+                ++i;
+            }
+        } else if (arg == "--seed" && i + 1 < argc) {
+            seed = static_cast<uint64_t>(std::strtoull(argv[++i], nullptr, 10));
+        } else if (arg == "--width" && i + 1 < argc) {
+            width = std::max(32, std::atoi(argv[++i]));
+        } else if (arg == "--height" && i + 1 < argc) {
+            height = std::max(32, std::atoi(argv[++i]));
+        }
+    }
+
+    if (benchmark) {
+        return run_benchmark(width, height, seed, steps);
+    }
+    return run_visualization(width, height, seed);
 }
