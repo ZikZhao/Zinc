@@ -594,30 +594,26 @@ public:
     Scope* scope_;
     strview identifier_;
     GlobalMemory::FlatSet<const InterfaceType*> extends_;
-    mutable GlobalMemory::
-        FlatMap<std::pair<strview, const FunctionType*>, GlobalMemory::Vector<const InstanceType*>>
-            implementors_;
+    mutable GlobalMemory::Vector<const InstanceType*> implementors_;
 
 public:
     InterfaceType() noexcept : Type(kind, false) {}
 
     InterfaceType(
-        Scope* scope,
-        strview identifier,
-        GlobalMemory::FlatSet<const InterfaceType*> extends,
-        GlobalMemory::FlatMap<
-            std::pair<strview, const FunctionType*>,
-            GlobalMemory::Vector<const InstanceType*>> implementors
+        Scope* scope, strview identifier, GlobalMemory::FlatSet<const InterfaceType*> extends
     ) noexcept
-        : Type(kind, false),
-          scope_(scope),
-          identifier_(identifier),
-          extends_(std::move(extends)),
-          implementors_(std::move(implementors)) {}
+        : Type(kind, false), scope_(scope), identifier_(identifier), extends_(std::move(extends)) {}
 
     GlobalMemory::String repr() const override { return GlobalMemory::String{identifier_}; }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
+
+    void implemented_by(const InstanceType* instance) const noexcept {
+        implementors_.push_back(instance);
+        for (const InterfaceType* parent : extends_) {
+            parent->implemented_by(instance);
+        }
+    }
 
 protected:
     std::strong_ordering do_compare(
@@ -664,7 +660,11 @@ public:
           scope_(scope),
           identifier_(identifier),
           implements_(std::move(interfaces)),
-          attrs_(std::move(attrs)) {}
+          attrs_(std::move(attrs)) {
+        for (const InterfaceType* interface : implements_) {
+            interface->implemented_by(this);
+        }
+    }
 
     GlobalMemory::String repr() const override {
         GlobalMemory::String str{identifier_};

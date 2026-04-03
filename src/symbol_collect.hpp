@@ -96,7 +96,7 @@ public:
         identifiers_[identifier] = ptr;
     }
 
-    template <typename T>
+    template <ASTClass T>
     void add_type(strview identifier, const T* node) noexcept {
         TypeProvider::Kind kind;
         if constexpr (std::is_same_v<T, ASTTypeAlias>) {

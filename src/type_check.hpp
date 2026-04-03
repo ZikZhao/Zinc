@@ -66,38 +66,10 @@ public:
 
     using Table = GlobalMemory::FlatMap<const ASTNode*, TableValue>;
 
-    struct VirtualDecl {
-        const InterfaceType* decl_provider;
-        strview identifier;
-        const FunctionType* func_type;
-    };
-
-    struct VirtualDeclHasher {
-        auto operator()(const VirtualDecl& decl) const noexcept -> std::size_t {
-            return hash_combine(
-                std::bit_cast<std::size_t>(decl.decl_provider),
-                std::hash<strview>{}(decl.identifier),
-                std::bit_cast<std::size_t>(decl.func_type)
-            );
-        }
-    };
-
-    struct VirtualDeclEqual {
-        auto operator()(const VirtualDecl& lhs, const VirtualDecl& rhs) const noexcept -> bool {
-            return lhs.decl_provider == rhs.decl_provider && lhs.identifier == rhs.identifier &&
-                   lhs.func_type == rhs.func_type;
-        }
-    };
-
 public:
     GlobalMemory::Vector<std::tuple<const Scope*, strview, const Value*>> constants_;
     GlobalMemory::Vector<FunctionDef> functions_;
-    GlobalMemory::UnorderedMap<
-        VirtualDecl,
-        GlobalMemory::Vector<const Type*>,
-        VirtualDeclHasher,
-        VirtualDeclEqual>
-        virtuals_;
+    GlobalMemory::Vector<std::tuple<const InterfaceType*, strview, const FunctionType*>> virtuals_;
     GlobalMemory::Vector<std::pair<Scope*, std::span<const Object*>>> instantiations_;
     GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
     GlobalMemory::Vector<strview> cpp_blocks_;
@@ -114,13 +86,10 @@ public:
         functions_.push_back({current_scope, node, func_obj});
     }
 
-    auto add_virtual_impl(
-        const InterfaceType* decl_provider,
-        strview identifier,
-        const FunctionType* func_type,
-        const Type* impl_provider
+    auto add_virtual(
+        const InterfaceType* interface, strview identifier, const FunctionType* func_type
     ) -> void {
-        virtuals_[{decl_provider, identifier, func_type}].push_back(impl_provider);
+        virtuals_.push_back({interface, identifier, func_type});
     }
 
     auto add_instantiation(const Scope* inst_scope, std::span<const Object*> args) -> void {
@@ -641,9 +610,9 @@ private:
                                Scope* scope, const ScopeValue* scope_value
                            ) -> GlobalMemory::Vector<const FunctionType*> {
             auto* overloads = scope_value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
-            return *overloads | std::views::filter([](FunctionOverloadDef overload) {
-                return !overload.get<const ASTTemplateDefinition*>();
-            }) | std::views::transform([this, scope](FunctionOverloadDef overload) {
+            return *overloads | std::views::filter([](FunctionOverloadDef overload) -> bool {
+                return overload.get<const ASTTemplateDefinition*>() == nullptr;
+            }) | std::views::transform([&](FunctionOverloadDef overload) -> const FunctionType* {
                 return sema_.get_func_type(scope, overload);
             }) | GlobalMemory::collect<GlobalMemory::Vector>();
         };
@@ -1860,32 +1829,11 @@ public:
                 extends.insert(extend_res.get()->cast<InterfaceType>());
             }
         }
-        GlobalMemory::FlatMap<
-            std::pair<strview, const FunctionType*>,
-            GlobalMemory::Vector<const InstanceType*>>
-            implementors;
-        for (const auto& [identifier, value] : *sema_.current_scope_) {
-            auto* overloads = value.get<GlobalMemory::Vector<FunctionOverloadDef>*>();
-            if (!overloads) continue;
-            for (const FunctionOverloadDef& overload_def : *overloads) {
-                if (overload_def.get<const ASTFunctionDefinition*>()) {
-                    const FunctionType* func_type =
-                        sema_.get_func_type(sema_.current_scope_, overload_def);
-                    if (!func_type) {
-                        has_error = true;
-                        continue;
-                    }
-                    implementors[{identifier, func_type}] = {};
-                }
-            }
-        }
         if (has_error) {
             out_ = nullptr;
             return;
         }
-        TypeRegistry::get_at<InterfaceType>(
-            out_, sema_.current_scope_, node->identifier, extends, implementors
-        );
+        TypeRegistry::get_at<InterfaceType>(out_, sema_.current_scope_, node->identifier, extends);
     }
 
     void operator()(const ASTClassDefinition* node) noexcept {
@@ -2550,8 +2498,20 @@ public:
 
     void operator()(const ASTInterfaceDefinition* node) noexcept {
         Sema::Guard guard(sema_, node);
-        for (auto& item : node->scope_items) {
-            (*this)(item);
+        const InterfaceType* interface_type = sema_.get_self_type()->cast<InterfaceType>();
+        for (const auto& [id, value] : *sema_.current_scope_) {
+            if (auto* overloads = value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+                if (!overloads->front().get<const ASTFunctionDefinition*>()) continue;
+                for (const FunctionOverloadDef& overload : *overloads) {
+                    const ASTFunctionDefinition* func_def =
+                        overload.get<const ASTFunctionDefinition*>();
+                    if (!func_def) continue;
+                    const FunctionType* func_type =
+                        sema_.get_func_type(sema_.current_scope_, overload);
+                    if (!func_type) continue;
+                    sema_.codegen_env_.add_virtual(interface_type, func_def->identifier, func_type);
+                }
+            }
         }
     }
 
@@ -3166,7 +3126,7 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
     }
     Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
     Term current_term = base_term;
-    GlobalMemory::Vector<std::pair<const InstanceType*, const FunctionType*>> dereference_chain;
+    GlobalMemory::Vector<std::pair<const InstanceType*, const FunctionType*>> pointer_chain;
     while (true) {
         const Type* decayed = current_term.decay();
         if (decayed == nullptr) {
@@ -3180,14 +3140,14 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
                     sema_.current_scope_,
                     node,
                     new PointerChain{
-                        {}, node->base, dereference_chain | GlobalMemory::collect<std::span>()
+                        {}, node->base, pointer_chain | GlobalMemory::collect<std::span>()
                     }
                 );
                 return Sema::nonnull(eval_struct_access(dereferenced, node->member));
             } else if (decayed_dereferenced->dyn_cast<InstanceType>()) {
                 Symbol result = eval_instance_access(dereferenced, node->member);
                 PointerChain* chain = new PointerChain{
-                    {}, node->base, dereference_chain | GlobalMemory::collect<std::span>()
+                    {}, node->base, pointer_chain | GlobalMemory::collect<std::span>()
                 };
                 if (auto* method = Sema::get_if<SymbolKind::Method>(result)) {
                     method->self = chain;
@@ -3203,7 +3163,27 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
                 node, OperatorCode::Pointer, current_term
             );
             current_term = result.first;
-            dereference_chain.push_back({instance_type, result.second});
+            pointer_chain.push_back({instance_type, result.second});
+        } else if (auto* dynamic_type = decayed->dyn_cast<DynamicType>()) {
+            Scope* interface_scope = dynamic_type->target_type_->scope_;
+            const ScopeValue* value = interface_scope->find(node->member);
+            if (!value) {
+                Diagnostic::error_member_not_found(node->member);
+                return {};
+            }
+            if (value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+                return BoundMethod{
+                    Term::lvalue(dynamic_type->target_type_, dynamic_type->is_mutable_),
+                    interface_scope,
+                    value,
+                    new PointerChain{
+                        {}, node->base, pointer_chain | GlobalMemory::collect<std::span>()
+                    }
+                };
+            } else {
+                Diagnostic::error_member_not_found(node->member);
+                return {};
+            }
         } else {
             Diagnostic::error_invalid_pointer_access(base_term->repr());
             return {};

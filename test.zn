@@ -1,18 +1,16 @@
 fn main(args: [strview]) {
     let inst = Derived();
-    let base_ref: dyn BaseInterface = inst;
-    std.cout << "Base reference: " << base_ref.foo();
+    let base_ref: dyn BaseInterface = &inst;
+    std.cout << "Base reference: " << base_ref->foo();
 }
 
 interface BaseInterface {
-    fn foo(self: &Self) -> i32 {
-        return 0;
-    }
+    fn foo(self: &Self) -> i32;
 }
 
 class Base implements BaseInterface {
     init() {
-        return Self();
+        return Self{};
     }
     drop() {
         std.cout << "Base destructor called\n";
@@ -24,7 +22,7 @@ class Base implements BaseInterface {
 
 class Derived implements BaseInterface {
     init() {
-        return Self();
+        return Self{};
     }
     drop() {
         std.cout << "Derived destructor called\n";

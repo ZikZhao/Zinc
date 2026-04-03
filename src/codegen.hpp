@@ -38,6 +38,8 @@ private:
 public:
     TypeSorter() noexcept = default;
 
+    auto size() const noexcept -> std::size_t { return types_.size(); }
+
     void add(const Type* type) noexcept {
         if (!types_.insert(type).second) return;
         switch (type->kind_) {
@@ -89,6 +91,9 @@ public:
                 add(variant_type);
             }
             break;
+        case Kind::Dynamic:
+            edges_.insert({.child = type->cast<DynamicType>()->target_type_, .parent = type});
+            add(type->cast<DynamicType>()->target_type_);
         default:
             break;
         }
@@ -110,9 +115,20 @@ public:
         while (!queue.empty()) {
             const Type* child = queue.back();
             queue.pop_back();
-            if (child->kind_ == Kind::Struct || child->kind_ == Kind::Instance ||
-                child->kind_ == Kind::Union) {
+            // if (child->kind_ == Kind::Struct || child->kind_ == Kind::Instance ||
+            //     child->kind_ == Kind::Union) {
+            //     co_yield child;
+            // }
+            switch (child->kind_) {
+            case Kind::Struct:
+            case Kind::Interface:
+            case Kind::Instance:
+            case Kind::Dynamic:
+            case Kind::Union:
                 co_yield child;
+                break;
+            default:
+                break;
             }
             auto range = std::ranges::equal_range(edges_, child, std::less{}, &Edge::child);
             for (const Edge& edge : range) {
@@ -148,7 +164,9 @@ public:
     static void output(GlobalMemory::String& out, const Type* type, TypeMap& type_map) {
         switch (type->kind_) {
         case Kind::Struct:
+        case Kind::Interface:
         case Kind::Instance:
+        case Kind::Dynamic:
         case Kind::Union:
             std::format_to(std::back_inserter(out), "_t{}"sv, type_map.at(type));
             break;
@@ -169,9 +187,6 @@ public:
             break;
         case Kind::Function:
             output(out, type->cast<FunctionType>(), type_map);
-            break;
-        case Kind::Interface:
-            /// TODO:
             break;
         case Kind::Reference:
             output(out, type->cast<ReferenceType>()->target_type_, type_map);
@@ -333,17 +348,20 @@ public:
              std::get<TypeRegistry::TypeSet<StructType>>(TypeRegistry::instance->types_)) {
             sorter.add(type);
         }
+        for (const InterfaceType* type : TypeRegistry::instance->interface_types_) {
+            sorter.add(type);
+        }
         for (const InstanceType* type : TypeRegistry::instance->instance_types_) {
+            sorter.add(type);
+        }
+        for (const DynamicType* type :
+             std::get<TypeRegistry::TypeSet<DynamicType>>(TypeRegistry::instance->types_)) {
             sorter.add(type);
         }
         for (const UnionType* type :
              std::get<TypeRegistry::TypeSet<UnionType>>(TypeRegistry::instance->types_)) {
             sorter.add(type);
         }
-        types_.reserve(
-            std::get<TypeRegistry::TypeSet<StructType>>(TypeRegistry::instance->types_).size() +
-            TypeRegistry::instance->instance_types_.size()
-        );
         std::ranges::copy(std::move(sorter).iterate(), std::back_inserter(types_));
         type_map_ =
             TypeMap(std::from_range, std::views::zip(types_, std::views::iota(std::size_t{0})));
@@ -355,11 +373,17 @@ public:
             case Kind::Struct:
                 generate_struct(type->cast<StructType>());
                 break;
+            case Kind::Interface:
+                generate_interface(type->cast<InterfaceType>());
+                break;
             case Kind::Instance:
                 generate_class(type->cast<InstanceType>());
                 break;
             case Kind::Union:
                 generate_union(type->cast<UnionType>());
+                break;
+            case Kind::Dynamic:
+                generate_dynamic(type->cast<DynamicType>());
                 break;
             default:
                 UNREACHABLE();
@@ -386,6 +410,12 @@ private:
             definitions_ += ";\n"sv;
         }
         definitions_ += "};\n"sv;
+    }
+
+    void generate_interface(const InterfaceType* type) {
+        std::size_t type_index = type_map_.at(type);
+        std::format_to(std::back_inserter(forward_declarations_), "struct _t{};\n"sv, type_index);
+        std::format_to(std::back_inserter(definitions_), "struct _t{} {{}};\n"sv, type_index);
     }
 
     void generate_class(const InstanceType* type) {
@@ -429,6 +459,26 @@ private:
             }
             definitions_ += "};\n"sv;
         }
+    }
+
+    void generate_dynamic(const DynamicType* type) {
+        std::size_t type_index = type_map_.at(type);
+        std::format_to(std::back_inserter(forward_declarations_), "struct _t{};\n"sv, type_index);
+        std::format_to(std::back_inserter(definitions_), "struct _t{} {{\n"sv, type_index);
+        std::format_to(
+            std::back_inserter(definitions_), "    void* _data;\n", type_map_.at(type->target_type_)
+        );
+        definitions_ += "    std::uint64_t _type_index;\n"sv;
+        for (const InstanceType* implementor : type->target_type_->implementors_) {
+            std::format_to(
+                std::back_inserter(definitions_),
+                "    _t{}(const _t{}* target) noexcept: _data(const_cast<void*>(static_cast<const void*>(target))), _type_index({}) {{}}\n"sv,
+                type_map_.at(type),
+                type_map_.at(implementor),
+                type_map_.at(implementor)
+            );
+        }
+        definitions_ += "};\n"sv;
     }
 
     void generate_union(const UnionType* type) {
@@ -524,6 +574,13 @@ public:
 
     auto operator()(GlobalMemory::String& out, const Type* type) const -> void {
         switch (type->kind_) {
+        case Kind::Struct:
+        case Kind::Interface:
+        case Kind::Instance:
+        case Kind::Dynamic:
+        case Kind::Union:
+            std::format_to(std::back_inserter(out), "t{}"sv, type_map_.at(type));
+            break;
         case Kind::Void:
             out += "v"sv;
             break;
@@ -574,11 +631,6 @@ public:
             }
             (*this)(out, type->cast<PointerType>()->target_type_);
             break;
-        case Kind::Struct:
-        case Kind::Instance: {
-            std::format_to(std::back_inserter(out), "t{}"sv, type_map_.at(type));
-            break;
-        }
         default:
             UNREACHABLE();
         }
@@ -802,9 +854,8 @@ public:
             }
             newline(false);
         }
-        for (const auto& [decl_info, impl_providers] : env_.virtuals_) {
-            const auto& [decl_provider, identifier, func_type] = decl_info;
-            (*this)(decl_provider, identifier, func_type, impl_providers);
+        for (const auto& [interface, identifier, func_type] : env_.virtuals_) {
+            (*this)(interface, identifier, func_type);
         }
         stream << "\n// ----- Constants -----\n"sv;
         flush_without_sdl_prefix(constants_, stream);
@@ -869,7 +920,7 @@ public:
         indent_level_--;
         newline();
         definitions_ += "}"sv;
-        newline(false);
+        newline();
     }
 
     auto operator()(const ASTCtorDtorDefinition* node, const FunctionType* func_type) -> void {
@@ -909,7 +960,7 @@ public:
         indent_level_--;
         newline();
         definitions_ += "}"sv;
-        newline(false);
+        newline();
     }
 
     auto operator()(const ASTCtorDtorDefinition* node, const FunctionType* func_type, int) -> void {
@@ -923,7 +974,11 @@ public:
         definitions_ += "() {"sv;
         indent_level_++;
         newline();
-        definitions_ += "auto&& self = *this;"sv;
+        std::format_to(
+            std::back_inserter(definitions_),
+            "_t{}& self = *this;"sv,
+            type_map_.at(func_type->return_type_)
+        );
         for (const ASTNodeVariant& child : node->body) {
             newline();
             (*this)(child);
@@ -931,7 +986,7 @@ public:
         indent_level_--;
         newline();
         definitions_ += "}"sv;
-        newline(false);
+        newline();
     }
 
     auto operator()(const ASTOperatorDefinition* node, const FunctionType* func_type) -> void {
@@ -974,31 +1029,30 @@ public:
         indent_level_--;
         newline();
         definitions_ += "}"sv;
-        newline(false);
+        newline();
     }
 
     auto operator()(
-        const InterfaceType* decl_provider,
-        strview identifier,
-        const FunctionType* func_type,
-        std::span<const Type* const> impl_providers
+        const InterfaceType* interface, strview identifier, const FunctionType* func_type
     ) -> void {
         auto gen = [&](GlobalMemory::String& out) {
-            out += "auto _virtual"sv;
-            std::format_to(std::back_inserter(out), "_t{}"sv, type_map_.at(decl_provider));
-            std::format_to(std::back_inserter(out), "_{}{}"sv, identifier.length(), identifier);
+            out += "auto "sv;
+            mangler_(out, interface->scope_, identifier);
             out += "_0"sv;
             for (const Type* param_type : func_type->parameters_) {
                 mangler_(out, param_type);
             }
             out += "("sv;
-            strview sep = ""sv;
-            for (std::size_t i = 0; i < func_type->parameters_.size(); i++) {
-                out += sep;
+            const DynamicType* dynamic_self = TypeRegistry::get<DynamicType>(
+                interface, Type::is_mutable(func_type->parameters_[0])
+            );
+            ObjectGen::output(out, dynamic_self, type_map_);
+            out += " _arg0"sv;
+            for (std::size_t i = 1; i < func_type->parameters_.size(); i++) {
+                out += ", "sv;
                 ObjectGen::output(out, func_type->parameters_[i], type_map_);
                 out += " "sv;
-                std::format_to(std::back_inserter(out), "arg{}"sv, i);
-                sep = ", "sv;
+                std::format_to(std::back_inserter(out), "_arg{}"sv, i);
             }
             out += ") -> "sv;
             ObjectGen::output(out, func_type->return_type_, type_map_);
@@ -1009,60 +1063,67 @@ public:
 
         const Type* self = func_type->parameters_[0];
         ValueCategory self_category = Type::category(self);
-        auto gen_self = [&](const Type* impl_type) {
+        auto gen_self = [&](const InstanceType* implementor) {
             switch (self_category) {
             case ValueCategory::Right:
-                // std::format_to(
-                //     std::back_inserter(definitions_),
-                //     "std::launder(static_cast<{}&&>(arg0))"sv,
-                //     Type::repr(Type::forward_like(self, impl_type))
-                // );
+            case ValueCategory::Expiring:
+                std::format_to(
+                    std::back_inserter(definitions_),
+                    "std::move(*static_cast<_t{}*>(_arg0._data))"sv,
+                    type_map_.at(implementor)
+                );
                 break;
+            case ValueCategory::Left:
+                std::format_to(
+                    std::back_inserter(definitions_),
+                    "*static_cast<_t{}*>(_arg0._data)"sv,
+                    type_map_.at(implementor)
+                );
             }
         };
 
         definitions_ += " {"sv;
         indent_level_++;
         newline();
-        definitions_ += "switch (arg0.$type_index) {"sv;
-        indent_level_++;
-        for (const Type* impl_provider : impl_providers) {
+        definitions_ += "switch (_arg0._type_index) {"sv;
+        for (const InstanceType* implementor : interface->implementors_) {
+            newline();
             std::format_to(
                 std::back_inserter(definitions_),
-                "case {}: // {}\n"sv,
-                type_map_.at(impl_provider->cast<InstanceType>()),
-                impl_provider->repr()
+                "case {}:"sv,
+                type_map_.at(implementor),
+                implementor->repr()
             );
             indent_level_++;
+            newline();
             definitions_ += "return "sv;
-            const Scope* impl_scope = impl_provider->kind_ == Kind::Instance
-                                          ? impl_provider->cast<InstanceType>()->scope_
-                                          : impl_provider->cast<InterfaceType>()->scope_;
-            mangler_(definitions_, impl_scope, identifier);
+            mangler_(definitions_, implementor->scope_, identifier);
             definitions_ += "_0"sv;
-            mangler_(definitions_, Type::forward_like(self, impl_provider));
+            mangler_(definitions_, Type::forward_like(self, implementor));
             for (std::size_t i = 1; i < func_type->parameters_.size(); i++) {
                 mangler_(definitions_, func_type->parameters_[i]);
             }
             definitions_ += "("sv;
-            if (Type::category(self) == ValueCategory::Expiring) {
-                definitions_ += "std::move("sv;
+            gen_self(implementor);
+            for (std::size_t i = 1; i < func_type->parameters_.size(); i++) {
+                definitions_ += ", "sv;
+                std::format_to(std::back_inserter(definitions_), "_arg{}"sv, i);
             }
-            definitions_ += "*static_cast<>(&arg0)";
-            ObjectGen::output(
-                definitions_,
-                Type::forward_like(func_type->parameters_[0], impl_provider),
-                type_map_
-            );
-            strview sep = ", "sv;
-            for (std::size_t i = 0; i < func_type->parameters_.size(); i++) {
-                definitions_ += sep;
-                std::format_to(std::back_inserter(definitions_), "arg{}", i);
-                sep = ", "sv;
-            }
-            definitions_ += ");\n"sv;
+            definitions_ += ");"sv;
             indent_level_--;
         }
+        newline();
+        definitions_ += "default:"sv;
+        indent_level_++;
+        newline();
+        definitions_ += "__builtin_unreachable();"sv;
+        indent_level_--;
+        newline();
+        definitions_ += "}"sv;
+        indent_level_--;
+        newline();
+        definitions_ += "}"sv;
+        newline();
     }
 
     auto operator()(const ASTLocalBlock* node) -> void {
