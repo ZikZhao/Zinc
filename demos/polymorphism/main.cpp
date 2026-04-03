@@ -215,30 +215,32 @@ public:
     void tick(World& world, int x, int y, uint64_t frame, std::mt19937_64& rng) override {
         (void)rng;
 
-        int heat_in = 0;
-        for (int dy = -1; dy <= 1; ++dy) {
-            for (int dx = -1; dx <= 1; ++dx) {
-                if (dx == 0 && dy == 0) {
-                    continue;
-                }
-                const int nx = x + dx;
-                const int ny = y + dy;
-                if (!world.in_bounds(nx, ny)) {
-                    continue;
-                }
-                if (world.at(nx, ny).type() == EntityType::Lava) {
-                    heat_in += 24;
-                }
+        bool near_lava = false;
+        static const std::array<std::pair<int, int>, 4> neighbors = {
+            std::pair{1, 0},
+            std::pair{-1, 0},
+            std::pair{0, 1},
+            std::pair{0, -1},
+        };
+        for (const auto& [dx, dy] : neighbors) {
+            const int nx = x + dx;
+            const int ny = y + dy;
+            if (!world.in_bounds(nx, ny)) {
+                continue;
+            }
+            if (world.at(nx, ny).type() == EntityType::Lava) {
+                near_lava = true;
+                break;
             }
         }
 
-        if (heat_in > 0) {
-            heat_ = static_cast<uint8_t>(std::min(255, static_cast<int>(heat_) + heat_in));
+        if (near_lava) {
+            heat_ = static_cast<uint8_t>(std::min(255, static_cast<int>(heat_) + 1));
         } else if (heat_ > 0) {
-            heat_ = static_cast<uint8_t>(heat_ > 2 ? heat_ - 2 : 0);
+            heat_ = static_cast<uint8_t>(heat_ - 1);
         }
 
-        if (heat_ > 170) {
+        if (heat_ >= 10) {
             world.set(x, y, make_entity(EntityType::Lava));
             world.at(x, y).last_update_frame = frame;
         }
@@ -1000,8 +1002,8 @@ void seed_world(World& world, uint64_t seed) {
     const int lava_x = std::min(world.width() - 3, world.width() * 5 / 6);
 
     world.set(acid_x, acid_y, make_generator(SpawnKind::Acid, 7));
-    world.set(water_x, water_y, make_generator(SpawnKind::Water, 2));
-    world.set(lava_x, lava_y, make_generator(SpawnKind::Lava, 4));
+    world.set(water_x, water_y, make_generator(SpawnKind::Water, 4));
+    world.set(lava_x, lava_y, make_generator(SpawnKind::Lava, 7));
 
     world.set(world.width() / 2, bottom, make_entity(EntityType::BlackHole));
 }
