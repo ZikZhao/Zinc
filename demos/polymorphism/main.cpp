@@ -4,13 +4,15 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include <memory>
+#include <new>
 #include <random>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 class World;
@@ -76,31 +78,84 @@ class Acid;
 class Generator;
 class BlackHole;
 
-std::unique_ptr<Entity> make_entity(EntityType t);
-std::unique_ptr<Entity> make_generator(SpawnKind kind, int interval);
+struct EntityRecipe {
+    EntityType type;
+    SpawnKind spawn_kind = SpawnKind::Water;
+    int interval = 8;
+    int steam_life = 160;
+};
+
+EntityRecipe make_entity(EntityType t);
+EntityRecipe make_generator(SpawnKind kind, int interval);
+
+size_t entity_storage_size();
+size_t entity_storage_align();
 
 class World {
 public:
-    World(int w, int h) : width_(w), height_(h), cells_(w * h) {
-        for (auto& c : cells_) {
-            c = make_entity(EntityType::VoidCell);
+    World(int w, int h)
+        : width_(w),
+          height_(h),
+          cell_size_(entity_storage_size()),
+          cell_align_(entity_storage_align()),
+          cell_stride_(align_up(cell_size_, cell_align_)) {
+        const size_t count = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+        storage_ = ::operator new(count * cell_stride_, std::align_val_t(cell_align_));
+        scratch_ = ::operator new(cell_stride_, std::align_val_t(cell_align_));
+        for (size_t i = 0; i < count; ++i) {
+            construct_from_recipe(cell_ptr(i), make_entity(EntityType::VoidCell));
         }
     }
+
+    ~World() {
+        const size_t count = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+        for (size_t i = 0; i < count; ++i) {
+            destroy_entity(*static_cast<Entity*>(cell_ptr(i)));
+        }
+        ::operator delete(scratch_, std::align_val_t(cell_align_));
+        ::operator delete(storage_, std::align_val_t(cell_align_));
+    }
+
+    World(const World&) = delete;
+    World& operator=(const World&) = delete;
 
     int width() const { return width_; }
     int height() const { return height_; }
 
     bool in_bounds(int x, int y) const { return x >= 0 && x < width_ && y >= 0 && y < height_; }
 
-    Entity& at(int x, int y) { return *cells_[index(x, y)]; }
-    const Entity& at(int x, int y) const { return *cells_[index(x, y)]; }
+    Entity& at(int x, int y) { return *static_cast<Entity*>(cell_ptr(index(x, y))); }
+    const Entity& at(int x, int y) const {
+        return *static_cast<const Entity*>(cell_ptr(index(x, y)));
+    }
 
-    void set(int x, int y, std::unique_ptr<Entity> entity) {
-        cells_[index(x, y)] = std::move(entity);
+    void set(int x, int y, EntityRecipe recipe) {
+        const size_t i = index(x, y);
+        Entity& cur = *static_cast<Entity*>(cell_ptr(i));
+        destroy_entity(cur);
+        construct_from_recipe(cell_ptr(i), recipe);
     }
 
     void swap_cells(int x1, int y1, int x2, int y2) {
-        std::swap(cells_[index(x1, y1)], cells_[index(x2, y2)]);
+        const size_t a = index(x1, y1);
+        const size_t b = index(x2, y2);
+        if (a == b) {
+            return;
+        }
+        void* pa = cell_ptr(a);
+        void* pb = cell_ptr(b);
+
+        Entity& ea = *static_cast<Entity*>(pa);
+        Entity& eb = *static_cast<Entity*>(pb);
+        move_construct_from_entity(scratch_, ea);
+        destroy_entity(ea);
+
+        move_construct_from_entity(pa, eb);
+        destroy_entity(eb);
+
+        Entity& et = *static_cast<Entity*>(scratch_);
+        move_construct_from_entity(pb, et);
+        destroy_entity(et);
     }
 
     bool try_move(int from_x, int from_y, int to_x, int to_y, uint64_t frame) {
@@ -126,8 +181,10 @@ public:
 
     int count_type(EntityType t) const {
         int count = 0;
-        for (const auto& cell : cells_) {
-            if (cell->type() == t) {
+        const size_t total = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+        for (size_t i = 0; i < total; ++i) {
+            const Entity& e = *static_cast<const Entity*>(cell_ptr(i));
+            if (e.type() == t) {
                 ++count;
             }
         }
@@ -148,6 +205,16 @@ public:
     }
 
 private:
+    static size_t align_up(size_t n, size_t a) { return (n + a - 1) / a * a; }
+
+    void* cell_ptr(size_t i) const {
+        return static_cast<void*>(static_cast<std::byte*>(storage_) + i * cell_stride_);
+    }
+
+    static void construct_from_recipe(void* dst, const EntityRecipe& recipe);
+    static void move_construct_from_entity(void* dst, Entity& src);
+    static void destroy_entity(Entity& entity);
+
     size_t index(int x, int y) const {
         return static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x);
     }
@@ -176,7 +243,11 @@ private:
 
     int width_;
     int height_;
-    std::vector<std::unique_ptr<Entity>> cells_;
+    size_t cell_size_;
+    size_t cell_align_;
+    size_t cell_stride_;
+    void* storage_ = nullptr;
+    void* scratch_ = nullptr;
 };
 
 class VoidCell final : public Entity {
@@ -672,34 +743,155 @@ private:
     int radius_ = 3;
 };
 
-std::unique_ptr<Entity> make_entity(EntityType t) {
-    switch (t) {
-    case EntityType::VoidCell:
-        return std::make_unique<VoidCell>();
-    case EntityType::Wall:
-        return std::make_unique<Wall>();
-    case EntityType::Sand:
-        return std::make_unique<Sand>();
-    case EntityType::Water:
-        return std::make_unique<Water>();
-    case EntityType::Plant:
-        return std::make_unique<Plant>();
-    case EntityType::Lava:
-        return std::make_unique<Lava>();
-    case EntityType::Steam:
-        return std::make_unique<Steam>();
-    case EntityType::Acid:
-        return std::make_unique<Acid>();
-    case EntityType::Generator:
-        return std::make_unique<Generator>(SpawnKind::Water, 8);
-    case EntityType::BlackHole:
-        return std::make_unique<BlackHole>();
-    }
-    return std::make_unique<VoidCell>();
+size_t entity_storage_size() {
+    const std::array<size_t, 10> sizes = {
+        sizeof(VoidCell),
+        sizeof(Wall),
+        sizeof(Sand),
+        sizeof(Water),
+        sizeof(Plant),
+        sizeof(Lava),
+        sizeof(Steam),
+        sizeof(Acid),
+        sizeof(Generator),
+        sizeof(BlackHole),
+    };
+    return *std::max_element(sizes.begin(), sizes.end());
 }
 
-std::unique_ptr<Entity> make_generator(SpawnKind kind, int interval) {
-    return std::make_unique<Generator>(kind, interval);
+size_t entity_storage_align() {
+    const std::array<size_t, 10> aligns = {
+        alignof(VoidCell),
+        alignof(Wall),
+        alignof(Sand),
+        alignof(Water),
+        alignof(Plant),
+        alignof(Lava),
+        alignof(Steam),
+        alignof(Acid),
+        alignof(Generator),
+        alignof(BlackHole),
+    };
+    return *std::max_element(aligns.begin(), aligns.end());
+}
+
+void World::construct_from_recipe(void* dst, const EntityRecipe& recipe) {
+    switch (recipe.type) {
+    case EntityType::VoidCell:
+        new (dst) VoidCell();
+        return;
+    case EntityType::Wall:
+        new (dst) Wall();
+        return;
+    case EntityType::Sand:
+        new (dst) Sand();
+        return;
+    case EntityType::Water:
+        new (dst) Water();
+        return;
+    case EntityType::Plant:
+        new (dst) Plant();
+        return;
+    case EntityType::Lava:
+        new (dst) Lava();
+        return;
+    case EntityType::Steam:
+        new (dst) Steam(recipe.steam_life);
+        return;
+    case EntityType::Acid:
+        new (dst) Acid();
+        return;
+    case EntityType::Generator:
+        new (dst) Generator(recipe.spawn_kind, recipe.interval);
+        return;
+    case EntityType::BlackHole:
+        new (dst) BlackHole();
+        return;
+    }
+}
+
+void World::move_construct_from_entity(void* dst, Entity& src) {
+    switch (src.type()) {
+    case EntityType::VoidCell:
+        new (dst) VoidCell(std::move(static_cast<VoidCell&>(src)));
+        return;
+    case EntityType::Wall:
+        new (dst) Wall(std::move(static_cast<Wall&>(src)));
+        return;
+    case EntityType::Sand:
+        new (dst) Sand(std::move(static_cast<Sand&>(src)));
+        return;
+    case EntityType::Water:
+        new (dst) Water(std::move(static_cast<Water&>(src)));
+        return;
+    case EntityType::Plant:
+        new (dst) Plant(std::move(static_cast<Plant&>(src)));
+        return;
+    case EntityType::Lava:
+        new (dst) Lava(std::move(static_cast<Lava&>(src)));
+        return;
+    case EntityType::Steam:
+        new (dst) Steam(std::move(static_cast<Steam&>(src)));
+        return;
+    case EntityType::Acid:
+        new (dst) Acid(std::move(static_cast<Acid&>(src)));
+        return;
+    case EntityType::Generator:
+        new (dst) Generator(std::move(static_cast<Generator&>(src)));
+        return;
+    case EntityType::BlackHole:
+        new (dst) BlackHole(std::move(static_cast<BlackHole&>(src)));
+        return;
+    }
+}
+
+void World::destroy_entity(Entity& entity) {
+    switch (entity.type()) {
+    case EntityType::VoidCell:
+        static_cast<VoidCell&>(entity).~VoidCell();
+        return;
+    case EntityType::Wall:
+        static_cast<Wall&>(entity).~Wall();
+        return;
+    case EntityType::Sand:
+        static_cast<Sand&>(entity).~Sand();
+        return;
+    case EntityType::Water:
+        static_cast<Water&>(entity).~Water();
+        return;
+    case EntityType::Plant:
+        static_cast<Plant&>(entity).~Plant();
+        return;
+    case EntityType::Lava:
+        static_cast<Lava&>(entity).~Lava();
+        return;
+    case EntityType::Steam:
+        static_cast<Steam&>(entity).~Steam();
+        return;
+    case EntityType::Acid:
+        static_cast<Acid&>(entity).~Acid();
+        return;
+    case EntityType::Generator:
+        static_cast<Generator&>(entity).~Generator();
+        return;
+    case EntityType::BlackHole:
+        static_cast<BlackHole&>(entity).~BlackHole();
+        return;
+    }
+}
+
+EntityRecipe make_entity(EntityType t) {
+    EntityRecipe recipe;
+    recipe.type = t;
+    return recipe;
+}
+
+EntityRecipe make_generator(SpawnKind kind, int interval) {
+    EntityRecipe recipe;
+    recipe.type = EntityType::Generator;
+    recipe.spawn_kind = kind;
+    recipe.interval = interval;
+    return recipe;
 }
 
 static int randint(std::mt19937_64& rng, int lo, int hi) {
