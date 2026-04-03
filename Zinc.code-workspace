@@ -420,6 +420,38 @@
                 ],
                 "preLaunchTask": "Build Main (Debug)"
             },
+            {
+                "name": "Polymorphism: Debug",
+                "type": "cppdbg",
+                "request": "launch",
+                "program": "${workspaceFolder}/build/debug/bin/zinc",
+                "args": [
+                    "${workspaceFolder}/demos/polymorphism/main.zn"
+                ],
+                "stopAtEntry": false,
+                "cwd": "${workspaceFolder}/demos/polymorphism",
+                "environment": [
+                    {
+                        "name": "ASAN_OPTIONS",
+                        "value": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+                    },
+                    {
+                        "name": "UBSAN_OPTIONS",
+                        "value": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+                    }
+                ],
+                "externalConsole": false,
+                "MIMode": "gdb",
+                "setupCommands": [
+                    {
+                        "text": "-enable-pretty-printing",
+                    },
+                    {
+                        "text": "source ${workspaceFolder}/tools/printer.py",
+                    }
+                ],
+                "preLaunchTask": "Build Main (Debug)"
+            },
         ]
     }
 }

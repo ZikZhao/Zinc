@@ -1,7 +1,8 @@
 # Rasterizer demo Makefile (GCC + SDL2 + GLM)
 
 CC := gcc
-TARGET := main
+TARGET := main_zinc
+LEGACY_TARGET := main
 SRC := main.zn.cpp
 BUILD_DIR := build
 OBJ := $(BUILD_DIR)/main.zn.o
@@ -26,6 +27,8 @@ LDLIBS += -lstdc++ -lm
 
 all: $(TARGET)
 
+$(LEGACY_TARGET): $(TARGET)
+
 $(TARGET): $(OBJ)
 	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 
@@ -39,6 +42,6 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET) $(LEGACY_TARGET)
 
 -include $(OBJ:.o=.d)

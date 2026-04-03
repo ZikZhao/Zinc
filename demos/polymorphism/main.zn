@@ -1,0 +1,1165 @@
+import "sdl.d.zn" as sdl;
+
+namespace EntityType {
+	const VOID_CELL: i32 = 0;
+	const WALL: i32 = 1;
+	const SAND: i32 = 2;
+	const WATER: i32 = 3;
+	const PLANT: i32 = 4;
+	const LAVA: i32 = 5;
+	const STEAM: i32 = 6;
+	const ACID: i32 = 7;
+	const GENERATOR: i32 = 8;
+	const BLACK_HOLE: i32 = 9;
+}
+
+namespace SpawnKind {
+	const WATER: i32 = 0;
+	const LAVA: i32 = 1;
+	const ACID: i32 = 2;
+}
+
+const EXIT_SUCCESS: i32 = 0;
+const EXIT_FAILURE: i32 = 1;
+
+const SDL_WINDOWPOS_CENTERED: i32 = 0x2FFF0000;
+const SDL_WINDOW_SHOWN: u32 = 0x00000004u32;
+const SDL_RENDERER_ACCELERATED: u32 = 0x00000002u32;
+
+type MoveIntent = {
+	dx: i32,
+	dy: i32,
+};
+
+type EntityRecipe = {
+	type_id: i32,
+	spawn_kind: i32,
+	interval: i32,
+	steam_life: i32,
+};
+
+fn make_entity(type_id: i32) -> EntityRecipe {
+	return EntityRecipe{
+		type_id: type_id,
+		spawn_kind: SpawnKind.WATER,
+		interval: 8,
+		steam_life: 160,
+	};
+}
+
+fn make_generator(kind: i32, interval: i32) -> EntityRecipe {
+	return EntityRecipe{
+		type_id: EntityType.GENERATOR,
+		spawn_kind: kind,
+		interval: interval,
+		steam_life: 160,
+	};
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> u32 {
+	return (0xFFu32 << 24u32) | ((r as u32) << 16u32) | ((g as u32) << 8u32) | (b as u32);
+}
+
+fn randint(rng: &mut std.mt19937_64, lo: i32, hi: i32) -> i32 {
+	let mut dist = std.uniform_int_distribution<i32>(lo, hi);
+	return dist(rng);
+}
+
+fn chance(rng: &mut std.mt19937_64, pct: i32) -> bool {
+	let mut dist = std.uniform_int_distribution<i32>(0, 99);
+	return dist(rng) < pct;
+}
+
+fn is_solid_support(type_id: i32) -> bool {
+	return type_id == EntityType.WALL || type_id == EntityType.SAND || type_id == EntityType.PLANT;
+}
+
+interface Entity {
+	fn type_id(self: &Self) -> i32;
+	fn color(self: &Self) -> u32;
+	fn is_static(self: &Self) -> bool;
+	fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64);
+	fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool;
+}
+
+class VoidCell implements Entity {
+	init() { return Self{}; }
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.VOID_CELL; }
+	override fn color(self: &Self) -> u32 { return rgb(20u8, 20u8, 28u8); }
+	override fn is_static(self: &Self) -> bool { return true; }
+
+	override fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		world.swap_cells(self_x, self_y, from_x, from_y);
+		world.mark_updated(self_x, self_y, frame);
+		return true;
+	}
+}
+
+class Wall implements Entity {
+	let mut heat_: u8;
+
+	init() {
+		return Self{heat_: 0u8};
+	}
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.WALL; }
+
+	override fn color(self: &Self) -> u32 {
+		let glow = std.min(255, 85 + self.heat_ as i32) as u8;
+		return rgb(glow, glow, glow);
+	}
+
+	override fn is_static(self: &Self) -> bool { return true; }
+
+	override fn tick(
+		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
+	) {
+		let mut near_lava = false;
+		let neigh: [MoveIntent; 4usize] = [
+			MoveIntent{dx: 1, dy: 0},
+			MoveIntent{dx: -1, dy: 0},
+			MoveIntent{dx: 0, dy: 1},
+			MoveIntent{dx: 0, dy: -1},
+		];
+		for (let mut i = 0usize; i < neigh.size(); ++i) {
+			let nx = x + neigh[i].dx;
+			let ny = y + neigh[i].dy;
+			if (!world.in_bounds(nx, ny)) { continue; }
+			if (world.type_at(nx, ny) == EntityType.LAVA) {
+				near_lava = true;
+				break;
+			}
+		}
+
+		if (near_lava) {
+			self.heat_ = std.min(255, self.heat_ as i32 + 1) as u8;
+		} else if (self.heat_ > 0u8) {
+			self.heat_ = (self.heat_ - 1u8) as u8;
+		}
+
+		if (self.heat_ >= 10u8) {
+			world.set(x, y, make_entity(EntityType.LAVA));
+			world.mark_updated(x, y, frame);
+		}
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		return false;
+	}
+}
+
+class Sand implements Entity {
+	init() { return Self{}; }
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.SAND; }
+	override fn color(self: &Self) -> u32 { return rgb(219u8, 186u8, 92u8); }
+	override fn is_static(self: &Self) -> bool { return false; }
+
+	override fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
+		let dirs: [MoveIntent; 3usize] = [
+			MoveIntent{dx: 0, dy: 1},
+			MoveIntent{dx: -1, dy: 1},
+			MoveIntent{dx: 1, dy: 1},
+		];
+		world.try_moves(x, y, dirs, frame, rng);
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		return false;
+	}
+}
+
+class Water implements Entity {
+	let mut lateral_momentum_: i32;
+
+	init() { return Self{lateral_momentum_: 0}; }
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.WATER; }
+	override fn color(self: &Self) -> u32 { return rgb(56u8, 119u8, 224u8); }
+	override fn is_static(self: &Self) -> bool { return false; }
+
+	override fn tick(
+		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
+	) {
+		if (world.try_move(x, y, x, y + 1, frame)) {
+			self.lateral_momentum_ = 0;
+			return;
+		}
+
+		if (self.lateral_momentum_ == 0) {
+			self.lateral_momentum_ = chance(rng, 50) ? -1 : 1;
+		}
+
+		let m = self.lateral_momentum_;
+		if (world.try_move(x, y, x + m, y + 1, frame) || world.try_move(x, y, x + m, y, frame)) {
+			return;
+		}
+
+		self.lateral_momentum_ = -m;
+		if (world.try_move(x, y, x - m, y + 1, frame) || world.try_move(x, y, x - m, y, frame)) {
+			return;
+		}
+
+		if (chance(rng, 45)) {
+			self.lateral_momentum_ = 0;
+		}
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		if (mover_type == EntityType.SAND || mover_type == EntityType.ACID) {
+			world.swap_cells(self_x, self_y, from_x, from_y);
+			world.mark_updated(self_x, self_y, frame);
+			return true;
+		}
+		return false;
+	}
+}
+
+class Lava implements Entity {
+	init() { return Self{}; }
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.LAVA; }
+	override fn color(self: &Self) -> u32 { return rgb(230u8, 88u8, 35u8); }
+	override fn is_static(self: &Self) -> bool { return false; }
+
+	override fn tick(
+		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
+	) {
+		for (let mut dy = -1; dy <= 1; ++dy) {
+			for (let mut dx = -1; dx <= 1; ++dx) {
+				if (dx == 0 && dy == 0) { continue; }
+				let nx = x + dx;
+				let ny = y + dy;
+				if (!world.in_bounds(nx, ny)) { continue; }
+				let t = world.type_at(nx, ny);
+				if (t == EntityType.WATER && chance(rng, 70)) {
+					world.set(nx, ny, make_entity(EntityType.STEAM));
+					world.set(x, y, make_entity(EntityType.WALL));
+					world.mark_updated(nx, ny, frame);
+					world.mark_updated(x, y, frame);
+					return;
+				}
+				if (t == EntityType.PLANT && chance(rng, 50)) {
+					world.set(nx, ny, make_entity(EntityType.VOID_CELL));
+					world.mark_updated(nx, ny, frame);
+				}
+			}
+		}
+
+		if ((frame & 1u64) == 0u64) { return; }
+
+		let dirs: [MoveIntent; 5usize] = [
+			MoveIntent{dx: 0, dy: 1},
+			MoveIntent{dx: -1, dy: 1},
+			MoveIntent{dx: 1, dy: 1},
+			MoveIntent{dx: -1, dy: 0},
+			MoveIntent{dx: 1, dy: 0},
+		];
+		world.try_moves(x, y, dirs, frame, rng);
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		if (mover_type == EntityType.WATER) {
+			world.set(self_x, self_y, make_entity(EntityType.STEAM));
+			world.set(from_x, from_y, make_entity(EntityType.WALL));
+			world.mark_updated(self_x, self_y, frame);
+			world.mark_updated(from_x, from_y, frame);
+			return true;
+		}
+		return false;
+	}
+}
+
+class Steam implements Entity {
+	let mut life_: i32;
+
+	init(life: i32) { return Self{life_: life}; }
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.STEAM; }
+	override fn color(self: &Self) -> u32 { return rgb(204u8, 214u8, 235u8); }
+	override fn is_static(self: &Self) -> bool { return false; }
+
+	override fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
+		self.life_ -= 1;
+		if (self.life_ <= 0) {
+			world.set(x, y, make_entity(EntityType.WATER));
+			world.mark_updated(x, y, frame);
+			return;
+		}
+
+		let dirs: [MoveIntent; 5usize] = [
+			MoveIntent{dx: 0, dy: -1},
+			MoveIntent{dx: -1, dy: -1},
+			MoveIntent{dx: 1, dy: -1},
+			MoveIntent{dx: -1, dy: 0},
+			MoveIntent{dx: 1, dy: 0},
+		];
+		world.try_moves(x, y, dirs, frame, rng);
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		return false;
+	}
+}
+
+class Plant implements Entity {
+	init() { return Self{}; }
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.PLANT; }
+	override fn color(self: &Self) -> u32 { return rgb(43u8, 176u8, 84u8); }
+	override fn is_static(self: &Self) -> bool { return true; }
+
+	override fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
+		let mut has_water = false;
+		let mut empty = std.vector<std.pair<i32, i32>>();
+
+		for (let mut dy = -1; dy <= 1; ++dy) {
+			for (let mut dx = -1; dx <= 1; ++dx) {
+				if (dx == 0 && dy == 0) { continue; }
+				let nx = x + dx;
+				let ny = y + dy;
+				if (!world.in_bounds(nx, ny)) { continue; }
+				let t = world.type_at(nx, ny);
+				if (t == EntityType.WATER) {
+					has_water = true;
+					world.set(nx, ny, make_entity(EntityType.VOID_CELL));
+					world.mark_updated(nx, ny, frame);
+				} else if (t == EntityType.VOID_CELL) {
+					empty.push_back(std.pair<i32, i32>(nx, ny));
+				}
+			}
+		}
+
+		if (has_water && !empty.empty() && chance(rng, 22)) {
+			let idx = randint(rng, 0, empty.size() as i32 - 1) as usize;
+			let gx = empty[idx].first;
+			let gy = empty[idx].second;
+			world.set(gx, gy, make_entity(EntityType.PLANT));
+			world.mark_updated(gx, gy, frame);
+		}
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		return false;
+	}
+}
+
+class Acid implements Entity {
+	let mut lateral_momentum_: i32;
+
+	init() { return Self{lateral_momentum_: 0}; }
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.ACID; }
+	override fn color(self: &Self) -> u32 { return rgb(175u8, 235u8, 74u8); }
+	override fn is_static(self: &Self) -> bool { return false; }
+
+	override fn tick(
+		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
+	) {
+		for (let mut dy = -1; dy <= 1; ++dy) {
+			for (let mut dx = -1; dx <= 1; ++dx) {
+				if (dx == 0 && dy == 0) { continue; }
+				let nx = x + dx;
+				let ny = y + dy;
+				if (!world.in_bounds(nx, ny)) { continue; }
+
+				let t = world.type_at(nx, ny);
+				if (t == EntityType.WALL && chance(rng, 18)) {
+					world.set(nx, ny, make_entity(EntityType.VOID_CELL));
+					world.set(x, y, make_entity(EntityType.VOID_CELL));
+					world.mark_updated(nx, ny, frame);
+					world.mark_updated(x, y, frame);
+					return;
+				}
+				if (t == EntityType.PLANT && chance(rng, 55)) {
+					world.set(nx, ny, make_entity(EntityType.VOID_CELL));
+					world.set(x, y, make_entity(EntityType.VOID_CELL));
+					world.mark_updated(nx, ny, frame);
+					world.mark_updated(x, y, frame);
+					return;
+				}
+			}
+		}
+
+		if (world.try_move(x, y, x, y + 1, frame)) {
+			self.lateral_momentum_ = 0;
+			return;
+		}
+
+		if (self.lateral_momentum_ == 0) {
+			self.lateral_momentum_ = chance(rng, 50) ? -1 : 1;
+		}
+
+		let m = self.lateral_momentum_;
+		if (world.try_move(x, y, x + m, y + 1, frame) || world.try_move(x, y, x + m, y, frame)) {
+			return;
+		}
+
+		self.lateral_momentum_ = -m;
+		if (world.try_move(x, y, x - m, y + 1, frame) || world.try_move(x, y, x - m, y, frame)) {
+			return;
+		}
+
+		if (chance(rng, 35)) {
+			self.lateral_momentum_ = 0;
+		}
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		return false;
+	}
+}
+
+class Generator implements Entity {
+	let spawn_: i32;
+	let interval_: i32;
+	let move_interval_: i32;
+	let mut vx_: i32;
+	let mut vy_: i32;
+	let mut counter_: i32;
+
+	init(spawn: i32, interval: i32) {
+		return Self{
+			spawn_: spawn,
+			interval_: std.max(1, interval),
+			move_interval_: 6,
+			vx_: 1,
+			vy_: 0,
+			counter_: 0,
+		};
+	}
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.GENERATOR; }
+
+	override fn color(self: &Self) -> u32 {
+		if (self.spawn_ == SpawnKind.WATER) { return rgb(58u8, 152u8, 255u8); }
+		if (self.spawn_ == SpawnKind.LAVA) { return rgb(247u8, 122u8, 57u8); }
+		return rgb(196u8, 247u8, 97u8);
+	}
+
+	override fn is_static(self: &Self) -> bool { return true; }
+
+	override fn tick(
+		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
+	) {
+		if ((frame % self.move_interval_ as u64) == 0u64) {
+			let mut nx = x + self.vx_;
+			let ny = y + self.vy_;
+
+			if (nx <= 0 || nx >= world.width() - 1) {
+				self.vx_ = -self.vx_;
+				nx = x + self.vx_;
+			}
+
+			if (world.in_bounds(nx, ny) && world.type_at(nx, ny) != EntityType.BLACK_HOLE) {
+				world.swap_cells(x, y, nx, ny);
+				world.set(x, y, make_entity(EntityType.VOID_CELL));
+				world.mark_updated(nx, ny, frame);
+			}
+		}
+
+		self.counter_ += 1;
+		if ((self.counter_ % self.interval_) != 0) { return; }
+
+		let mut candidates = std.vector<std.pair<i32, i32>>();
+		for (let mut dx = -1; dx <= 1; ++dx) {
+			let nx = x + dx;
+			let ny = y + 1;
+			if (!world.in_bounds(nx, ny)) { continue; }
+			if (world.type_at(nx, ny) == EntityType.VOID_CELL) {
+				candidates.push_back(std.pair<i32, i32>(nx, ny));
+			}
+		}
+		if (candidates.empty()) { return; }
+
+		let idx = randint(rng, 0, candidates.size() as i32 - 1) as usize;
+		let gx = candidates[idx].first;
+		let gy = candidates[idx].second;
+
+		if (self.spawn_ == SpawnKind.WATER) {
+			world.set(gx, gy, make_entity(EntityType.WATER));
+		} else if (self.spawn_ == SpawnKind.LAVA) {
+			world.set(gx, gy, make_entity(EntityType.LAVA));
+		} else {
+			world.set(gx, gy, make_entity(EntityType.ACID));
+		}
+		world.mark_updated(gx, gy, frame);
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		return false;
+	}
+}
+
+class BlackHole implements Entity {
+	let mut initialized_: bool;
+	let mut vx_: i32;
+	let mut vy_: i32;
+	let move_interval_: i32;
+	let radius_: i32;
+
+	init() {
+		return Self{
+			initialized_: false,
+			vx_: 1,
+			vy_: 1,
+			move_interval_: 4,
+			radius_: 3,
+		};
+	}
+
+	override fn type_id(self: &Self) -> i32 { return EntityType.BLACK_HOLE; }
+	override fn color(self: &Self) -> u32 { return rgb(160u8, 64u8, 220u8); }
+	override fn is_static(self: &Self) -> bool { return false; }
+
+	override fn tick(
+		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
+	) {
+		if (!self.initialized_) {
+			self.vx_ = chance(rng, 50) ? 1 : -1;
+			self.vy_ = chance(rng, 50) ? 1 : -1;
+			self.initialized_ = true;
+		}
+
+		let mut cx = x;
+		let mut cy = y;
+
+		if ((frame % self.move_interval_ as u64) == 0u64) {
+			let mut tx = x + self.vx_;
+			let mut ty = y + self.vy_;
+
+			if (tx <= 0 || tx >= world.width() - 1) {
+				self.vx_ = -self.vx_;
+				tx = x + self.vx_;
+			}
+			if (ty <= 0 || ty >= world.height() - 1) {
+				self.vy_ = -self.vy_;
+				ty = y + self.vy_;
+			}
+
+			if (world.in_bounds(tx, ty) && tx > 0 && tx < world.width() - 1 && ty > 0 && ty < world.height() - 1) {
+				let mut tt = world.type_at(tx, ty);
+				if (tt != EntityType.GENERATOR && tt != EntityType.BLACK_HOLE && tt != EntityType.VOID_CELL) {
+					world.set(tx, ty, make_entity(EntityType.VOID_CELL));
+					world.mark_updated(tx, ty, frame);
+					tt = EntityType.VOID_CELL;
+				}
+
+				if (tt == EntityType.VOID_CELL && world.try_move(x, y, tx, ty, frame)) {
+					cx = tx;
+					cy = ty;
+				}
+			}
+		}
+
+		for (let mut iy = cy - self.radius_; iy <= cy + self.radius_; ++iy) {
+			for (let mut ix = cx - self.radius_; ix <= cx + self.radius_; ++ix) {
+				if (!world.in_bounds(ix, iy)) { continue; }
+				if (ix <= 0 || iy <= 0 || ix >= world.width() - 1 || iy >= world.height() - 1) {
+					continue;
+				}
+				let dx = ix - cx;
+				let dy = iy - cy;
+				if (dx * dx + dy * dy > self.radius_ * self.radius_) { continue; }
+				if (ix == cx && iy == cy) { continue; }
+
+				let t = world.type_at(ix, iy);
+				if (t != EntityType.VOID_CELL && t != EntityType.BLACK_HOLE && t != EntityType.GENERATOR) {
+					world.set(ix, iy, make_entity(EntityType.VOID_CELL));
+					world.mark_updated(ix, iy, frame);
+				}
+			}
+		}
+	}
+
+	override fn accept_move(
+		self: &mut Self,
+		world: &mut World,
+		self_x: i32,
+		self_y: i32,
+		from_x: i32,
+		from_y: i32,
+		mover_type: i32,
+		frame: u64
+	) -> bool {
+		return false;
+	}
+}
+
+fn new_entity(recipe: EntityRecipe) -> std.unique_ptr<dyn mut Entity> {
+	switch (recipe.type_id) {
+		case EntityType.VOID_CELL: { return std.make_unique::<VoidCell>(); }
+		case EntityType.WALL: { return std.make_unique::<Wall>(); }
+		case EntityType.SAND: { return std.make_unique::<Sand>(); }
+		case EntityType.WATER: { return std.make_unique::<Water>(); }
+		case EntityType.PLANT: { return std.make_unique::<Plant>(); }
+		case EntityType.LAVA: { return std.make_unique::<Lava>(); }
+		case EntityType.STEAM: { return std.make_unique::<Steam>(recipe.steam_life); }
+		case EntityType.ACID: { return std.make_unique::<Acid>(); }
+		case EntityType.GENERATOR: { return std.make_unique::<Generator>(recipe.spawn_kind, recipe.interval); }
+		case EntityType.BLACK_HOLE: { return std.make_unique::<BlackHole>(); }
+	}
+	return std.make_unique::<VoidCell>();
+}
+
+class World {
+	let width_: i32;
+	let height_: i32;
+	let mut cells_: std.vector<std.unique_ptr<dyn mut Entity>>;
+	let mut updated_frame_: std.vector<u64>;
+
+	init(width: i32, height: i32) {
+		let mut world = Self{
+			width_: width,
+			height_: height,
+			cells_: std.vector<std.unique_ptr<dyn mut Entity>>(),
+			updated_frame_: std.vector<u64>(),
+		};
+
+		let count = (width * height) as usize;
+		world.cells_.reserve(count);
+		world.updated_frame_.resize(count, 0u64);
+		for (let mut i = 0usize; i < count; ++i) {
+			world.cells_.push_back(new_entity(make_entity(EntityType.VOID_CELL)));
+		}
+		return world;
+	}
+
+	fn width(self: &Self) -> i32 { return self.width_; }
+	fn height(self: &Self) -> i32 { return self.height_; }
+
+	fn in_bounds(self: &Self, x: i32, y: i32) -> bool {
+		return x >= 0 && x < self.width_ && y >= 0 && y < self.height_;
+	}
+
+	fn index(self: &Self, x: i32, y: i32) -> usize {
+		return (y as usize) * self.width_ as usize + x as usize;
+	}
+
+	fn type_at(self: &Self, x: i32, y: i32) -> i32 {
+		return self.cells_[self.index(x, y)]->type_id();
+	}
+
+	fn color_at(self: &Self, x: i32, y: i32) -> u32 {
+		return self.cells_[self.index(x, y)]->color();
+	}
+
+	fn mark_updated(self: &mut Self, x: i32, y: i32, frame: u64) {
+		self.updated_frame_[self.index(x, y)] = frame;
+	}
+
+	fn was_updated(self: &Self, x: i32, y: i32, frame: u64) -> bool {
+		return self.updated_frame_[self.index(x, y)] == frame;
+	}
+
+	fn set(self: &mut Self, x: i32, y: i32, recipe: EntityRecipe) {
+		let i = self.index(x, y);
+		self.cells_[i] = new_entity(recipe);
+	}
+
+	fn swap_cells(self: &mut Self, x1: i32, y1: i32, x2: i32, y2: i32) {
+		let a = self.index(x1, y1);
+		let b = self.index(x2, y2);
+		if (a == b) { return; }
+		let tmp = move self.cells_[a];
+		self.cells_[a] = move self.cells_[b];
+		self.cells_[b] = move tmp;
+
+		let tf = self.updated_frame_[a];
+		self.updated_frame_[a] = self.updated_frame_[b];
+		self.updated_frame_[b] = tf;
+	}
+
+	fn try_move(self: &mut Self, from_x: i32, from_y: i32, to_x: i32, to_y: i32, frame: u64) -> bool {
+		if (!self.in_bounds(to_x, to_y)) { return false; }
+		let mover_type = self.type_at(from_x, from_y);
+		return self.cells_[self.index(to_x, to_y)]->accept_move(
+			self,
+			to_x,
+			to_y,
+			from_x,
+			from_y,
+			mover_type,
+			frame
+		);
+	}
+
+	fn try_moves(
+		self: &mut Self,
+		x: i32,
+		y: i32,
+		intents: [MoveIntent],
+		frame: u64,
+		rng: &mut std.mt19937_64
+	) -> bool {
+		let mut shuffled = std.vector<MoveIntent>(intents.begin(), intents.end());
+		if (shuffled.size() > 1usize) {
+			for (let mut i = shuffled.size() as i32 - 1; i > 0; --i) {
+				let j = randint(rng, 0, i) as usize;
+				let tmp = shuffled[i as usize];
+				shuffled[i as usize] = shuffled[j];
+				shuffled[j] = tmp;
+			}
+		}
+
+		for (let mut i = 0usize; i < shuffled.size(); ++i) {
+			let mv = shuffled[i];
+			if (self.try_move(x, y, x + mv.dx, y + mv.dy, frame)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	fn count_type(self: &Self, t: i32) -> i32 {
+		let mut count = 0;
+		for (let mut i = 0usize; i < self.cells_.size(); ++i) {
+			if (self.cells_[i]->type_id() == t) {
+				count += 1;
+			}
+		}
+		return count;
+	}
+
+	fn iterate(
+		self: &mut Self,
+		y_begin: i32,
+		y_end: i32,
+		y_step: i32,
+		x_begin: i32,
+		x_end: i32,
+		x_step: i32,
+		frame: u64,
+		rng: &mut std.mt19937_64
+	) {
+		for (let mut y = y_begin; y != y_end; y += y_step) {
+			for (let mut x = x_begin; x != x_end; x += x_step) {
+				if (self.was_updated(x, y, frame)) { continue; }
+				self.mark_updated(x, y, frame);
+				self.cells_[self.index(x, y)]->tick(self, x, y, frame, rng);
+			}
+		}
+	}
+
+	fn step(self: &mut Self, frame: u64, rng: &mut std.mt19937_64) {
+		let mode = (frame % 4u64) as i32;
+		if (mode == 0) {
+			self.iterate(0, self.height_, 1, 0, self.width_, 1, frame, rng);
+		} else if (mode == 1) {
+			self.iterate(self.height_ - 1, -1, -1, 0, self.width_, 1, frame, rng);
+		} else if (mode == 2) {
+			self.iterate(0, self.height_, 1, self.width_ - 1, -1, -1, frame, rng);
+		} else {
+			self.iterate(self.height_ - 1, -1, -1, self.width_ - 1, -1, -1, frame, rng);
+		}
+	}
+}
+
+fn seed_world(world: &mut World, seed: u64) {
+	let mut rng = std.mt19937_64(seed);
+
+	for (let mut y = 0; y < world.height(); ++y) {
+		for (let mut x = 0; x < world.width(); ++x) {
+			if (x == 0 || y == 0 || x == world.width() - 1 || y == world.height() - 1) {
+				world.set(x, y, make_entity(EntityType.WALL));
+			} else {
+				world.set(x, y, make_entity(EntityType.VOID_CELL));
+			}
+		}
+	}
+
+	let area = world.width() * world.height();
+	let wall_cores = std.max(4, area / 4200);
+	let sand_cores = std.max(3, area / 5200);
+	let plant_cores = std.max(3, area / 5600);
+	let water_cores = std.max(2, area / 9000);
+	let lava_cores = std.max(1, area / 16000);
+
+	for (let mut i = 0; i < wall_cores; ++i) {
+		let x = randint(&rng, 6, world.width() - 7);
+		let y = randint(&rng, 5, world.height() - 6);
+		let steps = randint(&rng, 18, 50);
+		let mut cx = x;
+		let mut cy = y;
+		for (let mut s = 0; s < steps; ++s) {
+			if (!world.in_bounds(cx, cy) || cx <= 1 || cy <= 1 || cx >= world.width() - 2 || cy >= world.height() - 2) {
+				break;
+			}
+			world.set(cx, cy, make_entity(EntityType.WALL));
+			if (chance(&rng, 25)) {
+				world.set(cx + randint(&rng, -1, 1), cy + randint(&rng, -1, 1), make_entity(EntityType.WALL));
+			}
+			cx += randint(&rng, -1, 1);
+			cy += randint(&rng, -1, 1);
+		}
+	}
+
+	for (let mut i = 0; i < sand_cores; ++i) {
+		let cx = randint(&rng, 8, world.width() - 9);
+		let cy = randint(&rng, world.height() / 3, world.height() - 8);
+		let radius = randint(&rng, 7, 15);
+		let r2 = radius * radius;
+		for (let mut y = std.max(1, cy - radius); y <= std.min(world.height() - 2, cy + radius); ++y) {
+			for (let mut x = std.max(1, cx - radius); x <= std.min(world.width() - 2, cx + radius); ++x) {
+				let dx = x - cx;
+				let dy = y - cy;
+				let d2 = dx * dx + dy * dy;
+				if (d2 > r2) { continue; }
+				let mut p = 18;
+				if (d2 * 2 < r2) { p = 72; }
+				if (chance(&rng, p)) {
+					world.set(x, y, make_entity(EntityType.SAND));
+				}
+			}
+		}
+	}
+
+	for (let mut i = 0; i < plant_cores; ++i) {
+		let cx = randint(&rng, 8, world.width() - 9);
+		let cy = randint(&rng, world.height() / 2, world.height() - 7);
+		let budget = randint(&rng, 220, 520);
+		let mut frontier = std.vector<std.pair<i32, i32>>();
+		frontier.push_back(std.pair<i32, i32>(cx, cy));
+		world.set(cx, cy, make_entity(EntityType.PLANT));
+
+		let mut steps = budget;
+		for (!frontier.empty() && steps > 0) {
+			steps -= 1;
+			let fi = randint(&rng, 0, frontier.size() as i32 - 1) as usize;
+			let x = frontier[fi].first;
+			let y = frontier[fi].second;
+			frontier[fi] = frontier.back();
+			frontier.pop_back();
+
+			for (let mut k = 0; k < 8; ++k) {
+				let nx = x + randint(&rng, -1, 1);
+				let ny = y + randint(&rng, -1, 1);
+				if (!world.in_bounds(nx, ny) || nx <= 1 || ny <= 1 || nx >= world.width() - 2 || ny >= world.height() - 2) {
+					continue;
+				}
+				if (world.type_at(nx, ny) != EntityType.VOID_CELL) { continue; }
+				let support = is_solid_support(world.type_at(nx, ny + 1)) || is_solid_support(world.type_at(nx, ny - 1));
+				if (!support && !chance(&rng, 16)) { continue; }
+				if (chance(&rng, 40)) {
+					world.set(nx, ny, make_entity(EntityType.PLANT));
+					frontier.push_back(std.pair<i32, i32>(nx, ny));
+				}
+			}
+		}
+	}
+
+	for (let mut i = 0; i < water_cores; ++i) {
+		let cx = randint(&rng, 8, world.width() - 9);
+		let cy = randint(&rng, 6, world.height() / 2);
+		let size = randint(&rng, 24, 64);
+		for (let mut j = 0; j < size; ++j) {
+			let x = std.clamp(cx + randint(&rng, -6, 6), 1, world.width() - 2);
+			let y = std.clamp(cy + randint(&rng, -6, 6), 1, world.height() - 2);
+			world.set(x, y, make_entity(EntityType.WATER));
+		}
+	}
+
+	for (let mut i = 0; i < lava_cores; ++i) {
+		let cx = randint(&rng, 8, world.width() - 9);
+		let cy = randint(&rng, world.height() * 2 / 3, world.height() - 8);
+		let size = randint(&rng, 9, 28);
+		for (let mut j = 0; j < size; ++j) {
+			let x = std.clamp(cx + randint(&rng, -4, 4), 1, world.width() - 2);
+			let y = std.clamp(cy + randint(&rng, -4, 4), 1, world.height() - 2);
+			world.set(x, y, make_entity(EntityType.LAVA));
+		}
+	}
+
+	let top = 2;
+	let bottom = world.height() - 3;
+	let acid_y = std.min(world.height() - 13, top + 1);
+	let water_y = acid_y + 5;
+	let lava_y = acid_y + 10;
+
+	let acid_x = std.max(2, world.width() / 6);
+	let water_x = world.width() / 2;
+	let lava_x = std.min(world.width() - 3, world.width() * 5 / 6);
+
+	world.set(acid_x, acid_y, make_generator(SpawnKind.ACID, 7));
+	world.set(water_x, water_y, make_generator(SpawnKind.WATER, 4));
+	world.set(lava_x, lava_y, make_generator(SpawnKind.LAVA, 7));
+
+	world.set(world.width() / 2, bottom, make_entity(EntityType.BLACK_HOLE));
+}
+
+fn render_world(
+	world: &World,
+	pixel_buffer: &mut std.vector<u32>,
+	screen_w: i32,
+	screen_h: i32,
+	cell_size: i32
+) {
+	std.fill(pixel_buffer.begin(), pixel_buffer.end(), rgb(8u8, 8u8, 12u8));
+	for (let mut y = 0; y < world.height(); ++y) {
+		for (let mut x = 0; x < world.width(); ++x) {
+			let c = world.color_at(x, y);
+			let sx0 = x * cell_size;
+			let sy0 = y * cell_size;
+			for (let mut oy = 0; oy < cell_size; ++oy) {
+				let sy = sy0 + oy;
+				if (sy < 0 || sy >= screen_h) { continue; }
+				for (let mut ox = 0; ox < cell_size; ++ox) {
+					let sx = sx0 + ox;
+					if (sx < 0 || sx >= screen_w) { continue; }
+					pixel_buffer[(sy * screen_w + sx) as usize] = c;
+				}
+			}
+		}
+	}
+}
+
+fn run_visualization(width: i32, height: i32, seed: u64) -> i32 {
+	let cell_size = 8;
+	let frame_ms: u32 = (1000 / 24) as u32;
+
+	if (sdl.SDL_Init(sdl.SDL_INIT_VIDEO) != 0) {
+		std.cerr << "SDL_Init failed: " << sdl.SDL_GetError() << "\n";
+		return 1;
+	}
+
+	let screen_w = width * cell_size;
+	let screen_h = height * cell_size;
+
+	let window = sdl.SDL_CreateWindow(
+		("Polymorphism Sandbox").data(),
+		SDL_WINDOWPOS_CENTERED,
+		SDL_WINDOWPOS_CENTERED,
+		screen_w,
+		screen_h,
+		SDL_WINDOW_SHOWN
+	);
+	if (window == nullptr) {
+		std.cerr << "SDL_CreateWindow failed: " << sdl.SDL_GetError() << "\n";
+		sdl.SDL_Quit();
+		return 1;
+	}
+
+	let mut renderer = sdl.SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+	if (renderer == nullptr) {
+		renderer = sdl.SDL_CreateRenderer(window, -1, sdl.SDL_RENDERER_SOFTWARE);
+	}
+	if (renderer == nullptr) {
+		std.cerr << "SDL_CreateRenderer failed: " << sdl.SDL_GetError() << "\n";
+		sdl.SDL_DestroyWindow(window);
+		sdl.SDL_Quit();
+		return 1;
+	}
+
+	let texture = sdl.SDL_CreateTexture(
+		renderer,
+		sdl.SDL_PIXELFORMAT_ARGB8888,
+		sdl.SDL_TEXTUREACCESS_STATIC,
+		screen_w,
+		screen_h
+	);
+	if (texture == nullptr) {
+		std.cerr << "SDL_CreateTexture failed: " << sdl.SDL_GetError() << "\n";
+		sdl.SDL_DestroyRenderer(renderer);
+		sdl.SDL_DestroyWindow(window);
+		sdl.SDL_Quit();
+		return 1;
+	}
+
+	let mut rng = std.mt19937_64(seed);
+	let mut world = World(width, height);
+	seed_world(&world, seed);
+
+	let mut pixel_buffer = std.vector<u32>((screen_w * screen_h) as usize);
+	let mut running = true;
+	let mut frame: u64 = 1u64;
+
+	for (running) {
+		let frame_start = sdl.SDL_GetTicks();
+
+		let mut event: sdl.SDL_Event;
+		for (sdl.SDL_PollEvent(&event)) {
+			if (event.type == sdl.SDL_QUIT) { running = false; }
+			if (event.type == sdl.SDL_KEYDOWN && event.key.keysym.sym == sdl.SDLK_ESCAPE) {
+				running = false;
+			}
+		}
+
+		world.step(frame, &rng);
+		frame += 1u64;
+
+		render_world(&world, &pixel_buffer, screen_w, screen_h, cell_size);
+		sdl.SDL_UpdateTexture(texture, nullptr, pixel_buffer.data() as *void, (screen_w * 4) as usize);
+		sdl.SDL_RenderClear(renderer);
+		sdl.SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+		sdl.SDL_RenderPresent(renderer);
+
+		let elapsed = sdl.SDL_GetTicks() - frame_start;
+		if (elapsed < frame_ms) {
+			sdl.SDL_Delay(frame_ms - elapsed);
+		}
+	}
+
+	sdl.SDL_DestroyTexture(texture);
+	sdl.SDL_DestroyRenderer(renderer);
+	sdl.SDL_DestroyWindow(window);
+	sdl.SDL_Quit();
+	return 0;
+}
+
+fn run_benchmark(width: i32, height: i32, seed: u64, steps: u64) -> i32 {
+	let mut world = World(width, height);
+	seed_world(&world, seed);
+	let mut rng = std.mt19937_64(seed ^ 0x9E3779B97F4A7C15u64);
+
+	let start = std.chrono.steady_clock.now();
+	for (let mut frame = 1u64; frame <= steps; ++frame) {
+		world.step(frame, &rng);
+	}
+	let end = std.chrono.steady_clock.now();
+	let elapsed_ns = std.chrono.duration_cast::<std.chrono.nanoseconds>(end - start).count();
+
+	let elapsed_s = elapsed_ns as f64 / 1e9;
+	let fps_logic = steps as f64 / std.max(1e-9, elapsed_s);
+
+	std.cout << "benchmark_mode=on\n";
+	std.cout << "steps=" << steps << "\n";
+	std.cout << "elapsed_sec=" << elapsed_s << "\n";
+	std.cout << "logic_fps=" << fps_logic << "\n";
+	std.cout << "remaining_water=" << world.count_type(EntityType.WATER) << "\n";
+	std.cout << "remaining_lava=" << world.count_type(EntityType.LAVA) << "\n";
+	std.cout << "remaining_steam=" << world.count_type(EntityType.STEAM) << "\n";
+	return 0;
+}
+
+fn main(args: [strview]) {
+	let mut width = 160;
+	let mut height = 96;
+	let mut seed: u64 = 1337u64;
+	let mut benchmark = false;
+	let mut steps: u64 = 5000u64;
+
+	let mut i = 1usize;
+	for (i < args.size()) {
+		let arg = args[i];
+		if (arg == "--benchmark") {
+			benchmark = true;
+			if (i + 1usize < args.size()) {
+				let v = std.string(args[i + 1usize]);
+				steps = std.stoull(v);
+				i += 1usize;
+			}
+		} else if (arg == "--seed" && i + 1usize < args.size()) {
+			let v = std.string(args[i + 1usize]);
+			seed = std.stoull(v);
+			i += 1usize;
+		} else if (arg == "--width" && i + 1usize < args.size()) {
+			let v = std.string(args[i + 1usize]);
+			width = std.max(32, std.stoi(v));
+			i += 1usize;
+		} else if (arg == "--height" && i + 1usize < args.size()) {
+			let v = std.string(args[i + 1usize]);
+			height = std.max(32, std.stoi(v));
+			i += 1usize;
+		}
+		i += 1usize;
+	}
+
+	if (benchmark) {
+		return run_benchmark(width, height, seed, steps);
+	}
+	return run_visualization(width, height, seed);
+}

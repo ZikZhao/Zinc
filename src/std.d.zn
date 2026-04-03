@@ -1240,8 +1240,8 @@ class uniform_int_distribution<IntType: type> {
     fn param(self: &Self) -> param_type;
     fn param(self: &mut Self, p: param_type);
 
-    operator<Gen: type>(self: &mut Self, g: &mut Gen) -> result_type;
-    operator<Gen: type>(self: &mut Self, g: &mut Gen, p: param_type) -> result_type;
+    operator()<Gen: type>(self: &mut Self, g: &mut Gen) -> result_type;
+    operator()<Gen: type>(self: &mut Self, g: &mut Gen, p: param_type) -> result_type;
 
     operator==(self: &Self, other: &Self) -> bool;
     operator!=(self: &Self, other: &Self) -> bool;

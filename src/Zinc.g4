@@ -203,7 +203,7 @@ expr:
 		inits_ += field_init (OP_COMMA inits_ += field_init)* OP_COMMA?
 	)? OP_RBRACE # StructInitExpr
 	| OP_LBRACKET (
-		elements_ += expr (OP_COMMA elements_ += expr)*
+		elements_ += expr (OP_COMMA elements_ += expr)* OP_COMMA?
 	)? OP_RBRACKET																# ArrayInitExpr
 	| base_ = expr OP_LBRACKET start_ = expr OP_COLON end_ = expr OP_RBRACKET	# SliceExpr
 	| KW_MOVE inner_expr_ = expr												# MoveExpr
