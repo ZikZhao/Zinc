@@ -4,6 +4,41 @@
 #include "object.hpp"
 #include "type_check.hpp"
 
+inline constexpr strview output_header =
+    "#include <algorithm>\n"
+    "#include <array>\n"
+    "#include <cassert>\n"
+    "#include <cmath>\n"
+    "#include <compare>\n"
+    "#include <concepts>\n"
+    "#include <expected>\n"
+    "#include <filesystem>\n"
+    "#include <format>\n"
+    "#include <fstream>\n"
+    "#include <functional>\n"
+    "#include <future>\n"
+    "#include <initializer_list>\n"
+    "#include <iostream>\n"
+    "#include <iterator>\n"
+    "#include <map>\n"
+    "#include <memory>\n"
+    "#include <memory_resource>\n"
+    "#include <numeric>\n"
+    "#include <ranges>\n"
+    "#include <set>\n"
+    "#include <stdexcept>\n"
+    "#include <string>\n"
+    "#include <string_view>\n"
+    "#include <tuple>\n"
+    "#include <type_traits>\n"
+    "#include <typeindex>\n"
+    "#include <unordered_map>\n"
+    "#include <unordered_set>\n"
+    "#include <utility>\n"
+    "#include <variant>\n"
+    "#include <vector>\n"
+    "using namespace std::literals;\n\n";
+
 using TypeMap = GlobalMemory::FlatMap<const Type*, std::size_t>;
 
 auto flush_without_sdl_prefix(strview code, std::ostream& out) -> void {
@@ -1623,40 +1658,7 @@ auto codegen(SourceManager& sources, Sema& sema, CodeGenEnvironment& codegen_env
         std::cerr << "Failed to open output file: " << out_path << "\n";
         return EXIT_FAILURE;
     }
-    out << "#include <algorithm>\n"
-           "#include <array>\n"
-           "#include <cassert>\n"
-           "#include <cmath>\n"
-           "#include <compare>\n"
-           "#include <concepts>\n"
-           "#include <expected>\n"
-           "#include <filesystem>\n"
-           "#include <format>\n"
-           "#include <fstream>\n"
-           "#include <functional>\n"
-           "#include <future>\n"
-           "#include <initializer_list>\n"
-           "#include <iostream>\n"
-           "#include <iterator>\n"
-           "#include <map>\n"
-           "#include <memory>\n"
-           "#include <memory_resource>\n"
-           "#include <numeric>\n"
-           "#include <ranges>\n"
-           "#include <set>\n"
-           "#include <stdexcept>\n"
-           "#include <string>\n"
-           "#include <string_view>\n"
-           "#include <tuple>\n"
-           "#include <type_traits>\n"
-           "#include <typeindex>\n"
-           "#include <unordered_map>\n"
-           "#include <unordered_set>\n"
-           "#include <utility>\n"
-           "#include <variant>\n"
-           "#include <vector>\n"
-           "using namespace std::literals;\n\n";
-
+    out << output_header;
     for (strview cpp_block : codegen_env.cpp_blocks_) {
         out << cpp_block << "\n";
     }

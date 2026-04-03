@@ -1184,6 +1184,69 @@ namespace chrono {
     fn now() -> system_clock.time_point;
 }
 
+class mt19937 {
+    type result_type = u32;
+
+    init();
+    init(seed: result_type);
+
+    fn seed(self: &mut Self, value: result_type);
+
+    operator()(self: &mut Self) -> result_type;
+
+    static fn min() -> result_type;
+    static fn max() -> result_type;
+}
+
+class mt19937_64 {
+    type result_type = u64;
+
+    init();
+    init(seed: result_type);
+
+    fn seed(self: &mut Self, value: result_type);
+
+    operator()(self: &mut Self) -> result_type;
+
+    static fn min() -> result_type;
+    static fn max() -> result_type;
+}
+
+class uniform_int_distribution<IntType: type> {
+    type result_type = IntType;
+
+    class param_type {
+        init();
+        init(a: result_type, b: result_type);
+
+        fn a(self: &Self) -> result_type;
+        fn b(self: &Self) -> result_type;
+
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+    }
+
+    init();
+    init(a: result_type, b: result_type);
+    init(param: param_type);
+
+    fn reset(self: &mut Self);
+
+    fn a(self: &Self) -> result_type;
+    fn b(self: &Self) -> result_type;
+    fn min(self: &Self) -> result_type;
+    fn max(self: &Self) -> result_type;
+
+    fn param(self: &Self) -> param_type;
+    fn param(self: &mut Self, p: param_type);
+
+    operator<Gen: type>(self: &mut Self, g: &mut Gen) -> result_type;
+    operator<Gen: type>(self: &mut Self, g: &mut Gen, p: param_type) -> result_type;
+
+    operator==(self: &Self, other: &Self) -> bool;
+    operator!=(self: &Self, other: &Self) -> bool;
+}
+
 fn abs(value: i8) -> i8;
 fn abs(value: i16) -> i16;
 fn abs(value: i32) -> i32;
