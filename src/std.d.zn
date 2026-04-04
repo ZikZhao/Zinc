@@ -618,13 +618,13 @@ class span<T: type> {
 
     type pointer = *element_type;
     type const_pointer = *element_type;
-    type reference = &element_type;
+    type reference = &mut element_type;
     type const_reference = &element_type;
 
     class iterator {
         type difference_type = isize;
         type pointer = *value_type;
-        type reference = &value_type;
+        type reference = &mut value_type;
 
         init();
         init(ptr: pointer);
@@ -649,7 +649,7 @@ class span<T: type> {
     class const_iterator {
         type difference_type = isize;
         type pointer = *value_type;
-        type reference = &value_type;
+        type reference = &mut value_type;
 
         init();
         init(ptr: pointer);
@@ -682,14 +682,10 @@ class span<T: type> {
     init<N: usize>(arr: &array<T, N>);
     init<N: usize>(arr: &mut array<T, N>);
 
-    fn at(self: &Self, index: size_type) -> const_reference;
-    fn at(self: &mut Self, index: size_type) -> reference;
-    operator[](self: &Self, index: size_type) -> const_reference;
-    operator[](self: &mut Self, index: size_type) -> reference;
-    fn front(self: &Self) -> const_reference;
-    fn front(self: &mut Self) -> reference;
-    fn back(self: &Self) -> const_reference;
-    fn back(self: &mut Self) -> reference;
+    fn at(self: &Self, index: size_type) -> reference;
+    operator[](self: &Self, index: size_type) -> reference;
+    fn front(self: &Self) -> reference;
+    fn back(self: &Self) -> reference;
 
     fn data(self: &Self) -> const_pointer;
     fn data(self: &mut Self) -> pointer;

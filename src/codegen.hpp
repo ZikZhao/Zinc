@@ -892,6 +892,7 @@ public:
         }
         for (const auto& [dynamic, identifier, func_type] : env_.virtuals_) {
             (*this)(dynamic, identifier, func_type);
+            newline(false);
         }
         stream << "\n// ----- Constants -----\n"sv;
         flush_without_sdl_prefix(constants_, stream);

@@ -798,7 +798,7 @@ private:
         GlobalMemory::Vector<const FunctionType*> ambiguous_candidates;
         bool incomparable = false;
         if (best_candidate) {
-            error_trap.clear();
+            // error_trap.clear();
             for (const FunctionType* candidate : overloads) {
                 if (candidate == best_candidate) continue;
                 std::partial_ordering order =

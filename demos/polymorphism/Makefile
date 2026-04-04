@@ -1,35 +1,40 @@
-CXX := g++
-CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -pedantic
+CXX ?= g++
+CXXFLAGS ?= -std=c++23 -O3
+
+ZINC ?= ../../build/debug/bin/zinc
 
 CPP_SRC := main.cpp
-ZINC_SRC := main.zn.cpp
-CPP_TARGET := main_cpp
-ZINC_TARGET := main_zinc
+CPP_BIN := main_cpp
 
-SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
-SDL_LIBS := $(shell pkg-config --libs sdl2)
+ZN_SRC := main.zn
+ZN_CPP := main.zn.cpp
+ZN_BIN := main_zn
 
-.PHONY: all run_cpp run_zinc benchmark_cpp benchmark_zinc clean
+.PHONY: all cpp zn run-cpp run-zn clean distclean
 
-all: $(CPP_TARGET) $(ZINC_TARGET)
+all: cpp zn
 
-$(CPP_TARGET): $(CPP_SRC)
-	$(CXX) $(CXXFLAGS) $(SDL_CFLAGS) -o $@ $< $(SDL_LIBS)
+cpp: $(CPP_BIN)
 
-$(ZINC_TARGET): $(ZINC_SRC)
-	$(CXX) $(CXXFLAGS) $(SDL_CFLAGS) -o $@ $< $(SDL_LIBS)
+zn: $(ZN_BIN)
 
-run_cpp: $(CPP_TARGET)
-	./$(CPP_TARGET)
+$(CPP_BIN): $(CPP_SRC)
+	$(CXX) $(CXXFLAGS) -o $@ $<
 
-run_zinc: $(ZINC_TARGET)
-	./$(ZINC_TARGET)
+$(ZN_CPP): $(ZN_SRC)
+	$(ZINC) $<
 
-benchmark_cpp: $(CPP_TARGET)
-	./$(CPP_TARGET) --benchmark 10000
+$(ZN_BIN): $(ZN_CPP)
+	$(CXX) $(CXXFLAGS) -o $@ $<
 
-benchmark_zinc: $(ZINC_TARGET)
-	./$(ZINC_TARGET) --benchmark 10000
+run-cpp: $(CPP_BIN)
+	./$(CPP_BIN)
+
+run-zn: $(ZN_BIN)
+	./$(ZN_BIN)
 
 clean:
-	rm -f $(CPP_TARGET) $(ZINC_TARGET)
+	$(RM) $(CPP_BIN) $(ZN_BIN)
+
+distclean: clean
+	$(RM) $(ZN_CPP)

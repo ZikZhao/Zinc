@@ -1,9 +1,5 @@
 fn main(args: [strview]) {
-    std.cout << (0xFF << 24);
+    let a: [i32];
+    a[1usize] = 1;
 }
 
-class A {
-    init(a: i32, b: i32) {
-        return Self{};
-    }
-}
