@@ -850,7 +850,7 @@ auto unescape_string(auto& input) -> void {
     input.resize(write_index);
 }
 
-auto escape_string(strview input) -> GlobalMemory::String {
+inline auto escape_string(strview input) -> GlobalMemory::String {
     GlobalMemory::String result;
     result.reserve(input.size() + 24);  // Reserve extra space for escape sequences
     for (std::size_t read_index = 0; read_index < input.size(); ++read_index) {

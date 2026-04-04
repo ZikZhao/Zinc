@@ -382,9 +382,8 @@ private:
 
 private:
     Sema& sema_;
-    GlobalMemory::
-        UnorderedMap<TemplateCacheKey, const Object*, TemplateKeyHasher, TemplateKeyComparator>
-            cache_;
+    GlobalMemory::UnorderedMap<TemplateCacheKey, Symbol, TemplateKeyHasher, TemplateKeyComparator>
+        cache_;
     GlobalMemory::UnorderedMap<const ASTTemplateSpecialization*, SpecializationPrototype>
         pattern_cache_;
 
@@ -410,7 +409,7 @@ public:
             return {};
         }
         if (auto cache_it = cache_.find({family.primary, args}); cache_it != cache_.end()) {
-            return as_symbol(cache_it->second);
+            return cache_it->second;
         }
         auto [inst_scope, target] = specialization_resolution(family, args);
         inst_scope->scope_id_ = family.primary->identifier;
@@ -427,10 +426,7 @@ public:
                 instance_type->template_args_ = persisted_args;
             }
         }
-        cache_[{family.primary, persisted_args}] =
-            Sema::get_if<SymbolKind::Type>(result)
-                ? static_cast<const Object*>(Sema::get<SymbolKind::Type>(result))
-                : Sema::get<SymbolKind::Term>(result).get_comptime();
+        cache_[{family.primary, persisted_args}] = result;
         return result;
     }
 
@@ -439,6 +435,9 @@ public:
         Sema::Guard guard(sema_, *scope);
         if (!validate(*primary, args)) {
             return {};
+        }
+        if (auto cache_it = cache_.find({primary, args}); cache_it != cache_.end()) {
+            return cache_it->second;
         }
         Scope& inst_scope = Scope::make(*sema_.current_scope_, nullptr, primary->identifier);
         for (size_t i = 0; i < std::min(primary->parameters.size(), args.size()); i++) {
@@ -454,7 +453,10 @@ public:
         sema_.codegen_env_.add_instantiation(&inst_scope, persisted_args);
         sema_.deferred_analysis(inst_scope, primary->target_node);
         const ScopeValue* value = inst_scope.find(primary->identifier);
-        return sema_.eval_symbol(inst_scope, *value);
+        Symbol result = sema_.eval_symbol(inst_scope, *value);
+        if (holds_monostate(result)) return {};
+        cache_[{primary, persisted_args}] = result;
+        return result;
     }
 
     auto inference(
@@ -572,6 +574,7 @@ public:
             Diagnostic::error_no_matching_overload(
                 node->location, Sema::args_repr(std::span{combined_args})
             );
+            resolve_overload(callee, combined_args);
             error_trap.conclude();
             return {};
         }
@@ -798,7 +801,7 @@ private:
         GlobalMemory::Vector<const FunctionType*> ambiguous_candidates;
         bool incomparable = false;
         if (best_candidate) {
-            // error_trap.clear();
+            error_trap.clear();
             for (const FunctionType* candidate : overloads) {
                 if (candidate == best_candidate) continue;
                 std::partial_ordering order =
@@ -2892,15 +2895,15 @@ inline auto TemplateHandler::inference(
     // instantiate the template with auto bindings
     Symbol func_symbol = instantiate(scope, primary, instantiation_args);
     if (!holds_monostate(func_symbol)) {
-        auto [scope, value] = Sema::get<SymbolKind::Function>(func_symbol);
+        auto [func_scope, value] = Sema::get<SymbolKind::Function>(func_symbol);
         FunctionOverloadDef overload_def =
             (*value->get<GlobalMemory::Vector<FunctionOverloadDef>*>())[0];
         if (auto* func_def = overload_def.get<const ASTFunctionDefinition*>()) {
-            return sema_.get_func_type(scope, func_def);
+            return sema_.get_func_type(func_scope, func_def);
         } else if (auto* ctor_def = overload_def.get<const ASTCtorDtorDefinition*>()) {
-            return sema_.get_func_type(scope, ctor_def);
+            return sema_.get_func_type(func_scope, ctor_def);
         } else if (auto* op_def = overload_def.get<const ASTOperatorDefinition*>()) {
-            return sema_.get_func_type(scope, op_def);
+            return sema_.get_func_type(func_scope, op_def);
         } else {
             UNREACHABLE();
         }
