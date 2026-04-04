@@ -37,14 +37,9 @@ local_block: OP_LBRACE statements_ += statement* OP_RBRACE;
 expr_statement: expr_ = expr OP_SEMICOLON;
 
 declaration_statement:
-	KW_STATIC? KW_LET KW_MUT? identifier_ = any_identifier (
+	KW_STATIC? (KW_LET KW_MUT? | KW_CONST) identifier_ = any_identifier (
 		OP_COLON type_ = type
-	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON # LetDecl
-	| (specialize_list_ = specialize_parameter_list)? KW_STATIC? KW_CONST identifier_ =
-		any_identifier (
-		template_list_ = template_parameter_list
-		| instantiation_list_ = instantiation_list
-	)? (OP_COLON type_ = type)? OP_ASSIGN value_ = expr OP_SEMICOLON # ConstDecl;
+	)? (OP_ASSIGN value_ = expr)? OP_SEMICOLON;
 
 if_statement:
 	KW_IF OP_LPAREN condition_ = expr OP_RPAREN if_ = local_block (
@@ -101,7 +96,7 @@ function_definition:
 	);
 
 operator_overload_definition:
-	KW_CONST? KW_OPERATOR (
+	KW_OPERATOR (
 		operator_ = OP_ADD
 		| operator_ = OP_SUB
 		| operator_ = OP_MUL
@@ -328,7 +323,7 @@ field_decl: identifier_ = any_identifier OP_COLON type_ = type;
 field_init: identifier_ = any_identifier OP_COLON value_ = expr;
 
 constructor:
-	KW_CONST? KW_INIT (template_list_ = template_parameter_list)? OP_LPAREN (
+	KW_INIT (template_list_ = template_parameter_list)? OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*
@@ -338,7 +333,7 @@ constructor:
 	);
 
 destructor:
-	KW_CONST? KW_DROP OP_LPAREN (
+	KW_DROP OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
 		)*

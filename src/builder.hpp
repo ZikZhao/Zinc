@@ -196,26 +196,15 @@ private:
         return as_variant(new ASTExpressionStatement{loc(ctx), visit_expr(ctx->expr())});
     }
 
-    auto visitLetDecl(ZincParser::LetDeclContext* ctx) noexcept -> Any<ASTNodeVariant> final {
+    auto visitDeclaration_statement(ZincParser::Declaration_statementContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
         return as_variant(new ASTDeclaration{
             loc(ctx),
             text(ctx->identifier_),
             visit_expr(ctx->type_),
             visit_expr(ctx->value_),
             ctx->KW_MUT() != nullptr,
-            false,
-            ctx->KW_STATIC() != nullptr
-        });
-    }
-
-    auto visitConstDecl(ZincParser::ConstDeclContext* ctx) noexcept -> Any<ASTNodeVariant> final {
-        return as_variant(new ASTDeclaration{
-            loc(ctx),
-            text(ctx->identifier_),
-            visit_expr(ctx->type_),
-            visit_expr(ctx->value_),
-            false,
-            true,
+            ctx->KW_CONST() != nullptr,
             ctx->KW_STATIC() != nullptr
         });
     }
@@ -482,13 +471,9 @@ private:
         auto* op_def = new ASTOperatorDefinition{
             loc(ctx),
             opcode,
-            visit<ASTFunctionParameter>(ctx->parameters_[0]),
-            ctx->parameters_.size() > 1
-                ? new ASTFunctionParameter(visit<ASTFunctionParameter>(ctx->parameters_[1]))
-                : nullptr,
+            visit_list<ASTFunctionParameter>(ctx->parameters_),
             visit_expr(ctx->return_type_),
             visit_list(ctx->body_),
-            ctx->KW_CONST() != nullptr
         };
         if (ctx->template_list_) {
             return as_variant(new ASTTemplateDefinition{
@@ -1205,7 +1190,6 @@ private:
             visit_list<ASTFunctionParameter>(ctx->parameters_),
             visit_list<ASTNodeVariant>(ctx->body_),
             true,
-            ctx->KW_CONST() != nullptr
         };
         if (ctx->template_list_) {
             return as_variant(new ASTTemplateDefinition{
@@ -1224,7 +1208,6 @@ private:
             visit_list<ASTFunctionParameter>(ctx->parameters_),
             visit_list(ctx->body_),
             false,
-            ctx->KW_CONST() != nullptr
         });
     }
 

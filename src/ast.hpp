@@ -447,16 +447,13 @@ struct ASTCtorDtorDefinition final : public ASTNode {
     std::span<ASTFunctionParameter> parameters;
     std::span<ASTNodeVariant> body;
     bool is_constructor;
-    bool declared_const;
 };
 
 struct ASTOperatorDefinition final : public ASTNode {
     OperatorCode opcode;
-    ASTFunctionParameter left;
-    ASTFunctionParameter* right;
+    std::span<ASTFunctionParameter> parameters;
     ASTExprVariant return_type;
     std::span<ASTNodeVariant> body;
-    bool declared_const;
 };
 
 struct ASTInterfaceDefinition final : public ASTNode {
@@ -531,6 +528,7 @@ enum class OperatorGroup : std::uint8_t {
     UnaryArithmetic,
     UnaryLogical,
     UnaryBitwise,
+    Special
 };
 
 constexpr auto GetOperatorGroup(OperatorCode opcode) -> OperatorGroup {
@@ -581,6 +579,11 @@ constexpr auto GetOperatorGroup(OperatorCode opcode) -> OperatorGroup {
     case OperatorCode::LeftShiftAssign:
     case OperatorCode::RightShiftAssign:
         return OperatorGroup::Assignment;
+    case OperatorCode::Call:
+    case OperatorCode::Index:
+    case OperatorCode::Deref:
+    case OperatorCode::Pointer:
+        return OperatorGroup::Special;
     default:
         UNREACHABLE();
     }

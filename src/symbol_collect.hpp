@@ -400,32 +400,19 @@ public:
         current_scope_->add_function(GetOperatorString(node->opcode), node);
         Scope& local_scope = Scope::make(*current_scope_, node);
         local_scope.is_namespace_ = false;
-        if (node->left.is_variadic) {
-            Diagnostic::error_variadic_parameter_in_operator(node->left.location);
-            return;
-        }
-        local_scope.add_variable(
-            node->left.identifier,
-            new VariableInitialization{
-                .type = node->left.type,
-                .value = std::monostate{},
-                .is_mutable = node->left.is_mutable,
-                .is_comptime = node->declared_const,
+        for (std::size_t i = 0; i < node->parameters.size(); ++i) {
+            const auto& param = node->parameters[i];
+            Diagnostic::ErrorTrap param_trap{param.location};
+            if (i != node->parameters.size() - 1 && param.is_variadic) {
+                Diagnostic::error_variadic_parameter_must_be_last(param.location);
             }
-        );
-        if (node->right) {
-            if (node->right->is_variadic) {
-                Diagnostic::error_variadic_parameter_in_operator(node->right->location);
-                return;
-            }
-            Diagnostic::ErrorTrap right_trap{node->right->location};
             local_scope.add_variable(
-                node->right->identifier,
+                param.identifier,
                 new VariableInitialization{
-                    .type = node->right->type,
+                    .type = param.type,
                     .value = std::monostate{},
-                    .is_mutable = node->right->is_mutable,
-                    .is_comptime = node->declared_const,
+                    .is_mutable = param.is_mutable,
+                    .is_comptime = false,
                 }
             );
         }

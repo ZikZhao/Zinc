@@ -861,7 +861,11 @@ private:
 
 public:
     CodeGen(CodeGenEnvironment& env, NameMangler& mangler, TypeMap& type_map) noexcept
-        : env_(env), mangler_(mangler), type_map_(type_map) {}
+        : env_(env),
+          mangler_(mangler),
+          type_map_(type_map),
+          current_scope_(nullptr),
+          indent_level_(0) {}
 
     auto operator()(std::ofstream& stream) -> void {
         for (const auto& [scope, identifier, value] : env_.constants_) {
@@ -1035,21 +1039,17 @@ public:
                 mangler_(out, param_type);
             }
             out += "("sv;
-            ObjectGen::output(out, func_type->parameters_[0], type_map_);
-            if (!node->left.is_mutable && func_type->parameters_[0]->kind_ != Kind::Reference) {
-                out += " const"sv;
-            }
-            out += " "sv;
-            out += node->left.identifier;
-            if (node->right) {
-                out += ", "sv;
-                ObjectGen::output(out, func_type->parameters_[1], type_map_);
-                if (!node->right->is_mutable &&
-                    func_type->parameters_[1]->kind_ != Kind::Reference) {
+            strview sep = ""sv;
+            for (std::size_t i = 0; i < node->parameters.size(); i++) {
+                out += sep;
+                const ASTFunctionParameter& param = node->parameters[i];
+                ObjectGen::output(out, func_type->parameters_[i], type_map_);
+                if (!param.is_mutable && func_type->parameters_[i]->kind_ != Kind::Reference) {
                     out += " const"sv;
                 }
                 out += " "sv;
-                out += node->right->identifier;
+                out += param.identifier;
+                sep = ", "sv;
             }
             out += ") -> "sv;
             ObjectGen::output(out, func_type->return_type_, type_map_);

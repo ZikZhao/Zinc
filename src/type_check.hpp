@@ -331,12 +331,17 @@ class TemplateHandler final : public GlobalMemory::MonotonicAllocated {
 private:
     using TemplateArgs = std::span<const Object*>;
 
-    using TemplateCacheKey = std::pair<const ASTTemplateDefinition*, TemplateArgs>;
+    struct TemplateCacheKey {
+        const Scope* scope;
+        const ASTTemplateDefinition* primary;
+        TemplateArgs args;
+    };
 
     struct TemplateKeyHasher {
         auto operator()(const TemplateCacheKey& key) const noexcept -> std::size_t {
-            std::size_t result = std::bit_cast<std::size_t>(key.first);
-            for (const Object* arg : key.second) {
+            std::size_t result = std::bit_cast<std::size_t>(key.scope);
+            result = hash_combine(result, std::bit_cast<std::size_t>(key.primary));
+            for (const Object* arg : key.args) {
                 if (auto* type = arg->dyn_cast<Type>()) {
                     result = hash_combine(result, std::bit_cast<std::size_t>(type));
                 } else {
@@ -352,17 +357,22 @@ private:
     struct TemplateKeyComparator {
         auto operator()(const TemplateCacheKey& left, const TemplateCacheKey& right) const noexcept
             -> bool {
-            if (left.first != right.first) {
+            if (left.scope != right.scope || left.primary != right.primary) {
                 return false;
             }
-            if (left.second.size() != right.second.size()) {
+            if (left.args.size() != right.args.size()) {
                 return false;
             }
-            for (size_t i = 0; i < left.second.size(); i++) {
-                const Object* left_arg = left.second[i];
-                const Object* right_arg = right.second[i];
-                if (auto* left_type = left_arg->dyn_cast<Type>()) {
-                    if (left_type != right_arg) {
+            for (size_t i = 0; i < left.args.size(); i++) {
+                const Object* left_arg = left.args[i];
+                const Object* right_arg = right.args[i];
+                const Type* left_type = left_arg->dyn_cast<Type>();
+                const Type* right_type = right_arg->dyn_cast<Type>();
+                if (static_cast<bool>(left_type) != static_cast<bool>(right_type)) {
+                    return false;
+                }
+                if (left_type) {
+                    if (left_type != right_type) {
                         return false;
                     }
                 } else {
@@ -408,7 +418,8 @@ public:
         if (!validate(*family.primary, args)) {
             return {};
         }
-        if (auto cache_it = cache_.find({family.primary, args}); cache_it != cache_.end()) {
+        TemplateCacheKey cache_key{family.decl_scope, family.primary, args};
+        if (auto cache_it = cache_.find(cache_key); cache_it != cache_.end()) {
             return cache_it->second;
         }
         auto [inst_scope, target] = specialization_resolution(family, args);
@@ -426,7 +437,7 @@ public:
                 instance_type->template_args_ = persisted_args;
             }
         }
-        cache_[{family.primary, persisted_args}] = result;
+        cache_[TemplateCacheKey{family.decl_scope, family.primary, persisted_args}] = result;
         return result;
     }
 
@@ -436,7 +447,8 @@ public:
         if (!validate(*primary, args)) {
             return {};
         }
-        if (auto cache_it = cache_.find({primary, args}); cache_it != cache_.end()) {
+        TemplateCacheKey cache_key{scope, primary, args};
+        if (auto cache_it = cache_.find(cache_key); cache_it != cache_.end()) {
             return cache_it->second;
         }
         Scope& inst_scope = Scope::make(*sema_.current_scope_, nullptr, primary->identifier);
@@ -455,7 +467,7 @@ public:
         const ScopeValue* value = inst_scope.find(primary->identifier);
         Symbol result = sema_.eval_symbol(inst_scope, *value);
         if (holds_monostate(result)) return {};
-        cache_[{primary, persisted_args}] = result;
+        cache_[TemplateCacheKey{scope, primary, persisted_args}] = result;
         return result;
     }
 
@@ -2731,15 +2743,22 @@ inline auto Sema::get_func_type(Scope* scope, FunctionOverloadDef overload) noex
         }
         return_type = get_self_type();
     } else if (auto* op_def = overload.get<const ASTOperatorDefinition*>()) {
-        TypeResolution left_type;
-        TypeContextEvaluator{*this, left_type}(op_def->left.type);
-        params.push_back(left_type.get());
-        if (op_def->right) {
-            TypeResolution right_type;
-            TypeContextEvaluator{*this, right_type}(op_def->right->type);
-            params.push_back(right_type.get());
+        for (const ASTFunctionParameter& param : op_def->parameters) {
+            if (param.is_variadic) {
+                Symbol pack =
+                    ValueContextEvaluator{*this, nullptr, true}(op_def->parameters.back().type);
+                for (const Object* param_type : Sema::get<SymbolKind::ParameterPack>(pack)) {
+                    params.push_back(param_type->cast<Type>());
+                }
+                break;
+            }
+            params.push_back(get_param_type(param));
         }
-        TypeContextEvaluator{*this, return_type}(op_def->return_type);
+        if (!holds_monostate(op_def->return_type)) {
+            TypeContextEvaluator{*this, return_type}(op_def->return_type);
+        } else {
+            return_type = &VoidType::instance;
+        }
     } else {
         UNREACHABLE();
     }
@@ -2798,7 +2817,7 @@ inline auto TemplateHandler::inference(
     } else if (auto* ctor_def = std::get_if<const ASTCtorDtorDefinition*>(&primary->target_node)) {
         param_count = (*ctor_def)->parameters.size();
     } else if (auto* op_def = std::get_if<const ASTOperatorDefinition*>(&primary->target_node)) {
-        param_count = 1 + static_cast<bool>((*op_def)->right);
+        param_count = (*op_def)->parameters.size();
     } else {
         UNREACHABLE();
     }
@@ -2857,13 +2876,19 @@ inline auto TemplateHandler::inference(
         }
     } else if (auto* op_def = std::get_if<const ASTOperatorDefinition*>(&primary->target_node)) {
         func_node = *op_def;
-        Symbol left_pattern_symbol =
-            ValueContextEvaluator{sema_, nullptr, false}((*op_def)->left.type);
-        patterns.push_back(Sema::get_default<SymbolKind::Type>(left_pattern_symbol));
-        if ((*op_def)->right) {
-            Symbol right_pattern_symbol =
-                ValueContextEvaluator{sema_, nullptr, false}((*op_def)->right->type);
-            patterns.push_back(Sema::get_default<SymbolKind::Type>(right_pattern_symbol));
+        for (const auto& pattern : (*op_def)->parameters) {
+            if (pattern.is_variadic) break;
+            Symbol pattern_symbol = ValueContextEvaluator{sema_, nullptr, false}(pattern.type);
+            patterns.push_back(Sema::get_default<SymbolKind::Type>(pattern_symbol));
+        }
+        if (!variadic_param.empty() && args_type.size() >= param_count) {
+            for (size_t i = 0; i <= args_type.size() - param_count; i++) {
+                const AutoObject* auto_inst = auto_instances[i + primary->parameters.size() - 1];
+                pattern_scope.set_template_argument(variadic_param, auto_inst->as_object(false));
+                Symbol pattern_symbol =
+                    ValueContextEvaluator{sema_, nullptr, false}((*op_def)->parameters.back().type);
+                patterns.push_back(Sema::get_default<SymbolKind::Type>(pattern_symbol));
+            }
         }
     } else {
         // template cannot appears on another template

@@ -362,7 +362,7 @@ class Arena {
 		const align = 8usize;
 		self.offset = (self.offset + align - 1usize) & ~(align - 1usize);
 		if (self.offset + object_size > self.storage.size()) {
-			throw std.runtime_error("Arena out of memory");
+			throw std.runtime_error(("Arena out of memory").data());
 		}
 
 		let ptr = &self.storage[self.offset] as *mut void as *mut T;

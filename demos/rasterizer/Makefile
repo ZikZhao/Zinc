@@ -1,7 +1,7 @@
 # Rasterizer demo Makefile (GCC + SDL2 + GLM)
 
 CC := gcc
-TARGET := main_zinc
+TARGET := main
 LEGACY_TARGET := main
 SRC := main.zn.cpp
 BUILD_DIR := build
