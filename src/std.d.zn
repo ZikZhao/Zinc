@@ -1438,6 +1438,9 @@ class optional<T: type> {
 
 fn make_optional<T: type, Args...: type>(args: Args...) -> optional<T>;
 
+fn construct_at<T: type, Args...: type>(ptr: *mut T, args: Args...) -> *mut T;
+fn destroy_at<T: type>(ptr: *mut T);
+
 fn stoi(text: &string) -> i32;
 fn stoi(text: &string, pos: *usize, base: i32) -> i32;
 

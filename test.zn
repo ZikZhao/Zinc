@@ -1,34 +1,10 @@
 fn main(args: [strview]) {
-    let inst = Derived();
-    let base_ref: dyn BaseInterface = &inst;
-    std.cout << "Base reference: " << base_ref->foo();
+    let mut a: A;
+    let a_ptr: *mut A = std.construct_at::<A>(&a, 1, 2);
 }
 
-interface BaseInterface {
-    fn foo(self: &Self) -> i32;
-}
-
-class Base implements BaseInterface {
-    init() {
+class A {
+    init(a: i32, b: i32) {
         return Self{};
     }
-    drop() {
-        std.cout << "Base destructor called\n";
-    }
-    override fn foo(self: &Self) -> i32 {
-        return 42;
-    }
 }
-
-class Derived implements BaseInterface {
-    init() {
-        return Self{};
-    }
-    drop() {
-        std.cout << "Derived destructor called\n";
-    }
-    override fn foo(self: &Self) -> i32 {
-        return 100;
-    }
-}
-

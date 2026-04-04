@@ -69,7 +69,7 @@ public:
 public:
     GlobalMemory::Vector<std::tuple<const Scope*, strview, const Value*>> constants_;
     GlobalMemory::Vector<FunctionDef> functions_;
-    GlobalMemory::Vector<std::tuple<const InterfaceType*, strview, const FunctionType*>> virtuals_;
+    GlobalMemory::Vector<std::tuple<const DynamicType*, strview, const FunctionType*>> virtuals_;
     GlobalMemory::Vector<std::pair<Scope*, std::span<const Object*>>> instantiations_;
     GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
     GlobalMemory::Vector<strview> cpp_blocks_;
@@ -86,10 +86,9 @@ public:
         functions_.push_back({current_scope, node, func_obj});
     }
 
-    auto add_virtual(
-        const InterfaceType* interface, strview identifier, const FunctionType* func_type
-    ) -> void {
-        virtuals_.push_back({interface, identifier, func_type});
+    auto add_virtual(const DynamicType* dynamic, strview identifier, const FunctionType* func_type)
+        -> void {
+        virtuals_.push_back({dynamic, identifier, func_type});
     }
 
     auto add_instantiation(const Scope* inst_scope, std::span<const Object*> args) -> void {
@@ -451,7 +450,7 @@ public:
             return {};
         }
         Scope& inst_scope = Scope::make(*sema_.current_scope_, nullptr, primary->identifier);
-        for (size_t i = 0; i < args.size(); i++) {
+        for (size_t i = 0; i < std::min(primary->parameters.size(), args.size()); i++) {
             inst_scope.set_template_argument(primary->parameters[i].identifier, args[i]);
         }
         if (primary->parameters.back().is_variadic) {
@@ -568,7 +567,11 @@ public:
         if (holds_monostate(callee)) return {};
         assert(!std::ranges::contains(args_type, nullptr));
         GlobalMemory::Vector<const Type*> combined_args{args_type.begin(), args_type.end()};
-        if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
+        if (auto* term = Sema::get_if<SymbolKind::Term>(callee)) {
+            if (term->decay()->dyn_cast<InstanceType>()) {
+                combined_args.insert(combined_args.begin(), term->effective_type());
+            }
+        } else if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
             combined_args.insert(combined_args.begin(), method->object.effective_type());
         }
 
@@ -637,6 +640,12 @@ private:
             const Type* decayed = callable_term->decay();
             if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
                 return {func_type};
+            } else if (auto* instance_type = decayed->dyn_cast<InstanceType>()) {
+                Scope* scope = instance_type->scope_;
+                auto overloads = scope->find(GetOperatorString(OperatorCode::Call));
+                if (overloads) {
+                    return reification(scope, overloads);
+                }
             }
             Diagnostic::error_value_not_callable(decayed->repr());
             return {};
@@ -706,6 +715,12 @@ private:
             if (auto* func_type = decayed->dyn_cast<FunctionType>()) {
                 out.push_back(func_type);
                 return;
+            } else if (auto* instance_type = decayed->dyn_cast<InstanceType>()) {
+                Scope* scope = instance_type->scope_;
+                auto overloads = scope->find(GetOperatorString(OperatorCode::Call));
+                if (overloads) {
+                    return reification(scope, overloads);
+                }
             }
             return Diagnostic::error_value_not_callable(decayed->repr());
         } else if (auto* function = Sema::get_if<SymbolKind::Function>(func)) {
@@ -855,7 +870,7 @@ private:
                     return tiebreaker_rank();
                 }
                 return NoMatch;
-            } else {
+            } else if (decayed_param->kind_ == Kind::Auto) {
                 const AutoObject* auto_obj = static_cast<const AutoObject*>(decayed_param);
                 if (auto it = auto_bindings.find(auto_obj); it != auto_bindings.end()) {
                     if (it->second != decayed_arg) {
@@ -865,6 +880,9 @@ private:
                     auto_bindings[auto_obj] = decayed_arg;
                 }
                 return tiebreaker_rank();
+            } else {
+                return decayed_param->pattern_match(decayed_arg, auto_bindings) ? tiebreaker_rank()
+                                                                                : NoMatch;
             }
         }
 
@@ -1342,7 +1360,8 @@ public:
         const Type* decayed = operand.decay();
         return decayed->kind_ == Kind::Nullptr || decayed->kind_ == Kind::Integer ||
                decayed->kind_ == Kind::Float || decayed->kind_ == Kind::Boolean ||
-               decayed->kind_ == Kind::Pointer;
+               decayed->kind_ == Kind::Struct || decayed->kind_ == Kind::Pointer ||
+               decayed->kind_ == Kind::Dynamic;
     }
 
 private:
@@ -1475,6 +1494,17 @@ public:
                     (left_kind == Kind::Float && right_kind == Kind::Float) ||
                     (left_kind == Kind::Boolean && right_kind == Kind::Boolean)) {
                     return Term::lvalue(result_type, true);
+                } else if (left_kind == Kind::Struct && right_kind == Kind::Struct) {
+                    if (left == right) {
+                        return Term::lvalue(result_type, true);
+                    }
+                } else if (
+                    left_kind == Kind::Dynamic &&
+                    (right_kind == Kind::Pointer || right_kind == Kind::Dynamic)
+                ) {
+                    if (CallHandler::assignable(right.effective_type(), left.decay())) {
+                        return Term::lvalue(result_type, true);
+                    }
                 } else {
                     if (decayed_left == decayed_right) {
                         return Term::lvalue(result_type, true);
@@ -1498,27 +1528,28 @@ public:
         const Type* left_base_type = Type::decay(left_type);
         const Type* right_type = right.effective_type();
         const Type* right_base_type = Type::decay(right_type);
-        if (opcode == OperatorCode::Assign && left_base_type == right_base_type) {
-            if (Type::is_mutable(left_type)) {
-                return {Term::lvalue(left_type, true), nullptr};
-            }
+        std::array<const Type*, 2> args = {left.effective_type(), right.effective_type()};
+        if (opcode == OperatorCode::PostIncrement || opcode == OperatorCode::PostDecrement) {
+            args[1] = &IntegerType::i32_instance;
         }
-        if (left_base_type->kind_ != Kind::Instance && right_base_type &&
-            right_base_type->kind_ != Kind::Instance) {
+        if (left_base_type->kind_ != Kind::Instance && right_base_type->kind_ != Kind::Instance) {
             Diagnostic::error_operation_not_defined(
                 GetOperatorString(opcode), left_type->repr(), right_type->repr()
             );
             return {};
         }
-        std::array<const Type*, 2> args = {left.effective_type(), right.effective_type()};
-        if (opcode == OperatorCode::PostIncrement || opcode == OperatorCode::PostDecrement) {
-            args[1] = &IntegerType::i32_instance;
-        }
-        return sema_.call_handler_->eval_call(
+        auto [result, func_type] = sema_.call_handler_->eval_call(
             node,
             std::tuple{opcode, left_base_type, right_base_type},
             args[1] ? args : std::span(args).subspan(0, 1)
         );
+        if (!result) {
+            Diagnostic::error_operation_not_defined(
+                GetOperatorString(opcode), left_type->repr(), right_type->repr()
+            );
+            return {};
+        }
+        return {result, func_type};
     }
 
     auto eval_cast(const ASTAs* node, Term operand, const Type* target_type) const noexcept
@@ -2509,7 +2540,10 @@ public:
                     const FunctionType* func_type =
                         sema_.get_func_type(sema_.current_scope_, overload);
                     if (!func_type) continue;
-                    sema_.codegen_env_.add_virtual(interface_type, func_def->identifier, func_type);
+                    const DynamicType* dynamic_type = TypeRegistry::get<DynamicType>(
+                        interface_type, Type::is_mutable(func_type->parameters_[0])
+                    );
+                    sema_.codegen_env_.add_virtual(dynamic_type, func_def->identifier, func_type);
                 }
             }
         }

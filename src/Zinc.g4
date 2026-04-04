@@ -89,7 +89,7 @@ type_alias:
 	)? OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
-	(KW_STATIC | KW_OVERRIDE)? KW_FUNC identifier_ = T_IDENTIFIER (
+	KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER (
 		template_list_ = template_parameter_list
 	)? OP_LPAREN (
 		parameters_ += parameter (
@@ -209,7 +209,6 @@ expr:
 	| KW_MOVE inner_expr_ = expr												# MoveExpr
 	| KW_FORWARD inner_expr_ = expr												# ForwardExpr
 	| OP_LPAREN inner_expr_ = expr OP_RPAREN									# ParenExpr
-	| expr_ = expr KW_AS OP_QUESTION? type_ = type								# AsExpr
 	| OP_LPAREN (
 		parameters_ += parameter (
 			OP_COMMA parameters_ += parameter
@@ -228,6 +227,7 @@ expr:
 		| op_ = OP_MUL
 	) expr_ = expr											# UnaryExpr
 	| <assoc = right> expr_ = expr op_ = (OP_INC | OP_DEC)	# PostfixUnaryExpr
+	| expr_ = expr KW_AS OP_QUESTION? type_ = type			# AsExpr
 	| <assoc = left> left_ = expr op_ = (
 		OP_MUL
 		| OP_DIV
@@ -426,7 +426,6 @@ KW_OPERATOR: 'operator';
 KW_AS: 'as';
 KW_IMPORT: 'import';
 KW_THROW: 'throw';
-KW_OVERRIDE: 'override';
 KW_DYN: 'dyn';
 
 OP_DOT: '.';

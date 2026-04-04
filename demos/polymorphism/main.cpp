@@ -9,7 +9,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
-#include <new>
 #include <random>
 #include <string_view>
 #include <utility>
@@ -43,7 +42,7 @@ struct MoveIntent {
 
 class Entity {
 public:
-    virtual ~Entity() = default;
+    ~Entity() = default;
 
     uint64_t last_update_frame = 0;
 
@@ -93,26 +92,17 @@ size_t entity_storage_align();
 
 class World {
 public:
-    struct AlignedStorageDeleter {
-        size_t align = alignof(std::max_align_t);
-
-        void operator()(void* p) const noexcept {
-            if (p != nullptr) {
-                ::operator delete(p, std::align_val_t(align));
-            }
-        }
-    };
-
     World(int w, int h)
         : width_(w),
           height_(h),
           cell_size_(entity_storage_size()),
           cell_align_(entity_storage_align()),
-          cell_stride_(align_up(cell_size_, cell_align_)),
-          storage_(nullptr, AlignedStorageDeleter{cell_align_}) {
+          cell_stride_(align_up(cell_size_, cell_align_)) {
         const size_t count = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+        const size_t bytes = count * cell_stride_;
+
         cells_.resize(count);
-        storage_.reset(::operator new(count * cell_stride_, std::align_val_t(cell_align_)));
+        storage_.resize(bytes);
         for (size_t i = 0; i < count; ++i) {
             void* slot = slot_ptr(i);
             construct_from_recipe(slot, make_entity(EntityType::VoidCell));
@@ -203,8 +193,14 @@ public:
 private:
     static size_t align_up(size_t n, size_t a) { return (n + a - 1) / a * a; }
 
-    void* slot_ptr(size_t i) const {
-        return static_cast<void*>(static_cast<std::byte*>(storage_.get()) + i * cell_stride_);
+    void* slot_ptr(size_t i) {
+        auto* base = storage_.data();
+        return static_cast<void*>(base + i * cell_stride_);
+    }
+
+    const void* slot_ptr(size_t i) const {
+        auto* base = storage_.data();
+        return static_cast<const void*>(base + i * cell_stride_);
     }
 
     static void construct_from_recipe(void* dst, const EntityRecipe& recipe);
@@ -242,7 +238,7 @@ private:
     size_t cell_align_;
     size_t cell_stride_;
     std::vector<Entity*> cells_;
-    std::unique_ptr<void, AlignedStorageDeleter> storage_;
+    std::vector<std::byte> storage_;
 };
 
 class VoidCell final : public Entity {
@@ -773,34 +769,34 @@ size_t entity_storage_align() {
 void World::construct_from_recipe(void* dst, const EntityRecipe& recipe) {
     switch (recipe.type) {
     case EntityType::VoidCell:
-        new (dst) VoidCell();
+        std::construct_at(static_cast<VoidCell*>(dst));
         return;
     case EntityType::Wall:
-        new (dst) Wall();
+        std::construct_at(static_cast<Wall*>(dst));
         return;
     case EntityType::Sand:
-        new (dst) Sand();
+        std::construct_at(static_cast<Sand*>(dst));
         return;
     case EntityType::Water:
-        new (dst) Water();
+        std::construct_at(static_cast<Water*>(dst));
         return;
     case EntityType::Plant:
-        new (dst) Plant();
+        std::construct_at(static_cast<Plant*>(dst));
         return;
     case EntityType::Lava:
-        new (dst) Lava();
+        std::construct_at(static_cast<Lava*>(dst));
         return;
     case EntityType::Steam:
-        new (dst) Steam(recipe.steam_life);
+        std::construct_at(static_cast<Steam*>(dst), recipe.steam_life);
         return;
     case EntityType::Acid:
-        new (dst) Acid();
+        std::construct_at(static_cast<Acid*>(dst));
         return;
     case EntityType::Generator:
-        new (dst) Generator(recipe.spawn_kind, recipe.interval);
+        std::construct_at(static_cast<Generator*>(dst), recipe.spawn_kind, recipe.interval);
         return;
     case EntityType::BlackHole:
-        new (dst) BlackHole();
+        std::construct_at(static_cast<BlackHole*>(dst));
         return;
     }
 }
@@ -808,34 +804,34 @@ void World::construct_from_recipe(void* dst, const EntityRecipe& recipe) {
 void World::destroy_entity(Entity& entity) {
     switch (entity.type()) {
     case EntityType::VoidCell:
-        static_cast<VoidCell&>(entity).~VoidCell();
+        std::destroy_at(static_cast<VoidCell*>(&entity));
         return;
     case EntityType::Wall:
-        static_cast<Wall&>(entity).~Wall();
+        std::destroy_at(static_cast<Wall*>(&entity));
         return;
     case EntityType::Sand:
-        static_cast<Sand&>(entity).~Sand();
+        std::destroy_at(static_cast<Sand*>(&entity));
         return;
     case EntityType::Water:
-        static_cast<Water&>(entity).~Water();
+        std::destroy_at(static_cast<Water*>(&entity));
         return;
     case EntityType::Plant:
-        static_cast<Plant&>(entity).~Plant();
+        std::destroy_at(static_cast<Plant*>(&entity));
         return;
     case EntityType::Lava:
-        static_cast<Lava&>(entity).~Lava();
+        std::destroy_at(static_cast<Lava*>(&entity));
         return;
     case EntityType::Steam:
-        static_cast<Steam&>(entity).~Steam();
+        std::destroy_at(static_cast<Steam*>(&entity));
         return;
     case EntityType::Acid:
-        static_cast<Acid&>(entity).~Acid();
+        std::destroy_at(static_cast<Acid*>(&entity));
         return;
     case EntityType::Generator:
-        static_cast<Generator&>(entity).~Generator();
+        std::destroy_at(static_cast<Generator*>(&entity));
         return;
     case EntityType::BlackHole:
-        static_cast<BlackHole&>(entity).~BlackHole();
+        std::destroy_at(static_cast<BlackHole*>(&entity));
         return;
     }
 }
@@ -1182,10 +1178,7 @@ int run_visualization(int width, int height, uint64_t seed) {
     constexpr int kCellSize = 8;
     constexpr uint32_t kFrameMs = 1000 / 24;
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
-        return 1;
-    }
+    SDL_Init(SDL_INIT_VIDEO);
 
     SDL_Window* window = SDL_CreateWindow(
         "Polymorphism Sandbox",
@@ -1195,21 +1188,10 @@ int run_visualization(int width, int height, uint64_t seed) {
         height * kCellSize,
         SDL_WINDOW_SHOWN
     );
-    if (window == nullptr) {
-        std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << '\n';
-        SDL_Quit();
-        return 1;
-    }
 
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (renderer == nullptr) {
         renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
-    }
-    if (renderer == nullptr) {
-        std::cerr << "SDL_CreateRenderer failed: " << SDL_GetError() << '\n';
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
     }
 
     std::mt19937_64 rng(seed);

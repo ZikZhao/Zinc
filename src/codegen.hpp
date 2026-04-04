@@ -889,8 +889,8 @@ public:
             }
             newline(false);
         }
-        for (const auto& [interface, identifier, func_type] : env_.virtuals_) {
-            (*this)(interface, identifier, func_type);
+        for (const auto& [dynamic, identifier, func_type] : env_.virtuals_) {
+            (*this)(dynamic, identifier, func_type);
         }
         stream << "\n// ----- Constants -----\n"sv;
         flush_without_sdl_prefix(constants_, stream);
@@ -1067,9 +1067,9 @@ public:
         newline();
     }
 
-    auto operator()(
-        const InterfaceType* interface, strview identifier, const FunctionType* func_type
-    ) -> void {
+    auto operator()(const DynamicType* dynamic, strview identifier, const FunctionType* func_type)
+        -> void {
+        const InterfaceType* interface = dynamic->target_type_;
         auto gen = [&](GlobalMemory::String& out) {
             out += "auto "sv;
             mangler_(out, interface->scope_, identifier);
@@ -1078,10 +1078,7 @@ public:
                 mangler_(out, param_type);
             }
             out += "("sv;
-            const DynamicType* dynamic_self = TypeRegistry::get<DynamicType>(
-                interface, Type::is_mutable(func_type->parameters_[0])
-            );
-            ObjectGen::output(out, dynamic_self, type_map_);
+            ObjectGen::output(out, dynamic, type_map_);
             out += " _arg0"sv;
             for (std::size_t i = 1; i < func_type->parameters_.size(); i++) {
                 out += ", "sv;

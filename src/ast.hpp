@@ -441,7 +441,6 @@ struct ASTFunctionDefinition final : public ASTNode {
     ASTExprVariant return_type;
     std::span<ASTNodeVariant> body;
     bool declared_static;
-    bool declared_override;
 };
 
 struct ASTCtorDtorDefinition final : public ASTNode {

@@ -38,6 +38,8 @@ type EntityRecipe = {
 	steam_life: i32,
 };
 
+const ENTITY_SLOT_BYTES: usize = 64usize;
+
 fn make_entity(type_id: i32) -> EntityRecipe {
 	return EntityRecipe{
 		type_id: type_id,
@@ -94,14 +96,14 @@ interface Entity {
 class VoidCell implements Entity {
 	init() { return Self{}; }
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.VOID_CELL; }
-	override fn color(self: &Self) -> u32 { return rgb(20u8, 20u8, 28u8); }
-	override fn is_static(self: &Self) -> bool { return true; }
+	fn type_id(self: &Self) -> i32 { return EntityType.VOID_CELL; }
+	fn color(self: &Self) -> u32 { return rgb(20u8, 20u8, 28u8); }
+	fn is_static(self: &Self) -> bool { return true; }
 
-	override fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
+	fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -124,16 +126,16 @@ class Wall implements Entity {
 		return Self{heat_: 0u8};
 	}
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.WALL; }
+	fn type_id(self: &Self) -> i32 { return EntityType.WALL; }
 
-	override fn color(self: &Self) -> u32 {
+	fn color(self: &Self) -> u32 {
 		let glow = std.min(255, 85 + self.heat_ as i32) as u8;
 		return rgb(glow, glow, glow);
 	}
 
-	override fn is_static(self: &Self) -> bool { return true; }
+	fn is_static(self: &Self) -> bool { return true; }
 
-	override fn tick(
+	fn tick(
 		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
 	) {
 		let mut near_lava = false;
@@ -165,7 +167,7 @@ class Wall implements Entity {
 		}
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -182,20 +184,20 @@ class Wall implements Entity {
 class Sand implements Entity {
 	init() { return Self{}; }
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.SAND; }
-	override fn color(self: &Self) -> u32 { return rgb(219u8, 186u8, 92u8); }
-	override fn is_static(self: &Self) -> bool { return false; }
+	fn type_id(self: &Self) -> i32 { return EntityType.SAND; }
+	fn color(self: &Self) -> u32 { return rgb(219u8, 186u8, 92u8); }
+	fn is_static(self: &Self) -> bool { return false; }
 
-	override fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
+	fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
 		let dirs: [MoveIntent; 3usize] = [
 			MoveIntent{dx: 0, dy: 1},
 			MoveIntent{dx: -1, dy: 1},
 			MoveIntent{dx: 1, dy: 1},
 		];
-		world.try_moves(x, y, dirs, frame, rng);
+		world.try_moves(x, y, std.span::<MoveIntent>(dirs), frame, rng);
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -214,11 +216,11 @@ class Water implements Entity {
 
 	init() { return Self{lateral_momentum_: 0}; }
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.WATER; }
-	override fn color(self: &Self) -> u32 { return rgb(56u8, 119u8, 224u8); }
-	override fn is_static(self: &Self) -> bool { return false; }
+	fn type_id(self: &Self) -> i32 { return EntityType.WATER; }
+	fn color(self: &Self) -> u32 { return rgb(56u8, 119u8, 224u8); }
+	fn is_static(self: &Self) -> bool { return false; }
 
-	override fn tick(
+	fn tick(
 		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
 	) {
 		if (world.try_move(x, y, x, y + 1, frame)) {
@@ -245,7 +247,7 @@ class Water implements Entity {
 		}
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -267,11 +269,11 @@ class Water implements Entity {
 class Lava implements Entity {
 	init() { return Self{}; }
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.LAVA; }
-	override fn color(self: &Self) -> u32 { return rgb(230u8, 88u8, 35u8); }
-	override fn is_static(self: &Self) -> bool { return false; }
+	fn type_id(self: &Self) -> i32 { return EntityType.LAVA; }
+	fn color(self: &Self) -> u32 { return rgb(230u8, 88u8, 35u8); }
+	fn is_static(self: &Self) -> bool { return false; }
 
-	override fn tick(
+	fn tick(
 		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
 	) {
 		for (let mut dy = -1; dy <= 1; ++dy) {
@@ -304,10 +306,10 @@ class Lava implements Entity {
 			MoveIntent{dx: -1, dy: 0},
 			MoveIntent{dx: 1, dy: 0},
 		];
-		world.try_moves(x, y, dirs, frame, rng);
+		world.try_moves(x, y, std.span::<MoveIntent>(dirs), frame, rng);
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -331,13 +333,14 @@ class Lava implements Entity {
 class Steam implements Entity {
 	let mut life_: i32;
 
+	init() { return Self{life_: 160}; }
 	init(life: i32) { return Self{life_: life}; }
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.STEAM; }
-	override fn color(self: &Self) -> u32 { return rgb(204u8, 214u8, 235u8); }
-	override fn is_static(self: &Self) -> bool { return false; }
+	fn type_id(self: &Self) -> i32 { return EntityType.STEAM; }
+	fn color(self: &Self) -> u32 { return rgb(204u8, 214u8, 235u8); }
+	fn is_static(self: &Self) -> bool { return false; }
 
-	override fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
+	fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
 		self.life_ -= 1;
 		if (self.life_ <= 0) {
 			world.set(x, y, make_entity(EntityType.WATER));
@@ -352,10 +355,10 @@ class Steam implements Entity {
 			MoveIntent{dx: -1, dy: 0},
 			MoveIntent{dx: 1, dy: 0},
 		];
-		world.try_moves(x, y, dirs, frame, rng);
+		world.try_moves(x, y, std.span::<MoveIntent>(dirs), frame, rng);
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -372,11 +375,11 @@ class Steam implements Entity {
 class Plant implements Entity {
 	init() { return Self{}; }
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.PLANT; }
-	override fn color(self: &Self) -> u32 { return rgb(43u8, 176u8, 84u8); }
-	override fn is_static(self: &Self) -> bool { return true; }
+	fn type_id(self: &Self) -> i32 { return EntityType.PLANT; }
+	fn color(self: &Self) -> u32 { return rgb(43u8, 176u8, 84u8); }
+	fn is_static(self: &Self) -> bool { return true; }
 
-	override fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
+	fn tick(self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64) {
 		let mut has_water = false;
 		let mut empty = std.vector<std.pair<i32, i32>>();
 
@@ -406,7 +409,7 @@ class Plant implements Entity {
 		}
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -425,11 +428,11 @@ class Acid implements Entity {
 
 	init() { return Self{lateral_momentum_: 0}; }
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.ACID; }
-	override fn color(self: &Self) -> u32 { return rgb(175u8, 235u8, 74u8); }
-	override fn is_static(self: &Self) -> bool { return false; }
+	fn type_id(self: &Self) -> i32 { return EntityType.ACID; }
+	fn color(self: &Self) -> u32 { return rgb(175u8, 235u8, 74u8); }
+	fn is_static(self: &Self) -> bool { return false; }
 
-	override fn tick(
+	fn tick(
 		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
 	) {
 		for (let mut dy = -1; dy <= 1; ++dy) {
@@ -481,7 +484,7 @@ class Acid implements Entity {
 		}
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -503,6 +506,7 @@ class Generator implements Entity {
 	let mut vy_: i32;
 	let mut counter_: i32;
 
+	init() { return Self(SpawnKind.WATER, 8); }
 	init(spawn: i32, interval: i32) {
 		return Self{
 			spawn_: spawn,
@@ -514,17 +518,17 @@ class Generator implements Entity {
 		};
 	}
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.GENERATOR; }
+	fn type_id(self: &Self) -> i32 { return EntityType.GENERATOR; }
 
-	override fn color(self: &Self) -> u32 {
+	fn color(self: &Self) -> u32 {
 		if (self.spawn_ == SpawnKind.WATER) { return rgb(58u8, 152u8, 255u8); }
 		if (self.spawn_ == SpawnKind.LAVA) { return rgb(247u8, 122u8, 57u8); }
 		return rgb(196u8, 247u8, 97u8);
 	}
 
-	override fn is_static(self: &Self) -> bool { return true; }
+	fn is_static(self: &Self) -> bool { return true; }
 
-	override fn tick(
+	fn tick(
 		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
 	) {
 		if ((frame % self.move_interval_ as u64) == 0u64) {
@@ -571,7 +575,7 @@ class Generator implements Entity {
 		world.mark_updated(gx, gy, frame);
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -602,11 +606,11 @@ class BlackHole implements Entity {
 		};
 	}
 
-	override fn type_id(self: &Self) -> i32 { return EntityType.BLACK_HOLE; }
-	override fn color(self: &Self) -> u32 { return rgb(160u8, 64u8, 220u8); }
-	override fn is_static(self: &Self) -> bool { return false; }
+	fn type_id(self: &Self) -> i32 { return EntityType.BLACK_HOLE; }
+	fn color(self: &Self) -> u32 { return rgb(160u8, 64u8, 220u8); }
+	fn is_static(self: &Self) -> bool { return false; }
 
-	override fn tick(
+	fn tick(
 		self: &mut Self, world: &mut World, x: i32, y: i32, frame: u64, rng: &mut std.mt19937_64
 	) {
 		if (!self.initialized_) {
@@ -666,7 +670,7 @@ class BlackHole implements Entity {
 		}
 	}
 
-	override fn accept_move(
+	fn accept_move(
 		self: &mut Self,
 		world: &mut World,
 		self_x: i32,
@@ -680,41 +684,30 @@ class BlackHole implements Entity {
 	}
 }
 
-fn new_entity(recipe: EntityRecipe) -> std.unique_ptr<dyn mut Entity> {
-	switch (recipe.type_id) {
-		case EntityType.VOID_CELL: { return std.make_unique::<VoidCell>(); }
-		case EntityType.WALL: { return std.make_unique::<Wall>(); }
-		case EntityType.SAND: { return std.make_unique::<Sand>(); }
-		case EntityType.WATER: { return std.make_unique::<Water>(); }
-		case EntityType.PLANT: { return std.make_unique::<Plant>(); }
-		case EntityType.LAVA: { return std.make_unique::<Lava>(); }
-		case EntityType.STEAM: { return std.make_unique::<Steam>(recipe.steam_life); }
-		case EntityType.ACID: { return std.make_unique::<Acid>(); }
-		case EntityType.GENERATOR: { return std.make_unique::<Generator>(recipe.spawn_kind, recipe.interval); }
-		case EntityType.BLACK_HOLE: { return std.make_unique::<BlackHole>(); }
-	}
-	return std.make_unique::<VoidCell>();
-}
-
 class World {
 	let width_: i32;
 	let height_: i32;
-	let mut cells_: std.vector<std.unique_ptr<dyn mut Entity>>;
+	let mut cells_: std.vector<dyn mut Entity>;
 	let mut updated_frame_: std.vector<u64>;
+	let mut storage_: std.vector<u8>;
 
 	init(width: i32, height: i32) {
 		let mut world = Self{
 			width_: width,
 			height_: height,
-			cells_: std.vector<std.unique_ptr<dyn mut Entity>>(),
+			cells_: std.vector<dyn mut Entity>(),
 			updated_frame_: std.vector<u64>(),
+			storage_: std.vector<u8>(),
 		};
 
 		let count = (width * height) as usize;
-		world.cells_.reserve(count);
 		world.updated_frame_.resize(count, 0u64);
+		world.storage_.resize(count * ENTITY_SLOT_BYTES, 0u8);
+
+		world.cells_.reserve(count);
 		for (let mut i = 0usize; i < count; ++i) {
-			world.cells_.push_back(new_entity(make_entity(EntityType.VOID_CELL)));
+			let p = std.construct_at::<VoidCell>(world.slot_ptr(i) as *mut VoidCell);
+			world.cells_.push_back(p);
 		}
 		return world;
 	}
@@ -728,6 +721,10 @@ class World {
 
 	fn index(self: &Self, x: i32, y: i32) -> usize {
 		return (y as usize) * self.width_ as usize + x as usize;
+	}
+
+	fn slot_ptr(self: &mut Self, i: usize) -> *void {
+		return &self.storage_[i * ENTITY_SLOT_BYTES] as *void;
 	}
 
 	fn type_at(self: &Self, x: i32, y: i32) -> i32 {
@@ -748,7 +745,54 @@ class World {
 
 	fn set(self: &mut Self, x: i32, y: i32, recipe: EntityRecipe) {
 		let i = self.index(x, y);
-		self.cells_[i] = new_entity(recipe);
+		switch (recipe.type_id) {
+			case EntityType.VOID_CELL: {
+				self.cells_[i] = std.construct_at::<VoidCell>(self.slot_ptr(i) as *mut VoidCell);
+				return;
+			}
+			case EntityType.WALL: {
+				self.cells_[i] = std.construct_at::<Wall>(self.slot_ptr(i) as *mut Wall);
+				return;
+			}
+			case EntityType.SAND: {
+				self.cells_[i] = std.construct_at::<Sand>(self.slot_ptr(i) as *mut Sand);
+				return;
+			}
+			case EntityType.WATER: {
+				self.cells_[i] = std.construct_at::<Water>(self.slot_ptr(i) as *mut Water);
+				return;
+			}
+			case EntityType.PLANT: {
+				self.cells_[i] = std.construct_at::<Plant>(self.slot_ptr(i) as *mut Plant);
+				return;
+			}
+			case EntityType.LAVA: {
+				self.cells_[i] = std.construct_at::<Lava>(self.slot_ptr(i) as *mut Lava);
+				return;
+			}
+			case EntityType.STEAM: {
+				self.cells_[i] =
+					std.construct_at::<Steam>(self.slot_ptr(i) as *mut Steam, recipe.steam_life);
+				return;
+			}
+			case EntityType.ACID: {
+				self.cells_[i] = std.construct_at::<Acid>(self.slot_ptr(i) as *mut Acid);
+				return;
+			}
+			case EntityType.GENERATOR: {
+				self.cells_[i] = std.construct_at::<Generator>(
+					self.slot_ptr(i) as *mut Generator,
+					recipe.spawn_kind,
+					recipe.interval
+				);
+				return;
+			}
+			case EntityType.BLACK_HOLE: {
+				self.cells_[i] = std.construct_at::<BlackHole>(self.slot_ptr(i) as *mut BlackHole);
+				return;
+			}
+		}
+		self.cells_[i] = std.construct_at::<VoidCell>(self.slot_ptr(i) as *mut VoidCell);
 	}
 
 	fn swap_cells(self: &mut Self, x1: i32, y1: i32, x2: i32, y2: i32) {
@@ -807,7 +851,8 @@ class World {
 
 	fn count_type(self: &Self, t: i32) -> i32 {
 		let mut count = 0;
-		for (let mut i = 0usize; i < self.cells_.size(); ++i) {
+		let total = (self.width_ * self.height_) as usize;
+		for (let mut i = 0usize; i < total; ++i) {
 			if (self.cells_[i]->type_id() == t) {
 				count += 1;
 			}
@@ -870,9 +915,9 @@ fn seed_world(world: &mut World, seed: u64) {
 	let lava_cores = std.max(1, area / 16000);
 
 	for (let mut i = 0; i < wall_cores; ++i) {
-		let x = randint(&rng, 6, world.width() - 7);
-		let y = randint(&rng, 5, world.height() - 6);
-		let steps = randint(&rng, 18, 50);
+		let x = randint(rng, 6, world.width() - 7);
+		let y = randint(rng, 5, world.height() - 6);
+		let steps = randint(rng, 18, 50);
 		let mut cx = x;
 		let mut cy = y;
 		for (let mut s = 0; s < steps; ++s) {
@@ -880,18 +925,18 @@ fn seed_world(world: &mut World, seed: u64) {
 				break;
 			}
 			world.set(cx, cy, make_entity(EntityType.WALL));
-			if (chance(&rng, 25)) {
-				world.set(cx + randint(&rng, -1, 1), cy + randint(&rng, -1, 1), make_entity(EntityType.WALL));
+			if (chance(rng, 25)) {
+				world.set(cx + randint(rng, -1, 1), cy + randint(rng, -1, 1), make_entity(EntityType.WALL));
 			}
-			cx += randint(&rng, -1, 1);
-			cy += randint(&rng, -1, 1);
+			cx += randint(rng, -1, 1);
+			cy += randint(rng, -1, 1);
 		}
 	}
 
 	for (let mut i = 0; i < sand_cores; ++i) {
-		let cx = randint(&rng, 8, world.width() - 9);
-		let cy = randint(&rng, world.height() / 3, world.height() - 8);
-		let radius = randint(&rng, 7, 15);
+		let cx = randint(rng, 8, world.width() - 9);
+		let cy = randint(rng, world.height() / 3, world.height() - 8);
+		let radius = randint(rng, 7, 15);
 		let r2 = radius * radius;
 		for (let mut y = std.max(1, cy - radius); y <= std.min(world.height() - 2, cy + radius); ++y) {
 			for (let mut x = std.max(1, cx - radius); x <= std.min(world.width() - 2, cx + radius); ++x) {
@@ -901,7 +946,7 @@ fn seed_world(world: &mut World, seed: u64) {
 				if (d2 > r2) { continue; }
 				let mut p = 18;
 				if (d2 * 2 < r2) { p = 72; }
-				if (chance(&rng, p)) {
+				if (chance(rng, p)) {
 					world.set(x, y, make_entity(EntityType.SAND));
 				}
 			}
@@ -909,9 +954,9 @@ fn seed_world(world: &mut World, seed: u64) {
 	}
 
 	for (let mut i = 0; i < plant_cores; ++i) {
-		let cx = randint(&rng, 8, world.width() - 9);
-		let cy = randint(&rng, world.height() / 2, world.height() - 7);
-		let budget = randint(&rng, 220, 520);
+		let cx = randint(rng, 8, world.width() - 9);
+		let cy = randint(rng, world.height() / 2, world.height() - 7);
+		let budget = randint(rng, 220, 520);
 		let mut frontier = std.vector<std.pair<i32, i32>>();
 		frontier.push_back(std.pair<i32, i32>(cx, cy));
 		world.set(cx, cy, make_entity(EntityType.PLANT));
@@ -919,22 +964,22 @@ fn seed_world(world: &mut World, seed: u64) {
 		let mut steps = budget;
 		for (!frontier.empty() && steps > 0) {
 			steps -= 1;
-			let fi = randint(&rng, 0, frontier.size() as i32 - 1) as usize;
+			let fi = randint(rng, 0, frontier.size() as i32 - 1) as usize;
 			let x = frontier[fi].first;
 			let y = frontier[fi].second;
 			frontier[fi] = frontier.back();
 			frontier.pop_back();
 
 			for (let mut k = 0; k < 8; ++k) {
-				let nx = x + randint(&rng, -1, 1);
-				let ny = y + randint(&rng, -1, 1);
+				let nx = x + randint(rng, -1, 1);
+				let ny = y + randint(rng, -1, 1);
 				if (!world.in_bounds(nx, ny) || nx <= 1 || ny <= 1 || nx >= world.width() - 2 || ny >= world.height() - 2) {
 					continue;
 				}
 				if (world.type_at(nx, ny) != EntityType.VOID_CELL) { continue; }
 				let support = is_solid_support(world.type_at(nx, ny + 1)) || is_solid_support(world.type_at(nx, ny - 1));
-				if (!support && !chance(&rng, 16)) { continue; }
-				if (chance(&rng, 40)) {
+				if (!support && !chance(rng, 16)) { continue; }
+				if (chance(rng, 40)) {
 					world.set(nx, ny, make_entity(EntityType.PLANT));
 					frontier.push_back(std.pair<i32, i32>(nx, ny));
 				}
@@ -943,23 +988,23 @@ fn seed_world(world: &mut World, seed: u64) {
 	}
 
 	for (let mut i = 0; i < water_cores; ++i) {
-		let cx = randint(&rng, 8, world.width() - 9);
-		let cy = randint(&rng, 6, world.height() / 2);
-		let size = randint(&rng, 24, 64);
+		let cx = randint(rng, 8, world.width() - 9);
+		let cy = randint(rng, 6, world.height() / 2);
+		let size = randint(rng, 24, 64);
 		for (let mut j = 0; j < size; ++j) {
-			let x = std.clamp(cx + randint(&rng, -6, 6), 1, world.width() - 2);
-			let y = std.clamp(cy + randint(&rng, -6, 6), 1, world.height() - 2);
+			let x = std.clamp(cx + randint(rng, -6, 6), 1, world.width() - 2);
+			let y = std.clamp(cy + randint(rng, -6, 6), 1, world.height() - 2);
 			world.set(x, y, make_entity(EntityType.WATER));
 		}
 	}
 
 	for (let mut i = 0; i < lava_cores; ++i) {
-		let cx = randint(&rng, 8, world.width() - 9);
-		let cy = randint(&rng, world.height() * 2 / 3, world.height() - 8);
-		let size = randint(&rng, 9, 28);
+		let cx = randint(rng, 8, world.width() - 9);
+		let cy = randint(rng, world.height() * 2 / 3, world.height() - 8);
+		let size = randint(rng, 9, 28);
 		for (let mut j = 0; j < size; ++j) {
-			let x = std.clamp(cx + randint(&rng, -4, 4), 1, world.width() - 2);
-			let y = std.clamp(cy + randint(&rng, -4, 4), 1, world.height() - 2);
+			let x = std.clamp(cx + randint(rng, -4, 4), 1, world.width() - 2);
+			let y = std.clamp(cy + randint(rng, -4, 4), 1, world.height() - 2);
 			world.set(x, y, make_entity(EntityType.LAVA));
 		}
 	}
@@ -1061,7 +1106,7 @@ fn run_visualization(width: i32, height: i32, seed: u64) -> i32 {
 
 	let mut rng = std.mt19937_64(seed);
 	let mut world = World(width, height);
-	seed_world(&world, seed);
+	seed_world(world, seed);
 
 	let mut pixel_buffer = std.vector<u32>((screen_w * screen_h) as usize);
 	let mut running = true;
@@ -1078,10 +1123,10 @@ fn run_visualization(width: i32, height: i32, seed: u64) -> i32 {
 			}
 		}
 
-		world.step(frame, &rng);
+		world.step(frame, rng);
 		frame += 1u64;
 
-		render_world(&world, &pixel_buffer, screen_w, screen_h, cell_size);
+		render_world(world, pixel_buffer, screen_w, screen_h, cell_size);
 		sdl.SDL_UpdateTexture(texture, nullptr, pixel_buffer.data() as *void, (screen_w * 4) as usize);
 		sdl.SDL_RenderClear(renderer);
 		sdl.SDL_RenderCopy(renderer, texture, nullptr, nullptr);
@@ -1102,12 +1147,12 @@ fn run_visualization(width: i32, height: i32, seed: u64) -> i32 {
 
 fn run_benchmark(width: i32, height: i32, seed: u64, steps: u64) -> i32 {
 	let mut world = World(width, height);
-	seed_world(&world, seed);
+	seed_world(world, seed);
 	let mut rng = std.mt19937_64(seed ^ 0x9E3779B97F4A7C15u64);
 
 	let start = std.chrono.steady_clock.now();
 	for (let mut frame = 1u64; frame <= steps; ++frame) {
-		world.step(frame, &rng);
+		world.step(frame, rng);
 	}
 	let end = std.chrono.steady_clock.now();
 	let elapsed_ns = std.chrono.duration_cast::<std.chrono.nanoseconds>(end - start).count();

@@ -351,7 +351,6 @@ private:
             visit_expr(ctx->return_type_),
             visit_list(ctx->body_),
             ctx->KW_STATIC() != nullptr,
-            ctx->KW_OVERRIDE() != nullptr,
         };
         if (ctx->template_list_) {
             return as_variant(new ASTTemplateDefinition{
