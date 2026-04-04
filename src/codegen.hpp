@@ -470,11 +470,19 @@ private:
                     sep = "::"sv;
                 }
             }
-            forward_declarations_ += qualified_name;
-            if (!type->primary_template_) {
-                forward_declarations_ += sep;
-                forward_declarations_ += type->identifier_;
+            qualified_name += sep;
+            qualified_name += type->identifier_;
+            if (type->primary_template_) {
+                qualified_name += "<"sv;
+                sep = ""sv;
+                for (const Object* template_arg : type->template_args_) {
+                    qualified_name += sep;
+                    output(qualified_name, template_arg, type_map_);
+                    sep = ", "sv;
+                }
+                qualified_name += ">"sv;
             }
+            forward_declarations_ += qualified_name;
             forward_declarations_ += "\n"sv;
         } else {
             std::format_to(
@@ -542,20 +550,16 @@ public:
         for (auto& [scope, args] : env.instantiations_) {
             GlobalMemory::String qualified_name;
             qualified_name += scope->scope_id_;
+            Scope* child = scope->children_.begin()->second;
             if (scope->is_extern_) {
                 qualified_name += "<"sv;
                 strview sep = ""sv;
                 for (const Object* arg : args) {
                     qualified_name += sep;
-                    if (auto* type = arg->dyn_cast<Type>()) {
-                        ObjectGen::output(qualified_name, type, type_map_);
-                    } else {
-                        ObjectGen::output(qualified_name, arg->cast<Value>(), type_map_);
-                    }
+                    ObjectGen::output(qualified_name, arg, type_map_);
                     sep = ", "sv;
                 }
                 qualified_name += ">"sv;
-                scope->scope_id_ = GlobalMemory::persist(qualified_name);
             } else {
                 qualified_name += "_0"sv;
                 for (const Object* arg : args) {
@@ -576,9 +580,9 @@ public:
                         qualified_name.size() - prev_size
                     );
                 }
-                scope->scope_id_ = GlobalMemory::persist(qualified_name);
             }
-            scope->children_.begin()->second->scope_id_ = {};
+            scope->scope_id_ = {};
+            child->scope_id_ = GlobalMemory::persist(qualified_name);
         }
     }
 
@@ -915,13 +919,14 @@ public:
     auto operator()(const ASTClass auto*) -> void {}
 
     auto operator()(const ASTFunctionDefinition* node, const FunctionType* func_type) -> void {
-        bool is_main = node->identifier == "main"sv && current_scope_->parent_->parent_ == nullptr;
+        const Scope* decl_scope = current_scope_->parent_;
+        bool is_main = node->identifier == "main"sv && decl_scope->parent_ == nullptr;
         auto gen = [&](GlobalMemory::String& out) {
             if (is_main) {
                 out += "auto main(int $argc, char** $argv) -> int"sv;
             } else {
                 out += "auto "sv;
-                mangler_(out, current_scope_, node->identifier);
+                mangler_(out, decl_scope, node->identifier);
                 out += "_0"sv;
                 for (const Type* param_type : func_type->parameters_) {
                     mangler_(out, param_type);

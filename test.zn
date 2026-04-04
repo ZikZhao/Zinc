@@ -1,5 +1,13 @@
 fn main(args: [strview]) {
-    let a: [i32];
-    a[1usize] = 1;
+    let mut a = A();
+    let x = a.foo(42);
 }
 
+class A {
+    init() {
+        return Self{};
+    }
+    fn foo<T: type>(self: &Self, t: T) -> i32 {
+        return 42;
+    }
+}

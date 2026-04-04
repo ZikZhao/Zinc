@@ -2,7 +2,6 @@
 
 CC := gcc
 TARGET := main
-LEGACY_TARGET := main
 SRC := main.zn.cpp
 BUILD_DIR := build
 OBJ := $(BUILD_DIR)/main.zn.o
@@ -27,8 +26,6 @@ LDLIBS += -lstdc++ -lm
 
 all: $(TARGET)
 
-$(LEGACY_TARGET): $(TARGET)
-
 $(TARGET): $(OBJ)
 	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 
@@ -42,6 +39,6 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) $(LEGACY_TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET)
 
 -include $(OBJ:.o=.d)

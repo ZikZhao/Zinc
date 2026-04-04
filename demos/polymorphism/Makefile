@@ -4,11 +4,11 @@ CXXFLAGS ?= -std=c++23 -O3
 ZINC ?= ../../build/debug/bin/zinc
 
 CPP_SRC := main.cpp
-CPP_BIN := main_cpp
+CPP_BIN := cpp_main
 
 ZN_SRC := main.zn
 ZN_CPP := main.zn.cpp
-ZN_BIN := main_zn
+ZN_BIN := zn_main
 
 .PHONY: all cpp zn run-cpp run-zn clean distclean
 
@@ -23,6 +23,9 @@ $(CPP_BIN): $(CPP_SRC)
 
 $(ZN_CPP): $(ZN_SRC)
 	$(ZINC) $<
+
+# Keep source files as plain prerequisites; avoid implicit remakes like %: %.cpp.
+$(ZN_SRC): ;
 
 $(ZN_BIN): $(ZN_CPP)
 	$(CXX) $(CXXFLAGS) -o $@ $<
