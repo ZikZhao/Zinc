@@ -1,3 +1,6 @@
+> Archived document: this is the early-stage proposal from project kickoff.
+> It is preserved for historical decisions and does not represent the current implemented grammar/semantics.
+
 # Zinc Language Design Specification (`.zn`)
 
 Slogan: Galvanizing the C++ ecosystem.
