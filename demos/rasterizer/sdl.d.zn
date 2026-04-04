@@ -19,6 +19,22 @@ class SDL_Texture {
 class SDL_Surface {
 }
 
+class SDL_Color {
+	let r: u8;
+	let g: u8;
+	let b: u8;
+	let a: u8;
+    init(r: u8, g: u8, b: u8, a: u8);
+}
+
+class SDL_Rect {
+	let x: i32;
+	let y: i32;
+	let w: i32;
+	let h: i32;
+    init(x: i32, y: i32, w: i32, h: i32);
+}
+
 class SDL_Keysym {
 	let scancode: SDL_Scancode;
 	let sym: SDL_Keycode;
@@ -110,8 +126,11 @@ const SDL_WINDOWEVENT_CLOSE = 14u8;
 const SDLK_ESCAPE: SDL_Keycode = 27;
 
 const SDL_WINDOWPOS_UNDEFINED: i32 = 0x1FFF0000;
+const SDL_WINDOWPOS_CENTERED: i32 = 0x2FFF0000;
+const SDL_WINDOW_SHOWN: u32 = 0x00000004u32;
 const SDL_WINDOW_OPENGL = 0x00000002u32;
 
+const SDL_RENDERER_ACCELERATED = 0x00000002u32;
 const SDL_RENDERER_SOFTWARE = 0x00000001u32;
 
 const SDL_PIXELFORMAT_ARGB8888 = 372645892u32;
@@ -182,6 +201,8 @@ fn SDL_SetHint(name: *u8, value: *u8) -> i32;
 fn SDL_UpdateTexture(
 	texture: *mut SDL_Texture, rect: *void, pixels: *void, pitch: usize
 ) -> i32;
+fn SDL_SetRenderDrawColor(renderer: *mut SDL_Renderer, r: u8, g: u8, b: u8, a: u8) -> i32;
+fn SDL_RenderFillRect(renderer: *mut SDL_Renderer, rect: *SDL_Rect) -> i32;
 fn SDL_RenderClear(renderer: *mut SDL_Renderer) -> i32;
 fn SDL_RenderCopy(
 	renderer: *mut SDL_Renderer, texture: *mut SDL_Texture, src_rect: *void, dst_rect: *void

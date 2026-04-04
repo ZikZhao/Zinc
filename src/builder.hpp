@@ -1071,6 +1071,17 @@ private:
         strview literal_text = text(ctx->value_);
         switch (ctx->value_->getType()) {
         case ZincParser::T_INT: {
+            int base = 10;
+            if (literal_text.starts_with("0x") || literal_text.starts_with("0X")) {
+                base = 16;
+                literal_text = literal_text.substr(2);
+            } else if (literal_text.starts_with("0b") || literal_text.starts_with("0B")) {
+                base = 2;
+                literal_text = literal_text.substr(2);
+            } else if (literal_text.starts_with("0o") || literal_text.starts_with("0O")) {
+                base = 8;
+                literal_text = literal_text.substr(2);
+            }
             const IntegerType* int_type = &IntegerType::i32_instance;
             if (literal_text.ends_with("i8")) {
                 int_type = &IntegerType::i8_instance;
@@ -1099,7 +1110,7 @@ private:
             if (int_type->is_signed_) {
                 std::int64_t value = 0;
                 auto [ptr, ec] = std::from_chars(
-                    literal_text.data(), literal_text.data() + literal_text.size(), value
+                    literal_text.data(), literal_text.data() + literal_text.size(), value, base
                 );
                 if (ec == std::errc::result_out_of_range ||
                     (ec == std::errc{} && !int_type->in_range(value))) {
@@ -1113,7 +1124,7 @@ private:
             } else {
                 std::uint64_t value = 0;
                 auto [ptr, ec] = std::from_chars(
-                    literal_text.data(), literal_text.data() + literal_text.size(), value
+                    literal_text.data(), literal_text.data() + literal_text.size(), value, base
                 );
                 if (ec == std::errc::result_out_of_range ||
                     (ec == std::errc{} && !int_type->in_range(value))) {

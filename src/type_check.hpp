@@ -275,7 +275,7 @@ public:
             scope = scope->parent_;
         }
         if (scope->self_id_.empty()) {
-            throw;  // not in class error
+            return nullptr;
         }
         const ScopeValue* self_value = scope->parent_->find(scope->self_id_);
         assert(self_value);
@@ -313,15 +313,6 @@ public:
             return {};
         }
         return eval_type(*scope, *value);
-    }
-
-    auto lookup_symbol(strview identifier) -> Symbol {
-        auto [scope, value] = lookup(identifier);
-        if (!scope) {
-            Diagnostic::error_undeclared_identifier(identifier);
-            return {};
-        }
-        return eval_symbol(*scope, *value);
     }
 
     auto get_std_symbol(strview identifier) -> Symbol {
@@ -999,7 +990,7 @@ private:
             }
             const InstanceType* instance_type = decayed->dyn_cast<InstanceType>();
             return {
-                instance_type->scope_->is_extern_,
+                !instance_type->scope_->is_extern_,
                 instance_type->scope_,
                 GetOperatorString(OperatorCode::Call)
             };
@@ -1973,7 +1964,12 @@ public:
             const Type* self_type = sema_.get_self_type();
             return self_type ? Symbol{self_type} : Symbol{};
         } else {
-            Symbol result = sema_.lookup_symbol("self");
+            auto [scope, value] = sema_.lookup("self"sv);
+            if (!scope) {
+                Diagnostic::error_undeclared_identifier("self"sv);
+                return {};
+            }
+            Symbol result = sema_.eval_symbol(*scope, *value);
             if (!holds_monostate(result)) {
                 assert(Sema::get_if<SymbolKind::Term>(result));
             }
@@ -1982,18 +1978,21 @@ public:
     }
 
     auto operator()(const ASTIdentifier* node) noexcept -> Symbol {
-        Symbol symbol = sema_.lookup_symbol(node->str);
+        auto [scope, value] = sema_.lookup(node->str);
+        if (!scope) {
+            Diagnostic::error_undeclared_identifier(node->str);
+            return {};
+        }
+        Symbol symbol = sema_.eval_symbol(*scope, *value);
         if (require_comptime_) {
             if (auto* term = Sema::get_if<SymbolKind::Term>(symbol); term && !term->is_comptime()) {
                 Diagnostic::error_not_constant_expression(node->location);
                 return {};
             }
         }
-        assert(
-            Sema::get_if<SymbolKind::Term>(symbol)
-                ? Sema::get<SymbolKind::Term>(symbol).get() != nullptr
-                : true
-        );
+        if (Sema::get_if<SymbolKind::Term>(symbol) && !scope->is_extern_ && scope->is_namespace_) {
+            sema_.codegen_env_.map_member_access(sema_.current_scope_, node, scope);
+        }
         return symbol;
     }
 

@@ -687,6 +687,10 @@ public:
             }
         );
     }
+
+    static auto error_self_type_not_in_class() noexcept -> void {
+        unlocated_error("'Self' cannot be used outside of a class/interface scope");
+    }
 };
 
 inline thread_local std::optional<Diagnostic> Diagnostic::instance;

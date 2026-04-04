@@ -1,6 +1,5 @@
 fn main(args: [strview]) {
-    let mut a: A;
-    let a_ptr: *mut A = std.construct_at::<A>(&a, 1, 2);
+    std.cout << (0xFF << 24);
 }
 
 class A {

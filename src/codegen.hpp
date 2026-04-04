@@ -24,6 +24,7 @@ inline constexpr strview output_header =
     "#include <memory>\n"
     "#include <memory_resource>\n"
     "#include <numeric>\n"
+    "#include <random>\n"
     "#include <ranges>\n"
     "#include <set>\n"
     "#include <stdexcept>\n"
@@ -1192,7 +1193,14 @@ public:
         definitions_ += "self"sv;
     }
 
-    auto operator()(const ASTIdentifier* node) -> void { definitions_ += node->str; }
+    auto operator()(const ASTIdentifier* node) -> void {
+        if (auto* replacement = env_.find(current_scope_, node)) {
+            const Scope* namespace_scope = std::get<const Scope*>(*replacement);
+            mangler_(definitions_, namespace_scope, node->str);
+        } else {
+            definitions_ += node->str;
+        }
+    }
 
     auto operator()(const ASTMemberAccess* node) -> void {
         if (auto* replacement = env_.find(current_scope_, node)) {

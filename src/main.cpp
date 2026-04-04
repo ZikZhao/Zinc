@@ -87,7 +87,12 @@ auto main(int argc, char* argv[]) -> int {
     }
 
     Diagnostic::print_msg(
-        GlobalMemory::format("Generated code to '{}.cpp'", sources[file_id].relative_path_.c_str())
+        GlobalMemory::format(
+            "Generated code to {}{}.cpp{}",
+            ColourEscape::UNDERLINE,
+            sources[file_id].relative_path_.c_str(),
+            ColourEscape::RESET
+        )
     );
     auto end = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);

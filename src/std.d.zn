@@ -1082,6 +1082,7 @@ fn prev<Iter: type>(it: Iter) -> Iter;
 fn prev<Iter: type>(it: Iter, n: isize) -> Iter;
 
 fn fill<ForwardIt: type, T: type>(first: ForwardIt, last: ForwardIt, value: T);
+fn shuffle<RandomIt: type, URBG: type>(first: RandomIt, last: RandomIt, g: &mut URBG);
 
 fn transform<InputIt: type, OutputIt: type, Op: type>(
     first: InputIt,
@@ -1214,6 +1215,41 @@ class mt19937_64 {
 
 class uniform_int_distribution<IntType: type> {
     type result_type = IntType;
+
+    class param_type {
+        init();
+        init(a: result_type, b: result_type);
+
+        fn a(self: &Self) -> result_type;
+        fn b(self: &Self) -> result_type;
+
+        operator==(self: &Self, other: &Self) -> bool;
+        operator!=(self: &Self, other: &Self) -> bool;
+    }
+
+    init();
+    init(a: result_type, b: result_type);
+    init(param: param_type);
+
+    fn reset(self: &mut Self);
+
+    fn a(self: &Self) -> result_type;
+    fn b(self: &Self) -> result_type;
+    fn min(self: &Self) -> result_type;
+    fn max(self: &Self) -> result_type;
+
+    fn param(self: &Self) -> param_type;
+    fn param(self: &mut Self, p: param_type);
+
+    operator()<Gen: type>(self: &mut Self, g: &mut Gen) -> result_type;
+    operator()<Gen: type>(self: &mut Self, g: &mut Gen, p: param_type) -> result_type;
+
+    operator==(self: &Self, other: &Self) -> bool;
+    operator!=(self: &Self, other: &Self) -> bool;
+}
+
+class uniform_real_distribution<RealType: type> {
+    type result_type = RealType;
 
     class param_type {
         init();
