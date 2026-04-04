@@ -837,6 +837,7 @@ class ostream {
     fn flush(self: &mut Self) -> &mut Self;
     fn put(self: &mut Self, ch: char_type) -> &mut Self;
 
+    operator<<(self: &mut Self, value: *void) -> &mut Self;
     operator<<(self: &mut Self, value: bool) -> &mut Self;
 
     operator<<(self: &mut Self, value: i8) -> &mut Self;

@@ -1606,6 +1606,24 @@ public:
         return {};
     }
 
+    auto eval_dynamic_cast(const ASTAs* node, Term operand, const Type* target_type) const noexcept
+        -> Term {
+        const Type* source_type = operand.effective_type();
+        const Type* decayed_source_type = Type::decay(source_type);
+        if (auto* source_dynamic = decayed_source_type->dyn_cast<DynamicType>()) {
+            if (auto* target_pointer = target_type->dyn_cast<PointerType>()) {
+                const InstanceType* target_instance =
+                    target_pointer->target_type_->dyn_cast<InstanceType>();
+                if (source_dynamic->target_type_->implementors_.contains(target_instance)) {
+                    sema_.codegen_env_.map_type(sema_.current_scope_, node, target_type);
+                    return Term::of(target_type);
+                }
+            }
+        }
+        Diagnostic::error_invalid_cast(node->location, source_type->repr(), target_type->repr());
+        return {};
+    }
+
 private:
     auto eval_primitive_cast(Term operand, const Type* target_type) const noexcept -> Term {
         if (!operand.is_comptime()) return Term::of(target_type);
@@ -2260,7 +2278,13 @@ public:
             return {};
         }
         sema_.codegen_env_.map_type(sema_.current_scope_, node, target_type);
-        return Sema::nonnull(sema_.operation_handler_->eval_cast(node, expr_term, target_type));
+        if (node->is_dynamic) {
+            return Sema::nonnull(
+                sema_.operation_handler_->eval_dynamic_cast(node, expr_term, target_type)
+            );
+        } else {
+            return Sema::nonnull(sema_.operation_handler_->eval_cast(node, expr_term, target_type));
+        }
     }
 
     auto operator()(const ASTLambda* node) noexcept -> Symbol {

@@ -703,7 +703,9 @@ private:
     }
 
     auto visitAsExpr(ZincParser::AsExprContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        return as_variant(new ASTAs{loc(ctx), visit_expr(ctx->expr_), visit_expr(ctx->type_)});
+        return as_variant(new ASTAs{
+            loc(ctx), visit_expr(ctx->expr_), visit_expr(ctx->type_), ctx->OP_QUESTION() != nullptr
+        });
     }
 
     auto visitLambdaExpr(ZincParser::LambdaExprContext* ctx) noexcept -> Any<ASTExprVariant> final {

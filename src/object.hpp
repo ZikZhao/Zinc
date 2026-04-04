@@ -594,7 +594,7 @@ public:
     Scope* scope_;
     strview identifier_;
     GlobalMemory::FlatSet<const InterfaceType*> extends_;
-    mutable GlobalMemory::Vector<const InstanceType*> implementors_;
+    mutable GlobalMemory::FlatSet<const InstanceType*> implementors_;
 
 public:
     InterfaceType() noexcept : Type(kind, false) {}
@@ -609,7 +609,7 @@ public:
     bool can_intern(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
 
     void implemented_by(const InstanceType* instance) const noexcept {
-        implementors_.push_back(instance);
+        implementors_.insert(instance);
         for (const InterfaceType* parent : extends_) {
             parent->implemented_by(instance);
         }

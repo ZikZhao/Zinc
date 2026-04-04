@@ -1,13 +1,19 @@
 fn main(args: [strview]) {
     let mut a = A();
-    let x = a.foo(42);
+    let i: dyn I = &a;
+    let ptr = i as? *mut A;
+    std.cout << (ptr as *mut void);
 }
 
-class A {
+interface I {
+    fn foo(self: &mut Self, x: i32) -> i32;
+}
+
+class A implements I {
     init() {
         return Self{};
     }
-    fn foo<T: type>(self: &Self, t: T) -> i32 {
-        return 42;
+    fn foo(self: &mut Self, x: i32) -> i32 {
+        return x + 1;
     }
 }

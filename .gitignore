@@ -24,6 +24,7 @@ Thumbs.db
 
 # Program outputs
 *.zn.cpp
+test
 demos/rasterizer/main
 demos/polymorphism/cpp_main
 demos/polymorphism/zn_main

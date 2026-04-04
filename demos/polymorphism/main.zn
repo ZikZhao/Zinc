@@ -5,18 +5,19 @@ interface Node {
 }
 
 namespace NodeSize {
-	const VALUE_NODE: usize = 32usize;
-	const ADD_NODE: usize = 96usize;
-	const SUB_NODE: usize = 96usize;
-	const MUL_NODE: usize = 96usize;
-	const DIV_NODE: usize = 96usize;
-	const MOD_NODE: usize = 96usize;
-	const AND_NODE: usize = 96usize;
-	const OR_NODE: usize = 96usize;
-	const XOR_NODE: usize = 96usize;
-	const GT_NODE: usize = 96usize;
-	const EQ_NODE: usize = 96usize;
-	const COND_NODE: usize = 128usize;
+	const DYN_NODE: usize = 16usize;
+	const VALUE_NODE: usize = 8usize;
+	const ADD_NODE: usize = 2usize * DYN_NODE;
+	const SUB_NODE: usize = 2usize * DYN_NODE;
+	const MUL_NODE: usize = 2usize * DYN_NODE;
+	const DIV_NODE: usize = 2usize * DYN_NODE;
+	const MOD_NODE: usize = 2usize * DYN_NODE;
+	const AND_NODE: usize = 2usize * DYN_NODE;
+	const OR_NODE: usize = 2usize * DYN_NODE;
+	const XOR_NODE: usize = 2usize * DYN_NODE;
+	const GT_NODE: usize = 2usize * DYN_NODE;
+	const EQ_NODE: usize = 2usize * DYN_NODE;
+	const COND_NODE: usize = 3usize * DYN_NODE;
 }
 
 class ValueNode implements Node {
@@ -500,4 +501,37 @@ fn main(args: [strview]) {
 		<< "Throughput: " << (total_nodes_eval / total_time) / 1000000.0
 		<< " million nodes/sec\n";
 	std.cout << "Final Result Checksum: " << final_res << "\n";
+
+	let dynamic_cast_iterations = 512i32;
+	let dynamic_cast_start = std.chrono.steady_clock.now();
+	let mut value_node_xor = 0u64;
+	let mut value_node_single_pass_xor = 0u64;
+	let mut value_node_count = 0usize;
+	for (let mut iter = 0i32; iter < dynamic_cast_iterations; iter++) {
+		for (let mut i = 0usize; i < rpn.size(); i++) {
+			let value_node = rpn[i] as? *mut ValueNode;
+			if (value_node != nullptr) {
+				if (iter == 0i32) {
+					value_node_count++;
+					value_node_single_pass_xor = value_node_single_pass_xor ^ (value_node->val as u64);
+				}
+				value_node_xor = value_node_xor ^ (value_node->val as u64);
+			}
+		}
+	}
+	let dynamic_cast_end = std.chrono.steady_clock.now();
+	let dynamic_cast_elapsed = dynamic_cast_end - dynamic_cast_start;
+	let dynamic_cast_time = std.chrono.duration_cast::<std.chrono.microseconds>(
+		dynamic_cast_elapsed
+	).count() as f64 / 1000000.0;
+	let total_dynamic_cast_checks = rpn.size() as f64 * dynamic_cast_iterations as f64;
+	let dynamic_cast_throughput = dynamic_cast_time > 0.0
+		? (total_dynamic_cast_checks / dynamic_cast_time) / 1000000.0
+		: 0.0;
+
+	std.cout << "ValueNode count: " << value_node_count << "\n";
+	std.cout << std.format("ValueNode single-pass XOR (hex): 0x{:x}\n", value_node_single_pass_xor);
+	std.cout << "DynamicCast loop time: " << dynamic_cast_time << " s\n";
+	std.cout << "DynamicCast throughput: " << dynamic_cast_throughput << " million checks/sec\n";
+	std.cout << std.format("ValueNode DynamicCast XOR (hex): 0x{:x}\n", value_node_xor);
 }

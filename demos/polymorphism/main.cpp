@@ -4,9 +4,9 @@
 #include <iostream>
 #include <memory>
 #include <random>
+#include <span>
 #include <stdexcept>
 #include <utility>
-#include <span>
 #include <vector>
 
 struct Node {
@@ -425,6 +425,36 @@ int main() {
     std::cout << "Total time: " << total_time << " s\n";
     std::cout << "Throughput: " << (total_nodes_eval / total_time) / 1e6 << " million nodes/sec\n";
     std::cout << "Final Result Checksum: " << final_res << "\n";
+
+    constexpr int dynamic_cast_iterations = 512;
+    auto cast_start = std::chrono::high_resolution_clock::now();
+    uint64_t value_node_xor = 0;
+    uint64_t value_node_single_pass_xor = 0;
+    size_t value_node_count = 0;
+    for (int iter = 0; iter < dynamic_cast_iterations; ++iter) {
+        for (Node* node : rpn) {
+            if (auto* value_node = dynamic_cast<ValueNode*>(node); value_node != nullptr) {
+                if (iter == 0) {
+                    ++value_node_count;
+                    value_node_single_pass_xor ^= static_cast<uint64_t>(value_node->val);
+                }
+                value_node_xor ^= static_cast<uint64_t>(value_node->val);
+            }
+        }
+    }
+    auto cast_end = std::chrono::high_resolution_clock::now();
+    double dynamic_cast_time = std::chrono::duration<double>(cast_end - cast_start).count();
+    double total_dynamic_cast_checks = static_cast<double>(rpn.size()) * dynamic_cast_iterations;
+    double dynamic_cast_throughput =
+        dynamic_cast_time > 0.0 ? (total_dynamic_cast_checks / dynamic_cast_time) / 1e6 : 0.0;
+
+    std::cout << "ValueNode count: " << value_node_count << "\n";
+    std::cout << "ValueNode single-pass XOR (hex): 0x" << std::hex << value_node_single_pass_xor
+              << std::dec << "\n";
+    std::cout << "DynamicCast loop time: " << dynamic_cast_time << " s\n";
+    std::cout << "DynamicCast throughput: " << dynamic_cast_throughput << " million checks/sec\n";
+    std::cout << "ValueNode DynamicCast XOR (hex): 0x" << std::hex << value_node_xor << std::dec
+              << "\n";
 
     return 0;
 }

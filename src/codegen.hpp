@@ -1407,11 +1407,25 @@ public:
 
     auto operator()(const ASTAs* node) -> void {
         auto* replacement = env_.find(current_scope_, node);
-        definitions_ += "static_cast<"sv;
-        ObjectGen::output(definitions_, std::get<const Type*>(*replacement), type_map_);
-        definitions_ += ">("sv;
-        (*this)(node->expr);
-        definitions_ += ")"sv;
+        const Type* target_type = std::get<const Type*>(*replacement);
+        if (node->is_dynamic) {
+            const PointerType* ptr_type = target_type->cast<PointerType>();
+            definitions_ += "[_fat_ptr = "sv;
+            (*this)(node->expr);
+            definitions_ += "]() { return _fat_ptr._type_index == "sv;
+            std::format_to(
+                std::back_inserter(definitions_), "{}"sv, type_map_.at(ptr_type->target_type_)
+            );
+            definitions_ += " ? static_cast<"sv;
+            ObjectGen::output(definitions_, ptr_type->target_type_, type_map_);
+            definitions_ += "*>(_fat_ptr._data) : nullptr; }()"sv;
+        } else {
+            definitions_ += "static_cast<"sv;
+            ObjectGen::output(definitions_, target_type, type_map_);
+            definitions_ += ">("sv;
+            (*this)(node->expr);
+            definitions_ += ")"sv;
+        }
     }
 
     auto operator()(const ASTLambda* node) -> void {
