@@ -59,16 +59,15 @@ target_include_directories(antlr4_generated_lib SYSTEM PUBLIC ${ANTLR4_OUTPUT_DI
 target_compile_options(antlr4_generated_lib PRIVATE -w)
 
 # Runtime embedding generation
-set(RUNTIME_HPP_SRC "${SOURCE_DIR}/runtime.hpp")
 set(STD_D_ZN_SRC "${SOURCE_DIR}/std.d.zn")
 set(CONVERTER_PY "${CMAKE_SOURCE_DIR}/tools/runtime-converter.py")
-set(RUNTIME_HPP_STR "${CMAKE_BINARY_DIR}/runtime-str.hpp")
+set(EMBED_HPP "${CMAKE_BINARY_DIR}/embed.hpp")
 
 add_custom_command(
-    OUTPUT ${RUNTIME_HPP_STR}
-    COMMAND ${Python3_EXECUTABLE} ${CONVERTER_PY} ${RUNTIME_HPP_STR} ${RUNTIME_HPP_SRC} ${STD_D_ZN_SRC}
-    DEPENDS ${RUNTIME_HPP_SRC} ${STD_D_ZN_SRC}
-    COMMENT "Embedding runtime.hpp and std.d.zn into binary..."
+    OUTPUT ${EMBED_HPP}
+    COMMAND ${Python3_EXECUTABLE} ${CONVERTER_PY} ${EMBED_HPP} ${STD_D_ZN_SRC}
+    DEPENDS ${STD_D_ZN_SRC}
+    COMMENT "Embedding std.d.zn into binary..."
     VERBATIM
 )
 
@@ -79,7 +78,7 @@ set(PCH_HEADER ${SOURCE_DIR}/pch.hpp)
 set(SRC_MAIN ${SOURCE_DIR}/main.cpp)
 file(GLOB SRC_HEADERS ${SOURCE_DIR}/*.hpp)
 
-add_executable(zinc ${SRC_MAIN} ${RUNTIME_HPP_STR})
+add_executable(zinc ${SRC_MAIN} ${EMBED_HPP})
 target_link_libraries(zinc PRIVATE antlr4_generated_lib)
 target_include_directories(zinc PRIVATE ${SOURCE_DIR} ${CMAKE_BINARY_DIR})
 target_precompile_headers(zinc PRIVATE ${PCH_HEADER})
@@ -97,7 +96,7 @@ if(TEST_SOURCES)
     add_executable(unit_tests 
         ${TEST_SOURCES}
         ${SRC_HEADERS}
-        ${RUNTIME_HPP_STR}
+        ${EMBED_HPP}
     )
     
     target_link_libraries(unit_tests PRIVATE GTest::gtest_main antlr4_generated_lib)
@@ -121,7 +120,7 @@ if(BENCH_SOURCES)
     add_executable(benchmarks
         ${BENCH_SOURCES}
         ${SRC_HEADERS}
-        ${RUNTIME_HPP_STR}
+        ${EMBED_HPP}
     )
     
     target_link_libraries(benchmarks PRIVATE benchmark::benchmark antlr4_generated_lib)

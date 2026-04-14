@@ -5,7 +5,6 @@
 #include "ZincLexer.h"
 #include "ZincParser.h"
 #include "ast.hpp"
-#include "builtins.hpp"
 #include "object.hpp"
 #include "source.hpp"
 

@@ -2,7 +2,6 @@
 #include "pch.hpp"
 
 #include "ast.hpp"
-#include "meta.hpp"
 #include "object.hpp"
 #include "symbol_collect.hpp"
 
@@ -411,9 +410,6 @@ public:
             // Patterns can only be used for class templates
             throw;
         }
-        if (auto meta_result = catch_meta_instantiation(family, args)) {
-            return {};
-        }
         Sema::Guard guard(sema_, *family.decl_scope);
         if (!validate(*family.primary, args)) {
             return {};
@@ -499,23 +495,25 @@ private:
     static auto compare_specialization(
         const SpecializationPrototype& lhs, const SpecializationPrototype& rhs
     ) noexcept -> std::partial_ordering {
-        bool lhs_better = false;
-        bool rhs_better = false;
+        bool lhs_ever_more_specialized = false;
+        bool rhs_ever_more_specialized = false;
         for (size_t i = 0; i < lhs.patterns.size(); i++) {
             std::partial_ordering result = compare_pattern(
                 {lhs.patterns[i], lhs.skolems[i]}, {rhs.patterns[i], rhs.skolems[i]}
             );
             if (result == std::partial_ordering::less) {
-                rhs_better = true;
+                lhs_ever_more_specialized = true;
             } else if (result == std::partial_ordering::greater) {
-                lhs_better = true;
+                rhs_ever_more_specialized = true;
+            } else if (result == std::partial_ordering::unordered) {
+                return std::partial_ordering::unordered;
             }
         }
-        if (lhs_better && !rhs_better) {
-            return std::partial_ordering::greater;
-        } else if (!lhs_better && rhs_better) {
+        if (lhs_ever_more_specialized && !rhs_ever_more_specialized) {
             return std::partial_ordering::less;
-        } else if (!lhs_better && !rhs_better) {
+        } else if (!lhs_ever_more_specialized && rhs_ever_more_specialized) {
+            return std::partial_ordering::greater;
+        } else if (!lhs_ever_more_specialized && !rhs_ever_more_specialized) {
             return std::partial_ordering::equivalent;
         } else {
             return std::partial_ordering::unordered;
@@ -529,22 +527,14 @@ private:
         bool lhs_fits_rhs = rhs.first->pattern_match(lhs.second, auto_bindings);
         bool rhs_fits_lhs = lhs.first->pattern_match(rhs.second, auto_bindings);
         if (lhs_fits_rhs && !rhs_fits_lhs) {
-            return std::partial_ordering::greater;
-        } else if (!lhs_fits_rhs && rhs_fits_lhs) {
             return std::partial_ordering::less;
+        } else if (!lhs_fits_rhs && rhs_fits_lhs) {
+            return std::partial_ordering::greater;
         } else if (!lhs_fits_rhs && !rhs_fits_lhs) {
             return std::partial_ordering::unordered;
         } else {
             return std::partial_ordering::equivalent;
         }
-    }
-
-    auto catch_meta_instantiation(TemplateFamily& family, TemplateArgs args) noexcept
-        -> std::optional<const Object*> {
-        if (family.decl_scope != nullptr) {
-            return std::nullopt;
-        }
-        return std::bit_cast<MetaFunction>(family.primary)(args);
     }
 };
 
@@ -768,7 +758,6 @@ private:
     auto resolve_overload(Symbol func, std::span<const Type*> args) -> const FunctionType* {
         Diagnostic::ErrorTrap error_trap;
         const FunctionType* best_candidate = nullptr;
-        ConversionRank best_rank = ConversionRank::NoMatch;
         auto loop = [&](std::span<const FunctionType*> candidates) -> std::size_t {
             for (std::size_t i = 0; i < candidates.size(); ++i) {
                 const FunctionType* candidate = candidates[i];
@@ -785,13 +774,11 @@ private:
                 }
                 if (best_candidate == nullptr) {
                     best_candidate = candidate;
-                    best_rank = rank;
                 } else {
                     std::partial_ordering order =
-                        overload_partial_order(best_candidate, candidate, args);
+                        overload_partial_order(candidate, best_candidate, args);
                     if (order == std::partial_ordering::less) {
                         best_candidate = candidate;
-                        best_rank = rank;
                     }
                 }
             }
@@ -801,17 +788,15 @@ private:
         GlobalMemory::Vector<const FunctionType*> overloads = list_normal_overloads(func);
         std::size_t normal_count = loop(overloads);
         overloads.resize(normal_count);
-        // second, if no exact match, try template overloads
-        if (best_rank != ConversionRank::Exact) {
-            list_template_overloads(overloads, func, args);
-            loop(
-                {std::next(overloads.begin(), static_cast<std::ptrdiff_t>(normal_count)),
-                 overloads.end()}
-            );
-        }
+        // second, append template overloads and keeping the best candidate updated
+        list_template_overloads(overloads, func, args);
+        std::ignore = loop(
+            {std::next(overloads.begin(), static_cast<std::ptrdiff_t>(normal_count)),
+             overloads.end()}
+        );
         // third, re-iterate through all candidates to check for ambiguity
         GlobalMemory::Vector<const FunctionType*> ambiguous_candidates;
-        bool incomparable = false;
+        bool all_equivalent = true;
         if (best_candidate) {
             error_trap.clear();
             for (const FunctionType* candidate : overloads) {
@@ -822,14 +807,17 @@ private:
                     ambiguous_candidates.push_back(candidate);
                 } else if (order == std::partial_ordering::unordered) {
                     ambiguous_candidates.push_back(candidate);
-                    incomparable = true;
+                    all_equivalent = false;
                 }
             }
         }
-        if (!incomparable && ambiguous_candidates.size()) {
+        if (all_equivalent && ambiguous_candidates.size()) {
             // if there are only equivalent candidates, choose nontemplate one if possible
-            auto it = std::ranges::find(overloads, ambiguous_candidates[0]);
-            if (std::distance(overloads.begin(), it) < static_cast<std::ptrdiff_t>(normal_count)) {
+            auto it1 = std::ranges::find(overloads, best_candidate);
+            auto it2 = std::ranges::find(overloads, ambiguous_candidates[0]);
+            if (std::distance(overloads.begin(), it1) < static_cast<std::ptrdiff_t>(normal_count) &&
+                std::distance(overloads.begin(), it2) >=
+                    static_cast<std::ptrdiff_t>(normal_count)) {
                 ambiguous_candidates.clear();
             }
         }
@@ -917,8 +905,9 @@ private:
             }
             return NoMatch;
         } else {
-            // upcast to fat pointer
+            // upcast from pointer to fat pointer
             if (decayed_param->kind_ != Kind::Dynamic) return NoMatch;
+            if (Type::category(param) != ValueCategory::Right) return NoMatch;
             if (decayed_arg->kind_ == Kind::Nullptr) return Upcast;
             if (decayed_arg->kind_ != Kind::Pointer) return NoMatch;
             const DynamicType* param_dynamic = decayed_param->cast<DynamicType>();
@@ -926,7 +915,8 @@ private:
             if (param_dynamic->is_mutable_ && !arg_pointer->is_mutable_) return NoMatch;
             if (const InstanceType* arg_class =
                     arg_pointer->target_type_->dyn_cast<InstanceType>()) {
-                return arg_class->implemented(param_dynamic->target_type_) ? Upcast : NoMatch;
+                return param_dynamic->target_type_->implementors_.contains(arg_class) ? Upcast
+                                                                                      : NoMatch;
             }
             return NoMatch;
         }
@@ -969,9 +959,9 @@ private:
             }
         }
         if (left_ever_better && !right_ever_better) {
-            return std::partial_ordering::greater;
-        } else if (!left_ever_better && right_ever_better) {
             return std::partial_ordering::less;
+        } else if (!left_ever_better && right_ever_better) {
+            return std::partial_ordering::greater;
         } else if (left_ever_better && right_ever_better) {
             return std::partial_ordering::unordered;
         } else {
@@ -1573,7 +1563,10 @@ public:
                 if (auto* target_ref = target_type->dyn_cast<ReferenceType>()) {
                     convertible = source_ref->is_moved_ == target_ref->is_moved_ &&
                                   (!Type::is_mutable(target_type) || Type::is_mutable(source_type));
-                } else if (Meta::is_fundamental(target_type)) {
+                } else if (
+                    target_type->kind_ == Kind::Integer || target_type->kind_ == Kind::Float ||
+                    target_type->kind_ == Kind::Boolean
+                ) {
                     convertible = true;
                 }
             }
@@ -3074,9 +3067,9 @@ inline auto TemplateHandler::specialization_resolution(
             best_candidate_prototype = &prototype;
             best_auto_bindings = std::move(auto_bindings);
         } else {
-            std::partial_ordering better_than_best =
+            std::partial_ordering result =
                 compare_specialization(*best_candidate_prototype, prototype);
-            if (better_than_best == std::partial_ordering::greater) {
+            if (result == std::partial_ordering::greater) {
                 best_candidate = specialization;
                 best_candidate_prototype = &prototype;
                 best_auto_bindings = std::move(auto_bindings);
@@ -3090,10 +3083,10 @@ inline auto TemplateHandler::specialization_resolution(
         for (const auto* specialization : std::span(family.specializations.begin(), viable_count)) {
             if (specialization == best_candidate) continue;
             const auto& prototype = get_prototype(*family.pattern_scope, *specialization);
-            std::partial_ordering better_than_best =
+            std::partial_ordering result =
                 compare_specialization(*best_candidate_prototype, prototype);
-            if (better_than_best == std::partial_ordering::equivalent ||
-                better_than_best == std::partial_ordering::unordered) {
+            if (result == std::partial_ordering::equivalent ||
+                result == std::partial_ordering::unordered) {
                 ambiguous_candidates.push_back(specialization);
             }
         }

@@ -84,7 +84,7 @@ public:
         return true;
     }
 
-    auto extract_cycles(const Type* target) noexcept -> GlobalMemory::Vector<Edge> {
+    auto extract_terminal_component(const Type* target) noexcept -> GlobalMemory::Vector<Edge> {
         std::span<Edge> span = edges_;
         GlobalMemory::FlatSet<const Type*> visited{target};
         auto span_pivot = [&](this auto&& self,
@@ -681,26 +681,6 @@ public:
     }
 
     auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
-
-    auto implemented(const InterfaceType* interface) const noexcept -> bool {
-        auto check = [&](const InterfaceType* current) -> bool {
-            if (current == interface) {
-                return true;
-            }
-            for (const InterfaceType* parent : current->extends_) {
-                if (this->implemented(parent)) {
-                    return true;
-                }
-            }
-            return false;
-        };
-        for (const InterfaceType* impl : implements_) {
-            if (check(impl)) {
-                return true;
-            }
-        }
-        return false;
-    }
 
 protected:
     std::strong_ordering do_compare(
@@ -1330,7 +1310,7 @@ private:
             auto [it, _] = std::get<TypeSet<T>>(types_).insert(type);
             out = *it;
         } else {
-            auto active_edges = graph_.extract_cycles(type);
+            auto active_edges = graph_.extract_terminal_component(type);
             if (!active_edges.empty()) {
                 out = simplify_recursive_type(active_edges, type);
             }

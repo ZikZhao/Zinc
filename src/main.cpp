@@ -36,9 +36,6 @@ auto get_std_scope(SourceManager& sources) -> Scope& {
         scope.scope_id_ = "std";
         scope.is_extern_ = true;
         SymbolCollector{nullptr, nullptr}(std_root);
-        for (const auto& [identifier, meta_fn] : Meta::get_metas()) {
-            scope.add_meta(identifier, meta_fn);
-        }
         return scope;
     }();
     return std_scope;

@@ -1,8 +1,7 @@
 fn main(args: [strview]) {
-    let mut a = A();
-    let i: dyn I = &a;
-    let ptr = i as? *mut A;
-    std.cout << (ptr as *mut void);
+    let mut arr: std.vector<dyn I>;
+    let mut a1 = A();
+    arr.push_back(&a1);
 }
 
 interface I {

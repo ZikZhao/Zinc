@@ -1,7 +1,7 @@
 #pragma once
 #include "pch.hpp"
 
-#include "runtime-str.hpp"
+#include "embed.hpp"
 
 struct Location {
     std::uint32_t id = 0;

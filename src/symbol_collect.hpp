@@ -2,7 +2,6 @@
 #include "pch.hpp"
 
 #include "ast.hpp"
-#include "meta.hpp"
 #include "object.hpp"
 
 inline constexpr strview constructor_symbol = "!";
@@ -189,18 +188,6 @@ public:
         }
         assert(family->decl_scope != nullptr);
         family->specializations.push_back(specialization);
-    }
-
-    void add_meta(strview identifier, MetaFunction func) noexcept {
-        auto [_, inserted] = identifiers_.insert(
-            {identifier,
-             new TemplateFamily{
-                 .decl_scope = nullptr,
-                 .pattern_scope = nullptr,
-                 .primary = std::bit_cast<const ASTTemplateDefinition*>(func),
-             }}
-        );
-        assert(inserted);
     }
 
     void add_namespace(strview identifier, Scope& scope) noexcept {
