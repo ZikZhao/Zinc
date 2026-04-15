@@ -276,7 +276,7 @@ fn probe() {
 
 TEST_F(OverloadResolutionTest, XvaluePrefersMoveReferenceOverOtherReferences) {
     ASSERT_TRUE(analyze(R"(
-fn move_pick(x: move &mut i32) -> i64 {
+fn move_pick(x: move &i32) -> i64 {
     return 1i64;
 }
 
@@ -303,7 +303,7 @@ fn move_vs_value(x: i32) -> i32 {
     return 1i32;
 }
 
-fn move_vs_value(x: move &mut i32) -> i64 {
+fn move_vs_value(x: move &i32) -> i64 {
     return 2i64;
 }
 
@@ -318,7 +318,7 @@ fn probe() {
 
 TEST_F(OverloadResolutionTest, LvalueDoesNotBindToMoveReference) {
     ASSERT_TRUE(analyze(R"(
-fn move_bind(x: move &mut i32) -> i64 {
+fn move_bind(x: move &i32) -> i64 {
     return 1i64;
 }
 
@@ -900,6 +900,141 @@ fn probe() {
 )"));
 
     expect_single_call_return("h", &IntegerType::i64_instance);
+}
+
+TEST_F(OverloadResolutionTest, TemporaryExtendsWhenBindingScalarToImmutableReferenceVariable) {
+    ASSERT_TRUE(analyze(R"(
+fn probe() {
+    let r: &i32 = 42i32;
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, TemporaryCannotBindToMutableReferenceVariable) {
+    EXPECT_FALSE(analyze(R"(
+fn probe() {
+    let r: &mut i32 = 42i32;
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, PureRvalueCanBindToMoveReferenceVariable) {
+    ASSERT_TRUE(analyze(R"(
+fn probe() {
+    let r: move &i32 = 42i32;
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, PureRvalueCanBePassedToMoveReferenceParameter) {
+    ASSERT_TRUE(analyze(R"(
+fn take_move(x: move &i32) -> i64 {
+    return 1i64;
+}
+
+fn probe() {
+    take_move(42i32);
+}
+)"));
+
+    expect_single_call_return("take_move", &IntegerType::i64_instance);
+}
+
+TEST_F(OverloadResolutionTest, PureRvaluePrefersByValueOverMoveReferenceParameter) {
+    ASSERT_TRUE(analyze(R"(
+fn rv_pref(x: move &i32) -> i64 {
+    return 1i64;
+}
+
+fn rv_pref(x: i32) -> i32 {
+    return 2i32;
+}
+
+fn probe() {
+    rv_pref(42i32);
+}
+)"));
+
+    expect_single_call_return("rv_pref", &IntegerType::i32_instance);
+}
+
+TEST_F(OverloadResolutionTest, TemporaryExtendsWhenBindingClassTemporaryToImmutableReference) {
+    ASSERT_TRUE(analyze(R"(
+class LifeBox {
+    let x: i32;
+
+    init(v: i32) {
+        return Self{x: v};
+    }
+}
+
+fn probe() {
+    let r: &LifeBox = LifeBox(1i32);
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, ClassTemporaryCannotBindToMutableReferenceVariable) {
+    EXPECT_FALSE(analyze(R"(
+class LifeBoxMut {
+    let x: i32;
+
+    init(v: i32) {
+        return Self{x: v};
+    }
+}
+
+fn probe() {
+    let r: &mut LifeBoxMut = LifeBoxMut(1i32);
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, ExtendedReferenceParticipatesAsLvalueInOverloadResolution) {
+    ASSERT_TRUE(analyze(R"(
+fn ext_pick(x: &i32) -> i64 {
+    return 1i64;
+}
+
+fn ext_pick(x: i32) -> i32 {
+    return 2i32;
+}
+
+fn probe() {
+    let r: &i32 = 42i32;
+    ext_pick(r);
+}
+)"));
+
+    expect_single_call_return("ext_pick", &IntegerType::i64_instance);
+}
+
+TEST_F(OverloadResolutionTest, ExtendedReferenceCanBeForwardedToReferenceParameter) {
+    ASSERT_TRUE(analyze(R"(
+fn sink_ref(x: &i32) -> i32 {
+    return x;
+}
+
+fn probe() {
+    let r: &i32 = 42i32;
+    sink_ref(r);
+}
+)"));
+
+    expect_single_call_return("sink_ref", &IntegerType::i32_instance);
+}
+
+TEST_F(OverloadResolutionTest, ExtendedReferenceCannotBePassedToMutableReferenceParameter) {
+    EXPECT_FALSE(analyze(R"(
+fn sink_mut(x: &mut i32) -> i32 {
+    return x;
+}
+
+fn probe() {
+    let r: &i32 = 42i32;
+    sink_mut(r);
+}
+)"));
 }
 
 }  // namespace

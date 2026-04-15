@@ -841,8 +841,9 @@ private:
             auto* arg_ref = arg->dyn_cast<ReferenceType>();
             if (arg_ref == nullptr) {
                 // (rvalue) T -> T / move &T / &T
-                if (param_ref) return param_ref->is_moved_ ? Referenced : QualifiedReferenced;
-                return Exact;
+                if (!param_ref) return Exact;
+                if (param_ref->is_moved_) return Referenced;
+                return param_ref->is_mutable_ ? NoMatch : QualifiedReferenced;
             } else if (!arg_ref->is_moved_) {
                 // (lvalue) &T -> &T / &mut T / T, &mut T -> &mut T / &T / T
                 if (param_ref == nullptr) return Copy;
@@ -880,7 +881,9 @@ private:
             }
         }
 
-        if (Type::is_mutable(param) && !Type::is_mutable(arg)) return NoMatch;
+        if (Type::is_mutable(param) &&
+            (!Type::is_mutable(arg) && Type::category(arg) != ValueCategory::Right))
+            return NoMatch;
         if (decayed_param == decayed_arg) {
             // qualification conversion
             return tiebreaker_rank();
@@ -1434,6 +1437,8 @@ public:
                 break;
             case OperatorGroup::Assignment:
                 break;
+            default:
+                UNREACHABLE();
             }
         } else {
             switch (GetOperatorGroup(opcode)) {
@@ -1507,6 +1512,8 @@ public:
                     }
                 }
                 break;
+            default:
+                UNREACHABLE();
             }
         }
         Diagnostic::error_operation_not_defined(
@@ -1810,7 +1817,9 @@ public:
         if (!expr_type.is_sized()) {
             TypeRegistry::add_ref_dependency(out_, expr_type);
         }
-        TypeRegistry::get_at<ReferenceType>(out_, expr_type, node->is_mutable, node->is_moved);
+        TypeRegistry::get_at<ReferenceType>(
+            out_, expr_type, node->is_mutable || node->is_moved, node->is_moved
+        );
     }
 
     void operator()(const ASTPointerType* node) noexcept {
