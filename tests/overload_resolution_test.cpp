@@ -98,6 +98,17 @@ protected:
         EXPECT_EQ(calls.front()->func_type->return_type_, return_type);
     }
 
+    auto expect_single_call_param(
+        strview identifier, std::size_t index, const Type* param_type
+    ) const -> void {
+        auto calls = find_calls(identifier);
+        ASSERT_EQ(calls.size(), 1u);
+        ASSERT_NE(calls.front(), nullptr);
+        ASSERT_NE(calls.front()->func_type, nullptr);
+        ASSERT_GT(calls.front()->func_type->parameters_.size(), index);
+        EXPECT_EQ(calls.front()->func_type->parameters_[index], param_type);
+    }
+
 private:
     auto write_temp_source(strview source_text) const -> std::filesystem::path {
         const std::filesystem::path dir =
@@ -539,6 +550,356 @@ fn probe() {
 )"));
 
     expect_single_call_return("arity_pick2", &IntegerType::i64_instance);
+}
+
+TEST_F(OverloadResolutionTest, CrossBetterCandidatesAreAmbiguous) {
+    EXPECT_FALSE(analyze(R"(
+fn cross_amb(x: &i32, y: i32) -> i32 {
+    return 1i32;
+}
+
+fn cross_amb(x: i32, y: &i32) -> i64 {
+    return 2i64;
+}
+
+fn probe() {
+    let v: i32 = 0i32;
+    cross_amb(v, v);
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, BetterCandidateAcrossAllArgumentsWins) {
+    ASSERT_TRUE(analyze(R"(
+fn multi_best(x: &i32, y: &i32) -> i32 {
+    return 1i32;
+}
+
+fn multi_best(x: i32, y: i32) -> i64 {
+    return 2i64;
+}
+
+fn probe() {
+    let v: i32 = 0i32;
+    multi_best(v, v);
+}
+)"));
+
+    expect_single_call_return("multi_best", &IntegerType::i32_instance);
+}
+
+TEST_F(OverloadResolutionTest, EquivalentTemplatesAreAmbiguous) {
+    EXPECT_FALSE(analyze(R"(
+fn tpl_amb<T: type>(x: &T) -> i32 {
+    return 1i32;
+}
+
+fn tpl_amb<U: type>(x: &U) -> i64 {
+    return 2i64;
+}
+
+fn probe() {
+    let v: i32 = 0i32;
+    tpl_amb(v);
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, MoreSpecializedTemplateBeatsGenericTemplateForLvalue) {
+    ASSERT_TRUE(analyze(R"(
+fn tpl_spec<T: type>(x: T) -> i32 {
+    return 1i32;
+}
+
+fn tpl_spec<T: type>(x: &T) -> i64 {
+    return 2i64;
+}
+
+fn probe() {
+    let v: i32 = 0i32;
+    tpl_spec(v);
+}
+)"));
+
+    expect_single_call_return("tpl_spec", &IntegerType::i64_instance);
+}
+
+TEST_F(OverloadResolutionTest, ValueTemplateBeatsReferenceTemplateForRvalue) {
+    ASSERT_TRUE(analyze(R"(
+fn tpl_rv<T: type>(x: &T) -> i32 {
+    return 1i32;
+}
+
+fn tpl_rv<T: type>(x: T) -> i64 {
+    return 2i64;
+}
+
+fn probe() {
+    tpl_rv(1i32);
+}
+)"));
+
+    expect_single_call_return("tpl_rv", &IntegerType::i64_instance);
+}
+
+TEST_F(OverloadResolutionTest, NullptrBetweenTypedAndVoidPointersIsAmbiguous) {
+    EXPECT_FALSE(analyze(R"(
+fn null_void(x: *i32) -> i32 {
+    return 1i32;
+}
+
+fn null_void(x: *void) -> i64 {
+    return 2i64;
+}
+
+fn probe() {
+    null_void(nullptr);
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, NonTemplateStillWinsWhenTemplateIsEquivalentForPointers) {
+    ASSERT_TRUE(analyze(R"(
+fn ptr_nt(x: *i32) -> i32 {
+    return 1i32;
+}
+
+fn ptr_nt<T: type>(x: T) -> i64 {
+    return 2i64;
+}
+
+fn probe() {
+    let mut v: i32 = 0i32;
+    ptr_nt(&v);
+}
+)"));
+
+    expect_single_call_return("ptr_nt", &IntegerType::i32_instance);
+}
+
+TEST_F(OverloadResolutionTest, MethodOverloadPrefersMutableReceiverOnMutableObject) {
+    ASSERT_TRUE(analyze(R"(
+class ReceiverMut {
+    let x: i32;
+
+    init(v: i32) {
+        return Self{x: v};
+    }
+
+    fn tag(self: &Self) -> i32 {
+        return 1i32;
+    }
+
+    fn tag(self: &mut Self) -> i64 {
+        return 2i64;
+    }
+}
+
+fn probe() {
+    let mut r: ReceiverMut = ReceiverMut(1i32);
+    r.tag();
+}
+)"));
+
+    expect_single_call_return("tag", &IntegerType::i64_instance);
+}
+
+TEST_F(OverloadResolutionTest, MethodOverloadPrefersConstReceiverOnImmutableObject) {
+    ASSERT_TRUE(analyze(R"(
+class ReceiverConst {
+    let x: i32;
+
+    init(v: i32) {
+        return Self{x: v};
+    }
+
+    fn tag(self: &Self) -> i32 {
+        return 1i32;
+    }
+
+    fn tag(self: &mut Self) -> i64 {
+        return 2i64;
+    }
+}
+
+fn probe() {
+    let r: ReceiverConst = ReceiverConst(1i32);
+    r.tag();
+}
+)"));
+
+    expect_single_call_return("tag", &IntegerType::i32_instance);
+}
+
+TEST_F(OverloadResolutionTest, MethodCallFailsWhenOnlyMutableReceiverExistsForImmutableObject) {
+    EXPECT_FALSE(analyze(R"(
+class ReceiverOnlyMut {
+    let x: i32;
+
+    init(v: i32) {
+        return Self{x: v};
+    }
+
+    fn only_mut(self: &mut Self) -> i32 {
+        return 1i32;
+    }
+}
+
+fn probe() {
+    let r: ReceiverOnlyMut = ReceiverOnlyMut(1i32);
+    r.only_mut();
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, ConstructorLvaluePrefersReferenceOverload) {
+    ASSERT_TRUE(analyze(R"(
+class CtorRef {
+    let x: i32;
+
+    init(v: i32) {
+        return Self{x: v};
+    }
+
+    init(v: &i32) {
+        return Self{x: v};
+    }
+}
+
+fn probe() {
+    let v: i32 = 7i32;
+    let a: CtorRef = CtorRef(v);
+}
+)"));
+
+    expect_single_call_param(
+        constructor_symbol,
+        0,
+        TypeRegistry::get<ReferenceType>(&IntegerType::i32_instance, false, false)
+    );
+}
+
+TEST_F(OverloadResolutionTest, ConstructorRvaluePrefersByValueOverload) {
+    ASSERT_TRUE(analyze(R"(
+class CtorValue {
+    let x: i32;
+
+    init(v: i32) {
+        return Self{x: v};
+    }
+
+    init(v: &i32) {
+        return Self{x: v};
+    }
+}
+
+fn probe() {
+    let a: CtorValue = CtorValue(7i32);
+}
+)"));
+
+    expect_single_call_param(constructor_symbol, 0, &IntegerType::i32_instance);
+}
+
+TEST_F(OverloadResolutionTest, ConstructorMutableLvaluePrefersMutableReferenceOverload) {
+    ASSERT_TRUE(analyze(R"(
+class CtorMutRef {
+    let x: i32;
+
+    init(v: &i32) {
+        return Self{x: v};
+    }
+
+    init(v: &mut i32) {
+        return Self{x: v};
+    }
+}
+
+fn probe() {
+    let mut v: i32 = 7i32;
+    let a: CtorMutRef = CtorMutRef(v);
+}
+)"));
+
+    expect_single_call_param(
+        constructor_symbol,
+        0,
+        TypeRegistry::get<ReferenceType>(&IntegerType::i32_instance, true, false)
+    );
+}
+
+TEST_F(OverloadResolutionTest, MethodCrossBetterCandidatesAreAmbiguous) {
+    EXPECT_FALSE(analyze(R"(
+class MethodCrossAmb {
+    init() {
+        return Self{};
+    }
+
+    fn f(self: &Self, x: &i32, y: i32) -> i32 {
+        return 1i32;
+    }
+
+    fn f(self: &Self, x: i32, y: &i32) -> i64 {
+        return 2i64;
+    }
+}
+
+fn probe() {
+    let o: MethodCrossAmb = MethodCrossAmb();
+    let v: i32 = 0i32;
+    o.f(v, v);
+}
+)"));
+}
+
+TEST_F(OverloadResolutionTest, MethodNonTemplatePreferredWhenEquivalentTemplateExists) {
+    ASSERT_TRUE(analyze(R"(
+class MethodNtPref {
+    init() {
+        return Self{};
+    }
+
+    fn g(self: &Self, x: i32) -> i32 {
+        return 1i32;
+    }
+
+    fn g<T: type>(self: &Self, x: T) -> i64 {
+        return 2i64;
+    }
+}
+
+fn probe() {
+    let o: MethodNtPref = MethodNtPref();
+    o.g(1i32);
+}
+)"));
+
+    expect_single_call_return("g", &IntegerType::i32_instance);
+}
+
+TEST_F(OverloadResolutionTest, MethodTemplateUsedWhenNonTemplateIsNotViable) {
+    ASSERT_TRUE(analyze(R"(
+class MethodTplFallback {
+    init() {
+        return Self{};
+    }
+
+    fn h(self: &Self, x: bool) -> i32 {
+        return 1i32;
+    }
+
+    fn h<T: type>(self: &Self, x: T) -> i64 {
+        return 2i64;
+    }
+}
+
+fn probe() {
+    let o: MethodTplFallback = MethodTplFallback();
+    o.h(1i32);
+}
+)"));
+
+    expect_single_call_return("h", &IntegerType::i64_instance);
 }
 
 }  // namespace
