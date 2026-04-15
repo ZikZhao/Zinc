@@ -851,8 +851,8 @@ private:
             } else {
                 // (xvalue) move &T -> move &T / &mut T / &T / T
                 if (!param_ref) return Copy;
-                if (param_ref->is_mutable_) return Referenced;
-                return param_ref->is_moved_ ? Exact : QualifiedReferenced;
+                if (param_ref->is_moved_) return Exact;
+                return param_ref->is_mutable_ ? NoMatch : QualifiedReferenced;
             }
         };
 
