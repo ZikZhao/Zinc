@@ -1,28 +1,142 @@
-请使用 C++23 实现一个用于测试多态分派性能的 AST 求值器 Benchmark 框架。核心要求如下：
+# Polymorphism Benchmark Demo (Zinc + C++)
 
-1. **类型与运算定义**
-   - 聚焦纯整数计算。布尔值用 `0` 和 `非0` 模拟。
-   - 定义一个基础接口 `Node`。
-   - 实现至少 10 种派生节点，包含算术运算（加、减、乘、除、模）、位运算（与、或、异或）、比较运算（大于、等于）以及三目运算（模拟 `cond ? a : b`，虽然在 RPN 中需注意求值顺序，此处仅做数值计算即可）。节点中不保存指针，运算所需的数据从求值栈中获取。
-   - 另外实现一个 `ValueNode`，用于压入立即数。
+This demo benchmarks polymorphic dispatch performance with a large AST evaluator.
 
-2. **核心接口约定**
-   - `void to_rpn(std::vector<Node*>& out)`: 递归遍历（先左、后右，最后把自己 `push_back` 到 `out` 中）。
-   - `void eval(int64_t* stack, int& sp)`: 从栈顶弹出需要的操作数，执行计算后压回栈中。不使用 `std::vector`，直接操作定长裸数组模拟的栈，以消除冗余内存操作。
+Unlike the rasterizer demo, this one does not reference an external C++ repository.
+Its native C++ implementation is already in this folder.
 
-3. **内存管理 (Arena)**
-   - 禁用 `std::pmr` 和标准的 `new`。
-   - 维护一个全局或局部的 `std::vector<std::byte> arena;`，用常数（例如 256MB）提前预分配足够空间。
-   - 实现一个简单的 bump pointer 分配机制在 arena 上就地构造（Placement New）节点对象。
+## Files in This Folder
 
-4. **AST 随机生成**
-   - 编写一个高熵的树生成函数，接受最大节点数和深度限制。
-   - 权重分配：极其偏向生成运算节点，且强制要求运算节点至少有一个子节点也是运算节点，以构造深且密集的计算树。
-   - 终止条件：当接近总节点限制或达到最大深度时，强制收敛并生成 `ValueNode` 作为叶子。
+- `main.cpp`: native C++23 benchmark implementation.
+- `main.zn`: Zinc source implementation.
+- `main.zn.cpp`: generated C++ from `main.zn`.
+- `Makefile`: helper targets to build and run both versions.
 
-5. **执行与基准测试流程**
-   - 生成足够庞大（如百万级别节点）的 AST。
-   - 调用根节点的 `to_rpn`，将整棵树展平为一个 `std::vector<Node*>` 的执行序列（此步骤不计入时间）。
-   - 执行一次不计时的 Warm-up `eval` 遍历，确保所有代码页和数据进入 Cache，同时验证栈内存运转正常。
-   - 记录开始时间，使用 `for` 循环遍历 RPN 序列执行数千次完整的 `eval` 过程。
-   - 记录结束时间，输出总耗时、吞吐量（每秒执行节点数），并输出最终栈顶的计算结果以防止编译器激进优化（DCE）。
+## What It Does
+
+The benchmark:
+
+- builds a high-entropy random AST (integer-only operations),
+- flattens it into an RPN execution list,
+- runs one warm-up pass,
+- runs timed stack-based evaluation loops,
+- runs an additional `dynamic_cast` scan benchmark,
+- prints throughput and checksum values.
+
+Operations include arithmetic (`+ - * / %`), bitwise (`& | ^`), comparisons (`> ==`), and ternary (`cond ? a : b`) style evaluation.
+
+## Prerequisites
+
+Required:
+
+- a C++23 compiler (`g++` or `clang++`),
+- `make`.
+
+Optional (only if you want to regenerate `main.zn.cpp` from Zinc source):
+
+- Zinc compiler binary (default path in Makefile: `../../build/debug/bin/zinc`).
+
+## Quick Start (Native C++ Baseline)
+
+```bash
+cd demos/polymorphism
+make cpp
+./cpp_main
+```
+
+## Run the Zinc Version
+
+If Zinc compiler already exists at `../../build/debug/bin/zinc`:
+
+```bash
+cd demos/polymorphism
+make zn
+./zn_main
+```
+
+If you still need to build the Zinc compiler first:
+
+```bash
+# from repository root
+cmake --preset debug
+cmake --build --preset debug --target zinc
+
+# then run the demo
+cd demos/polymorphism
+make zn
+./zn_main
+```
+
+## Build and Run Both for Comparison
+
+```bash
+cd demos/polymorphism
+make clean
+make all
+./cpp_main
+./zn_main
+```
+
+## Typical Output Includes
+
+- generated node count,
+- RPN size,
+- warm-up output,
+- max stack size,
+- benchmark total time,
+- node throughput (million nodes/sec),
+- final checksum,
+- dynamic-cast throughput (million checks/sec).
+
+## Example Run Output
+
+The following outputs were captured by running both binaries once in this folder:
+
+```text
+# ./cpp_main
+Generating AST...
+Nodes generated: 1000042
+RPN generation complete. Size: 1000042
+Warm-up output: 0
+Max stack size needed: 25
+Running benchmark on 2000 iterations...
+Total time: 13.3691 s
+Throughput: 149.605 million nodes/sec
+Final Result Checksum: 0
+ValueNode count: 521690
+ValueNode single-pass XOR (hex): 0x5f
+DynamicCast loop time: 5.3806 s
+DynamicCast throughput: 95.1607 million checks/sec
+ValueNode DynamicCast XOR (hex): 0x0
+```
+
+```text
+# ./zn_main
+Generating AST...
+Nodes generated: 1000042
+RPN generation complete. Size: 1000042
+Warm-up output: 0
+Max stack size needed: 25
+Running benchmark on 2000 iterations...
+Total time: 11.7094 s
+Throughput: 170.811 million nodes/sec
+Final Result Checksum: 0
+ValueNode count: 521690
+ValueNode single-pass XOR (hex): 0x5f
+DynamicCast loop time: 1.38068 s
+DynamicCast throughput: 370.846 million checks/sec
+ValueNode DynamicCast XOR (hex): 0x0
+```
+
+Performance numbers will vary by compiler version and running environment.
+
+## Notes
+
+Current benchmark sizing is fixed in source:
+
+- `max_nodes = 1,000,000`
+- `max_depth = 50`
+- `benchmark_iterations = 2000`
+- `dynamic_cast_iterations = 512`
+
+You can tune these constants in `main.cpp` and `main.zn` if you want different stress levels.
