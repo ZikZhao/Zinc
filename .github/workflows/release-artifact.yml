@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      VCPKG_DEFAULT_BINARY_CACHE: ~/.cache/vcpkg/archives
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
 
     steps:
       - name: Checkout
@@ -33,11 +33,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/vcpkg/archives
+            ${{ github.workspace }}/.cache/vcpkg/archives
             ~/vcpkg/installed
           key: ${{ runner.os }}-vcpkg-x64-linux-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-x64-linux-
+
+      - name: Prepare vcpkg binary cache directory
+        run: |
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
       - name: Bootstrap vcpkg
         run: |
