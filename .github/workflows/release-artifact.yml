@@ -48,7 +48,7 @@ jobs:
 
       - name: Install C++ dependencies via vcpkg
         run: |
-          "$HOME/vcpkg/vcpkg" install antlr4-runtime gtest benchmark --triplet x64-linux
+          "$HOME/vcpkg/vcpkg" install antlr4 gtest benchmark --triplet x64-linux
 
       - name: Configure release
         run: cmake --preset release
