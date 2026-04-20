@@ -99,7 +99,6 @@ jobs:
     name: Publish GitHub Release
     needs: build-linux-x86-64
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment:
       name: release
     permissions:
