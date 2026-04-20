@@ -563,22 +563,11 @@ public:
             } else {
                 qualified_name += "_0"sv;
                 for (const Object* arg : args) {
-                    std::size_t prev_size = qualified_name.size();
                     if (auto* type = arg->dyn_cast<Type>()) {
                         (*this)(qualified_name, type);
                     } else {
                         (*this)(qualified_name, arg->cast<Value>());
                     }
-                    std::format_to(
-                        std::inserter(
-                            qualified_name,
-                            std::next(
-                                qualified_name.begin(), static_cast<std::ptrdiff_t>(prev_size)
-                            )
-                        ),
-                        "{}"sv,
-                        qualified_name.size() - prev_size
-                    );
                 }
             }
             scope->scope_id_ = {};

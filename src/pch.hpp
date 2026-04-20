@@ -174,7 +174,7 @@ private:
         constexpr std::pmr::pool_options pool_opts{
             .largest_required_pool_block = 4uz * 1024 * 1024,  // 4 MB
         };
-        static std::pmr::unsynchronized_pool_resource resource(
+        static std::pmr::synchronized_pool_resource resource(
             pool_opts, std::pmr::new_delete_resource()
         );
         return &resource;

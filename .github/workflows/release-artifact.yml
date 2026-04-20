@@ -1,0 +1,75 @@
+name: Release Build Artifact
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-x86-64:
+    name: Build zinc (linux-x86-64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ~/.cache/vcpkg/archives
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build openjdk-17-jre
+
+      - name: Cache vcpkg archives and installed libs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/vcpkg/archives
+            ~/vcpkg/installed
+          key: ${{ runner.os }}-vcpkg-x64-linux-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-x64-linux-
+
+      - name: Bootstrap vcpkg
+        run: |
+          if [ ! -d "$HOME/vcpkg" ]; then
+            git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
+          fi
+          "$HOME/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Install C++ dependencies via vcpkg
+        run: |
+          "$HOME/vcpkg/vcpkg" install antlr4-runtime gtest benchmark --triplet x64-linux
+
+      - name: Configure release
+        run: cmake --preset release
+
+      - name: Build release executable
+        run: cmake --build --preset release --target zinc --parallel
+
+      - name: Prepare artifact files
+        run: |
+          mkdir -p dist
+          cp build/release/bin/zinc dist/zinc-linux-x86-64
+          chmod +x dist/zinc-linux-x86-64
+          strip dist/zinc-linux-x86-64 || true
+          sha256sum dist/zinc-linux-x86-64 > dist/zinc-linux-x86-64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zinc-linux-x86-64
+          path: |
+            dist/zinc-linux-x86-64
+            dist/zinc-linux-x86-64.sha256
+          if-no-files-found: error
+          retention-days: 14

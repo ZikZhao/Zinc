@@ -1,6 +1,9 @@
 #include "pch.hpp"
 #include "gtest/gtest.h"
 
+#include "builder.hpp"
+#include "diagnosis.hpp"
+#include "symbol_collect.hpp"
 #include "type_check.hpp"
 
 class TemplateInstantiationTest : public ::testing::Test {
@@ -127,3 +130,338 @@ TEST_F(TemplateInstantiationTest, TypeTemplateRejectsNonTypeArgument) {
     EXPECT_TRUE(holds_monostate(result));
     EXPECT_TRUE(codegen_env_.instantiations_.empty());
 }
+
+namespace {
+
+class TemplateSpecializationResolutionTest : public ::testing::Test {
+protected:
+    SourceManager sources_;
+    Scope std_scope_;
+    CodeGenEnvironment codegen_env_;
+    std::unique_ptr<Sema> sema_;
+    const ASTRoot* root_ = nullptr;
+    std::filesystem::path temp_file_;
+
+protected:
+    void SetUp() override {
+        TypeRegistry::instance.emplace();
+        Diagnostic::instance.emplace();
+    }
+
+    void TearDown() override {
+        sema_.reset();
+
+        std::error_code ec;
+        if (!temp_file_.empty()) {
+            std::filesystem::remove(temp_file_, ec);
+        }
+
+        GlobalMemory::monotonic()->release();
+        GlobalMemory::local_pool()->release();
+        Diagnostic::instance.reset();
+        TypeRegistry::instance.reset();
+    }
+
+    auto analyze(strview source_text) -> bool {
+        temp_file_ = write_temp_source(source_text);
+
+        const std::uint32_t std_file_id = sources_.load_std();
+        const ASTRoot* std_root = ASTBuilder(sources_, std_file_id)();
+        if (std_root == nullptr) {
+            return false;
+        }
+
+        std_root->scope = &std_scope_;
+        std_scope_.scope_id_ = "std";
+        std_scope_.is_extern_ = true;
+        SymbolCollector{nullptr, nullptr}(std_root);
+
+        std::string source_path = temp_file_.string();
+        const std::uint32_t file_id = sources_.load(source_path);
+        if (file_id == std::numeric_limits<std::uint32_t>::max()) {
+            return false;
+        }
+
+        root_ = ASTBuilder(sources_, file_id)();
+        if (root_ == nullptr) {
+            return false;
+        }
+
+        root_->scope = &Scope::root(std_scope_);
+        SymbolCollector{&std_scope_, nullptr}(root_);
+        if (Diagnostic::flush(sources_)) {
+            return false;
+        }
+
+        sema_ = std::make_unique<Sema>(std_scope_, *root_->scope, codegen_env_);
+        TypeCheckVisitor{*sema_}(root_);
+        return !Diagnostic::flush(sources_);
+    }
+
+    auto find_calls(strview identifier) const
+        -> std::vector<const CodeGenEnvironment::FunctionCall*> {
+        std::vector<const CodeGenEnvironment::FunctionCall*> calls;
+        for (const auto& [scope, table] : codegen_env_.scope_map_) {
+            (void)scope;
+            for (const auto& [node, value] : table) {
+                (void)node;
+                if (const auto* call = std::get_if<CodeGenEnvironment::FunctionCall*>(&value)) {
+                    if ((*call)->identifier == identifier) {
+                        calls.push_back(*call);
+                    }
+                }
+            }
+        }
+        return calls;
+    }
+
+    auto expect_single_call_return(strview identifier, const Type* return_type) const -> void {
+        auto calls = find_calls(identifier);
+        ASSERT_EQ(calls.size(), 1u);
+        ASSERT_NE(calls.front(), nullptr);
+        ASSERT_NE(calls.front()->func_type, nullptr);
+        EXPECT_EQ(calls.front()->func_type->return_type_, return_type);
+    }
+
+private:
+    auto write_temp_source(strview source_text) const -> std::filesystem::path {
+        const std::filesystem::path dir =
+            std::filesystem::temp_directory_path() / "zinc_template_resolution_tests";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+
+        static unsigned long long serial = 0;
+        ++serial;
+        const auto addr = static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(this));
+        const std::filesystem::path file =
+            dir / ("case_" + std::to_string(addr) + "_" + std::to_string(serial) + ".zn");
+
+        std::ofstream out(file, std::ios::binary);
+        out << source_text;
+        out.flush();
+        return file;
+    }
+};
+
+TEST_F(TemplateSpecializationResolutionTest, FallsBackToPrimaryWhenNoSpecializationMatches) {
+    ASSERT_TRUE(analyze(R"(
+class Pick<A: type, B: type> {
+    static fn marker() -> i32 {
+        return 0i32;
+    }
+}
+
+specialize<X: type> class Pick<X, f64> {
+    static fn marker() -> i64 {
+        return 1i64;
+    }
+}
+
+fn probe() {
+    Pick::<bool, i32>.marker();
+}
+)"));
+
+    expect_single_call_return("marker", &IntegerType::i32_instance);
+}
+
+TEST_F(
+    TemplateSpecializationResolutionTest, MatchingPartialSpecializationOverridesPrimaryTemplate
+) {
+    ASSERT_TRUE(analyze(R"(
+class Pick<A: type, B: type> {
+    static fn marker() -> i32 {
+        return 0i32;
+    }
+}
+
+specialize<X: type> class Pick<X, f64> {
+    static fn marker() -> i64 {
+        return 1i64;
+    }
+}
+
+fn probe() {
+    Pick::<bool, f64>.marker();
+}
+)"));
+
+    expect_single_call_return("marker", &IntegerType::i64_instance);
+}
+
+TEST_F(TemplateSpecializationResolutionTest, FullSpecializationBeatsPartialSpecialization) {
+    ASSERT_TRUE(analyze(R"(
+class Pick<A: type, B: type> {
+    static fn marker() -> i32 {
+        return 0i32;
+    }
+}
+
+specialize<X: type> class Pick<X, f64> {
+    static fn marker() -> i64 {
+        return 1i64;
+    }
+}
+
+specialize class Pick<i32, f64> {
+    static fn marker() -> bool {
+        return true;
+    }
+}
+
+fn probe() {
+    Pick::<i32, f64>.marker();
+}
+)"));
+
+    expect_single_call_return("marker", &BooleanType::instance);
+}
+
+TEST_F(TemplateSpecializationResolutionTest, MoreSpecializedPartialSpecializationIsPreferred) {
+    ASSERT_TRUE(analyze(R"(
+class Pick<A: type, B: type, C: type> {
+    static fn marker() -> i32 {
+        return 0i32;
+    }
+}
+
+specialize<X: type, Y: type> class Pick<X, Y, f64> {
+    static fn marker() -> i64 {
+        return 1i64;
+    }
+}
+
+specialize<Z: type> class Pick<Z, f64, f64> {
+    static fn marker() -> bool {
+        return true;
+    }
+}
+
+fn probe() {
+    Pick::<i32, f64, f64>.marker();
+}
+)"));
+
+    expect_single_call_return("marker", &BooleanType::instance);
+}
+
+TEST_F(TemplateSpecializationResolutionTest, RepeatedTypeBindingPatternMatchesConsistentArguments) {
+    ASSERT_TRUE(analyze(R"(
+class Pair<A: type, B: type> {
+    static fn marker() -> i32 {
+        return 0i32;
+    }
+}
+
+specialize<T: type> class Pair<T, T> {
+    static fn marker() -> i64 {
+        return 1i64;
+    }
+}
+
+fn probe() {
+    Pair::<i32, i32>.marker();
+}
+)"));
+
+    expect_single_call_return("marker", &IntegerType::i64_instance);
+}
+
+TEST_F(TemplateSpecializationResolutionTest, RepeatedTypeBindingFallsBackWhenArgumentsDiffer) {
+    ASSERT_TRUE(analyze(R"(
+class Pair<A: type, B: type> {
+    static fn marker() -> i32 {
+        return 0i32;
+    }
+}
+
+specialize<T: type> class Pair<T, T> {
+    static fn marker() -> i64 {
+        return 1i64;
+    }
+}
+
+fn probe() {
+    Pair::<i32, bool>.marker();
+}
+)"));
+
+    expect_single_call_return("marker", &IntegerType::i32_instance);
+}
+
+TEST_F(TemplateSpecializationResolutionTest, NestedTemplatePatternCanBeMatched) {
+    ASSERT_TRUE(analyze(R"(
+class Wrap<A: type, B: type> {
+    static fn marker() -> i32 {
+        return 0i32;
+    }
+}
+
+specialize<T: type> class Wrap<std.vector<T>, T> {
+    static fn marker() -> i64 {
+        return 1i64;
+    }
+}
+
+fn probe() {
+    Wrap::<std.vector<i32>, i32>.marker();
+}
+)"));
+
+    expect_single_call_return("marker", &IntegerType::i64_instance);
+}
+
+TEST_F(TemplateSpecializationResolutionTest, CrossPartialSpecializationsAreAmbiguous) {
+    EXPECT_FALSE(analyze(R"(
+class Ambiguous<A: type, B: type> {
+    static fn marker() -> i32 {
+        return 0i32;
+    }
+}
+
+specialize<X: type> class Ambiguous<X, f64> {
+    static fn marker() -> i64 {
+        return 1i64;
+    }
+}
+
+specialize<Y: type> class Ambiguous<i64, Y> {
+    static fn marker() -> bool {
+        return true;
+    }
+}
+
+fn probe() {
+    Ambiguous::<i64, f64>.marker();
+}
+)"));
+}
+
+TEST_F(TemplateSpecializationResolutionTest, SpecializationWithoutPatternIsRejected) {
+    EXPECT_FALSE(analyze(R"(
+class Bad<T: type> {
+}
+
+specialize class Bad {
+}
+)"));
+}
+
+TEST_F(TemplateSpecializationResolutionTest, TemplateAndSpecializationListsCannotAppearTogether) {
+    EXPECT_FALSE(analyze(R"(
+specialize<X: type> class Bad<Y: type> {
+}
+)"));
+}
+
+TEST_F(TemplateSpecializationResolutionTest, SpecializationBeforePrimaryTemplateIsRejected) {
+    EXPECT_FALSE(analyze(R"(
+specialize class Late<i32> {
+}
+
+class Late<T: type> {
+}
+)"));
+}
+
+}  // namespace

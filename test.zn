@@ -1,8 +1,4 @@
 fn main(args: [strview]) {
-    let x = 42;
-    foo(x);
-}
-
-fn foo(x: &mut i32) {
-    // do something
+    let arr1: std.vector<i32>;
+    let arr2: std.vector<{ name: strview, age: i32 }>;
 }
