@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
   pull_request:
   workflow_dispatch:
 
@@ -129,7 +127,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
+          SHORT_SHA="${GITHUB_SHA::12}"
+          TAG="build-${SHORT_SHA}"
+          TITLE="Build ${SHORT_SHA}"
           if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" \
               --repo "$GH_REPO" \
@@ -139,8 +139,9 @@ jobs:
           else
             gh release create "$TAG" \
               --repo "$GH_REPO" \
+              --target "$GITHUB_SHA" \
               release-assets/zinc-linux-x86-64 \
               release-assets/zinc-linux-x86-64.sha256 \
-              --title "$TAG" \
+              --title "$TITLE" \
               --generate-notes
           fi
