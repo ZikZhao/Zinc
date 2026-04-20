@@ -48,7 +48,6 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/.cache/vcpkg/archives
-            ~/vcpkg/installed
           key: ${{ runner.os }}-vcpkg-x64-linux-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-x64-linux-
@@ -59,8 +58,9 @@ jobs:
 
       - name: Bootstrap vcpkg
         run: |
-          if [ ! -d "$HOME/vcpkg" ]; then
-            git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
+          if [ ! -x "$HOME/vcpkg/bootstrap-vcpkg.sh" ]; then
+            rm -rf "$HOME/vcpkg"
+            git clone --depth 1 https://github.com/microsoft/vcpkg "$HOME/vcpkg"
           fi
           "$HOME/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
 
