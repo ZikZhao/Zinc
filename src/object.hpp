@@ -1235,7 +1235,7 @@ private:
     using TypeSet = GlobalMemory::FlatSet<const T*, TypeComparator>;
 
 private:
-    static thread_local std::optional<TypeRegistry> instance;
+    static thread_local TypeRegistry instance;
 
 public:
     template <TypeClass T>
@@ -1244,13 +1244,13 @@ public:
         if constexpr (std::is_same_v<T, InterfaceType>) {
             // interfaces are not interned
             out.construct<T>(std::forward<decltype(args)>(args)...);
-            instance->interface_types_.push_back(static_cast<const T*>(out.get()));
+            instance.interface_types_.push_back(static_cast<const T*>(out.get()));
         } else if constexpr (std::is_same_v<T, InstanceType>) {
             // classes are not interned
             out.construct<T>(std::forward<decltype(args)>(args)...);
-            instance->instance_types_.push_back(static_cast<const T*>(out.get()));
+            instance.instance_types_.push_back(static_cast<const T*>(out.get()));
         } else {
-            instance->get_interned<T>(out, std::forward<decltype(args)>(args)...);
+            instance.get_interned<T>(out, std::forward<decltype(args)>(args)...);
         }
     }
 
@@ -1263,25 +1263,25 @@ public:
     }
 
     static void add_ref_dependency(const Type* parent, const Type* child) noexcept {
-        instance->graph_.add_ref_dependency(parent, child);
+        instance.graph_.add_ref_dependency(parent, child);
     }
 
     static auto is_type_incomplete(const Type* type) noexcept -> bool {
-        return instance->graph_.is_parent(type);
+        return instance.graph_.is_parent(type);
     }
 
     static auto get_auto_instances(std::size_t count) noexcept -> std::span<const AutoObject*> {
-        while (instance->auto_objects_.size() < count) {
-            instance->auto_objects_.push_back(new AutoObject(instance->auto_objects_.size()));
+        while (instance.auto_objects_.size() < count) {
+            instance.auto_objects_.push_back(new AutoObject(instance.auto_objects_.size()));
         }
-        return {instance->auto_objects_.data(), count};
+        return {instance.auto_objects_.data(), count};
     }
 
     static auto get_skolem_objects(std::size_t count) noexcept -> std::span<const SkolemObject*> {
-        while (instance->skolem_objects_.size() < count) {
-            instance->skolem_objects_.push_back(new SkolemObject());
+        while (instance.skolem_objects_.size() < count) {
+            instance.skolem_objects_.push_back(new SkolemObject());
         }
-        return {instance->skolem_objects_.data(), count};
+        return {instance.skolem_objects_.data(), count};
     }
 
 private:
@@ -1526,4 +1526,4 @@ inline BooleanType BooleanType::instance;
 
 inline NullptrValue NullptrValue::instance;
 
-inline thread_local std::optional<TypeRegistry> TypeRegistry::instance;
+inline thread_local TypeRegistry TypeRegistry::instance;

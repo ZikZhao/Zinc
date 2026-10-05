@@ -381,21 +381,21 @@ public:
     void sort_types() {
         TypeSorter sorter;
         for (const StructType* type :
-             std::get<TypeRegistry::TypeSet<StructType>>(TypeRegistry::instance->types_)) {
+             std::get<TypeRegistry::TypeSet<StructType>>(TypeRegistry::instance.types_)) {
             sorter.add(type);
         }
-        for (const InterfaceType* type : TypeRegistry::instance->interface_types_) {
+        for (const InterfaceType* type : TypeRegistry::instance.interface_types_) {
             sorter.add(type);
         }
-        for (const InstanceType* type : TypeRegistry::instance->instance_types_) {
+        for (const InstanceType* type : TypeRegistry::instance.instance_types_) {
             sorter.add(type);
         }
         for (const DynamicType* type :
-             std::get<TypeRegistry::TypeSet<DynamicType>>(TypeRegistry::instance->types_)) {
+             std::get<TypeRegistry::TypeSet<DynamicType>>(TypeRegistry::instance.types_)) {
             sorter.add(type);
         }
         for (const UnionType* type :
-             std::get<TypeRegistry::TypeSet<UnionType>>(TypeRegistry::instance->types_)) {
+             std::get<TypeRegistry::TypeSet<UnionType>>(TypeRegistry::instance.types_)) {
             sorter.add(type);
         }
         std::ranges::copy(std::move(sorter).iterate(), std::back_inserter(types_));

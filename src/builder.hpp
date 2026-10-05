@@ -5,6 +5,7 @@
 #include "ZincLexer.h"
 #include "ZincParser.h"
 #include "ast.hpp"
+#include "cfg.hpp"
 #include "object.hpp"
 #include "source.hpp"
 
@@ -338,7 +339,9 @@ private:
             visit_list<ASTFunctionParameter>(ctx->parameters_),
             visit_expr(ctx->return_type_),
             visit_list(ctx->body_),
+            {},
             ctx->KW_STATIC() != nullptr,
+            ctx->KW_ASYNC() != nullptr
         };
         if (ctx->template_list_) {
             return as_variant(new ASTTemplateDefinition{
@@ -614,6 +617,16 @@ private:
     auto visitThrow_statement(ZincParser::Throw_statementContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
         return as_variant(new ASTThrowStatement{loc(ctx), visit_expr(ctx->expr_)});
+    }
+
+    auto visitAwait_statement(ZincParser::Await_statementContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTAwaitStatement{loc(ctx), visit_expr(ctx->expr_)});
+    }
+
+    auto visitYield_statement(ZincParser::Yield_statementContext* ctx) noexcept
+        -> Any<ASTNodeVariant> final {
+        return as_variant(new ASTYieldStatement{loc(ctx), visit_expr(ctx->expr_)});
     }
 
     auto visitImport_statement(ZincParser::Import_statementContext* ctx) noexcept

@@ -1,0 +1,11 @@
+async fn get_elements() -> i32 {
+    yield 1;
+    yield 2;
+    yield 3;
+}
+
+fn main() {
+    for element in get_elements() {
+        std.cout << element << std.endl;
+    }
+}

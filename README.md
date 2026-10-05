@@ -1,6 +1,6 @@
 # Zinc Programming Language
 
-> 2026 Dissertation Project | University of Bristol  
+> 2026 Dissertation Project | University of Bristol | Score: 85 🏆 Best Theory Project
 >
 > Slogan: Galvanizing the C++ ecosystem.
 

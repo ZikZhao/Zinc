@@ -35,7 +35,7 @@ class ImageBuffer<T: type> {
     let height_: usize;
     let data_: std.vector<T>;
 
-    init(width: usize, height: usize, data: std.vector<T>) {
+    init(width: usize, height: usize, mut data: std.vector<T>) {
         return Self{
             width_: width,
             height_: height,
@@ -278,7 +278,7 @@ class World {
         }
 
         world.merge_models();
-        return move world;
+        return world;
     }
 
     static fn parse_index_token(token: &std.string) -> [i32; 3] {
@@ -640,7 +640,7 @@ class World {
                         }
                     }
                 }
-                let new_face = Face{
+                let mut new_face = Face{
                     v_indices:
                         [vi_out[0usize] as u32,
                          vi_out[1usize] as u32,

@@ -9,24 +9,6 @@
 #include "symbol_collect.hpp"
 #include "type_check.hpp"
 
-class ThreadGuard {
-public:
-    ThreadGuard() {
-        TypeRegistry::instance.emplace();
-        Diagnostic::instance.emplace();
-    }
-    ThreadGuard(const ThreadGuard&) = delete;
-    ThreadGuard(ThreadGuard&&) = delete;
-    auto operator=(const ThreadGuard&) -> ThreadGuard& = delete;
-    auto operator=(ThreadGuard&&) -> ThreadGuard& = delete;
-    ~ThreadGuard() {
-        GlobalMemory::monotonic()->release();
-        GlobalMemory::local_pool()->release();
-        TypeRegistry::instance.reset();
-        Diagnostic::instance.reset();
-    }
-};
-
 auto get_std_scope(SourceManager& sources) -> Scope& {
     static Scope& std_scope = [&]() -> Scope& {
         ASTBuilder builder(sources, sources.load_std());
@@ -47,7 +29,6 @@ auto main(int argc, char* argv[]) -> int {
         return EXIT_FAILURE;
     }
 
-    ThreadGuard guard;
     auto start = std::chrono::steady_clock::now();
 
     SourceManager sources;

@@ -29,14 +29,13 @@ public:
         ErrorTrap* prev_;
 
     public:
-        ErrorTrap() noexcept : location_{}, prev_(std::exchange(instance->current_trap_, this)) {}
+        ErrorTrap() noexcept : location_{}, prev_(std::exchange(instance.current_trap_, this)) {}
 
         ErrorTrap(Location location) noexcept
-            : location_(location), prev_(std::exchange(instance->current_trap_, this)) {}
+            : location_(location), prev_(std::exchange(instance.current_trap_, this)) {}
 
         ~ErrorTrap() noexcept {
-            GlobalMemory::Vector<Problem>& target =
-                (prev_) ? prev_->problems_ : instance->problems_;
+            GlobalMemory::Vector<Problem>& target = (prev_) ? prev_->problems_ : instance.problems_;
             for (Problem& problem : problems_) {
                 if (problem.location.begin == problem.location.end &&
                     location_.begin != location_.end) {
@@ -44,7 +43,7 @@ public:
                 }
                 target.push_back(std::move(problem));
             }
-            instance->current_trap_ = prev_;
+            instance.current_trap_ = prev_;
         }
 
         auto clear() noexcept -> void { problems_.clear(); }
@@ -60,17 +59,17 @@ public:
 
 private:
     static inline std::mutex print_mutex_;
-    static thread_local std::optional<Diagnostic> instance;
+    static thread_local Diagnostic instance;
 
 public:
     static void report(Problem&& problem) {
-        assert(instance->current_trap_);
-        instance->current_trap_->problems_.push_back(std::move(problem));
+        assert(instance.current_trap_);
+        instance.current_trap_->problems_.push_back(std::move(problem));
     }
 
     static void report_subproblem(Problem&& problem) {
-        assert(instance->current_trap_ && !instance->current_trap_->problems_.empty());
-        instance->current_trap_->problems_.back().subproblems.push_back(std::move(problem));
+        assert(instance.current_trap_ && !instance.current_trap_->problems_.empty());
+        instance.current_trap_->problems_.back().subproblems.push_back(std::move(problem));
     }
 
     static auto flush(SourceManager& sources) -> bool {
@@ -78,7 +77,7 @@ public:
         sort_and_unique();
         std::size_t error_count = 0;
         std::size_t warning_count = 0;
-        for (const Problem& problem : instance->problems_) {
+        for (const Problem& problem : instance.problems_) {
             print_problem(sources, problem);
             switch (problem.severity) {
             case Severity::Error:
@@ -123,18 +122,18 @@ public:
 
 private:
     static void sort_and_unique() noexcept {
-        std::ranges::sort(instance->problems_, [](const Problem& lhs, const Problem& rhs) {
+        std::ranges::sort(instance.problems_, [](const Problem& lhs, const Problem& rhs) {
             if (auto cmp = lhs.location <=> rhs.location; cmp != 0) {
                 return cmp < 0;
             }
             return lhs.message < rhs.message;
         });
         auto [begin, end] =
-            std::ranges::unique(instance->problems_, [](const Problem& lhs, const Problem& rhs) {
+            std::ranges::unique(instance.problems_, [](const Problem& lhs, const Problem& rhs) {
                 bool result = lhs.location == rhs.location && lhs.message == rhs.message;
                 return result;
             });
-        instance->problems_.erase(begin, end);
+        instance.problems_.erase(begin, end);
     }
 
     static void print_problem(SourceManager& sources, const Problem& problem) {
@@ -585,6 +584,16 @@ public:
         );
     }
 
+    static auto error_move_non_mutable(Location location, strview expr) noexcept -> void {
+        Diagnostic::report(
+            Problem{
+                .severity = Severity::Error,
+                .location = location,
+                .message = GlobalMemory::format("Cannot move non-mutable value '{}'", expr)
+            }
+        );
+    }
+
     static auto error_move_non_reference(Location location, strview expr) noexcept -> void {
         Diagnostic::report(
             Problem{
@@ -693,4 +702,4 @@ public:
     }
 };
 
-inline thread_local std::optional<Diagnostic> Diagnostic::instance;
+inline thread_local Diagnostic Diagnostic::instance;

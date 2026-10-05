@@ -30,7 +30,9 @@ statement:
     | continue_statement
     | return_statement
     | type_alias
-    | throw_statement;
+    | throw_statement
+    | await_statement
+    | yield_statement;
 
 local_block:
     OP_LBRACE statements_ += statement* OP_RBRACE;
@@ -92,7 +94,7 @@ type_alias:
     )? OP_ASSIGN type_ = type OP_SEMICOLON;
 
 function_definition:
-    KW_STATIC? KW_FUNC identifier_ = T_IDENTIFIER (
+    KW_STATIC? KW_ASYNC? KW_FUNC identifier_ = T_IDENTIFIER (
         template_list_ = template_parameter_list
     )? OP_LPAREN (
         parameters_ += parameter (
@@ -192,6 +194,12 @@ namespace_definition:
 
 throw_statement:
     KW_THROW expr_ = expr OP_SEMICOLON;
+
+await_statement:
+    KW_AWAIT expr_ = expr OP_SEMICOLON;
+
+yield_statement:
+    KW_YIELD expr_ = expr OP_SEMICOLON;
 
 import_statement:
     KW_IMPORT path_ = T_STRING KW_AS identifier_ = T_IDENTIFIER OP_SEMICOLON;
@@ -464,6 +472,9 @@ KW_AS: 'as';
 KW_IMPORT: 'import';
 KW_THROW: 'throw';
 KW_DYN: 'dyn';
+KW_ASYNC: 'async';
+KW_AWAIT: 'await';
+KW_YIELD: 'yield';
 
 OP_DOT: '.';
 OP_QUESTION: '?';

@@ -2184,6 +2184,11 @@ public:
             if (ref_type->is_moved_) {
                 Diagnostic::error_double_move(node->location);
                 return {};
+            } else if (!ref_type->is_mutable_) {
+                Diagnostic::error_move_non_mutable(
+                    node->location, inner_term.effective_type()->repr()
+                );
+                return {};
             }
             return Term::of(TypeRegistry::get<ReferenceType>(ref_type->target_type_, true, true));
         }

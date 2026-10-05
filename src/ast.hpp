@@ -3,6 +3,8 @@
 
 #include "object.hpp"
 
+class CFG;
+
 enum class OperatorCode : std::uint8_t {
     Add,
     Subtract,
@@ -113,6 +115,8 @@ struct ASTTemplateParameter;
 struct ASTTemplateDefinition;
 struct ASTTemplateSpecialization;
 struct ASTThrowStatement;
+struct ASTAwaitStatement;
+struct ASTYieldStatement;
 struct ASTImportStatement;
 struct ASTCppBlock;
 
@@ -143,6 +147,9 @@ using ASTNodeVariant = std::variant<
     // Templates
     const ASTTemplateDefinition*,
     const ASTTemplateSpecialization*,
+    // Async
+    const ASTAwaitStatement*,
+    const ASTYieldStatement*,
     // Error handling
     const ASTThrowStatement*,
     // Import
@@ -440,7 +447,9 @@ struct ASTFunctionDefinition final : public ASTNode {
     std::span<ASTFunctionParameter> parameters;
     ASTExprVariant return_type;
     std::span<ASTNodeVariant> body;
+    std::unique_ptr<CFG> cfg;
     bool declared_static;
+    bool declared_async;
 };
 
 struct ASTCtorDtorDefinition final : public ASTNode {
@@ -496,6 +505,14 @@ struct ASTTemplateSpecialization final : public ASTNode {
 };
 
 struct ASTThrowStatement final : public ASTNode {
+    ASTExprVariant expr;
+};
+
+struct ASTAwaitStatement final : public ASTNode {
+    ASTExprVariant expr;
+};
+
+struct ASTYieldStatement final : public ASTNode {
     ASTExprVariant expr;
 };
 
