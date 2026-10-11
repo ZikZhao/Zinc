@@ -13,14 +13,14 @@ struct Location {
 class SourceFile {
 public:
     std::filesystem::path relative_path_;
-    GlobalMemory::String content_;
+    std::string content_;
 
 private:
-    GlobalMemory::Vector<std::size_t> line_offsets_;
-    GlobalMemory::Vector<std::size_t> byte_offsets_;
+    std::vector<std::size_t> line_offsets_;
+    std::vector<std::size_t> byte_offsets_;
 
 public:
-    SourceFile(std::filesystem::path path, GlobalMemory::String content) noexcept
+    SourceFile(std::filesystem::path path, std::string content) noexcept
         : relative_path_(std::move(path)), content_(std::move(content)) {
         compute_offsets();
     }
@@ -60,9 +60,9 @@ private:
 
 class SourceManager {
 public:
-    GlobalMemory::FlatMap<std::filesystem::path, std::uint32_t> file_id_map_;
-    GlobalMemory::Vector<SourceFile> files;
-    GlobalMemory::FlatMap<std::uint32_t, std::optional<const void*>> module_cache_;
+    std::flat_map<std::filesystem::path, std::uint32_t> file_id_map_;
+    std::vector<SourceFile> files;
+    std::flat_map<std::uint32_t, std::optional<const void*>> module_cache_;
 
 public:
     /// Used to load main file
@@ -73,7 +73,7 @@ public:
         if (file_stream.fail()) {
             return std::numeric_limits<std::uint32_t>::max();
         }
-        GlobalMemory::String content(
+        std::string content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
         );
         files.emplace_back(std::filesystem::proximate(path), std::move(content));
@@ -94,7 +94,7 @@ public:
         if (file_stream.fail()) {
             return std::numeric_limits<std::uint32_t>::max();
         }
-        GlobalMemory::String content(
+        std::string content(
             (std::istreambuf_iterator<char>(file_stream)), std::istreambuf_iterator<char>()
         );
         files.emplace_back(std::filesystem::proximate(full_path), std::move(content));
@@ -103,7 +103,7 @@ public:
     }
 
     auto load_std() noexcept -> std::uint32_t {
-        GlobalMemory::String content(std_d_zn_str());
+        std::string content(std_d_zn_str());
         assert(files.empty());
         files.emplace_back("<zinc.std>", std::move(content));
         return 0;

@@ -7,17 +7,17 @@
 #include "ast.hpp"
 #include "cfg.hpp"
 #include "object.hpp"
+#include "parser_enums.hpp"
 #include "source.hpp"
 
 class ErrorTracker : public antlr4::BaseErrorListener {
 private:
     bool& has_error_;
-    GlobalMemory::String path_string_;
+    std::string path_string_;
 
 public:
     explicit ErrorTracker(bool& has_error, std::filesystem::path path) : has_error_(has_error) {
-        path_string_ =
-            path.string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>();
+        path_string_ = path.string<char, std::char_traits<char>, std::string::allocator_type>();
     }
 
     void syntaxError(
@@ -35,11 +35,6 @@ public:
 };
 
 class ASTBuilder final : private ZincBaseVisitor {
-private:
-    /// Indication of return type for visit functions.
-    template <typename>
-    using Any = antlrcpp::Any;
-
 private:
     SourceManager& sources_;
     std::uint32_t file_id_;
@@ -85,12 +80,8 @@ private:
 
     template <typename R>
     auto visit(auto* ctx) -> R {
-        if constexpr (std::is_default_constructible_v<R>) {
-            return ctx ? std::any_cast<R>(ZincBaseVisitor::visit(ctx)) : R{};
-        } else {
-            assert(ctx != nullptr);
-            return std::any_cast<R>(ZincBaseVisitor::visit(ctx));
-        }
+        assert(ctx != nullptr);
+        return std::any_cast<R>(ZincBaseVisitor::visit(ctx));
     }
 
     auto visit(auto* ctx) -> ASTNodeVariant { return visit<ASTNodeVariant>(ctx); }
@@ -98,22 +89,22 @@ private:
     auto visit_expr(auto* ctx) -> ASTExprVariant { return visit<ASTExprVariant>(ctx); }
 
     template <typename R>
-    auto visit_list(const auto& contexts) -> std::span<R> {
+    auto visit_list(const auto& contexts) -> Array<R> {
         return contexts | std::views::transform([&](auto* ctx) { return visit<R>(ctx); }) |
-               GlobalMemory::collect<std::span<R>>();
+               std::ranges::to<Array>();
     }
 
-    auto visit_list(const auto& contexts) -> std::span<ASTNodeVariant> {
+    auto visit_list(const auto& contexts) -> Array<ASTNodeVariant> {
         return visit_list<ASTNodeVariant>(contexts);
     }
 
-    auto as_variant(auto* ptr) {
-        if constexpr (std::derived_from<std::decay_t<decltype(*ptr)>, ASTExpression>) {
-            return ASTExprVariant(ptr);
-        } else {
-            return ASTNodeVariant(ptr);
-        }
-    }
+    // auto as_variant(auto* ptr) {
+    //     if constexpr (std::derived_from<std::decay_t<decltype(*ptr)>, ASTExpression>) {
+    //         return ASTExprVariant(ptr);
+    //     } else {
+    //         return ASTNodeVariant(ptr);
+    //     }
+    // }
 
     auto import_module(strview path) -> const ASTRoot* {
         std::uint32_t module_file_id = sources_.load(path, file_id_);
@@ -130,7 +121,7 @@ private:
             bool reserved = sources_.reserve_cache(module_file_id);
             if (!reserved) {
                 Diagnostic::print_error_msg(
-                    GlobalMemory::format(
+                    std::format(
                         "Circular module dependency detected: '{}' -> '{}'",
                         sources_[file_id_].relative_path_.string(),
                         path
@@ -172,8 +163,10 @@ public:
 
 private:
     auto visitProgram(ZincParser::ProgramContext* ctx) noexcept -> Any<ASTNodeVariant> final {
-        return as_variant(
-            new ASTRoot{loc(ctx), visit_list(ctx->statements_), visit_list(ctx->cpp_blocks_)}
+        return ASTNodeVariant(
+            std::make_unique<ASTRoot>(
+                loc(ctx), visit_list(ctx->statements_), visit_list(ctx->cpp_blocks_)
+            )
         );
     }
 
@@ -325,7 +318,7 @@ private:
             return as_variant(new ASTTemplateDefinition{
                 loc(ctx),
                 type_alias->identifier,
-                visit<std::span<ASTTemplateParameter>>(ctx->template_list_),
+                visit<Array<ASTTemplateParameter>>(ctx->template_list_),
                 type_alias
             });
         }
@@ -347,7 +340,7 @@ private:
             return as_variant(new ASTTemplateDefinition{
                 loc(ctx),
                 func_def->identifier,
-                visit<std::span<ASTTemplateParameter>>(ctx->template_list_),
+                visit<Array<ASTTemplateParameter>>(ctx->template_list_),
                 func_def
             });
         }
@@ -481,7 +474,7 @@ private:
             return as_variant(new ASTTemplateDefinition{
                 loc(ctx),
                 GetOperatorString(opcode),
-                visit<std::span<ASTTemplateParameter>>(ctx->template_list_),
+                visit<Array<ASTTemplateParameter>>(ctx->template_list_),
                 op_def
             });
         }
@@ -541,43 +534,29 @@ private:
 
     auto visitClass_definition(ZincParser::Class_definitionContext* ctx) noexcept
         -> Any<ASTNodeVariant> final {
-        std::span attrs = visit_list(ctx->attrs_);
-        GlobalMemory::FlatSet<strview> attr_names;
-        for (ASTNodeVariant attr : attrs) {
-            const ASTDeclaration* decl = std::get<const ASTDeclaration*>(attr);
-            if (!attr_names.insert(decl->identifier).second) {
-                Diagnostic::error_duplicate_attribute(decl->location, decl->identifier);
+        AccessSpecifier access = AccessSpecifier::Private;
+        std::vector<ASTDeclaration> fields;
+        std::vector<ASTNodeVariant> scope_items;
+        scope_items.reserve(ctx->items_.size());
+        for (ZincParser::Class_itemContext* item : ctx->items_) {
+            std::optional result =
+                std::any_cast<std::optional<ASTNodeVariant>>(visitClass_item(item, access));
+            if (result.has_value()) {
+                if (auto decl = std::get_if<const ASTDeclaration*>(&result.value());
+                    decl && !(*decl)->declared_static) {
+                    fields.push_back(**decl);
+                } else {
+                    scope_items.push_back(result.value());
+                }
             }
         }
-        std::span scope_items = GlobalMemory::alloc_array<ASTNodeVariant>(
-            ctx->aliases_.size() + ctx->classes_.size() + ctx->constructors_.size() +
-            ctx->destructors_.size() + ctx->functions_.size() + ctx->operators_.size()
-        );
-        std::size_t item_index = 0;
-        for (const auto& alias : ctx->aliases_) {
-            scope_items[item_index++] = visit(alias);
-        }
-        for (const auto& class_def : ctx->classes_) {
-            scope_items[item_index++] = visit(class_def);
-        }
-        for (const auto& constructor : ctx->constructors_) {
-            scope_items[item_index++] = visit(constructor);
-        }
-        for (const auto& destructor : ctx->destructors_) {
-            scope_items[item_index++] = visit(destructor);
-        }
-        for (const auto& function : ctx->functions_) {
-            scope_items[item_index++] = visit(function);
-        }
-        for (const auto& operator_def : ctx->operators_) {
-            scope_items[item_index++] = visit(operator_def);
-        }
+        std::ignore = access;  // TODO: handle access specifiers for fields and methods
         auto* class_def = new ASTClassDefinition{
             loc(ctx),
             text(ctx->identifier_),
             visit_list<ASTExprVariant>(ctx->implements_),
-            attrs,
-            scope_items,
+            fields,
+            scope_items | std::ranges::to<Array>(),
         };
         if (ctx->template_list_) {
             if (ctx->specialize_list_) {
@@ -587,7 +566,7 @@ private:
             return as_variant(new ASTTemplateDefinition{
                 loc(ctx),
                 class_def->identifier,
-                visit<std::span<ASTTemplateParameter>>(ctx->template_list_),
+                visit<Array<ASTTemplateParameter>>(ctx->template_list_),
                 class_def
             });
         } else if (ctx->specialize_list_) {
@@ -598,12 +577,53 @@ private:
             return as_variant(new ASTTemplateSpecialization{
                 loc(ctx),
                 class_def->identifier,
-                visit<std::span<ASTTemplateParameter>>(ctx->specialize_list_),
-                visit<std::span<ASTExprVariant>>(ctx->instantiation_list_),
+                visit<Array<ASTTemplateParameter>>(ctx->specialize_list_),
+                visit<Array<ASTExprVariant>>(ctx->instantiation_list_),
                 class_def
             });
         } else {
             return as_variant(class_def);
+        }
+    }
+
+    auto visitClass_item(ZincParser::Class_itemContext* ctx, AccessSpecifier& access) noexcept
+        -> Any<std::optional<ASTNodeVariant>> final {
+        if (ctx->access_specifier()) {
+            access = std::get<AccessSpecifier>(visitAccess_specifier(ctx->access_specifier()));
+            return std::nullopt;
+        } else if (ctx->type_alias()) {
+            return visitType_alias(ctx->type_alias());
+        } else if (ctx->class_definition()) {
+            return visitClass_definition(ctx->class_definition());
+        } else if (ctx->declaration_statement()) {
+            if (ctx->declaration_statement()->KW_STATIC()) {
+                Diagnostic::error_static_field_in_class(loc(ctx));
+                return std::nullopt;
+            }
+            return visitDeclaration_statement(ctx->declaration_statement());
+        } else if (ctx->constructor()) {
+            return visitConstructor(ctx->constructor());
+        } else if (ctx->destructor()) {
+            return visitDestructor(ctx->destructor());
+        } else if (ctx->function_definition()) {
+            return visitFunction_definition(ctx->function_definition());
+        } else if (ctx->operator_overload_definition()) {
+            return visitOperator_overload_definition(ctx->operator_overload_definition());
+        } else {
+            UNREACHABLE();
+        }
+    }
+
+    auto visitAccess_specifier(ZincParser::Access_specifierContext* ctx) noexcept
+        -> Any<AccessSpecifier> final {
+        if (ctx->KW_PUBLIC()) {
+            return AccessSpecifier::Public;
+        } else if (ctx->KW_PROTECTED()) {
+            return AccessSpecifier::Protected;
+        } else if (ctx->KW_PRIVATE()) {
+            return AccessSpecifier::Private;
+        } else {
+            UNREACHABLE();
         }
     }
 
@@ -710,7 +730,7 @@ private:
         return as_variant(new ASTTemplateInstantiation{
             loc(ctx),
             visit_expr(ctx->template_),
-            visit<std::span<ASTExprVariant>>(ctx->instantiation_list_)
+            visit<Array<ASTExprVariant>>(ctx->instantiation_list_)
         });
     }
 
@@ -993,7 +1013,7 @@ private:
 
     auto visitStructType(ZincParser::StructTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
         std::span fields = visit_list<ASTFieldDeclaration>(ctx->fields_);
-        GlobalMemory::FlatSet<strview> field_names;
+        std::flat_set<strview> field_names;
         for (const ASTFieldDeclaration& field : fields) {
             if (!field_names.insert(field.identifier).second) {
                 Diagnostic::error_duplicate_field(field.location, field.identifier);
@@ -1043,12 +1063,6 @@ private:
         );
     }
 
-    auto visitUnionType(ZincParser::UnionTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
-        return as_variant(
-            new ASTUnionType{loc(ctx), visit_expr(ctx->left_), visit_expr(ctx->right_)}
-        );
-    }
-
     auto visitParenType(ZincParser::ParenTypeContext* ctx) noexcept -> Any<ASTExprVariant> final {
         return visit_expr(ctx->inner_type_);
     }
@@ -1058,7 +1072,7 @@ private:
         return as_variant(new ASTTemplateInstantiation{
             loc(ctx),
             visit_expr(ctx->template_),
-            visit<std::span<ASTExprVariant>>(ctx->instantiation_list_),
+            visit<Array<ASTExprVariant>>(ctx->instantiation_list_),
         });
     }
 
@@ -1159,13 +1173,12 @@ private:
             return as_variant(new ASTConstant{loc(ctx), new FloatValue(float_type, value)});
         }
         case ZincParser::T_STRING: {
-            GlobalMemory::String raw_string{literal_text.substr(1, literal_text.size() - 2)};
+            std::string raw_string{literal_text.substr(1, literal_text.size() - 2)};
             unescape_string(raw_string);
-            strview persisted = GlobalMemory::persist_string(raw_string);
-            return as_variant(new ASTStringConstant{loc(ctx), persisted});
+            return as_variant(new ASTStringConstant{loc(ctx), std::move(raw_string)});
         }
         case ZincParser::T_CHAR: {
-            GlobalMemory::String raw_string{literal_text.substr(1, literal_text.size() - 2)};
+            std::string raw_string{literal_text.substr(1, literal_text.size() - 2)};
             unescape_string(raw_string);
             return as_variant(new ASTConstant{
                 loc(ctx),
@@ -1209,7 +1222,7 @@ private:
             return as_variant(new ASTTemplateDefinition{
                 loc(ctx),
                 "!",
-                visit<std::span<ASTTemplateParameter>>(ctx->template_list_),
+                visit<Array<ASTTemplateParameter>>(ctx->template_list_),
                 constructor_def
             });
         }
@@ -1226,12 +1239,12 @@ private:
     }
 
     auto visitTemplate_parameter_list(ZincParser::Template_parameter_listContext* ctx) noexcept
-        -> Any<std::span<ASTTemplateParameter>> final {
+        -> Any<Array<ASTTemplateParameter>> final {
         return visit_list<ASTTemplateParameter>(ctx->parameters_);
     }
 
     auto visitSpecialize_parameter_list(ZincParser::Specialize_parameter_listContext* ctx) noexcept
-        -> Any<std::span<ASTTemplateParameter>> final {
+        -> Any<Array<ASTTemplateParameter>> final {
         return visit_list<ASTTemplateParameter>(ctx->parameters_);
     }
 
@@ -1243,7 +1256,7 @@ private:
             ctx->OP_ELLIPSIS() != nullptr,
             text(ctx->identifier_),
             std::monostate{},
-            visit_expr(ctx->default_),
+            ctx->default_ ? visit_expr(ctx->default_) : std::monostate{},
         };
     }
 
@@ -1260,10 +1273,10 @@ private:
     }
 
     auto visitInstantiation_list(ZincParser::Instantiation_listContext* ctx) noexcept
-        -> Any<std::span<ASTExprVariant>> final {
+        -> Any<Array<ASTExprVariant>> final {
         return ctx->arguments_ |
                std::views::transform([this](auto* arg) { return visit_expr(arg); }) |
-               GlobalMemory::collect<std::span>();
+               std::ranges::to<Array>();
     }
 
     auto visitInstantiation_argument(ZincParser::Instantiation_argumentContext* ctx) noexcept

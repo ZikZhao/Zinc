@@ -3,7 +3,7 @@
 
 #include "object.hpp"
 
-class CFG;
+enum class AccessSpecifier : std::uint8_t { Public, Protected, Private };
 
 enum class OperatorCode : std::uint8_t {
     Add,
@@ -88,7 +88,6 @@ struct ASTMutableType;
 struct ASTReferenceType;
 struct ASTPointerType;
 struct ASTDynamicType;
-struct ASTUnionType;
 
 struct ASTExpressionStatement;
 struct ASTDeclaration;
@@ -124,93 +123,92 @@ struct ASTCppBlock;
 using ASTNodeVariant = std::variant<
     std::monostate,
     // Root and blocks
-    const ASTRoot*,
-    const ASTLocalBlock*,
+    std::unique_ptr<ASTRoot>,
+    std::unique_ptr<ASTLocalBlock>,
     // Statements
-    const ASTExpressionStatement*,
-    const ASTDeclaration*,
-    const ASTTypeAlias*,
-    const ASTIfStatement*,
-    const ASTSwitchStatement*,
-    const ASTMatchStatement*,
-    const ASTForStatement*,
-    const ASTContinueStatement*,
-    const ASTBreakStatement*,
-    const ASTReturnStatement*,
+    std::unique_ptr<ASTExpressionStatement>,
+    std::unique_ptr<ASTDeclaration>,
+    std::unique_ptr<ASTTypeAlias>,
+    std::unique_ptr<ASTIfStatement>,
+    std::unique_ptr<ASTSwitchStatement>,
+    std::unique_ptr<ASTMatchStatement>,
+    std::unique_ptr<ASTForStatement>,
+    std::unique_ptr<ASTContinueStatement>,
+    std::unique_ptr<ASTBreakStatement>,
+    std::unique_ptr<ASTReturnStatement>,
     // Functions and classes
-    const ASTFunctionDefinition*,
-    const ASTCtorDtorDefinition*,
-    const ASTOperatorDefinition*,
-    const ASTClassDefinition*,
-    const ASTInterfaceDefinition*,
-    const ASTNamespaceDefinition*,
+    std::unique_ptr<ASTFunctionDefinition>,
+    std::unique_ptr<ASTCtorDtorDefinition>,
+    std::unique_ptr<ASTOperatorDefinition>,
+    std::unique_ptr<ASTClassDefinition>,
+    std::unique_ptr<ASTInterfaceDefinition>,
+    std::unique_ptr<ASTNamespaceDefinition>,
     // Templates
-    const ASTTemplateDefinition*,
-    const ASTTemplateSpecialization*,
+    std::unique_ptr<ASTTemplateDefinition>,
+    std::unique_ptr<ASTTemplateSpecialization>,
     // Async
-    const ASTAwaitStatement*,
-    const ASTYieldStatement*,
+    std::unique_ptr<ASTAwaitStatement>,
+    std::unique_ptr<ASTYieldStatement>,
     // Error handling
-    const ASTThrowStatement*,
+    std::unique_ptr<ASTThrowStatement>,
     // Import
-    const ASTImportStatement*,
+    std::unique_ptr<ASTImportStatement>,
     // C++ block
-    const ASTCppBlock*>;
+    std::unique_ptr<ASTCppBlock>>;
 
 // All expression node types (all ASTExpression derivatives)
 using ASTExprVariant = std::variant<
     std::monostate,
     // Basic expressions
-    const ASTParenExpr*,
-    const ASTConstant*,
-    const ASTStringConstant*,
-    const ASTSelfExpr*,
-    const ASTIdentifier*,
-    const ASTMemberAccess*,
-    const ASTPointerAccess*,
-    const ASTIndexAccess*,
-    const ASTAddressOfExpr*,
-    const ASTDereference*,
-    const ASTUnaryOp*,
-    const ASTBinaryOp*,
+    std::unique_ptr<ASTParenExpr>,
+    std::unique_ptr<ASTConstant>,
+    std::unique_ptr<ASTStringConstant>,
+    std::unique_ptr<ASTSelfExpr>,
+    std::unique_ptr<ASTIdentifier>,
+    std::unique_ptr<ASTMemberAccess>,
+    std::unique_ptr<ASTPointerAccess>,
+    std::unique_ptr<ASTIndexAccess>,
+    std::unique_ptr<ASTAddressOfExpr>,
+    std::unique_ptr<ASTDereference>,
+    std::unique_ptr<ASTUnaryOp>,
+    std::unique_ptr<ASTBinaryOp>,
     // Complex expressions
-    const ASTStructInitialization*,
-    const ASTArrayInitialization*,
-    const ASTMoveExpr*,
-    const ASTFunctionCall*,
-    const ASTTemplateInstantiation*,
-    const ASTTernaryOp*,
-    const ASTAs*,
-    const ASTLambda*,
+    std::unique_ptr<ASTStructInitialization>,
+    std::unique_ptr<ASTArrayInitialization>,
+    std::unique_ptr<ASTMoveExpr>,
+    std::unique_ptr<ASTFunctionCall>,
+    std::unique_ptr<ASTTemplateInstantiation>,
+    std::unique_ptr<ASTTernaryOp>,
+    std::unique_ptr<ASTAs>,
+    std::unique_ptr<ASTLambda>,
     // Type expressions
-    const ASTPrimitiveType*,
-    const ASTStringViewType*,
-    const ASTArrayType*,
-    const ASTFunctionType*,
-    const ASTStructType*,
-    const ASTMutableType*,
-    const ASTReferenceType*,
-    const ASTPointerType*,
-    const ASTDynamicType*,
-    const ASTUnionType*,
+    std::unique_ptr<ASTPrimitiveType>,
+    std::unique_ptr<ASTStringViewType>,
+    std::unique_ptr<ASTArrayType>,
+    std::unique_ptr<ASTFunctionType>,
+    std::unique_ptr<ASTStructType>,
+    std::unique_ptr<ASTMutableType>,
+    std::unique_ptr<ASTReferenceType>,
+    std::unique_ptr<ASTPointerType>,
+    std::unique_ptr<ASTDynamicType>,
     // Match case variable type
-    const MatchCaseVarType*>;
+    std::unique_ptr<MatchCaseVarType>>;
 
 template <typename T>
 concept ASTClass = std::derived_from<T, ASTNode>;
 
-struct ASTNode : public GlobalMemory::MonotonicAllocated {
+struct ASTNode {
     Location location;
     ASTNode(const Location& loc) noexcept : location(loc) {}
 };
 
 struct ASTLocalBlock final : public ASTNode {
-    std::span<ASTNodeVariant> statements;
+    Array<ASTNodeVariant> statements;
 };
 
 struct ASTRoot final : public ASTNode {
-    std::span<ASTNodeVariant> statements;
-    std::span<ASTNodeVariant> cpp_blocks;
+    Array<ASTNodeVariant> statements;
+    Array<ASTNodeVariant> cpp_blocks;
     mutable Scope* scope = nullptr;
     mutable bool type_checked = false;
 };
@@ -247,7 +245,7 @@ struct ASTConstant final : public ASTExpression {
 };
 
 struct ASTStringConstant final : public ASTExpression {
-    strview value;
+    std::string value;
 };
 
 struct ASTParenExpr final : public ASTExpression {
@@ -280,11 +278,11 @@ struct ASTFieldInitialization final : public ASTNode {
 
 struct ASTStructInitialization final : public ASTExpression {
     ASTExprVariant struct_type;
-    std::span<ASTFieldInitialization> field_inits;
+    Array<ASTFieldInitialization> field_inits;
 };
 
 struct ASTArrayInitialization final : public ASTExpression {
-    std::span<ASTExprVariant> elements;
+    Array<ASTExprVariant> elements;
 };
 
 struct ASTMoveExpr final : public ASTExpression {
@@ -293,12 +291,12 @@ struct ASTMoveExpr final : public ASTExpression {
 
 struct ASTFunctionCall final : public ASTExpression {
     ASTExprVariant function;
-    std::span<ASTExprVariant> arguments;
+    Array<ASTExprVariant> arguments;
 };
 
 struct ASTTemplateInstantiation final : public ASTExpression {
     ASTExprVariant template_expr;
-    std::span<ASTExprVariant> arguments;
+    Array<ASTExprVariant> arguments;
 };
 
 struct ASTTernaryOp final : public ASTExpression {
@@ -314,7 +312,7 @@ struct ASTAs final : public ASTExpression {
 };
 
 struct ASTLambda final : public ASTExpression {
-    std::span<ASTFunctionParameter> parameters;
+    Array<ASTFunctionParameter> parameters;
     ASTExprVariant return_type;
     std::variant<ASTNodeVariant, ASTExprVariant> body;
     mutable bool visited = false;
@@ -327,7 +325,7 @@ struct ASTPrimitiveType final : public ASTTypeExpr {
 struct ASTStringViewType final : public ASTTypeExpr {};
 
 struct ASTFunctionType final : public ASTTypeExpr {
-    std::span<ASTExprVariant> parameter_types;
+    Array<ASTExprVariant> parameter_types;
     ASTExprVariant return_type;
 };
 
@@ -337,7 +335,7 @@ struct ASTFieldDeclaration final : public ASTNode {
 };
 
 struct ASTStructType final : public ASTTypeExpr {
-    std::span<ASTFieldDeclaration> fields;
+    Array<ASTFieldDeclaration> fields;
 };
 
 struct ASTArrayType final : public ASTTypeExpr {
@@ -363,11 +361,6 @@ struct ASTPointerType final : public ASTTypeExpr {
 struct ASTDynamicType final : public ASTTypeExpr {
     ASTExprVariant inner;
     bool is_mutable;
-};
-
-struct ASTUnionType final : public ASTTypeExpr {
-    ASTExprVariant left;
-    ASTExprVariant right;
 };
 
 struct ASTExpressionStatement final : public ASTNode {
@@ -401,18 +394,18 @@ struct ASTSwitchCase final : public ASTNode {
 
 struct ASTSwitchStatement final : public ASTNode {
     ASTExprVariant condition;
-    std::span<ASTSwitchCase> cases;
+    Array<ASTSwitchCase> cases;
 };
 
 struct ASTMatchCase final : public ASTNode {
     strview identifier;
     ASTExprVariant type;
-    std::span<ASTNodeVariant> body;
+    Array<ASTNodeVariant> body;
 };
 
 struct ASTMatchStatement final : public ASTNode {
     ASTExprVariant value;
-    std::span<ASTMatchCase> cases;
+    Array<ASTMatchCase> cases;
 };
 
 struct MatchCaseVarType final : public ASTTypeExpr {
@@ -444,43 +437,43 @@ struct ASTFunctionParameter final : public ASTNode {
 
 struct ASTFunctionDefinition final : public ASTNode {
     strview identifier;
-    std::span<ASTFunctionParameter> parameters;
+    Array<ASTFunctionParameter> parameters;
     ASTExprVariant return_type;
-    std::span<ASTNodeVariant> body;
-    std::unique_ptr<CFG> cfg;
+    Array<ASTNodeVariant> body;
     bool declared_static;
     bool declared_async;
 };
 
 struct ASTCtorDtorDefinition final : public ASTNode {
-    std::span<ASTFunctionParameter> parameters;
-    std::span<ASTNodeVariant> body;
+    Array<ASTFunctionParameter> parameters;
+    Array<ASTNodeVariant> body;
     bool is_constructor;
 };
 
 struct ASTOperatorDefinition final : public ASTNode {
     OperatorCode opcode;
-    std::span<ASTFunctionParameter> parameters;
+    Array<ASTFunctionParameter> parameters;
     ASTExprVariant return_type;
-    std::span<ASTNodeVariant> body;
+    Array<ASTNodeVariant> body;
 };
 
 struct ASTInterfaceDefinition final : public ASTNode {
     strview identifier;
-    std::span<ASTExprVariant> extends;
-    std::span<ASTNodeVariant> scope_items;
+    Array<ASTExprVariant> extends;
+    Array<ASTNodeVariant> scope_items;
 };
 
 struct ASTClassDefinition final : public ASTNode {
     strview identifier;
-    std::span<ASTExprVariant> implements;
-    std::span<ASTNodeVariant> fields;
-    std::span<ASTNodeVariant> scope_items;
+    Array<ASTExprVariant> implements;
+    Array<ASTDeclaration> fields;  // only instance fields, not static fields
+    Array<ASTNodeVariant> scope_items;
+    // Array<std::pair<std::size_t, AccessSpecifier>> access_specifiers;
 };
 
 struct ASTNamespaceDefinition final : public ASTNode {
     strview identifier;
-    std::span<ASTNodeVariant> items;
+    Array<ASTNodeVariant> items;
 };
 
 struct ASTTemplateParameter final : public ASTNode {
@@ -493,14 +486,14 @@ struct ASTTemplateParameter final : public ASTNode {
 
 struct ASTTemplateDefinition final : public ASTNode {
     strview identifier;
-    std::span<ASTTemplateParameter> parameters;
+    Array<ASTTemplateParameter> parameters;
     ASTNodeVariant target_node;
 };
 
 struct ASTTemplateSpecialization final : public ASTNode {
     strview identifier;
-    std::span<ASTTemplateParameter> parameters;
-    std::span<ASTExprVariant> patterns;
+    Array<ASTTemplateParameter> parameters;
+    Array<ASTExprVariant> patterns;
     ASTNodeVariant target_node;
 };
 
@@ -530,8 +523,8 @@ struct ASTNodePtrGetter {
     auto operator()(ASTNodeVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
     auto operator()(ASTExprVariant variant) -> const ASTNode* { return std::visit(*this, variant); }
     template <typename T>
-    auto operator()(const T* node) -> const ASTNode* {
-        return node;
+    auto operator()(std::unique_ptr<T>& node) -> const ASTNode* {
+        return node.get();
     }
     auto operator()(std::monostate) -> const ASTNode* { UNREACHABLE(); }
 };

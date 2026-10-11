@@ -6,7 +6,7 @@
 namespace {
 
 auto make_fields(std::initializer_list<std::pair<strview, const Type*>> fields)
-    -> GlobalMemory::Vector<std::pair<strview, const Type*>> {
+    -> std::vector<std::pair<strview, const Type*>> {
     return {fields.begin(), fields.end()};
 }
 
@@ -39,7 +39,7 @@ TEST_F(TypeInterningTest, CoinductionComparisonWorks) {
     TypeRegistry::get_at<ReferenceType>(ref_b, b, false, false);
     TypeRegistry::get_at<StructType>(a, make_fields({{"b", ref_b}}));
 
-    GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
+    std::flat_set<std::pair<const Type*, const Type*>> assumed_equal;
     EXPECT_EQ(a->compare(a, assumed_equal), std::strong_ordering::equal)
         << "Coinductively defined type should be equal to itself";
 }

@@ -48,7 +48,7 @@ class TypeResolutionPrinter:
 
 
 class FlatSetPrinter:
-    """Pretty printer for GlobalMemory::FlatSet"""
+    """Pretty printer for std::flat_set"""
     
     def __init__(self, val):
         self.val = val
@@ -78,7 +78,7 @@ class FlatSetPrinter:
 
 
 class FlatMapPrinter:
-    """Pretty printer for GlobalMemory::FlatMap"""
+    """Pretty printer for std::flat_map"""
     
     def __init__(self, val):
         self.val = val
@@ -224,10 +224,10 @@ def build_pretty_printer():
     pp.add_printer('TypeResolution', '^TypeResolution$', TypeResolutionPrinter)
     
     # FlatSet
-    pp.add_printer('FlatSet', '^GlobalMemory::FlatSet<.*>$', FlatSetPrinter)
+    pp.add_printer('FlatSet', '^std::flat_set<.*>$', FlatSetPrinter)
     
     # FlatMap
-    pp.add_printer('FlatMap', '^GlobalMemory::FlatMap<.*>$', FlatMapPrinter)
+    pp.add_printer('FlatMap', '^std::flat_map<.*>$', FlatMapPrinter)
     
     # MultiMap
     pp.add_printer('MultiMap', '^GlobalMemory::MultiMap<.*>$', MultiMapPrinter)
@@ -244,8 +244,8 @@ gdb.printing.register_pretty_printer(gdb.current_objfile(), build_pretty_printer
 gdb.write("Zinc pretty printers loaded successfully!\n")
 gdb.write("Registered printers for:\n")
 gdb.write("  - TypeResolution\n")
-gdb.write("  - GlobalMemory::FlatSet\n")
-gdb.write("  - GlobalMemory::FlatMap\n")
+gdb.write("  - std::flat_set\n")
+gdb.write("  - std::flat_map\n")
 gdb.write("  - GlobalMemory::MultiMap\n")
 gdb.write("  - PointerVariant\n")
 gdb.write(f"Total global pretty printers: {len(gdb.pretty_printers)}\n")

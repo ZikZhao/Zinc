@@ -7,45 +7,33 @@
 inline constexpr strview constructor_symbol = "!";
 inline constexpr strview destructor_symbol = "~";
 
-struct TypeProvider final : public GlobalMemory::MonotonicAllocated {
-    enum class Kind {
-        Alias,
-        Interface,
-        Class,
-    } kind;
-    const ASTNode* node;
-};
-
-struct VariableInitialization : public GlobalMemory::MonotonicAllocated {
-    ASTExprVariant type;
-    ASTExprVariant value;
-    bool is_mutable;
-    bool is_comptime;
-};
-
 using FunctionOverloadDef = PointerVariant<
     const ASTFunctionDefinition*,
     const ASTCtorDtorDefinition*,
     const ASTOperatorDefinition*,
     const ASTTemplateDefinition*>;
 
-struct TemplateFamily : public GlobalMemory::MonotonicAllocated {
+struct TemplateFamily {
     Scope* decl_scope;
     Scope* pattern_scope;  // used for template specialization pattern and skolemization
     const ASTTemplateDefinition* primary;  // meta function if decl_scope is nullptr
-    GlobalMemory::Vector<const ASTTemplateSpecialization*> specializations;
+    std::vector<const ASTTemplateSpecialization*> specializations;
 };
 
-using ScopeValue = PointerVariant<
-    const Object*,                               // type/comptime (from template)
-    std::span<const Object*>*,                   // parameter pack (from template)
-    TypeProvider*,                               // type provider
-    const VariableInitialization*,               // comptime/variable declaration
-    GlobalMemory::Vector<FunctionOverloadDef>*,  // function overloads
-    TemplateFamily*,                             // template definition
-    Scope*>;                                     // namespace
+using ScopeValue = std::variant<
+    const Object*,                     // type/comptime (from template)
+    Array<const Object*>,              // parameter pack (from template)
+    const ASTTypeAlias*,               // type alias
+    const ASTInterfaceDefinition*,     // interface definition
+    const ASTClassDefinition*,         // class definition
+    const ASTDeclaration*,             // variable declaration
+    const ASTFunctionParameter*,       // function parameter
+    const ASTMatchCase*,               // match case variable
+    std::vector<FunctionOverloadDef>,  // function overloads
+    TemplateFamily,                    // template definition
+    Scope*>;                           // namespace
 
-class Scope final : public GlobalMemory::MonotonicAllocated {
+class Scope final {
     friend class Sema;
     friend class NameMangler;
     friend class CodeGen;
@@ -65,12 +53,12 @@ public:
     }
 
 private:
-    GlobalMemory::FlatMap<const void*, Scope*> children_;
-    GlobalMemory::FlatMap<strview, ScopeValue> identifiers_;
+    std::flat_map<const ASTNode*, Scope*> children_;
+    std::flat_map<strview, ScopeValue> identifiers_;
 
 public:
     Scope* parent_ = nullptr;
-    strview scope_id_;
+    std::string scope_id_;
     strview self_id_;  // only set for class scopes
     bool is_extern_ = false;
     bool is_instantiating_template_ = false;
@@ -87,51 +75,38 @@ public:
     Scope() noexcept = default;
 
     void set_template_argument(strview identifier, const Object* obj) noexcept {
+        assert(identifiers_.find(identifier) == identifiers_.end());
         identifiers_[identifier] = obj;
     }
 
-    void set_template_pack(strview identifier, std::span<const Object*> terms) noexcept {
-        std::span<const Object*>* ptr = GlobalMemory::alloc<std::span<const Object*>>(terms);
-        identifiers_[identifier] = ptr;
+    void set_template_pack(strview identifier, Array<const Object*> terms) noexcept {
+        assert(identifiers_.find(identifier) == identifiers_.end());
+        identifiers_[identifier] = std::move(terms);
     }
 
-    template <ASTClass T>
-    void add_type(strview identifier, const T* node) noexcept {
-        TypeProvider::Kind kind;
-        if constexpr (std::is_same_v<T, ASTTypeAlias>) {
-            kind = TypeProvider::Kind::Alias;
-        } else if constexpr (std::is_same_v<T, ASTInterfaceDefinition>) {
-            kind = TypeProvider::Kind::Interface;
-        } else if constexpr (std::is_same_v<T, ASTClassDefinition>) {
-            kind = TypeProvider::Kind::Class;
-        } else {
-            /// TODO: support enum definitions as types
-            static_assert(false);
-        }
-        auto [_, inserted] =
-            identifiers_.insert({identifier, new TypeProvider{.kind = kind, .node = node}});
+    void add_type(strview identifier, const ASTClass auto* node) noexcept {
+        auto [_, inserted] = identifiers_.insert({identifier, node});
         if (!inserted) {
             Diagnostic::error_redeclared_identifier(identifier);
         }
     }
 
-    void add_variable(strview identifier, const VariableInitialization* init) noexcept {
-        auto [_, inserted] = identifiers_.insert({identifier, init});
+    void add_variable(strview identifier, const ASTDeclaration* decl) noexcept {
+        auto [_, inserted] = identifiers_.insert({identifier, decl});
         if (!inserted) {
             Diagnostic::error_redeclared_identifier(identifier);
         }
     }
 
-    void add_case_variable(strview identifier, const Type* var_type) noexcept {
-        auto [_, inserted] = identifiers_.insert(
-            {identifier,
-             new VariableInitialization{
-                 .type = new MatchCaseVarType{Location{}, var_type},
-                 .value = std::monostate{},
-                 .is_mutable = false,
-                 .is_comptime = false,
-             }}
-        );
+    void add_parameter(strview identifier, const ASTFunctionParameter* param) noexcept {
+        auto [_, inserted] = identifiers_.insert({identifier, decl});
+        if (!inserted) {
+            Diagnostic::error_redeclared_identifier(identifier);
+        }
+    }
+
+    void add_case_variable(strview identifier, const ASTMatchCase* match_case) noexcept {
+        auto [_, inserted] = identifiers_.insert({identifier, match_case});
         if (!inserted) {
             Diagnostic::error_redeclared_identifier(identifier);
         }
@@ -139,11 +114,9 @@ public:
 
     void add_function(strview identifier, const auto* func) noexcept {
         if (auto it = identifiers_.find(identifier); it == identifiers_.end()) {
-            auto overloads = GlobalMemory::alloc<GlobalMemory::Vector<FunctionOverloadDef>>();
-            overloads->push_back(func);
-            identifiers_[identifier] = overloads;
+            identifiers_[identifier] = std::vector<FunctionOverloadDef>{func};
         } else {
-            auto overloads = it->second.get<GlobalMemory::Vector<FunctionOverloadDef>*>();
+            auto overloads = std::get_if<std::vector<FunctionOverloadDef>>(&it->second);
             if (!overloads) {
                 Diagnostic::error_redeclared_identifier(identifier);
                 return;
@@ -162,7 +135,7 @@ public:
         }
         auto [_, inserted] = identifiers_.insert(
             {identifier,
-             new TemplateFamily{
+             TemplateFamily{
                  .decl_scope = this,
                  .pattern_scope = &Scope::make(*this),
                  .primary = definition,
@@ -181,7 +154,7 @@ public:
             Diagnostic::error_undeclared_identifier(identifier);
             return;
         }
-        auto family = it->second.get<TemplateFamily*>();
+        auto family = std::get_if<TemplateFamily>(&it->second);
         if (!family) {
             Diagnostic::error_redeclared_identifier(identifier);
             return;
@@ -249,7 +222,7 @@ public:
 
     // Struct initialization
     void operator()(const ASTStructInitialization* node) noexcept {
-        GlobalMemory::FlatSet<strview> fields;
+        std::flat_set<strview> fields;
         for (const auto& init : node->field_inits) {
             auto [_, inserted] = fields.insert(init.identifier);
             if (!inserted) {
@@ -266,15 +239,7 @@ public:
     // Declarations
     void operator()(const ASTDeclaration* node) noexcept {
         Diagnostic::ErrorTrap trap{node->location};
-        current_scope_->add_variable(
-            node->identifier,
-            new VariableInitialization{
-                .type = node->declared_type,
-                .value = node->expr,
-                .is_mutable = node->is_mutable,
-                .is_comptime = node->is_constant,
-            }
-        );
+        current_scope_->add_variable(node->identifier, node);
     }
 
     void operator()(const ASTTypeAlias* node) noexcept {
@@ -340,15 +305,7 @@ public:
             if (i != node->parameters.size() - 1 && param.is_variadic) {
                 Diagnostic::error_variadic_parameter_must_be_last(param.location);
             }
-            local_scope.add_variable(
-                param.identifier,
-                new VariableInitialization{
-                    .type = param.type,
-                    .value = std::monostate{},
-                    .is_mutable = param.is_mutable,
-                    .is_comptime = false,
-                }
-            );
+            local_scope.add_parameter(param.identifier, &param);
         }
         SymbolCollector local_visitor(std_scope_, &local_scope);
         for (auto& stmt : node->body) {
@@ -366,15 +323,7 @@ public:
         for (std::size_t i = 0; i < node->parameters.size(); ++i) {
             const auto& param = node->parameters[i];
             Diagnostic::ErrorTrap param_trap{param.location};
-            local_scope.add_variable(
-                param.identifier,
-                new VariableInitialization{
-                    .type = param.type,
-                    .value = std::monostate{},
-                    .is_mutable = param.is_mutable,
-                    .is_comptime = false,
-                }
-            );
+            local_scope.add_parameter(param.identifier, &param);
         }
         SymbolCollector local_visitor(std_scope_, &local_scope);
         for (auto& stmt : node->body) {
@@ -393,15 +342,7 @@ public:
             if (i != node->parameters.size() - 1 && param.is_variadic) {
                 Diagnostic::error_variadic_parameter_must_be_last(param.location);
             }
-            local_scope.add_variable(
-                param.identifier,
-                new VariableInitialization{
-                    .type = param.type,
-                    .value = std::monostate{},
-                    .is_mutable = param.is_mutable,
-                    .is_comptime = false,
-                }
-            );
+            local_scope.add_parameter(param.identifier, &param);
         }
         SymbolCollector local_visitor(std_scope_, &local_scope);
         for (auto& stmt : node->body) {
@@ -431,21 +372,10 @@ public:
         for (auto& item : node->scope_items) {
             class_visitor(item);
         }
-        for (ASTNodeVariant decl_variant : node->fields) {
-            const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
+        for (const ASTDeclaration* decl : node->fields) {
+            assert(!decl->declared_static);
             if (holds_monostate(decl->declared_type)) {
                 throw;
-            }
-            if (decl->declared_static) {
-                class_scope.add_variable(
-                    decl->identifier,
-                    new VariableInitialization{
-                        .type = decl->declared_type,
-                        .value = std::monostate{},
-                        .is_mutable = decl->is_mutable,
-                        .is_comptime = decl->is_constant,
-                    }
-                );
             }
         }
     }

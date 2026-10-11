@@ -4,35 +4,47 @@ options {
     language = Cpp;
 }
 
+@parser::preinclude {
+#include "parser_enums.hpp"
+using namespace Parser;
+}
+
 program: (
         statements_ += top_level_statement
         | cpp_blocks_ += cpp_block
     )* EOF;
 
-top_level_statement:
-    declaration_statement
-    | type_alias
-    | function_definition
-    | interface_definition
-    | class_definition
-    | namespace_definition
-    | import_statement;
+top_level_statement
+    returns[StatementKind kind_ = 0]:
+    declaration_statement { $kind_ = StatementKind::DeclarationStatement; 
+        }
+    | type_alias { $kind_ = StatementKind::TypeAlias; }
+    | function_definition { $kind_ = StatementKind::FunctionDefinition; 
+        }
+    | interface_definition { $kind_ = StatementKind::InterfaceDefinition; 
+        }
+    | class_definition { $kind_ = StatementKind::ClassDefinition; }
+    | namespace_definition { $kind_ = StatementKind::NamespaceDefinition; 
+        }
+    | import_statement { $kind_ = StatementKind::ImportStatement; };
 
-statement:
-    local_block
-    | expr_statement
-    | declaration_statement
-    | if_statement
-    | switch_statement
-    | match_statement
-    | for_statement
-    | break_statement
-    | continue_statement
-    | return_statement
-    | type_alias
-    | throw_statement
-    | await_statement
-    | yield_statement;
+statement
+    returns[StatementKind kind_ = 0]:
+    local_block { $kind_ = StatementKind::LocalBlock; }
+    | expr_statement { $kind_ = StatementKind::ExprStatement; }
+    | declaration_statement { $kind_ = StatementKind::DeclarationStatement; 
+        }
+    | if_statement { $kind_ = StatementKind::IfStatement; }
+    | switch_statement { $kind_ = StatementKind::SwitchStatement; }
+    | match_statement { $kind_ = StatementKind::MatchStatement; }
+    | for_statement { $kind_ = StatementKind::ForStatement; }
+    | break_statement { $kind_ = StatementKind::BreakStatement; }
+    | continue_statement { $kind_ = StatementKind::ContinueStatement; }
+    | return_statement { $kind_ = StatementKind::ReturnStatement; }
+    | type_alias { $kind_ = StatementKind::TypeAlias; }
+    | throw_statement { $kind_ = StatementKind::ThrowStatement; }
+    | await_statement { $kind_ = StatementKind::AwaitStatement; }
+    | yield_statement { $kind_ = StatementKind::YieldStatement; };
 
 local_block:
     OP_LBRACE statements_ += statement* OP_RBRACE;
@@ -66,20 +78,24 @@ match_statement:
         cases_ += match_case
     )* OP_RBRACE;
 
-match_case: (identifier_ = T_IDENTIFIER)? OP_COLON type_ = type OP_LAMBDA body_
-        = local_block                                          # NormalMatchCase
-    | identifier_ = T_IDENTIFIER OP_LAMBDA body_ = local_block # DefaultMatchCase
-        ;
+match_case
+    returns[MatchCaseKind kind_ = 0]: (
+        identifier_ = T_IDENTIFIER
+    )? OP_COLON type_ = type OP_LAMBDA body_ = local_block { $kind_ = MatchCaseKind::Normal; 
+        } # NormalMatchCase
+    | identifier_ = T_IDENTIFIER OP_LAMBDA body_ = local_block { $kind_ = MatchCaseKind::Default; 
+        } # DefaultMatchCase;
 
-for_statement:
+for_statement
+    returns[ForStatementKind kind_ = 0]:
     KW_FOR OP_LPAREN (
         init_decl_ = declaration_statement
         | init_expr_ = expr_statement OP_SEMICOLON
         | OP_SEMICOLON
     ) condition_ = expr? OP_SEMICOLON update_ = expr? OP_RPAREN body_ =
-        local_block                                                    # CStyleFor
-    | KW_FOR OP_LPAREN condition_ = expr OP_RPAREN body_ = local_block #
-        WhileStyleFor;
+        local_block { $kind_ = ForStatementKind::CStyle; } # CStyleFor
+    | KW_FOR OP_LPAREN condition_ = expr OP_RPAREN body_ = local_block { $kind_ = ForStatementKind::WhileStyle; 
+        } # WhileStyleFor;
 
 break_statement: KW_BREAK OP_SEMICOLON;
 
@@ -154,13 +170,15 @@ operator_overload_definition:
         | semi_ = OP_SEMICOLON
     );
 
-parameter:
-    KW_SELF OP_COLON type_ = type                              # SelfParam
-    | KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type # NormalParam
+parameter
+    returns[ParameterKind kind_ = 0]:
+    KW_SELF OP_COLON type_ = type { $kind_ = ParameterKind::Self; } # SelfParam
+    | KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type { $kind_ = ParameterKind::Normal; 
+        } # NormalParam
     | KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_ASSIGN
-        default_ = expr                                                    # DefaultParam
-    | KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_ELLIPSIS #
-        VariadicParam;
+        default_ = expr { $kind_ = ParameterKind::Default; } # DefaultParam
+    | KW_MUT? identifier_ = T_IDENTIFIER OP_COLON type_ = type OP_ELLIPSIS { $kind_ = ParameterKind::Variadic; 
+        } # VariadicParam;
 
 interface_definition:
     KW_INTERFACE identifier_ = T_IDENTIFIER (
@@ -178,15 +196,22 @@ class_definition:
         KW_IMPLEMENTS implements_ += type (
             OP_COMMA implements_ += type
         )*
-    )? OP_LBRACE (
-        aliases_ += type_alias
-        | classes_ += class_definition
-        | attrs_ += declaration_statement
-        | constructors_ += constructor
-        | destructors_ += destructor
-        | functions_ += function_definition
-        | operators_ += operator_overload_definition
-    )* OP_RBRACE;
+    )? OP_LBRACE (items_ += class_item)* OP_RBRACE;
+
+class_item:
+    access_specifier OP_COLON
+    | type_alias
+    | class_definition
+    | declaration_statement
+    | constructor
+    | destructor
+    | function_definition
+    | operator_overload_definition;
+
+access_specifier:
+    KW_PUBLIC
+    | KW_PROTECTED
+    | KW_PRIVATE;
 
 namespace_definition:
     KW_NAMESPACE (identifier_ = T_IDENTIFIER)? OP_LBRACE items_ +=
@@ -204,36 +229,42 @@ yield_statement:
 import_statement:
     KW_IMPORT path_ = T_STRING KW_AS identifier_ = T_IDENTIFIER OP_SEMICOLON;
 
-expr:
-    KW_SELF                                                     # SelfExpr
-    | KW_SELF_TYPE                                              # SelfTypeExpr
-    | constant_ = constant                                      # ConstExpr
-    | identifier_ = T_IDENTIFIER                                # IdentifierExpr
-    | template_ = expr instantiation_list_ = instantiation_list #
-        InstantiationExpr
-    | base_ = expr OP_DOT member_ = any_identifier        # MemberAccessExpr
-    | base_ = expr OP_ARROW member_ = any_identifier      # PointerAccessExpr
-    | base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET # IndexAccessExpr
+expr
+    returns[ExprKind kind_ = 0]:
+    KW_SELF { $kind_ = ExprKind::Self; }                            # SelfExpr
+    | KW_SELF_TYPE { $kind_ = ExprKind::SelfType; }                 # SelfTypeExpr
+    | constant_ = constant { $kind_ = ExprKind::Const; }            # ConstExpr
+    | identifier_ = T_IDENTIFIER { $kind_ = ExprKind::Identifier; } #
+        IdentifierExpr
+    | template_ = expr instantiation_list_ = instantiation_list { $kind_ = ExprKind::Instantiation; 
+        } # InstantiationExpr
+    | base_ = expr OP_DOT member_ = any_identifier { $kind_ = ExprKind::MemberAccess; 
+        } # MemberAccessExpr
+    | base_ = expr OP_ARROW member_ = any_identifier { $kind_ = ExprKind::PointerAccess; 
+        } # PointerAccessExpr
+    | base_ = expr OP_LBRACKET length_ = expr OP_RBRACKET { $kind_ = ExprKind::IndexAccess; 
+        } # IndexAccessExpr
     | func_ = expr OP_LPAREN (
         arguments_ += expr (
             OP_COMMA arguments_ += expr
         )*
-    )? OP_RPAREN # CallExpr
+    )? OP_RPAREN { $kind_ = ExprKind::Call; } # CallExpr
     | struct_ = type OP_LBRACE (
         inits_ += field_init (
             OP_COMMA inits_ += field_init
         )* OP_COMMA?
-    )? OP_RBRACE # StructInitExpr
+    )? OP_RBRACE { $kind_ = ExprKind::StructInit; } # StructInitExpr
     | OP_LBRACKET (
         elements_ += expr (
             OP_COMMA elements_ += expr
         )* OP_COMMA?
-    )? OP_RBRACKET                                                            # ArrayInitExpr
-    | base_ = expr OP_LBRACKET start_ = expr OP_COLON end_ = expr OP_RBRACKET #
-        SliceExpr
-    | KW_MOVE inner_expr_ = expr             # MoveExpr
-    | KW_FORWARD inner_expr_ = expr          # ForwardExpr
-    | OP_LPAREN inner_expr_ = expr OP_RPAREN # ParenExpr
+    )? OP_RBRACKET { $kind_ = ExprKind::ArrayInit; } # ArrayInitExpr
+    | base_ = expr OP_LBRACKET start_ = expr OP_COLON end_ = expr OP_RBRACKET { $kind_ = ExprKind::Slice; 
+        } # SliceExpr
+    | KW_MOVE inner_expr_ = expr { $kind_ = ExprKind::Move; }                                                         # MoveExpr
+    | KW_FORWARD inner_expr_ = expr { $kind_ = ExprKind::Forward; }                                                   # ForwardExpr
+    | OP_LPAREN inner_expr_ = expr OP_RPAREN { $kind_ = ExprKind::Paren; }                                            #
+        ParenExpr
     | OP_LPAREN (
         parameters_ += parameter (
             OP_COMMA parameters_ += parameter
@@ -241,7 +272,7 @@ expr:
     )? OP_RPAREN (OP_COLON return_type_ = type)? OP_LAMBDA (
         expr_ = expr
         | body_ = local_block
-    ) # LambdaExpr
+    ) { $kind_ = ExprKind::Lambda; } # LambdaExpr
     | <assoc = right> (
         op_ = OP_INC
         | op_ = OP_DEC
@@ -250,42 +281,48 @@ expr:
         | op_ = OP_BITNOT
         | op_ = OP_BITAND
         | op_ = OP_MUL
-    ) expr_ = expr # UnaryExpr
+    ) expr_ = expr { $kind_ = ExprKind::Unary; } # UnaryExpr
     | <assoc = right> expr_ = expr op_ = (
         OP_INC
         | OP_DEC
-    )                                              # PostfixUnaryExpr
-    | expr_ = expr KW_AS OP_QUESTION? type_ = type # AsExpr
+    ) { $kind_ = ExprKind::PostfixUnary; }                                    # PostfixUnaryExpr
+    | expr_ = expr KW_AS OP_QUESTION? type_ = type { $kind_ = ExprKind::As; } #
+        AsExpr
     | <assoc = left> left_ = expr op_ = (
         OP_MUL
         | OP_DIV
         | OP_REM
-    ) right_ = expr # MultiplicativeExpr
+    ) right_ = expr { $kind_ = ExprKind::Multiplicative; } # MultiplicativeExpr
     | <assoc = left> left_ = expr op_ = (
         OP_ADD
         | OP_SUB
-    ) right_ = expr # AdditiveExpr
+    ) right_ = expr { $kind_ = ExprKind::Additive; } # AdditiveExpr
     | <assoc = left> left_ = expr (
         op_ = OP_LT OP_LT
         | op_ = OP_GT OP_GT
-    ) right_ = expr # ShiftExpr
+    ) right_ = expr { $kind_ = ExprKind::Shift; } # ShiftExpr
     | <assoc = left> left_ = expr op_ = (
         OP_LT
         | OP_LTE
         | OP_GT
         | OP_GTE
-    ) right_ = expr # RelationalExpr
+    ) right_ = expr { $kind_ = ExprKind::Relational; } # RelationalExpr
     | <assoc = left> left_ = expr op_ = (
         OP_EQ
         | OP_NEQ
-    ) right_ = expr                                             # EqualityExpr
-    | <assoc = left> left_ = expr op_ = OP_BITAND right_ = expr # BitAndExpr
-    | <assoc = left> left_ = expr op_ = OP_BITXOR right_ = expr # BitXorExpr
-    | <assoc = left> left_ = expr op_ = OP_BITOR right_ = expr  # BitOrExpr
-    | <assoc = left> left_ = expr op_ = OP_AND right_ = expr    # AndExpr
-    | <assoc = left> left_ = expr op_ = OP_OR right_ = expr     # OrExpr
+    ) right_ = expr { $kind_ = ExprKind::Equality; } # EqualityExpr
+    | <assoc = left> left_ = expr op_ = OP_BITAND right_ = expr { $kind_ = ExprKind::BitAnd; 
+        } # BitAndExpr
+    | <assoc = left> left_ = expr op_ = OP_BITXOR right_ = expr { $kind_ = ExprKind::BitXor; 
+        } # BitXorExpr
+    | <assoc = left> left_ = expr op_ = OP_BITOR right_ = expr { $kind_ = ExprKind::BitOr; 
+        } # BitOrExpr
+    | <assoc = left> left_ = expr op_ = OP_AND right_ = expr { $kind_ = ExprKind::And; 
+        } # AndExpr
+    | <assoc = left> left_ = expr op_ = OP_OR right_ = expr { $kind_ = ExprKind::Or; 
+        } # OrExpr
     | <assoc = right> condition_ = expr OP_QUESTION true_expr_ = expr OP_COLON
-        false_expr_ = expr # TernaryExpr
+        false_expr_ = expr { $kind_ = ExprKind::Ternary; } # TernaryExpr
     | <assoc = right> left_ = expr (
         op_ = OP_ASSIGN
         | op_ = OP_ADD_ASSIGN
@@ -300,7 +337,7 @@ expr:
         | op_ = OP_BITXOR_ASSIGN
         | op_ = OP_LT OP_LT OP_ASSIGN
         | op_ = OP_GT OP_GT OP_ASSIGN
-    ) right_ = expr # AssignExpr;
+    ) right_ = expr { $kind_ = ExprKind::Assign; } # AssignExpr;
 
 any_identifier:
     T_IDENTIFIER
@@ -320,8 +357,9 @@ constant:
         | KW_NULLPTR
     );
 
-type:
-    KW_SELF_TYPE # SelfType
+type
+    returns[TypeKind kind_ = TypeKind::SelfType]:
+    KW_SELF_TYPE { $kind_ = TypeKind::SelfType; } # SelfType
     | primitive_ = (
         KW_VOID
         | KW_INT8
@@ -338,29 +376,35 @@ type:
         | KW_FLOAT64
         | KW_BOOL
         | KW_STRVIEW
-    )                                                           # PrimitiveType
-    | identifier_ = T_IDENTIFIER                                # IdentifierType
-    | template_ = type instantiation_list_ = instantiation_list #
-        InstantiatedType
-    | base_ = type OP_DOT member_ = any_identifier # MemberAccessType
+    ) { $kind_ = TypeKind::Primitive; }                             # PrimitiveType
+    | identifier_ = T_IDENTIFIER { $kind_ = TypeKind::Identifier; } #
+        IdentifierType
+    | template_ = type instantiation_list_ = instantiation_list { $kind_ = TypeKind::Instantiated; 
+        } # InstantiatedType
+    | base_ = type OP_DOT member_ = any_identifier { $kind_ = TypeKind::MemberAccess; 
+        } # MemberAccessType
     | OP_LBRACE (
         fields_ += field_decl (
             OP_COMMA fields_ += field_decl
         )* OP_COMMA?
-    )? OP_RBRACE # StructType
+    )? OP_RBRACE { $kind_ = TypeKind::Struct; } # StructType
     | OP_LBRACKET element_type_ = type (
         OP_SEMICOLON length_ = expr
-    )? OP_RBRACKET # ArrayType
+    )? OP_RBRACKET { $kind_ = TypeKind::Array; } # ArrayType
     | OP_LPAREN (
         parameters_ += type (
             OP_COMMA parameters_ += type
         )*
-    )? OP_RPAREN OP_ARROW return_type_ = type       # FunctionType
-    | KW_MOVE? OP_BITAND KW_MUT? inner_type_ = type # ReferenceType
-    | OP_MUL KW_MUT? inner_type_ = type             # PointerType
-    | KW_DYN KW_MUT? inner_type_ = type             # DynamicType
-    | left_ = type OP_BITOR right_ = type           # UnionType
-    | OP_LBRACKET inner_type_ = type OP_RBRACKET    # ParenType;
+    )? OP_RPAREN OP_ARROW return_type_ = type { $kind_ = TypeKind::Function; } #
+        FunctionType
+    | KW_MOVE? OP_BITAND KW_MUT? inner_type_ = type { $kind_ = TypeKind::Reference; 
+        }                                                               # ReferenceType
+    | OP_MUL KW_MUT? inner_type_ = type { $kind_ = TypeKind::Pointer; } #
+        PointerType
+    | KW_DYN KW_MUT? inner_type_ = type { $kind_ = TypeKind::Dynamic; } #
+        DynamicType
+    | OP_LBRACKET inner_type_ = type OP_RBRACKET { $kind_ = TypeKind::Paren; } #
+        ParenType;
 
 field_decl:
     identifier_ = any_identifier OP_COLON type_ = type;
@@ -402,13 +446,14 @@ specialize_parameter_list:
         )* OP_GT
     )?;
 
-template_parameter:
+template_parameter
+    returns[int kind_ = 0]:
     identifier_ = T_IDENTIFIER OP_ELLIPSIS? OP_COLON KW_TYPE (
         OP_EQ default_ = type
-    )? # TypeTemplateParam
+    )? { $kind_ = 1; } # TypeTemplateParam
     | identifier_ = T_IDENTIFIER OP_ELLIPSIS? OP_COLON type_ = type (
         OP_EQ default_ = expr
-    )? # ComptimeTemplateParam;
+    )? { $kind_ = 2; } # ComptimeTemplateParam;
 
 instantiation_list:
     (OP_LT | OP_TURBO_FISH) arguments_ += instantiation_argument (
@@ -475,6 +520,9 @@ KW_DYN: 'dyn';
 KW_ASYNC: 'async';
 KW_AWAIT: 'await';
 KW_YIELD: 'yield';
+KW_PUBLIC: 'public';
+KW_PROTECTED: 'protected';
+KW_PRIVATE: 'private';
 
 OP_DOT: '.';
 OP_QUESTION: '?';

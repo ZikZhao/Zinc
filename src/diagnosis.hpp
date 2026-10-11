@@ -12,8 +12,8 @@ enum class Severity : std::uint8_t {
 struct Problem {
     Severity severity;
     Location location;
-    GlobalMemory::String message;
-    GlobalMemory::Vector<Problem> subproblems;
+    std::string message;
+    std::vector<Problem> subproblems;
 };
 
 class Diagnostic {
@@ -25,7 +25,7 @@ public:
 
     private:
         Location location_;
-        GlobalMemory::Vector<Problem> problems_;
+        std::vector<Problem> problems_;
         ErrorTrap* prev_;
 
     public:
@@ -35,7 +35,7 @@ public:
             : location_(location), prev_(std::exchange(instance.current_trap_, this)) {}
 
         ~ErrorTrap() noexcept {
-            GlobalMemory::Vector<Problem>& target = (prev_) ? prev_->problems_ : instance.problems_;
+            std::vector<Problem>& target = (prev_) ? prev_->problems_ : instance.problems_;
             for (Problem& problem : problems_) {
                 if (problem.location.begin == problem.location.end &&
                     location_.begin != location_.end) {
@@ -174,10 +174,10 @@ private:
         strview content = file.content_;
 
         std::size_t context_start = content.rfind('\n', location.begin);
-        context_start = (context_start == GlobalMemory::String::npos) ? 0 : context_start + 1;
+        context_start = (context_start == std::string::npos) ? 0 : context_start + 1;
 
         std::size_t context_end = content.find('\n', location.end);
-        context_end = (context_end == GlobalMemory::String::npos) ? content.size() : context_end;
+        context_end = (context_end == std::string::npos) ? content.size() : context_end;
 
         std::int64_t start_line_num = file.get_line_number(context_start);
         std::int64_t end_line_num = file.get_line_number(context_end);
@@ -189,8 +189,7 @@ private:
             "    {}{}{}:{}:{}{}\n",
             ColourEscape::DIM,
             ColourEscape::UNDERLINE,
-            file.relative_path_
-                .string<char, std::char_traits<char>, GlobalMemory::String::allocator_type>(),
+            file.relative_path_.string<char, std::char_traits<char>, std::string::allocator_type>(),
             start_line_num,
             col_num,
             ColourEscape::RESET
@@ -248,14 +247,14 @@ private:
     }
 
 private:
-    GlobalMemory::Vector<Problem> problems_;
+    std::vector<Problem> problems_;
     ErrorTrap* current_trap_ = nullptr;
 
 public:
     Diagnostic() noexcept = default;
 
 private:
-    static auto unlocated_error(GlobalMemory::String&& msg) noexcept -> void {
+    static auto unlocated_error(std::string&& msg) noexcept -> void {
         Diagnostic::report(Problem{.severity = Severity::Error, .message = std::move(msg)});
     }
 
@@ -263,12 +262,10 @@ public:
     static auto error_module_not_found(strview module_path, strview relative_to = {}) noexcept
         -> void {
         if (relative_to.empty()) {
-            print_error_msg(GlobalMemory::format("Module not found: '{}'", module_path));
+            print_error_msg(std::format("Module not found: '{}'", module_path));
         } else {
             print_error_msg(
-                GlobalMemory::format(
-                    "Module not found: '{}' (imported from '{}')", module_path, relative_to
-                )
+                std::format("Module not found: '{}' (imported from '{}')", module_path, relative_to)
             );
         }
     }
@@ -278,7 +275,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String(
+                .message = std::string(
                     "Specialization definition requires a pattern to specialize, but a template argument list is provided"sv
                 )
             }
@@ -290,25 +287,22 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String(
-                    "Specialization definition requires a pattern to specialize"sv
-                )
+                .message =
+                    std::string("Specialization definition requires a pattern to specialize"sv)
             }
         );
     }
 
     static auto error_undeclared_identifier(strview identifier) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Undeclared identifier: '{}'", identifier));
+        unlocated_error(std::format("Undeclared identifier: '{}'", identifier));
     }
 
     static auto error_redeclared_identifier(strview identifier) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Redeclared identifier: '{}'", identifier));
+        unlocated_error(std::format("Redeclared identifier: '{}'", identifier));
     }
 
     static auto error_symbol_category_mismatch(strview expected, strview actual) noexcept -> void {
-        unlocated_error(
-            GlobalMemory::format("Symbol kind mismatch: expected {}, got {}", expected, actual)
-        );
+        unlocated_error(std::format("Symbol kind mismatch: expected {}, got {}", expected, actual));
     }
 
     static auto error_symbol_category_mismatch(
@@ -318,15 +312,14 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format(
-                    "Symbol kind mismatch: expected '{}', got '{}'", expected, actual
-                )
+                .message =
+                    std::format("Symbol kind mismatch: expected '{}', got '{}'", expected, actual)
             }
         );
     }
 
     static auto error_circular_type_dependency(Location location) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Circular type definition detected:"));
+        unlocated_error(std::format("Circular type definition detected:"));
     }
 
     static auto error_duplicate_field(Location location, strview field_name) noexcept -> void {
@@ -334,7 +327,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format("Duplicate field name: '{}'", field_name)
+                .message = std::format("Duplicate field name: '{}'", field_name)
             }
         );
     }
@@ -345,7 +338,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format("Duplicate attribute name: '{}'", attribute_name)
+                .message = std::format("Duplicate attribute name: '{}'", attribute_name)
             }
         );
     }
@@ -355,19 +348,17 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Previous declaration of attribute is here:"sv)
+                .message = std::string("Previous declaration of attribute is here:"sv)
             }
         );
     }
 
     static auto error_overflow(strview literal, strview type) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Literal '{}' overflows type '{}'", literal, type));
+        unlocated_error(std::format("Literal '{}' overflows type '{}'", literal, type));
     }
 
     static auto error_type_mismatch(strview expected, strview actual) noexcept -> void {
-        unlocated_error(
-            GlobalMemory::format("Type mismatch: expected '{}', got '{}'", expected, actual)
-        );
+        unlocated_error(std::format("Type mismatch: expected '{}', got '{}'", expected, actual));
     }
 
     static auto error_operation_not_defined(
@@ -375,13 +366,11 @@ public:
     ) noexcept -> void {
         if (right_type_repr.empty()) {
             unlocated_error(
-                GlobalMemory::format(
-                    "Undefined operator '{}' for type '{}'", operator_repr, left_type_repr
-                )
+                std::format("Undefined operator '{}' for type '{}'", operator_repr, left_type_repr)
             );
         } else {
             unlocated_error(
-                GlobalMemory::format(
+                std::format(
                     "Undefined operator '{}' for types '{}' and '{}'",
                     operator_repr,
                     left_type_repr,
@@ -396,7 +385,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format("No matching overload found, arguments: {}"sv, args)
+                .message = std::format("No matching overload found, arguments: {}"sv, args)
             }
         );
     }
@@ -405,7 +394,7 @@ public:
         strview signature, std::size_t expected, std::size_t actual
     ) noexcept -> void {
         unlocated_error(
-            GlobalMemory::format(
+            std::format(
                 "Candidate with mismatching argument count: expected {}, got {}",
                 signature,
                 expected,
@@ -421,7 +410,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format(
+                .message = std::format(
                     "Candidate with mismatching argument types at index {}: expected '{}', got "
                     "'{}'",
                     index,
@@ -433,7 +422,7 @@ public:
     }
 
     static auto error_invalid_literal(strview literal, strview type) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Invalid literal '{}' for type '{}'", literal, type));
+        unlocated_error(std::format("Invalid literal '{}' for type '{}'", literal, type));
     }
 
     static auto error_not_constant_expression(Location location) noexcept -> void {
@@ -441,7 +430,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Expression is not a constant expression"sv)
+                .message = std::string("Expression is not a constant expression"sv)
             }
         );
     }
@@ -451,7 +440,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Global variables cannot be mutable"sv)
+                .message = std::string("Global variables cannot be mutable"sv)
             }
         );
     }
@@ -463,7 +452,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format(
+                .message = std::format(
                     "Cannot construct instance of class '{}' outside of its scope, calling "
                     "constructor instead",
                     class_name
@@ -478,8 +467,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message =
-                    GlobalMemory::format("Invalid cast from '{}' to '{}'", from_type, to_type)
+                .message = std::format("Invalid cast from '{}' to '{}'", from_type, to_type)
             }
         );
     }
@@ -491,7 +479,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format(
+                .message = std::format(
                     "Array initializer size mismatch: expected {}, got {}", expected, actual
                 )
             }
@@ -499,26 +487,26 @@ public:
     }
 
     static auto error_invalid_member_access(strview member_name) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Invalid member access: '{}'", member_name));
+        unlocated_error(std::format("Invalid member access: '{}'", member_name));
     }
 
     static auto error_member_not_found(strview member_name) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Member not found: '{}'", member_name));
+        unlocated_error(std::format("Member not found: '{}'", member_name));
     }
 
     static auto error_type_not_callable(strview callee) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Type '{}' is not callable", callee));
+        unlocated_error(std::format("Type '{}' is not callable", callee));
     }
 
     static auto error_value_not_callable(strview callee) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Value of type '{}' is not callable", callee));
+        unlocated_error(std::format("Value of type '{}' is not callable", callee));
     }
 
     static auto error_auto_binding_mismatch(
         strview auto_rep, strview prev, strview current
     ) noexcept -> void {
         unlocated_error(
-            GlobalMemory::format(
+            std::format(
                 "Auto type deduction mismatch for '{}': previously deduced '{}', now deduced "
                 "'{}'",
                 auto_rep,
@@ -529,7 +517,7 @@ public:
     }
 
     static auto error_invalid_pointer_access(strview type) noexcept -> void {
-        unlocated_error(GlobalMemory::format("Invalid pointer access on type '{}'", type));
+        unlocated_error(std::format("Invalid pointer access on type '{}'", type));
     }
 
     static auto error_cannot_infer_template_argument(Location location) noexcept -> void {
@@ -537,7 +525,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Cannot infer template argument"sv)
+                .message = std::string("Cannot infer template argument"sv)
             }
         );
     }
@@ -547,7 +535,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Variadic parameter must be the last parameter"sv)
+                .message = std::string("Variadic parameter must be the last parameter"sv)
             }
         );
     }
@@ -557,7 +545,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Operator parameters cannot be variadic"sv)
+                .message = std::string("Operator parameters cannot be variadic"sv)
             }
         );
     }
@@ -567,7 +555,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String(
+                .message = std::string(
                     "Explicit function instantiation is only supported for function overloads when only one overload is template"sv
                 )
             }
@@ -579,7 +567,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Value is already moved"sv)
+                .message = std::string("Value is already moved"sv)
             }
         );
     }
@@ -589,7 +577,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format("Cannot move non-mutable value '{}'", expr)
+                .message = std::format("Cannot move non-mutable value '{}'", expr)
             }
         );
     }
@@ -599,7 +587,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format("Cannot move non-reference value '{}'", expr)
+                .message = std::format("Cannot move non-reference value '{}'", expr)
             }
         );
     }
@@ -610,8 +598,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message =
-                    GlobalMemory::format("Cannot declare mutable variable of type '{}'", type)
+                .message = std::format("Cannot declare mutable variable of type '{}'", type)
             }
         );
     }
@@ -621,7 +608,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Missing type annotation"sv)
+                .message = std::string("Missing type annotation"sv)
             }
         );
     }
@@ -631,7 +618,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format("Invalid match value: '{}'", value_repr)
+                .message = std::format("Invalid match value: '{}'", value_repr)
             }
         );
     }
@@ -641,7 +628,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format("Invalid match case: '{}'", case_repr)
+                .message = std::format("Invalid match case: '{}'", case_repr)
             }
         );
     }
@@ -652,7 +639,7 @@ public:
             Problem{
                 .severity = Severity::Warning,
                 .location = location,
-                .message = GlobalMemory::format("Unreachable match case: '{}'", case_repr)
+                .message = std::format("Unreachable match case: '{}'", case_repr)
             }
         );
     }
@@ -662,7 +649,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Cannot create pointer to reference type"sv)
+                .message = std::string("Cannot create pointer to reference type"sv)
             }
         );
     }
@@ -672,7 +659,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Cannot create reference to reference type"sv)
+                .message = std::string("Cannot create reference to reference type"sv)
             }
         );
     }
@@ -682,7 +669,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::String("Cannot create reference to void type"sv)
+                .message = std::string("Cannot create reference to void type"sv)
             }
         );
     }
@@ -692,7 +679,7 @@ public:
             Problem{
                 .severity = Severity::Error,
                 .location = location,
-                .message = GlobalMemory::format("Type '{}' cannot be used as a dynamic type", type)
+                .message = std::format("Type '{}' cannot be used as a dynamic type", type)
             }
         );
     }

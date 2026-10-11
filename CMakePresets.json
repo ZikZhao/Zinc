@@ -8,6 +8,8 @@
             "binaryDir": "${sourceDir}/build/${presetName}",
             "cacheVariables": {
                 "CMAKE_TOOLCHAIN_FILE": "$env{HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
             }
         },
@@ -17,6 +19,26 @@
             "inherits": "base",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
+                "VCPKG_TARGET_TRIPLET": "x64-linux"
+            }
+        },
+        {
+            "name": "debug-asan",
+            "displayName": "Debug (ASan + UBSan, mimalloc MI_TRACK_ASAN)",
+            "inherits": "base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ZINC_ASAN": "ON",
+                "VCPKG_TARGET_TRIPLET": "x64-linux-asan"
+            }
+        },
+        {
+            "name": "debug-nosan",
+            "displayName": "Debug (无 Sanitizer，用于快速迭代)",
+            "inherits": "base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ZINC_ASAN": "OFF",
                 "VCPKG_TARGET_TRIPLET": "x64-linux"
             }
         },
@@ -36,6 +58,14 @@
             "configurePreset": "debug"
         },
         {
+            "name": "debug-asan",
+            "configurePreset": "debug-asan"
+        },
+        {
+            "name": "debug-nosan",
+            "configurePreset": "debug-nosan"
+        },
+        {
             "name": "release",
             "configurePreset": "release"
         }
@@ -44,6 +74,17 @@
         {
             "name": "debug",
             "configurePreset": "debug",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "noTestsAction": "error",
+                "stopOnFailure": true
+            }
+        },
+        {
+            "name": "debug-asan",
+            "configurePreset": "debug-asan",
             "output": {
                 "outputOnFailure": true
             },

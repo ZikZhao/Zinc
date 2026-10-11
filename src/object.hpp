@@ -19,7 +19,6 @@ enum class Kind : std::uint8_t {
     Reference,
     Pointer,
     Dynamic,
-    Union,
 };
 
 enum class ValueCategory : std::uint8_t {
@@ -45,7 +44,6 @@ class InstanceType;
 class ReferenceType;
 class PointerType;
 class DynamicType;
-class UnionType;
 
 class Value;
 class NullptrValue;
@@ -60,8 +58,16 @@ template <typename T>
 concept TypeClass = std::derived_from<T, Type> && !std::is_abstract_v<T>;
 template <typename V>
 concept ValueClass = std::derived_from<V, Value> && !std::is_abstract_v<V>;
+template <typename T>
+concept FundamentalTypeClass =
+    TypeClass<T> && (std::is_same_v<T, VoidType> || std::is_same_v<T, NullptrType> ||
+                     std::is_same_v<T, IntegerType> || std::is_same_v<T, FloatType> ||
+                     std::is_same_v<T, BooleanType>);
+template <typename T>
+concept NominalTypeClass =
+    TypeClass<T> && (std::is_same_v<T, InterfaceType> || std::is_same_v<T, InstanceType>);
 
-using AutoBindings = GlobalMemory::FlatMap<const AutoObject*, const Object*>;
+using AutoBindings = std::flat_map<const AutoObject*, const Object*>;
 
 class TypeDependencyGraph {
 public:
@@ -72,7 +78,7 @@ public:
     };
 
 private:
-    GlobalMemory::Vector<Edge> edges_;
+    std::vector<Edge> edges_;
 
 public:
     /// Checks if the child type is complete. If not, adds a dependency edge and returns false.
@@ -84,9 +90,9 @@ public:
         return true;
     }
 
-    auto extract_terminal_component(const Type* target) noexcept -> GlobalMemory::Vector<Edge> {
+    auto extract_terminal_component(const Type* target) noexcept -> std::vector<Edge> {
         std::span<Edge> span = edges_;
-        GlobalMemory::FlatSet<const Type*> visited{target};
+        std::flat_set<const Type*> visited{target};
         auto span_pivot = [&](this auto&& self,
                               const Type* child,
                               std::span<Edge> subspan) -> decltype(subspan)::iterator {
@@ -109,7 +115,7 @@ public:
 
         std::ptrdiff_t remaining_size = std::distance(span.begin(), span_pivot);
         auto pivot = std::next(edges_.begin(), remaining_size);
-        GlobalMemory::Vector<Edge> active_graph(pivot, edges_.end());
+        std::vector<Edge> active_graph(pivot, edges_.end());
         edges_.erase(pivot, edges_.end());
         return active_graph;
     }
@@ -136,7 +142,15 @@ private:
     }
 };
 
-class Object : public GlobalMemory::MonotonicAllocated {
+class Object {
+protected:
+    static std::pmr::monotonic_buffer_resource& get_monotonic_resource() noexcept {
+        static std::pmr::monotonic_buffer_resource resource{
+            64 * 1024, std::pmr::new_delete_resource()
+        };
+        return resource;
+    }
+
 public:
     static auto any_pattern(auto&& elements) noexcept -> bool {
         return std::ranges::contains(
@@ -155,6 +169,14 @@ public:
     Object(Kind kind, bool is_type, bool is_pattern) noexcept
         : kind_(kind), is_type_(is_type), is_pattern_(is_pattern) {}
     virtual ~Object() = default;
+
+    auto operator new(std::size_t size) -> void* {
+        return get_monotonic_resource().allocate(size, alignof(Object));
+    }
+
+    void operator delete(void* ptr, std::size_t size) noexcept {
+        get_monotonic_resource().deallocate(ptr, size);
+    }
 
     template <typename T>
         requires TypeClass<T> || std::same_as<T, Type>
@@ -190,7 +212,7 @@ public:
         return static_cast<ResultType>(&self);
     }
 
-    virtual GlobalMemory::String repr() const = 0;
+    virtual std::string repr() const = 0;
 
     auto pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept -> bool {
         assert(is_type_ == target->is_type_);
@@ -226,7 +248,7 @@ public:
     virtual auto can_intern(TypeDependencyGraph& graph) noexcept -> bool = 0;
 
     auto compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept -> std::strong_ordering {
         if (this == other) {
             return std::strong_ordering::equal;
@@ -243,7 +265,7 @@ public:
 
 protected:
     virtual auto do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept -> std::strong_ordering = 0;
 };
 
@@ -254,7 +276,7 @@ protected:
     bool can_intern(TypeDependencyGraph& graph) noexcept final { return true; }
 
     std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         return this <=> other;
     }
@@ -271,7 +293,7 @@ public:
 
 public:
     VoidType() noexcept : PrimitiveType(kind) {}
-    GlobalMemory::String repr() const final { return "void"; }
+    std::string repr() const final { return "void"; }
 };
 
 class NullptrType final : public PrimitiveType {
@@ -281,7 +303,7 @@ public:
 
 public:
     NullptrType() noexcept : PrimitiveType(kind) {}
-    GlobalMemory::String repr() const final { return "nullptr"; }
+    std::string repr() const final { return "nullptr"; }
 };
 
 class IntegerType final : public PrimitiveType {
@@ -305,9 +327,7 @@ public:
         : PrimitiveType(kind), is_signed_(is_signed), bits_(bits) {
         assert(bits == 8 || bits == 16 || bits == 32 || bits == 64);
     }
-    GlobalMemory::String repr() const final {
-        return GlobalMemory::format("{}{}", is_signed_ ? "i" : "u", bits_);
-    }
+    std::string repr() const final { return std::format("{}{}", is_signed_ ? "i" : "u", bits_); }
     bool in_range(std::int64_t value) const noexcept {
         if (is_signed_) {
             switch (bits_) {
@@ -410,7 +430,7 @@ public:
     FloatType(std::uint8_t bits) noexcept : PrimitiveType(kind), bits_(bits) {
         assert(bits == 32 || bits == 64);
     }
-    GlobalMemory::String repr() const final { return GlobalMemory::format("f{}", bits_); }
+    std::string repr() const final { return std::format("f{}", bits_); }
     bool in_range(double value) const noexcept {
         if (bits_ == 32) {
             return std::abs(value) <= std::numeric_limits<float>::max();
@@ -427,7 +447,7 @@ public:
 
 public:
     BooleanType() noexcept : PrimitiveType(kind) {}
-    GlobalMemory::String repr() const final { return "bool"; }
+    std::string repr() const final { return "bool"; }
 };
 
 class FunctionType final : public Type {
@@ -435,22 +455,22 @@ public:
     static constexpr Kind kind = Kind::Function;
 
 public:
-    GlobalMemory::Vector<const Type*> parameters_;
+    std::vector<const Type*> parameters_;
     const Type* return_type_;
 
 public:
     FunctionType() noexcept : Type(kind, false) {}
 
-    FunctionType(GlobalMemory::Vector<const Type*> parameters, const Type* return_type) noexcept
+    FunctionType(std::vector<const Type*> parameters, const Type* return_type) noexcept
         : Type(kind, any_pattern(parameters) || return_type->is_pattern()),
           parameters_(std::move(parameters)),
           return_type_(return_type) {}
 
-    GlobalMemory::String repr() const final {
-        GlobalMemory::String params_repr =
+    std::string repr() const final {
+        std::string params_repr =
             parameters_ | std::views::transform([](const Type* type) { return type->repr(); }) |
-            std::views::join_with(", "sv) | GlobalMemory::collect<GlobalMemory::String>();
-        return GlobalMemory::format("({}) -> {}", params_repr, return_type_->repr());
+            std::views::join_with(", "sv) | std::ranges::to<std::string>();
+        return std::format("({}) -> {}", params_repr, return_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -468,7 +488,7 @@ public:
 
 protected:
     std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const FunctionType* other_func = other->cast<FunctionType>();
         if (parameters_.size() != other_func->parameters_.size()) {
@@ -502,24 +522,24 @@ public:
     static constexpr Kind kind = Kind::Struct;
 
 public:
-    GlobalMemory::Vector<std::pair<strview, const Type*>> fields_;
+    std::vector<std::pair<strview, const Type*>> fields_;
 
 public:
     StructType() noexcept : Type(kind, false) {}
 
-    StructType(GlobalMemory::Vector<std::pair<strview, const Type*>> fields) noexcept
+    StructType(std::vector<std::pair<strview, const Type*>> fields) noexcept
         : Type(
               kind,
               any_pattern(fields | std::views::transform(&std::pair<strview, const Type*>::second))
           ),
           fields_(std::move(fields)) {}
 
-    GlobalMemory::String repr() const final {
-        GlobalMemory::String str;
+    std::string repr() const final {
+        std::string str;
         strview sep = "{"sv;
         for (const auto& [name, type] : fields_) {
             str += sep;
-            str += GlobalMemory::format("{}: {}", name, type->repr());
+            str += std::format("{}: {}", name, type->repr());
             sep = ", "sv;
         }
         str += "}"sv;
@@ -538,7 +558,7 @@ public:
 
 protected:
     std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const StructType* other_struct = other->cast<StructType>();
         if (fields_.size() != other_struct->fields_.size()) {
@@ -593,18 +613,18 @@ public:
 public:
     Scope* scope_;
     strview identifier_;
-    GlobalMemory::FlatSet<const InterfaceType*> extends_;
-    mutable GlobalMemory::FlatSet<const InstanceType*> implementors_;
+    std::flat_set<const InterfaceType*> extends_;
+    mutable std::flat_set<const InstanceType*> implementors_;
 
 public:
     InterfaceType() noexcept : Type(kind, false) {}
 
     InterfaceType(
-        Scope* scope, strview identifier, GlobalMemory::FlatSet<const InterfaceType*> extends
+        Scope* scope, strview identifier, std::flat_set<const InterfaceType*> extends
     ) noexcept
         : Type(kind, false), scope_(scope), identifier_(identifier), extends_(std::move(extends)) {}
 
-    GlobalMemory::String repr() const override { return GlobalMemory::String{identifier_}; }
+    std::string repr() const override { return std::string{identifier_}; }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final { UNREACHABLE(); }
 
@@ -617,7 +637,7 @@ public:
 
 protected:
     std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         return this <=> other;
     }
@@ -634,16 +654,18 @@ public:
 public:
     Scope* scope_;
     strview identifier_;
-    GlobalMemory::FlatSet<const InterfaceType*> implements_;
-    GlobalMemory::Vector<std::pair<strview, const Type*>> attrs_;
+    std::flat_set<const InterfaceType*> implements_;
+    std::vector<std::pair<strview, const Type*>> attrs_;
     mutable const void* primary_template_;
-    mutable std::span<const Object*> template_args_;
+    mutable std::span<const Object* const> template_args_;
 
 public:
     InstanceType() noexcept : Type(kind, false) {}
 
     InstanceType(
-        strview identifier, const void* primary_template, std::span<const Object*> template_args
+        strview identifier,
+        const void* primary_template,
+        std::span<const Object* const> template_args
     ) noexcept
         : Type(kind, true),
           identifier_(identifier),
@@ -653,8 +675,8 @@ public:
     InstanceType(
         Scope* scope,
         strview identifier,
-        GlobalMemory::FlatSet<const InterfaceType*> interfaces,
-        GlobalMemory::Vector<std::pair<strview, const Type*>> attrs
+        std::flat_set<const InterfaceType*> interfaces,
+        std::vector<std::pair<strview, const Type*>> attrs
     ) noexcept
         : Type(kind, false),
           scope_(scope),
@@ -666,8 +688,8 @@ public:
         }
     }
 
-    GlobalMemory::String repr() const override {
-        GlobalMemory::String str{identifier_};
+    std::string repr() const override {
+        std::string str{identifier_};
         if (primary_template_) {
             std::string_view sep = "<"sv;
             for (const Object* arg : template_args_) {
@@ -684,7 +706,7 @@ public:
 
 protected:
     std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         return this <=> other;
     }
@@ -733,8 +755,8 @@ public:
           is_moved_(is_moved) {
         assert(!is_moved_ || is_mutable_);
     }
-    GlobalMemory::String repr() const final {
-        return GlobalMemory::format(
+    std::string repr() const final {
+        return std::format(
             "{}&{}{}",
             is_moved_ ? "move " : "",
             (is_mutable_ && !is_moved_) ? "mut " : "",
@@ -748,7 +770,7 @@ public:
 
 protected:
     std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const ReferenceType* other_ref = other->cast<ReferenceType>();
         if (is_mutable_ != other_ref->is_mutable_) {
@@ -783,8 +805,8 @@ public:
         : Type(kind, target_type->is_pattern()),
           target_type_(target_type),
           is_mutable_(is_mutable) {}
-    GlobalMemory::String repr() const final {
-        return GlobalMemory::format("*{}{}", is_mutable_ ? "mut " : "", target_type_->repr());
+    std::string repr() const final {
+        return std::format("*{}{}", is_mutable_ ? "mut " : "", target_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final {
@@ -793,7 +815,7 @@ public:
 
 protected:
     std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const PointerType* other_ptr = other->cast<PointerType>();
         if (is_mutable_ != other_ptr->is_mutable_) {
@@ -825,15 +847,15 @@ public:
           target_type_(target_type),
           is_mutable_(is_mutable) {}
 
-    GlobalMemory::String repr() const final {
-        return GlobalMemory::format("dyn {}{}", is_mutable_ ? "mut " : "", target_type_->repr());
+    std::string repr() const final {
+        return std::format("dyn {}{}", is_mutable_ ? "mut " : "", target_type_->repr());
     }
 
     bool can_intern(TypeDependencyGraph& graph) noexcept final { return true; }
 
 private:
     std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept final {
         const DynamicType* other_dyn = other->cast<DynamicType>();
         return target_type_->compare(other_dyn->target_type_, assumed_equal);
@@ -842,77 +864,6 @@ private:
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const DynamicType* other_dyn = target->dyn_cast<DynamicType>();
         return other_dyn && target_type_->pattern_match(other_dyn->target_type_, auto_bindings);
-    }
-};
-
-/// TODO: order types by address
-class UnionType final : public Type {
-public:
-    static constexpr Kind kind = Kind::Union;
-
-public:
-    GlobalMemory::FlatSet<const Type*> types_;
-
-public:
-    UnionType() noexcept : Type(kind, false) {}
-
-    UnionType(const Type* left, const Type* right) noexcept
-        : Type(kind, any_pattern(std::array{left, right})) {
-        if (auto* union_left = left->dyn_cast<UnionType>()) {
-            types_.insert(union_left->types_.begin(), union_left->types_.end());
-        } else {
-            types_.insert(left);
-        }
-        if (auto* union_right = right->dyn_cast<UnionType>()) {
-            types_.insert(union_right->types_.begin(), union_right->types_.end());
-        } else {
-            types_.insert(right);
-        }
-    }
-
-    GlobalMemory::String repr() const final {
-        GlobalMemory::String str = "(";
-        std::string_view sep = ""sv;
-        for (const Type* type : types_) {
-            str += sep;
-            str += type->repr();
-            sep = " | "sv;
-        }
-        str += ")"sv;
-        return str;
-    }
-
-    bool can_intern(TypeDependencyGraph& graph) noexcept final {
-        bool has_incomplete_child = false;
-        for (const Type*& type : types_) {
-            has_incomplete_child |= !graph.check_dependency(this, type);
-        }
-        return !has_incomplete_child;
-    }
-
-protected:
-    std::strong_ordering do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
-    ) const noexcept final {
-        const UnionType* other_union = other->cast<UnionType>();
-        if (types_.size() != other_union->types_.size()) {
-            return types_.size() <=> other_union->types_.size();
-        }
-        auto this_it = types_.begin();
-        auto other_it = other_union->types_.begin();
-        for (; this_it != types_.end() && other_it != other_union->types_.end();
-             ++this_it, ++other_it) {
-            assumed_equal.insert({*this_it, *other_it});
-            auto cmp = (*this_it)->compare(*other_it, assumed_equal);
-            if (cmp != std::strong_ordering::equal) {
-                return cmp;
-            }
-        }
-        return std::strong_ordering::equal;
-    }
-
-    bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
-        return false;
     }
 };
 
@@ -939,7 +890,7 @@ public:
 
 public:
     NullptrValue() noexcept : Value(kind) {}
-    GlobalMemory::String repr() const final { return "nullptr"; }
+    std::string repr() const final { return "nullptr"; }
     const NullptrType* get_type() const noexcept final { return &NullptrType::instance; }
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const NullptrValue* other_nullptr = target->dyn_cast<NullptrValue>();
@@ -977,7 +928,7 @@ public:
             unsigned_value_ = unsigned_value;
         }
     }
-    auto repr() const -> GlobalMemory::String final {
+    auto repr() const -> std::string final {
         strview prefix;
         if (type_->is_signed_) {
             switch (type_->bits_) {
@@ -996,7 +947,7 @@ public:
             default:
                 UNREACHABLE();
             }
-            return GlobalMemory::format("{}({})", prefix, signed_value_);
+            return std::format("{}({})", prefix, signed_value_);
         } else {
             switch (type_->bits_) {
             case 8:
@@ -1014,7 +965,7 @@ public:
             default:
                 UNREACHABLE();
             }
-            return GlobalMemory::format("{}({})", prefix, unsigned_value_);
+            return std::format("{}({})", prefix, unsigned_value_);
         }
     }
     auto get_type() const noexcept -> const IntegerType* final { return type_; }
@@ -1053,7 +1004,7 @@ public:
         : Value(kind), type_(&FloatType::f64_instance), value_(value) {}
     FloatValue(const FloatType* type, double value) noexcept
         : Value(kind), type_(type), value_(value) {}
-    GlobalMemory::String repr() const final {
+    std::string repr() const final {
         strview prefix;
         switch (type_->bits_) {
         case 32:
@@ -1065,7 +1016,7 @@ public:
         default:
             UNREACHABLE();
         }
-        return GlobalMemory::format("{}({:#})", prefix, value_);
+        return std::format("{}({:#})", prefix, value_);
     }
     const FloatType* get_type() const noexcept final { return type_; }
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
@@ -1087,7 +1038,7 @@ public:
 
 public:
     BooleanValue(bool value) noexcept : Value(kind), value_(value) {}
-    GlobalMemory::String repr() const noexcept final { return this->value_ ? "true" : "false"; }
+    std::string repr() const noexcept final { return this->value_ ? "true" : "false"; }
     const BooleanType* get_type() const noexcept final { return &BooleanType::instance; }
     bool do_pattern_match(const Object* target, AutoBindings& auto_bindings) const noexcept final {
         const BooleanValue* other_bool = target->dyn_cast<BooleanValue>();
@@ -1127,13 +1078,13 @@ public:
     }
 
 private:
-    GlobalMemory::String repr() const final { return GlobalMemory::format("auto#{}", index_); }
+    std::string repr() const final { return std::format("auto#{}", index_); }
     const Type* get_type() const noexcept final { UNREACHABLE(); }
     bool do_equal_compare(const Value* other) const noexcept final { UNREACHABLE(); }
     auto hash_code() const noexcept -> std::size_t final { UNREACHABLE(); }
     auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
     auto do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept -> std::strong_ordering final {
         UNREACHABLE();
     }
@@ -1164,13 +1115,13 @@ public:
     }
 
 private:
-    GlobalMemory::String repr() const final { UNREACHABLE(); }
+    std::string repr() const final { UNREACHABLE(); }
     const Type* get_type() const noexcept final { UNREACHABLE(); }
     bool do_equal_compare(const Value* other) const noexcept final { UNREACHABLE(); }
     auto hash_code() const noexcept -> std::size_t final { UNREACHABLE(); }
     auto can_intern(TypeDependencyGraph& graph) noexcept -> bool final { UNREACHABLE(); }
     auto do_compare(
-        const Type* other, GlobalMemory::FlatSet<std::pair<const Type*, const Type*>>& assumed_equal
+        const Type* other, std::flat_set<std::pair<const Type*, const Type*>>& assumed_equal
     ) const noexcept -> std::strong_ordering final {
         UNREACHABLE();
     }
@@ -1193,7 +1144,7 @@ public:
 
     template <TypeClass T>
     TypeResolution(std::type_identity<T> identity) noexcept
-        : ptr_(std::bit_cast<std::uintptr_t>(GlobalMemory::alloc_raw(identity))) {
+        : ptr_(std::bit_cast<std::uintptr_t>(new T)) {
         std::construct_at(std::bit_cast<T*>(ptr_));
         if constexpr (!(std::is_same_v<T, InterfaceType> || std::is_same_v<T, InstanceType>)) {
             ptr_ |= flag;
@@ -1226,20 +1177,22 @@ class TypeRegistry {
 private:
     struct TypeComparator {
         bool operator()(const Type* lhs, const Type* rhs) const noexcept {
-            GlobalMemory::FlatSet<std::pair<const Type*, const Type*>> assumed_equal;
+            std::flat_set<std::pair<const Type*, const Type*>> assumed_equal;
             return lhs->compare(rhs, assumed_equal) == std::strong_ordering::less;
         }
     };
 
     template <typename T>
-    using TypeSet = GlobalMemory::FlatSet<const T*, TypeComparator>;
+    using TypeSet = std::flat_set<const T*, TypeComparator>;
 
 private:
     static thread_local TypeRegistry instance;
 
 public:
-    template <TypeClass T>
-        requires(!TypeInTupleV<T, std::tuple<NullptrType, IntegerType, FloatType, BooleanType>>)
+    template <FundamentalTypeClass T>
+    static void get_at(TypeResolution& out, auto&&... args) noexcept = delete;
+
+    template <NominalTypeClass T>
     static void get_at(TypeResolution& out, auto&&... args) noexcept {
         if constexpr (std::is_same_v<T, InterfaceType>) {
             // interfaces are not interned
@@ -1249,13 +1202,16 @@ public:
             // classes are not interned
             out.construct<T>(std::forward<decltype(args)>(args)...);
             instance.instance_types_.push_back(static_cast<const T*>(out.get()));
-        } else {
-            instance.get_interned<T>(out, std::forward<decltype(args)>(args)...);
         }
+        UNREACHABLE();
+    }
+
+    template <TypeClass T>
+    static void get_at(TypeResolution& out, auto&&... args) noexcept {
+        instance.get_interned<T>(out, std::forward<decltype(args)>(args)...);
     }
 
     template <typename T>
-        requires(!TypeInTupleV<T, std::tuple<NullptrType, IntegerType, FloatType, BooleanType>>)
     static auto get(auto&&... args) noexcept -> const T* {
         TypeResolution out = std::type_identity<T>();
         get_at<T>(out, std::forward<decltype(args)>(args)...);
@@ -1291,13 +1247,12 @@ private:
         TypeSet<StructType>,
         TypeSet<ReferenceType>,
         TypeSet<PointerType>,
-        TypeSet<DynamicType>,
-        TypeSet<UnionType>>
+        TypeSet<DynamicType>>
         types_;
-    GlobalMemory::Vector<const InterfaceType*> interface_types_;
-    GlobalMemory::Vector<const InstanceType*> instance_types_;
-    GlobalMemory::Vector<const AutoObject*> auto_objects_;
-    GlobalMemory::Vector<const SkolemObject*> skolem_objects_;
+    std::vector<const InterfaceType*> interface_types_;
+    std::vector<const InstanceType*> instance_types_;
+    std::vector<const AutoObject*> auto_objects_;
+    std::vector<const SkolemObject*> skolem_objects_;
 
 private:
     template <TypeClass T>
@@ -1345,21 +1300,16 @@ private:
                 std::get<TypeSet<PointerType>>(types_).insert(type->cast<PointerType>());
             return {*it, inserted};
         }
-        case Kind::Union: {
-            auto [it, inserted] =
-                std::get<TypeSet<UnionType>>(types_).insert(type->cast<UnionType>());
-            return {*it, inserted};
-        }
         default:
             UNREACHABLE();
         }
     }
 
     auto simplify_recursive_type(
-        GlobalMemory::Vector<TypeDependencyGraph::Edge> active_edges, const Type* type
+        std::vector<TypeDependencyGraph::Edge> active_edges, const Type* type
     ) noexcept -> const Type* {
-        GlobalMemory::FlatSet<const Type*, TypeComparator> unique_types;
-        GlobalMemory::FlatSet<const Type*> visited_types{type};
+        std::flat_set<const Type*, TypeComparator> unique_types;
+        std::flat_set<const Type*> visited_types{type};
         std::ignore =
             [&](this auto&& self,
                 const Type* child,
@@ -1397,7 +1347,7 @@ public:
     TypeRegistry() noexcept = default;
 };
 
-class Term : public GlobalMemory::MonotonicAllocated {
+class Term {
 public:
     static auto of(const Type* type) noexcept -> Term { return Term(type); }
     static auto of(const Value* value) noexcept -> Term { return Term(value); }

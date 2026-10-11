@@ -7,9 +7,9 @@ class CFG {
 public:
     struct Node {
         const Node* parent;
-        GlobalMemory::Vector<ASTNodeVariant> statements;
-        GlobalMemory::Vector<std::string_view> ending_variables;
-        GlobalMemory::Vector<std::pair<ASTExprVariant, Node*>> successors;
+        std::vector<ASTNodeVariant> statements;
+        std::vector<std::string_view> ending_variables;
+        std::vector<std::pair<ASTExprVariant, Node*>> successors;
     };
 
 private:
@@ -19,8 +19,8 @@ public:
     explicit CFG(const Node* entry_node) : entry_node_(entry_node) {}
 
     ~CFG() noexcept {
-        GlobalMemory::FlatSet<const Node*> visited;
-        GlobalMemory::Vector<const Node*> remaining{entry_node_};
+        std::flat_set<const Node*> visited;
+        std::vector<const Node*> remaining{entry_node_};
         while (!remaining.empty()) {
             const Node* current = remaining.back();
             remaining.pop_back();
@@ -37,10 +37,9 @@ public:
         }
     }
 
-    auto variables(const Node* node, ASTNodeVariant statement)
-        -> GlobalMemory::FlatSet<std::string_view> {
-        GlobalMemory::FlatSet<std::string_view> beginning_variables;
-        GlobalMemory::FlatSet<std::string_view> ending_variables;
+    auto variables(const Node* node, ASTNodeVariant statement) -> std::flat_set<std::string_view> {
+        std::flat_set<std::string_view> beginning_variables;
+        std::flat_set<std::string_view> ending_variables;
 
         size_t index = static_cast<size_t>(std::distance(
             node->statements.begin(),
@@ -67,15 +66,15 @@ public:
             );
         }
 
-        auto end = std::set_difference(
+        std::vector<std::string_view> result;
+        std::set_difference(
             beginning_variables.begin(),
             beginning_variables.end(),
             ending_variables.begin(),
             ending_variables.end(),
-            beginning_variables.begin()
+            std::back_inserter(result)
         );
-        beginning_variables.erase(end, beginning_variables.end());
-        return beginning_variables;
+        return result;
     }
 };
 

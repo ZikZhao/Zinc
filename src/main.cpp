@@ -29,6 +29,9 @@ auto main(int argc, char* argv[]) -> int {
         return EXIT_FAILURE;
     }
 
+    mi_option_set(mi_option_purge_delay, 0);
+    mi_option_set(mi_option_eager_commit, 0);
+
     auto start = std::chrono::steady_clock::now();
 
     SourceManager sources;
@@ -45,7 +48,7 @@ auto main(int argc, char* argv[]) -> int {
         Diagnostic::print_error_msg("Failed to parse input");
         return EXIT_FAILURE;
     }
-    Diagnostic::print_msg(GlobalMemory::format("Parsed {} modules", sources.files.size() - 1));
+    Diagnostic::print_msg(std::format("Parsed {} modules", sources.files.size() - 1));
     Diagnostic::print_msg("Collecting symbols...");
 
     root->scope = &Scope::root(std_scope);
@@ -65,7 +68,7 @@ auto main(int argc, char* argv[]) -> int {
     }
 
     Diagnostic::print_msg(
-        GlobalMemory::format(
+        std::format(
             "Generated code to {}{}.cpp{}",
             ColourEscape::UNDERLINE,
             sources[file_id].relative_path_.c_str(),
@@ -74,6 +77,6 @@ auto main(int argc, char* argv[]) -> int {
     );
     auto end = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    Diagnostic::print_msg(GlobalMemory::format("Compilation time: {} ms", duration.count()));
+    Diagnostic::print_msg(std::format("Compilation time: {} ms", duration.count()));
     return EXIT_SUCCESS;
 }

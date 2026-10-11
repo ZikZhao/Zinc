@@ -5,6 +5,18 @@
 #include "object.hpp"
 #include "symbol_collect.hpp"
 
+struct PointerChain {
+    ASTExprVariant base;
+    std::vector<std::pair<const InstanceType*, const FunctionType*>> pointers;
+};
+
+struct BoundMethod {
+    Term object;
+    Scope* scope;
+    const ScopeValue* value;
+    PointerChain* self;
+};
+
 enum class SymbolKind : std::uint8_t {
     Type = 1,
     Term = 2,
@@ -17,18 +29,6 @@ enum class SymbolKind : std::uint8_t {
     PartialInstantiation = 9,
 };
 
-struct PointerChain : GlobalMemory::MonotonicAllocated {
-    ASTExprVariant base;
-    std::span<std::pair<const InstanceType*, const FunctionType*>> pointers;
-};
-
-struct BoundMethod {
-    Term object;
-    Scope* scope;
-    const ScopeValue* value;
-    PointerChain* self;
-};
-
 using Symbol = std::variant<
     std::monostate,
     const Type*,
@@ -36,10 +36,10 @@ using Symbol = std::variant<
     std::pair<Scope*, const ScopeValue*>,
     BoundMethod,
     TemplateFamily*,
-    std::span<const Object*>,
+    std::span<const Object* const>,
     Scope*,
     std::tuple<OperatorCode, const Type*, const Type*>,
-    std::tuple<Scope*, const ASTTemplateDefinition*, std::span<const Object*>>>;
+    std::tuple<Scope*, const ASTTemplateDefinition*, std::vector<const Object*>>>;
 
 class CodeGenEnvironment {
 public:
@@ -49,7 +49,7 @@ public:
         const FunctionType* func_type;
     };
 
-    struct FunctionCall : public GlobalMemory::MonotonicAllocated {
+    struct FunctionCall {
         const FunctionType* func_type;
         const Scope* scope;
         strview identifier;
@@ -57,21 +57,21 @@ public:
     };
 
     using TableValue = std::variant<
-        const Type*,                // type expression
-        const Scope*,               // member access
-        PointerChain*,              // pointer access
-        FunctionCall*,              // function call
-        std::span<const Object*>>;  // template instantiation
+        const Type*,                      // type expression
+        const Scope*,                     // member access
+        PointerChain*,                    // pointer access
+        FunctionCall*,                    // function call
+        std::span<const Object* const>>;  // template instantiation
 
-    using Table = GlobalMemory::FlatMap<const ASTNode*, TableValue>;
+    using Table = std::flat_map<const ASTNode*, TableValue>;
 
 public:
-    GlobalMemory::Vector<std::tuple<const Scope*, strview, const Value*>> constants_;
-    GlobalMemory::Vector<FunctionDef> functions_;
-    GlobalMemory::Vector<std::tuple<const DynamicType*, strview, const FunctionType*>> virtuals_;
-    GlobalMemory::Vector<std::pair<Scope*, std::span<const Object*>>> instantiations_;
-    GlobalMemory::FlatMap<const Scope*, Table> scope_map_;
-    GlobalMemory::Vector<strview> cpp_blocks_;
+    std::vector<std::tuple<const Scope*, strview, const Value*>> constants_;
+    std::vector<FunctionDef> functions_;
+    std::vector<std::tuple<const DynamicType*, strview, const FunctionType*>> virtuals_;
+    std::vector<std::pair<Scope*, std::span<const Object* const>>> instantiations_;
+    std::flat_map<const Scope*, Table> scope_map_;
+    std::vector<strview> cpp_blocks_;
 
 public:
     auto add_constant(const Scope* scope, strview identifier, const Value* value) -> void {
@@ -90,7 +90,7 @@ public:
         virtuals_.push_back({dynamic, identifier, func_type});
     }
 
-    auto add_instantiation(const Scope* inst_scope, std::span<const Object*> args) -> void {
+    auto add_instantiation(const Scope* inst_scope, std::span<const Object* const> args) -> void {
         instantiations_.push_back({const_cast<Scope*>(inst_scope), args});
     }
 
@@ -127,7 +127,7 @@ public:
     }
 
     auto map_instantiation(
-        const Scope* current_scope, const ASTNode* node, std::span<const Object*> args
+        const Scope* current_scope, const ASTNode* node, std::span<const Object* const> args
     ) -> void {
         scope_map_[current_scope][node] = args;
     }
@@ -197,7 +197,7 @@ public:
                 UNREACHABLE();
             }
         };
-        GlobalMemory::String expected_str;
+        std::string expected_str;
         {
             const char* sep = "";
             ((expected_str.append(sep).append(fmt(expected_kinds)), sep = " or "), ...);
@@ -239,8 +239,8 @@ public:
     static auto nonnull(const Type* type) -> Symbol { return type ? Symbol(type) : Symbol{}; }
 
     template <typename T>
-    static auto args_repr(std::span<const T*> args) -> GlobalMemory::String {
-        GlobalMemory::String str = "(";
+    static auto args_repr(std::span<const T*> args) -> std::string {
+        std::string str = "(";
         strview sep = ""sv;
         for (const T* arg : args) {
             str += sep;
@@ -252,7 +252,7 @@ public:
     }
 
 private:
-    GlobalMemory::Map<std::pair<const Scope*, const ScopeValue*>, TypeResolution> type_cache_;
+    std::map<std::pair<const Scope*, const ScopeValue*>, TypeResolution> type_cache_;
 
 public:
     Scope& std_scope_;
@@ -315,9 +315,16 @@ public:
     }
 
     auto get_std_symbol(strview identifier) -> Symbol {
-        auto [scope, value] = lookup("std");
-        auto std_scope = value->get<Scope*>();
-        return eval_symbol(*std_scope, *std_scope->find(identifier));
+        Scope* current = current_scope_;
+        while (current->parent_) {
+            current = current->parent_;
+        }
+        auto it = current->identifiers_.find("std");
+        assert(it != current->identifiers_.end() && std::holds_alternative<Scope*>(it->second));
+        auto std_scope = std::get<Scope*>(it->second);
+        auto id_it = std_scope->identifiers_.find(identifier);
+        assert(id_it != std_scope->identifiers_.end());
+        return eval_symbol(*std_scope, id_it->second);
     }
 
     auto get_func_type(Scope* scope, FunctionOverloadDef overload) noexcept -> const FunctionType*;
@@ -326,14 +333,12 @@ private:
     auto eval_var_init(Scope& scope, const VariableInitialization& init) noexcept -> Symbol;
 };
 
-class TemplateHandler final : public GlobalMemory::MonotonicAllocated {
+class TemplateHandler final {
 private:
-    using TemplateArgs = std::span<const Object*>;
-
     struct TemplateCacheKey {
         const Scope* scope;
         const ASTTemplateDefinition* primary;
-        TemplateArgs args;
+        std::vector<const Object*> args;
     };
 
     struct TemplateKeyHasher {
@@ -391,20 +396,19 @@ private:
 
 private:
     Sema& sema_;
-    GlobalMemory::UnorderedMap<TemplateCacheKey, Symbol, TemplateKeyHasher, TemplateKeyComparator>
-        cache_;
-    GlobalMemory::UnorderedMap<const ASTTemplateSpecialization*, SpecializationPrototype>
-        pattern_cache_;
+    std::unordered_map<TemplateCacheKey, Symbol, TemplateKeyHasher, TemplateKeyComparator> cache_;
+    std::unordered_map<const ASTTemplateSpecialization*, SpecializationPrototype> pattern_cache_;
 
 public:
     TemplateHandler(Sema& sema) noexcept : sema_(sema) {}
 
     inline auto instantiate(const ASTTemplateInstantiation* node) noexcept -> Symbol;
 
-    inline auto instantiate(TemplateFamily& family, TemplateArgs args) -> Symbol {
+    inline auto instantiate(TemplateFamily& family, std::vector<const Object*> args) -> Symbol {
         if (Object::any_pattern(args)) {
-            std::span persisted_args = args | GlobalMemory::collect<std::span>();
             if (std::get_if<const ASTClassDefinition*>(&family.primary->target_node)) {
+                std::span<const Object* const> persisted_args =
+                    GlobalMemory::alloc_array<const Object* const>(args.size());
                 return new InstanceType(family.primary->identifier, family.primary, persisted_args);
             }
             // Patterns can only be used for class templates
@@ -414,15 +418,17 @@ public:
         if (!validate(*family.primary, args)) {
             return {};
         }
-        TemplateCacheKey cache_key{family.decl_scope, family.primary, args};
-        if (auto cache_it = cache_.find(cache_key); cache_it != cache_.end()) {
+        auto [cache_it, inserted] = cache_.emplace(
+            TemplateCacheKey{family.decl_scope, family.primary, std::move(args)}, Symbol{}
+        );
+        if (!inserted) {
             return cache_it->second;
         }
-        auto [inst_scope, target] = specialization_resolution(family, args);
+        std::span<const Object* const> args_span = cache_it->first.args;
+        auto [inst_scope, target] = specialization_resolution(family, args_span);
         inst_scope->scope_id_ = family.primary->identifier;
         Sema::Guard inner_guard(sema_, *inst_scope);
-        std::span persisted_args = args | GlobalMemory::collect<std::span>();
-        sema_.codegen_env_.add_instantiation(inst_scope, persisted_args);
+        sema_.codegen_env_.add_instantiation(inst_scope, args_span);
         sema_.deferred_analysis(*inst_scope, target);
         const ScopeValue* value = inst_scope->find(family.primary->identifier);
         Symbol result = sema_.eval_symbol(*inst_scope, *value);
@@ -430,47 +436,52 @@ public:
         if (const Type* type = std::get<static_cast<size_t>(SymbolKind::Type)>(result)) {
             if (auto instance_type = type->dyn_cast<InstanceType>()) {
                 instance_type->primary_template_ = family.primary;
-                instance_type->template_args_ = persisted_args;
+                instance_type->template_args_ = args_span;
             }
         }
-        cache_[TemplateCacheKey{family.decl_scope, family.primary, persisted_args}] = result;
+        cache_it->second = result;
         return result;
     }
 
-    inline auto instantiate(Scope* scope, const ASTTemplateDefinition* primary, TemplateArgs args)
-        -> Symbol {
+    inline auto instantiate(
+        Scope* scope, const ASTTemplateDefinition* primary, std::vector<const Object*> args
+    ) -> Symbol {
         Sema::Guard guard(sema_, *scope);
         if (!validate(*primary, args)) {
             return {};
         }
-        TemplateCacheKey cache_key{scope, primary, args};
-        if (auto cache_it = cache_.find(cache_key); cache_it != cache_.end()) {
+        auto [cache_it, inserted] =
+            cache_.emplace(TemplateCacheKey{scope, primary, std::move(args)}, Symbol{});
+        if (!inserted) {
             return cache_it->second;
         }
+        std::span<const Object* const> args_span = cache_it->first.args;
         Scope& inst_scope = Scope::make(*sema_.current_scope_, nullptr, primary->identifier);
         for (size_t i = 0; i < std::min(primary->parameters.size(), args.size()); i++) {
             inst_scope.set_template_argument(primary->parameters[i].identifier, args[i]);
         }
         if (primary->parameters.back().is_variadic) {
-            TemplateArgs pack_args = args.subspan(primary->parameters.size() - 1);
-            inst_scope.set_template_pack(primary->parameters.back().identifier, pack_args);
+            std::span<const Object* const> pack_args =
+                args_span.subspan(primary->parameters.size() - 1);
+            inst_scope.set_template_pack(
+                primary->parameters.back().identifier, Array<const Object*>(pack_args)
+            );
         }
         /// TODO: parameter pack
         Sema::Guard inner_guard(sema_, inst_scope);
-        std::span persisted_args = args | GlobalMemory::collect<std::span>();
-        sema_.codegen_env_.add_instantiation(&inst_scope, persisted_args);
+        sema_.codegen_env_.add_instantiation(&inst_scope, args_span);
         sema_.deferred_analysis(inst_scope, primary->target_node);
         const ScopeValue* value = inst_scope.find(primary->identifier);
         Symbol result = sema_.eval_symbol(inst_scope, *value);
         if (holds_monostate(result)) return {};
-        cache_[TemplateCacheKey{scope, primary, persisted_args}] = result;
+        cache_it->second = result;
         return result;
     }
 
     auto inference(
         Scope* scope,
         const ASTTemplateDefinition* primary,
-        TemplateArgs explicit_instantiation_args,
+        std::span<const Object* const> explicit_instantiation_args,
         std::span<const Type*> args
     ) noexcept -> const FunctionType*;
 
@@ -483,10 +494,13 @@ private:
         }
     }
 
-    auto validate(const ASTTemplateDefinition& primary, TemplateArgs args) noexcept -> bool;
+    auto validate(
+        const ASTTemplateDefinition& primary, std::span<const Object* const> args
+    ) noexcept -> bool;
 
-    auto specialization_resolution(TemplateFamily& family, TemplateArgs args) noexcept
-        -> std::pair<Scope*, ASTNodeVariant>;
+    auto specialization_resolution(
+        TemplateFamily& family, std::span<const Object* const> args
+    ) noexcept -> std::pair<Scope*, ASTNodeVariant>;
 
     auto get_prototype(
         Scope& pattern_scope, const ASTTemplateSpecialization& specialization
@@ -538,7 +552,7 @@ private:
     }
 };
 
-class CallHandler final : public GlobalMemory::MonotonicAllocated {
+class CallHandler final {
 private:
     enum class ConversionRank : std::uint8_t {
         Exact = 0,                // exactly the same type
@@ -561,7 +575,7 @@ public:
         -> std::pair<Term, const FunctionType*> {
         if (holds_monostate(callee)) return {};
         assert(!std::ranges::contains(args_type, nullptr));
-        GlobalMemory::Vector<const Type*> combined_args{args_type.begin(), args_type.end()};
+        std::vector<const Type*> combined_args{args_type.begin(), args_type.end()};
         if (auto* term = Sema::get_if<SymbolKind::Term>(callee)) {
             if (term->decay()->dyn_cast<InstanceType>()) {
                 combined_args.insert(combined_args.begin(), term->effective_type());
@@ -604,16 +618,15 @@ public:
     }
 
 private:
-    auto list_normal_overloads(Symbol func) -> GlobalMemory::Vector<const FunctionType*> {
-        auto reification = [&](
-                               Scope* scope, const ScopeValue* scope_value
-                           ) -> GlobalMemory::Vector<const FunctionType*> {
-            auto* overloads = scope_value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
+    auto list_normal_overloads(Symbol func) -> std::vector<const FunctionType*> {
+        auto reification = [&](Scope* scope,
+                               const ScopeValue* scope_value) -> std::vector<const FunctionType*> {
+            auto* overloads = scope_value->get<std::vector<FunctionOverloadDef>*>();
             return *overloads | std::views::filter([](FunctionOverloadDef overload) -> bool {
                 return overload.get<const ASTTemplateDefinition*>() == nullptr;
             }) | std::views::transform([&](FunctionOverloadDef overload) -> const FunctionType* {
                 return sema_.get_func_type(scope, overload);
-            }) | GlobalMemory::collect<GlobalMemory::Vector>();
+            }) | std::ranges::to<std::vector>();
         };
         if (!Sema::expect(
                 func,
@@ -650,7 +663,7 @@ private:
         } else if (auto* method = Sema::get_if<SymbolKind::Method>(func)) {
             return reification(method->scope, method->value);
         } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(func)) {
-            GlobalMemory::Vector<const FunctionType*> result;
+            std::vector<const FunctionType*> result;
             const Type* left_type = std::get<1>(*operator_fn);
             if (left_type->kind_ == Kind::Instance) {
                 Scope* scope = left_type->cast<InstanceType>()->scope_;
@@ -676,10 +689,10 @@ private:
     }
 
     auto list_template_overloads(
-        GlobalMemory::Vector<const FunctionType*>& out, Symbol func, std::span<const Type*> args
+        std::vector<const FunctionType*>& out, Symbol func, std::span<const Type*> args
     ) -> void {
         auto reification = [&](Scope* scope, const ScopeValue* scope_value) -> void {
-            auto* overloads = scope_value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
+            auto* overloads = scope_value->get<std::vector<FunctionOverloadDef>*>();
             for (FunctionOverloadDef overload : *overloads) {
                 if (!overload.get<const ASTTemplateDefinition*>()) continue;
                 if (auto func_obj = sema_.template_handler_->inference(
@@ -785,7 +798,7 @@ private:
             return candidates.size();
         };
         // first, find the best non-template overload
-        GlobalMemory::Vector<const FunctionType*> overloads = list_normal_overloads(func);
+        std::vector<const FunctionType*> overloads = list_normal_overloads(func);
         std::size_t normal_count = loop(overloads);
         overloads.resize(normal_count);
         // second, append template overloads and keeping the best candidate updated
@@ -795,7 +808,7 @@ private:
              overloads.end()}
         );
         // third, re-iterate through all candidates to check for ambiguity
-        GlobalMemory::Vector<const FunctionType*> ambiguous_candidates;
+        std::vector<const FunctionType*> ambiguous_candidates;
         bool all_equivalent = true;
         if (best_candidate) {
             error_trap.clear();
@@ -887,14 +900,6 @@ private:
         if (decayed_param == decayed_arg) {
             // qualification conversion
             return tiebreaker_rank();
-        } else if (auto* union_param = decayed_param->dyn_cast<UnionType>()) {
-            // assignment to union field
-            if (decayed_arg->kind_ == Kind::Union) {
-                if (union_param != decayed_arg) return NoMatch;
-                return tiebreaker_rank();
-            }
-            if (!union_param->types_.contains(decayed_arg)) return NoMatch;
-            return tiebreaker_rank();
         } else if (auto* param_pointer = decayed_param->dyn_cast<PointerType>()) {
             // pointer conversion
             if (decayed_arg->kind_ == Kind::Nullptr) return Upcast;
@@ -973,8 +978,7 @@ private:
     }
 
     auto get_mangle_info(Symbol callee) const noexcept -> std::tuple<bool, Scope*, strview> {
-        auto get_func_identifier =
-            [&](GlobalMemory::Vector<FunctionOverloadDef>& overloads) -> strview {
+        auto get_func_identifier = [&](std::vector<FunctionOverloadDef>& overloads) -> strview {
             FunctionOverloadDef first_overload = overloads[0];
             if (auto* func_def = first_overload.get<const ASTFunctionDefinition*>()) {
                 return func_def->identifier;
@@ -1009,9 +1013,7 @@ private:
             return {
                 true,
                 function->first,
-                get_func_identifier(
-                    *function->second->get<GlobalMemory::Vector<FunctionOverloadDef>*>()
-                )
+                get_func_identifier(*function->second->get<std::vector<FunctionOverloadDef>*>())
             };
         } else if (auto* method = Sema::get_if<SymbolKind::Method>(callee)) {
             if (method->scope->is_extern_) {
@@ -1020,9 +1022,7 @@ private:
             return {
                 true,
                 method->scope,
-                get_func_identifier(
-                    *method->value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()
-                )
+                get_func_identifier(*method->value->get<std::vector<FunctionOverloadDef>*>())
             };
         } else if (auto* operator_fn = Sema::get_if<SymbolKind::Operator>(callee)) {
             bool both_extern = true;
@@ -1102,7 +1102,7 @@ private:
             return Term::of(Type::forward_like(object.effective_type(), attr_it->second));
         }
         const ScopeValue* value = instance_type->scope_->find(member);
-        if (value && value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+        if (value && value->get<std::vector<FunctionOverloadDef>*>()) {
             return BoundMethod{object, instance_type->scope_, value};
         }
         Diagnostic::error_member_not_found(member);
@@ -1761,7 +1761,7 @@ public:
 
     void operator()(const ASTFunctionType* node) noexcept {
         out_ = std::type_identity<FunctionType>();
-        GlobalMemory::Vector<const Type*> param_types;
+        std::vector<const Type*> param_types;
         param_types.reserve(node->parameter_types.size());
         for (ASTExprVariant param_expr : node->parameter_types) {
             TypeResolution param_type;
@@ -1780,7 +1780,7 @@ public:
     void operator()(const ASTStructType* node) noexcept {
         out_ = std::type_identity<StructType>();
         bool has_error = false;
-        GlobalMemory::Vector<std::pair<strview, const Type*>> fields;
+        std::vector<std::pair<strview, const Type*>> fields;
         for (const ASTFieldDeclaration& decl : node->fields) {
             TypeResolution field_type;
             TypeContextEvaluator{sema_, field_type}(decl.type);
@@ -1857,24 +1857,11 @@ public:
         );
     }
 
-    void operator()(const ASTUnionType* node) noexcept {
-        out_ = std::type_identity<UnionType>();
-        TypeResolution left_type;
-        TypeContextEvaluator{sema_, left_type}(node->left);
-        TypeResolution right_type;
-        TypeContextEvaluator{sema_, right_type}(node->right);
-        if (!left_type.get() || !right_type.get()) {
-            out_ = nullptr;
-            return;
-        }
-        TypeRegistry::get_at<UnionType>(out_, left_type.get(), right_type.get());
-    }
-
     void operator()(const ASTInterfaceDefinition* node) noexcept {
         out_ = std::type_identity<InterfaceType>{};
         Sema::Guard guard(sema_, node);
         bool has_error = false;
-        GlobalMemory::FlatSet<const InterfaceType*> extends;
+        std::flat_set<const InterfaceType*> extends;
         for (ASTExprVariant extend : node->extends) {
             TypeResolution extend_res;
             TypeContextEvaluator{sema_, extend_res}(extend);
@@ -1897,7 +1884,7 @@ public:
         out_ = std::type_identity<InstanceType>{};
         Sema::Guard guard(sema_, node);
         bool has_error = false;
-        GlobalMemory::FlatSet<const InterfaceType*> interfaces;
+        std::flat_set<const InterfaceType*> interfaces;
         for (ASTExprVariant interface : node->implements) {
             TypeResolution result;
             TypeContextEvaluator{sema_, result}(interface);
@@ -1907,7 +1894,7 @@ public:
             }
             interfaces.insert(result.get()->cast<InterfaceType>());
         }
-        GlobalMemory::Vector<std::pair<strview, const Type*>> attrs;
+        std::vector<std::pair<strview, const Type*>> attrs;
         for (ASTNodeVariant decl_variant : node->fields) {
             const ASTDeclaration* decl = std::get<const ASTDeclaration*>(decl_variant);
             if (decl->declared_static) continue;
@@ -2125,7 +2112,7 @@ public:
             Diagnostic::error_construct_instance_out_of_class(node->location, type->repr());
         }
         bool any_error = false;
-        GlobalMemory::FlatMap<strview, const Type*> inits;
+        std::flat_map<strview, const Type*> inits;
         for (const ASTFieldInitialization& init : node->field_inits) {
             Symbol symbol = ValueContextEvaluator{*this, nullptr}(init.value);
             if (!Sema::expect(symbol, SymbolKind::Term)) {
@@ -2165,11 +2152,11 @@ public:
                 return {};
             }
         }
-        std::array<const Object*, 2> template_args = {
+        std::vector<const Object*> template_args = {
             element_type, new IntegerValue(&IntegerType::u64_instance, node->elements.size())
         };
         Symbol result_type_symbol =
-            sema_.template_handler_->instantiate(array_template, template_args);
+            sema_.template_handler_->instantiate(array_template, std::move(template_args));
         const Type* result_type = Sema::get_default<SymbolKind::Type>(result_type_symbol);
         return result_type ? Term::of(result_type) : Symbol{};
     }
@@ -2197,7 +2184,7 @@ public:
     }
 
     auto operator()(const ASTFunctionCall* node) noexcept -> Symbol {
-        GlobalMemory::Vector<const Type*> args_type;
+        std::vector<const Type*> args_type;
         args_type.reserve(node->arguments.size());
         for (const ASTExprVariant& arg : node->arguments) {
             Symbol arg_symbol = ValueContextEvaluator{*this, nullptr}(arg);
@@ -2299,7 +2286,7 @@ public:
             node->visited = true;
             sema_.deferred_analysis(*sema_.current_scope_, node);
         }
-        GlobalMemory::Vector<const Type*> param_types;
+        std::vector<const Type*> param_types;
         param_types.reserve(node->parameters.size());
         for (const ASTFunctionParameter& param : node->parameters) {
             TypeResolution param_type;
@@ -2323,10 +2310,9 @@ public:
     auto operator()(const auto* node) noexcept -> Symbol { UNREACHABLE(); }
 
 private:
-    auto struct_validate(
-        const Type* type, GlobalMemory::FlatMap<strview, const Type*> inits
-    ) noexcept -> bool {
-        GlobalMemory::FlatMap<strview, const Type*> field_types;
+    auto struct_validate(const Type* type, std::flat_map<strview, const Type*> inits) noexcept
+        -> bool {
+        std::flat_map<strview, const Type*> field_types;
         if (auto struct_type = type->dyn_cast<StructType>()) {
             field_types = decltype(field_types)(std::from_range, struct_type->fields_);
         } else if (auto instance_type = type->dyn_cast<InstanceType>()) {
@@ -2465,40 +2451,6 @@ public:
         const Type* value_type = value_term.decay();
         if (auto* dynamic_type = value_type->dyn_cast<DynamicType>()) {
             /// TODO:
-        } else if (auto* union_type = value_type->dyn_cast<UnionType>()) {
-            GlobalMemory::FlatSet<const Type*> remaining_types = union_type->types_;
-            for (const ASTMatchCase& match_case : node->cases) {
-                TypeResolution type;
-                if (!holds_monostate(match_case.type)) {
-                    TypeContextEvaluator{sema_, type}(match_case.type);
-                    if (!type.get()) continue;
-                    if (!remaining_types.contains(type.get())) {
-                        if (!union_type->types_.contains(type.get())) {
-                            Diagnostic::error_invalid_match_case(
-                                match_case.location, type.get()->repr()
-                            );
-                        } else {
-                            Diagnostic::warning_unreachable_match_case(
-                                match_case.location, type.get()->repr()
-                            );
-                        }
-                        continue;
-                    }
-                    sema_.codegen_env_.map_type(sema_.current_scope_, &match_case, type);
-                    if (!match_case.identifier.empty()) {
-                        Sema::Guard guard(sema_, &match_case);
-                        sema_.current_scope_->add_case_variable(
-                            match_case.identifier, Type::forward_like(value_type, type.get())
-                        );
-                    }
-                } else {
-                    remaining_types.clear();
-                }
-                Sema::Guard guard(sema_, &match_case);
-                for (ASTNodeVariant stmt : match_case.body) {
-                    (*this)(stmt);
-                }
-            }
         } else {
             Diagnostic::error_invalid_match(node->location, value_term->repr());
         }
@@ -2553,7 +2505,7 @@ public:
             sema_.codegen_env_.add_function_output(
                 sema_.current_scope_,
                 node,
-                TypeRegistry::get<FunctionType>(GlobalMemory::Vector<const Type*>{}, self_type)
+                TypeRegistry::get<FunctionType>(std::vector<const Type*>{}, self_type)
             );
         }
         for (auto& stmt : node->body) {
@@ -2576,7 +2528,7 @@ public:
         Sema::Guard guard(sema_, node);
         const InterfaceType* interface_type = sema_.get_self_type()->cast<InterfaceType>();
         for (const auto& [id, value] : *sema_.current_scope_) {
-            if (auto* overloads = value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+            if (auto* overloads = value.get<std::vector<FunctionOverloadDef>*>()) {
                 if (!overloads->front().get<const ASTFunctionDefinition*>()) continue;
                 for (const FunctionOverloadDef& overload : *overloads) {
                     const ASTFunctionDefinition* func_def =
@@ -2612,7 +2564,7 @@ public:
     }
 
     void operator()(const ASTLambda* node) noexcept {
-        GlobalMemory::Vector<const Type*> param_types;
+        std::vector<const Type*> param_types;
         param_types.reserve(node->parameters.size());
         for (const ASTFunctionParameter& param : node->parameters) {
             TypeResolution param_type;
@@ -2716,14 +2668,14 @@ inline auto Sema::eval_symbol(Scope& scope, const ScopeValue& value) noexcept ->
         } else {
             return Term::of(object->cast<Value>());
         }
-    } else if (auto* pack = value.get<std::span<const Object*>*>()) {
+    } else if (auto* pack = value.get<std::span<const Object* const>*>()) {
         return *pack;
     } else if (value.get<TypeProvider*>()) {
         TypeResolution out = eval_type(scope, value);
         return out.get() ? Symbol{out.get()} : Symbol{};
     } else if (auto var_init = value.get<const VariableInitialization*>()) {
         return eval_var_init(scope, *var_init);
-    } else if (value.get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+    } else if (value.get<std::vector<FunctionOverloadDef>*>()) {
         return std::pair{&scope, &value};
     } else if (auto* template_family = value.get<TemplateFamily*>()) {
         return template_family;
@@ -2741,7 +2693,7 @@ inline auto Sema::get_func_type(Scope* scope, FunctionOverloadDef overload) noex
         return type;
     };
     Sema::Guard guard{*this, *scope};
-    GlobalMemory::Vector<const Type*> params;
+    std::vector<const Type*> params;
     TypeResolution return_type;
     if (auto* func_def = overload.get<const ASTFunctionDefinition*>()) {
         for (const ASTFunctionParameter& param : func_def->parameters) {
@@ -2836,7 +2788,7 @@ inline auto Sema::eval_var_init(Scope& scope, const VariableInitialization& init
 inline auto TemplateHandler::inference(
     Scope* scope,
     const ASTTemplateDefinition* primary,
-    TemplateArgs explicit_instantiation_args,
+    std::span<const Object* const> explicit_instantiation_args,
     std::span<const Type*> args_type
 ) noexcept -> const FunctionType* {
     // check if variadic argument count matches
@@ -2870,7 +2822,7 @@ inline auto TemplateHandler::inference(
     // make patterns
     Sema::Guard guard(sema_, pattern_scope);
     const ASTNode* func_node;
-    GlobalMemory::Vector<const Type*> patterns;
+    std::vector<const Type*> patterns;
     if (auto* func_def = std::get_if<const ASTFunctionDefinition*>(&primary->target_node)) {
         func_node = *func_def;
         for (const auto& pattern : (*func_def)->parameters) {
@@ -2944,16 +2896,15 @@ inline auto TemplateHandler::inference(
             return {};
         }
     }
-    GlobalMemory::Vector<const Object*> instantiation_args;
+    std::vector<const Object*> instantiation_args;
     for (auto& auto_inst : auto_instances) {
         instantiation_args.push_back(auto_bindings[auto_inst]);
     }
     // instantiate the template with auto bindings
-    Symbol func_symbol = instantiate(scope, primary, instantiation_args);
+    Symbol func_symbol = instantiate(scope, primary, std::move(instantiation_args));
     if (!holds_monostate(func_symbol)) {
         auto [func_scope, value] = Sema::get<SymbolKind::Function>(func_symbol);
-        FunctionOverloadDef overload_def =
-            (*value->get<GlobalMemory::Vector<FunctionOverloadDef>*>())[0];
+        FunctionOverloadDef overload_def = (*value->get<std::vector<FunctionOverloadDef>*>())[0];
         if (auto* func_def = overload_def.get<const ASTFunctionDefinition*>()) {
             return sema_.get_func_type(func_scope, func_def);
         } else if (auto* ctor_def = overload_def.get<const ASTCtorDtorDefinition*>()) {
@@ -2972,7 +2923,7 @@ inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) n
     if (!Sema::expect(template_symbol, SymbolKind::Template, SymbolKind::Function)) {
         return {};
     }
-    GlobalMemory::Vector<const Object*> instantiation_args;
+    std::vector<const Object*> instantiation_args;
     for (const ASTExprVariant& arg : node->arguments) {
         Diagnostic::ErrorTrap trap{ASTNodePtrGetter{}(arg)->location};
         Symbol result = ValueContextEvaluator{sema_, nullptr, true}(arg);
@@ -2989,16 +2940,14 @@ inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) n
     if (std::ranges::contains(instantiation_args, nullptr)) {
         return {};
     }
-    sema_.codegen_env_.map_instantiation(
-        sema_.current_scope_, node, instantiation_args | GlobalMemory::collect<std::span>()
-    );
+    sema_.codegen_env_.map_instantiation(sema_.current_scope_, node, instantiation_args);
     if (auto* family = Sema::get_if<SymbolKind::Template>(template_symbol)) {
         // normal template instantiation
-        return instantiate(**family, instantiation_args);
+        return instantiate(**family, std::move(instantiation_args));
     } else {
         // explicit function instantiation
         auto [scope, value] = Sema::get<SymbolKind::Function>(template_symbol);
-        const auto& overloads = *value->get<GlobalMemory::Vector<FunctionOverloadDef>*>();
+        const auto& overloads = *value->get<std::vector<FunctionOverloadDef>*>();
         const ASTTemplateDefinition* primary = nullptr;
         for (const auto& overload : overloads) {
             if (auto* p = overload.get<const ASTTemplateDefinition*>()) {
@@ -3014,12 +2963,12 @@ inline auto TemplateHandler::instantiate(const ASTTemplateInstantiation* node) n
             );
             return {};
         }
-        return std::tuple{scope, primary, instantiation_args | GlobalMemory::collect<std::span>()};
+        return std::tuple{scope, primary, std::move(instantiation_args)};
     }
 }
 
 inline auto TemplateHandler::validate(
-    const ASTTemplateDefinition& primary, TemplateArgs args
+    const ASTTemplateDefinition& primary, std::span<const Object* const> args
 ) noexcept -> bool {
     if (primary.parameters.size() != args.size() && !primary.parameters.back().is_variadic) {
         return false;
@@ -3042,7 +2991,7 @@ inline auto TemplateHandler::validate(
 }
 
 inline auto TemplateHandler::specialization_resolution(
-    TemplateFamily& family, TemplateArgs args
+    TemplateFamily& family, std::span<const Object* const> args
 ) noexcept -> std::pair<Scope*, ASTNodeVariant> {
     // first, try to find a matching full specialization
     for (const auto* specialization : family.specializations) {
@@ -3092,7 +3041,7 @@ inline auto TemplateHandler::specialization_resolution(
     next_partial_specialization:;
     }
     // third, re-iterate through all candidates to check for ambiguity
-    GlobalMemory::Vector<const ASTTemplateSpecialization*> ambiguous_candidates;
+    std::vector<const ASTTemplateSpecialization*> ambiguous_candidates;
     if (best_candidate) {
         for (const auto* specialization : std::span(family.specializations.begin(), viable_count)) {
             if (specialization == best_candidate) continue;
@@ -3110,7 +3059,7 @@ inline auto TemplateHandler::specialization_resolution(
         //     family.primary.identifier, best_candidate->location,
         //     ambiguous_candidates |
         //     std::views::transform(&ASTTemplateSpecialization::location) |
-        //         GlobalMemory::collect<GlobalMemory::Vector>()
+        //         GlobalMemory::collect<std::vector>()
         // ));
         throw;
         return {nullptr, std::monostate{}};
@@ -3218,7 +3167,7 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
     }
     Term base_term = Sema::get<SymbolKind::Term>(base_symbol);
     Term current_term = base_term;
-    GlobalMemory::Vector<std::pair<const InstanceType*, const FunctionType*>> pointer_chain;
+    std::vector<std::pair<const InstanceType*, const FunctionType*>> pointer_chain;
     while (true) {
         const Type* decayed = current_term.decay();
         if (decayed == nullptr) {
@@ -3231,16 +3180,12 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
                 sema_.codegen_env_.map_pointer_access(
                     sema_.current_scope_,
                     node,
-                    new PointerChain{
-                        {}, node->base, pointer_chain | GlobalMemory::collect<std::span>()
-                    }
+                    new PointerChain{{}, node->base, std::move(pointer_chain)}
                 );
                 return Sema::nonnull(eval_struct_access(dereferenced, node->member));
             } else if (decayed_dereferenced->dyn_cast<InstanceType>()) {
                 Symbol result = eval_instance_access(dereferenced, node->member);
-                PointerChain* chain = new PointerChain{
-                    {}, node->base, pointer_chain | GlobalMemory::collect<std::span>()
-                };
+                PointerChain* chain = new PointerChain{{}, node->base, std::move(pointer_chain)};
                 if (auto* method = Sema::get_if<SymbolKind::Method>(result)) {
                     method->self = chain;
                 }
@@ -3263,14 +3208,12 @@ inline auto AccessHandler::eval_pointer(const ASTPointerAccess* node) noexcept -
                 Diagnostic::error_member_not_found(node->member);
                 return {};
             }
-            if (value->get<GlobalMemory::Vector<FunctionOverloadDef>*>()) {
+            if (value->get<std::vector<FunctionOverloadDef>*>()) {
                 return BoundMethod{
                     Term::lvalue(dynamic_type->target_type_, dynamic_type->is_mutable_),
                     interface_scope,
                     value,
-                    new PointerChain{
-                        {}, node->base, pointer_chain | GlobalMemory::collect<std::span>()
-                    }
+                    new PointerChain{{}, node->base, std::move(pointer_chain)}
                 };
             } else {
                 Diagnostic::error_member_not_found(node->member);
@@ -3332,9 +3275,8 @@ inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) noexcept 
 
     if (holds_monostate(node->length)) {
         Symbol span_symbol = sema_.get_std_symbol("span");
-        std::span array_args = GlobalMemory::pack_array<const Object*>(element_type.get());
         Symbol result = sema_.template_handler_->instantiate(
-            *std::get<TemplateFamily*>(span_symbol), array_args
+            *std::get<TemplateFamily*>(span_symbol), std::vector<const Object*>{element_type.get()}
         );
         out_ = Sema::get<SymbolKind::Type>(result);
         return;
@@ -3353,11 +3295,11 @@ inline auto TypeContextEvaluator::operator()(const ASTArrayType* node) noexcept 
             return;
         }
         Symbol array_symbol = sema_.get_std_symbol("array");
-        std::array<const Object*, 2> array_args = {
+        std::vector<const Object*> array_args = {
             element_type.get(), static_cast<const Object*>(length_term.get_comptime())
         };
         Symbol result = sema_.template_handler_->instantiate(
-            *std::get<TemplateFamily*>(array_symbol), array_args
+            *std::get<TemplateFamily*>(array_symbol), std::move(array_args)
         );
         out_ = Sema::get_default<SymbolKind::Type>(result);
     }
